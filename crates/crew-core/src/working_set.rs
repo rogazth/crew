@@ -155,7 +155,8 @@ pub(crate) fn detail_line(detail: &ToolDetail) -> String {
         ToolDetail::Message { to, text, to_name, what, .. } => {
             let to = to_name.as_deref().unwrap_or(to);
             match what.as_deref() {
-                Some("start") => format!("started {to}: {}", clip(text, MESSAGE_LIMIT)),
+                Some("start") => format!("delegated to {to}: {}", clip(text, MESSAGE_LIMIT)),
+                Some("launch") => format!("started the session {to}: {}", clip(text, MESSAGE_LIMIT)),
                 Some("handoff") => format!("handed {to} to the user: {}", clip(text, MESSAGE_LIMIT)),
                 _ => format!("wrote to {to}: {}", clip(text, MESSAGE_LIMIT)),
             }

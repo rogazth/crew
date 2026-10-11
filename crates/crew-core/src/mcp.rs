@@ -112,7 +112,7 @@ fn unreachable_error(error: &std::io::Error) -> String {
 /// Any other tool whose arguments carry `timeout_s` is one that waits that
 /// long on purpose, so the read waits `min(timeout_s, 60) + 10` seconds. The
 /// convention is the whole mechanism there: a tool that blocks names its
-/// wait `timeout_s` and caps it at 60 itself. `start_session` with `wait` is
+/// wait `timeout_s` and caps it at 60 itself. `delegate` with `wait` is
 /// the one longer wait. Never less than the default.
 fn call_timeout(method: &str, params: &Value) -> Duration {
     if method != "tools/call" {
@@ -124,9 +124,9 @@ fn call_timeout(method: &str, params: &Value) -> Duration {
     if let Some(budget) = name.and_then(|name| crate::browser_tools::budget(name, arguments.unwrap_or(&no_args))) {
         return (budget + Duration::from_secs(WAIT_SLACK_S)).max(CALL_TIMEOUT);
     }
-    // `start_session` with `wait` blocks for the child's turn: 600 s unless
+    // `delegate` with `wait` blocks for the subagent's turn: 600 s unless
     // `timeout_s` says otherwise, 3600 at most (plan §7e.2).
-    if name == Some("start_session") {
+    if name == Some("delegate") {
         let args = arguments.unwrap_or(&no_args);
         if args.get("wait").and_then(Value::as_bool) != Some(true) {
             return CALL_TIMEOUT;
@@ -319,7 +319,7 @@ mod tests {
     /// minutes unless told otherwise, an hour at most, and the margin.
     #[test]
     fn a_start_that_waits_is_given_its_wait_and_ten_seconds_more() {
-        let start = |args: Value| call_timeout("tools/call", &json!({ "name": "start_session", "arguments": args }));
+        let start = |args: Value| call_timeout("tools/call", &json!({ "name": "delegate", "arguments": args }));
         assert_eq!(start(json!({ "prompt": "x" })), CALL_TIMEOUT);
         assert_eq!(start(json!({ "prompt": "x", "wait": true })), Duration::from_secs(610));
         assert_eq!(start(json!({ "prompt": "x", "wait": true, "timeout_s": 120 })), Duration::from_secs(130));

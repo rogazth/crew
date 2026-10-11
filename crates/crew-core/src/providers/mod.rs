@@ -162,10 +162,10 @@ pub fn is_message_tool(verb: &str) -> bool {
     matches!(verb, "send_message" | "message_agent" | "send_to_session")
 }
 
-/// The Crew tools that make a letter: the message tools, and `start_session`,
-/// whose prompt is the new session's first letter.
+/// The Crew tools that make a letter: the message tools, and `delegate` and
+/// `start_session`, whose prompt is the new session's first letter.
 pub fn is_letter_tool(verb: &str) -> bool {
-    is_message_tool(verb) || verb == "start_session"
+    is_message_tool(verb) || matches!(verb, "delegate" | "start_session")
 }
 
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
@@ -173,8 +173,14 @@ pub fn is_letter_tool(verb: &str) -> bool {
 /// and so is the prompt a session was started on.
 pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
     let (verb, input) = crew_call(name, input)?;
-    if verb == "start_session" {
-        let handoff = string_field(Some(&input), "owner").as_deref() == Some("user");
+    if matches!(verb, "delegate" | "start_session") {
+        // `start_session` took an `owner` before `delegate` existed: a call
+        // that still carries one is an old transcript's, and `me` was a child.
+        let what = match (verb, string_field(Some(&input), "owner").as_deref()) {
+            (_, Some("user")) => "handoff",
+            ("delegate", _) | (_, Some(_)) => "start",
+            _ => "launch",
+        };
         return Some(crew_protocol::ToolDetail::Message {
             // The name is Crew's to pick when the call leaves it out; the
             // answer brings it (`to_name`).
@@ -185,7 +191,7 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
             letter_id: None,
             to_id: None,
             to_name: None,
-            what: Some(if handoff { "handoff" } else { "start" }.into()),
+            what: Some(what.into()),
             delivery: None,
             error: None,
         });
@@ -241,7 +247,7 @@ pub fn crew_result_detail(
     let answer: Map<String, Value> = serde_json::from_str(result.trim()).ok()?;
     let field = |key: &str| string_field(Some(&answer), key);
     let letter_id = field("letter_id")?;
-    // `send_message` answers the reader's name as `to`, `start_session` as `name`.
+    // `send_message` answers the reader's name as `to`, `delegate` and `start_session` as `name`.
     let to_name = if what.is_some() { field("name") } else { field("to") };
     Some(row(Some(letter_id), field("id"), to_name, field("delivery"), None))
 }
@@ -756,11 +762,19 @@ mod tests {
         let refused = crew_result_detail("crew_send_message", input, "You can't message yourself.", true);
         assert!(matches!(refused, Some(ToolDetail::Message { error: Some(ref why), letter_id: None, .. }) if why == "You can't message yourself."));
 
-        let start = serde_json::json!({ "provider": "codex", "prompt": "fix it", "owner": "user" });
+        let start = serde_json::json!({ "provider": "codex", "prompt": "fix it" });
         let start = start.as_object().unwrap();
+        for (tool, said) in [("delegate", "start"), ("start_session", "launch")] {
+            assert!(matches!(
+                crew_tool_detail(&format!("mcp__crew__{tool}"), start),
+                Some(ToolDetail::Message { ref to, ref what, .. }) if to == "codex" && what.as_deref() == Some(said)
+            ));
+        }
+        // What an old transcript's `owner` said.
+        let old = serde_json::json!({ "prompt": "fix it", "owner": "user" });
         assert!(matches!(
-            crew_tool_detail("mcp__crew__start_session", start),
-            Some(ToolDetail::Message { ref to, ref what, .. }) if to == "codex" && what.as_deref() == Some("handoff")
+            crew_tool_detail("mcp__crew__start_session", old.as_object().unwrap()),
+            Some(ToolDetail::Message { ref what, .. }) if what.as_deref() == Some("handoff")
         ));
         let started = crew_result_detail("mcp__crew__start_session", start, r#"{ "id": "s9", "letter_id": "L2", "name": "codex: fix it" }"#, false);
         assert!(matches!(

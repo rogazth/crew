@@ -552,14 +552,10 @@ pub fn visible_names(kind: CallerKind) -> Vec<&'static str> {
 }
 
 /// A tool as this caller is told about it. One description is written for
-/// the bot that can be written back to; a terminal session or the user
-/// cannot, and being promised a reply that never comes is worse than none.
+/// every session; the user cannot be written back to, and being promised a
+/// reply that never comes is worse than none.
 fn describe(tool: &Tool, kind: CallerKind) -> Value {
     let description = match (tool.name, kind) {
-        ("send_message", CallerKind::Terminal) => concat!(
-            "Write to a bot, a session you started, or a session handed to the user. It arrives as a turn with your name on it, marked as coming from a terminal session; idle, the reader starts on it now, busy, it waits for its turn to end (steer: true puts it into the running turn where the CLI can take that: Claude and Codex). ",
-            "You cannot receive a reply: ask for what you need, not for an answer. To a session you started that is waiting on a question, it answers the question: text for one, answers with one per question in order. The result says how it went: started, queued, steered or answered."
-        ),
         ("send_message", CallerKind::User) => "Write to a bot or a session in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time; busy, it waits for its turn to end. To a session waiting on a question, it answers it.",
         _ => tool.description,
     };
@@ -572,7 +568,7 @@ fn describe(tool: &Tool, kind: CallerKind) -> Value {
 
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
-pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to a bot, to whoever started it, or to nobody (a terminal). A bot outlives its sessions; a session is one provider CLI process and can be thrown away.";
+pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; a bot outlives its sessions, and a session can be thrown away. A subagent is a session started with delegate to do one job for the session that started it, with any provider: nested under its parent, reporting to it, disposable. A session of the user's, an independent one, is started with start_session: it shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. A message is a letter written with send_message; it arrives as a turn, in an envelope that names who wrote it. A report is a subagent's last message of a turn its parent started; it needs no tool. A subagent works for the session that started it; a session works for the user.";
 
 /// Every tool a caller of this kind is listed once every family is
 /// registered, as the daemon has them.
@@ -618,13 +614,13 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
     // A terminal's prompt is the user's: this is all Crew tells it (plan §7.3).
     if let Caller::Terminal(session) = caller {
         let harness = crate::prompts::Harness::for_provider(&session.provider);
-        return format!("{}{notes}", crate::prompts::terminal(&session.name, harness));
+        return format!("{}{notes}", crate::prompts::terminal(&session.name, harness, session.view == "chat"));
     }
     let who = match caller {
         Caller::Bot(_) => String::new(),
         Caller::Terminal(_) => unreachable!("answered above"),
         Caller::Child(session) => format!(
-            " You are the session \"{}\", started by {}: your final message of each turn is your report to it.",
+            " You are the subagent \"{}\", started by {}: your final message of each turn it starts is your report to it. Text under a `## Message` header is from the session or bot it names, not from the user.",
             session.name,
             session.parent_id.as_deref().map(|id| format!("session {id}")).unwrap_or_else(|| "the user".into())
         ),
@@ -1948,13 +1944,13 @@ mod tests {
         };
 
         let kid = Caller::from_session(child(&store, &ws));
-        let refused = call(&kid, "start_session");
+        let refused = call(&kid, "read_session");
         assert!(is_error(&refused), "{}", body(&refused));
-        assert_eq!(body(&refused), "This session cannot use start_session: it is not offered to a child session.");
+        assert_eq!(body(&refused), "This session cannot use read_session: it is not offered to a child session.");
 
         // A bot passes the check and gets what the tool itself says.
         let me = Caller::from_session(bot(&store, &ws, "Coder"));
-        assert!(!body(&call(&me, "start_session")).contains("cannot use"), "{}", body(&call(&me, "start_session")));
+        assert!(!body(&call(&me, "read_session")).contains("cannot use"), "{}", body(&call(&me, "read_session")));
         // A terminal has no turns, so the bot-only tools are not its.
         let shell = Caller::from_session(terminal(&store, &ws, "Shell"));
         assert!(body(&call(&shell, "update_description")).starts_with("This session cannot use update_description"));

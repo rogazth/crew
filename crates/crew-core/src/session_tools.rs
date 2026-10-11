@@ -1,17 +1,22 @@
 //! Sessions and messaging as MCP tools: who is there (`list_peers`), write to
-//! one (`send_message`), start a session on a job, read what it did, stop it.
+//! one (`send_message`), hand a job to a subagent (`delegate`), start a
+//! separate session (`start_session`), read what a subagent did, stop it.
 //!
 //! The words, as every model that reads these tools is told: a bot is a
 //! persistent identity Crew keeps; a session is one provider CLI and can be
-//! thrown away. A session a caller starts is its child: each turn it ends, its
-//! final message is its report, which wakes a bot parent; a terminal parent
-//! (which cannot be woken) reads it, or waits for it with `wait: true`.
+//! thrown away. A subagent is a session `delegate` starts for the session that
+//! started it: it is that session's child, and each turn its parent starts
+//! ends with a final message, its report, which wakes a bot parent; a terminal
+//! parent (which cannot be woken) reads it, or waits for it with `wait: true`.
+//! An independent session is one `start_session` starts: a top-level chat
+//! session that is the user's, reports to nobody and records who launched it.
 //!
-//! `send_message` is one way to write to anyone: a bot, a session you
-//! started, a top-level session. The mailbox is the queue: idle, the reader
-//! starts on it now; busy, it waits for the turn to end; `steer` puts it into
-//! the running turn where the CLI can take that. To a child waiting on a
-//! question, it is the answer.
+//! `send_message` writes to any bot or session in the workspace but the
+//! caller itself and an exited subagent, as long as the target's autonomy is
+//! not above the caller's (the user is exempt). The mailbox is the queue:
+//! idle, the reader starts on it now; busy, it waits for the turn to end;
+//! `steer` puts it into the running turn where the CLI can take that. To a
+//! subagent waiting on a question, it is the answer.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -41,6 +46,15 @@ const READ_MAX: usize = 256 * 1024;
 /// How long an idle child is kept before it exits, unless
 /// `CREW_SESSION_IDLE_MINUTES` says otherwise.
 pub const IDLE_MINUTES: u64 = 30;
+
+/// Which of the two tools is starting a session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Start {
+    /// A subagent: the caller's child, which reports to it.
+    Delegate,
+    /// A separate session of the user's, which reports to nobody.
+    Launch,
+}
 
 type Made = Arc<dyn Fn(&Session) + Send + Sync>;
 type MakeWorktree = Arc<dyn Fn(&str, &str) -> Result<Worktree, String> + Send + Sync>;
@@ -128,14 +142,14 @@ impl SessionTools {
         Ok(gone)
     }
 
-    /// The session `id`, if this caller may drive it: one it started, or any
-    /// at all for the user. A bot and a terminal are refused with what
-    /// reaches them instead.
+    /// The subagent `id`, if this caller may drive it: one it started, or any
+    /// at all for the user. A bot and a session of the user's are refused with
+    /// what reaches them instead.
     fn owned(&self, caller: &Caller, id: &str) -> Result<Session, String> {
         let workspace = caller.workspace_id()?;
         let found = session::get(&self.store, id.trim().to_string())?
             .filter(|row| row.workspace_id == workspace)
-            .ok_or_else(|| format!("No session {id} in this workspace. list_peers has the ones you started."))?;
+            .ok_or_else(|| format!("No session {id} in this workspace. list_peers has who is here."))?;
         match found.kind.as_str() {
             "bot" => {
                 return Err(format!(
@@ -145,8 +159,8 @@ impl SessionTools {
             }
             "terminal" => {
                 return Err(format!(
-                    "{id} is a terminal session: the user drives its CLI, not Crew. Only a session started with \
-                     start_session can be driven."
+                    "{id} is a session of the user's, not a subagent of yours: reach it with send_message. \
+                     read_session and stop_session are for the subagents you start with delegate."
                 ))
             }
             _ => {}
@@ -253,11 +267,13 @@ impl SessionTools {
         }
     }
 
-    /// Whether `caller` may write to `target`, and if not, why. A bot takes
-    /// anyone's letters; a session takes its parent's, the user's, the
-    /// answer of anyone it wrote to, and, when it has no parent (a top-level
-    /// session), anyone's. Nobody writes to itself, and a terminal has no
-    /// turns to put a message in.
+    /// Whether `caller` may write to `target`, and if not, why. Any bot or
+    /// session in the workspace takes a letter, but not from itself, not once
+    /// a subagent has exited (subagents are disposable: start another with
+    /// `delegate`), and not from a caller with less autonomy than the target
+    /// has: a session that has to ask could otherwise hand work to one that
+    /// does not. The user is exempt. A session in the terminal view is the
+    /// user at the keyboard of its CLI and has no turn to put a letter in.
     fn may_write(&self, caller: &Caller, target: &Session) -> Result<(), String> {
         if caller.session_id() == Some(target.id.as_str()) {
             return Err(
@@ -266,26 +282,42 @@ impl SessionTools {
                     .into(),
             );
         }
-        match target.kind.as_str() {
-            "terminal" => Err(format!(
-                "{} ({}) is a terminal session: the user drives its CLI, and Crew has no turns to put a message in.",
+        if target.kind == "terminal" && target.view != "chat" {
+            return Err(format!(
+                "{} ({}) is in the terminal view: the user drives its CLI, and Crew has no turns to put a message in.",
                 target.name, target.id
-            )),
-            _ if target.status == "exited" => Err(format!(
-                "{} has exited, so nothing can reach it. read_session still reads it; start_session starts another.",
-                target.name
-            )),
-            "bot" => Ok(()),
-            _ if target.parent_id.is_none() => Ok(()),
-            _ if matches!(caller, Caller::User { .. }) || caller.session_id() == target.parent_id.as_deref() => Ok(()),
-            // It asked: the answer may go back.
-            _ if caller.session_id().is_some_and(|me| mailbox::has_written(&self.store, &target.id, me)) => Ok(()),
-            _ => Err(format!(
-                "{} ({}) was started by {}, not by you: only whoever started a session (and the user) writes to it.",
-                target.name,
-                target.id,
-                self.who(target.parent_id.as_deref())
-            )),
+            ));
+        }
+        if target.status == "exited" {
+            return Err(if target.kind == "child" {
+                format!(
+                    "{} is a subagent that has exited, and a subagent stays exited. read_session still reads it; start \
+                     another with delegate.",
+                    target.name
+                )
+            } else {
+                format!("{} has exited, so nothing can reach it.", target.name)
+            });
+        }
+        if !matches!(caller, Caller::User { .. }) {
+            let (mine, theirs) = (caller.autonomy(), target.autonomy.as_str());
+            if autonomy_rank(theirs).unwrap_or(0) > autonomy_rank(mine).unwrap_or(0) {
+                return Err(format!(
+                    "{} ({}) runs with {theirs} autonomy and you with {mine}: a session cannot write to one that is \
+                     allowed more than it is. Ask the user, who can.",
+                    target.name, target.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a letter to `caller` is read: a bot, a subagent and a session
+    /// in the chat view have turns; a terminal-view session does not.
+    fn hears(caller: &Caller) -> bool {
+        match caller {
+            Caller::Terminal(me) => me.view == "chat",
+            _ => true,
         }
     }
 
@@ -316,7 +348,6 @@ impl SessionTools {
         let workspace = caller.workspace_id()?.to_string();
         let rows = session::list(&self.store, workspace.clone())?;
         let me = caller.session_id();
-        let user = matches!(caller, Caller::User { .. });
         let folder = crate::workspace::get(&self.store, workspace)?.map(|row| row.path);
         let branches: HashMap<String, Option<String>> = match &folder {
             Some(folder) if rows.iter().any(|row| row.worktree.is_some()) => {
@@ -328,16 +359,15 @@ impl SessionTools {
             .iter()
             .filter(|row| Some(row.id.as_str()) != me)
             .filter(|row| match row.kind.as_str() {
-                "child" => {
-                    let mine = row.parent_id.is_some() && row.parent_id.as_deref() == me;
-                    mine || ((row.parent_id.is_none() || user) && row.status != "exited")
-                }
+                // A subagent that has exited is listed only to whoever started it.
+                "child" => (row.parent_id.is_some() && row.parent_id.as_deref() == me) || row.status != "exited",
                 _ => true,
             })
             .map(|row| {
-                let kind = match row.kind.as_str() {
-                    "bot" => "bot",
-                    "terminal" => "terminal",
+                let kind = match (row.kind.as_str(), row.view.as_str()) {
+                    ("bot", _) => "bot",
+                    ("terminal", "chat") => "session",
+                    ("terminal", _) => "terminal",
                     _ => "session",
                 };
                 let mut out = json!({
@@ -405,10 +435,9 @@ impl SessionTools {
         if let Some(decision) = decision {
             return self.decide(caller, &target, decision, body.as_deref());
         }
-        // A child stopped on a question takes this as the answer, from whoever
-        // may drive it: the question is theirs to answer.
-        let drives = matches!(caller, Caller::User { .. }) || caller.session_id() == target.parent_id.as_deref();
-        if let Some(request) = self.pending_question(&target).filter(|_| target.kind == "child" && drives) {
+        // A subagent stopped on a question takes this as the answer, from
+        // anyone who may write to it: whoever may write may answer.
+        if let Some(request) = self.pending_question(&target).filter(|_| target.kind == "child") {
             return self.answer(caller, &target, &request, body.as_deref(), answers);
         }
         let Some(body) = body else {
@@ -468,9 +497,8 @@ impl SessionTools {
             note = format!("Not steered ({why}), so it was queued as a message. {note}");
         }
         match caller {
-            Caller::Terminal(_) => note.push_str(" It cannot write back to you."),
-            Caller::Child(me) if me.parent_id.as_deref() != Some(target.id.as_str()) => {
-                note.push_str(" It cannot write back to you: only whoever started you can.")
+            Caller::Terminal(_) if !Self::hears(caller) => {
+                note.push_str(" It cannot write back to you: your CLI takes no letters, so read what it did with the user.")
             }
             Caller::User { .. } => note.push_str(" Its reply will be in its chat."),
             _ => {}
@@ -485,7 +513,7 @@ impl SessionTools {
         }))
     }
 
-    /// `send_message` to a child waiting on a question: the answer, through
+    /// `send_message` to a subagent waiting on a question: the answer, through
     /// the same door the window's card uses, so the first answer wins.
     fn answer(
         &self,
@@ -538,7 +566,7 @@ impl SessionTools {
         let letter = mailbox::record_delivered(&self.store, &target.id, &caller.sender(), &said)?;
         let note = match caller {
             Caller::Bot(_) => "It carries on with your answer. Its report wakes you when its turn ends.",
-            Caller::Terminal(_) => "It carries on with your answer. Check it with read_session.",
+            Caller::Terminal(_) => "It carries on with your answer. Nothing wakes you when it reports: check it with read_session.",
             _ => "It carries on with your answer.",
         };
         Ok(json!({ "to": target.name, "id": target.id, "letter_id": letter.id, "delivery": "answered", "note": note }))
@@ -650,17 +678,35 @@ impl SessionTools {
         }))
     }
 
-    fn start(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
+    /// `delegate` and `start_session`, which share everything up to the row
+    /// they make: the prompt, the provider and model, the autonomy ceiling and
+    /// the worktree.
+    fn start(&self, caller: &Caller, args: &Value, how: Start) -> Result<Value, String> {
         let workspace = caller.workspace_id()?.to_string();
-        let owner = text(args.get("owner")).unwrap_or_else(|| "me".into());
-        if owner != "me" && owner != "user" {
-            return Err(format!("owner is me or user, not \"{owner}\""));
+        if args.get("owner").is_some_and(|owner| !owner.is_null()) {
+            return Err(
+                "owner is gone. delegate hands a job to a subagent that reports to you; start_session starts a \
+                 separate session the user can see and talk to, and reports to nobody."
+                    .into(),
+            );
+        }
+        if how == Start::Delegate {
+            if let Caller::Child(me) = caller {
+                return Err(format!(
+                    "A subagent cannot delegate: do this yourself, or ask {}. send_message reaches it; start_session \
+                     starts a separate session if the user wants one.",
+                    match me.parent_id.as_deref() {
+                        Some(parent) => format!("your parent ({})", self.who(Some(parent))),
+                        None => "whoever started you".to_string(),
+                    }
+                ));
+            }
         }
         let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
-        if owner == "user" && wait {
+        if how == Start::Launch && (wait || args.get("timeout_s").is_some_and(|raw| !raw.is_null())) {
             return Err(
-                "wait is for a session you own. One handed to the user (owner user) reports to nobody, so there is \
-                 nothing to wait for."
+                "start_session does not wait: a separate session reports to nobody, so there is nothing to wait \
+                 for. To get a job's answer back, use delegate with wait."
                     .into(),
             );
         }
@@ -699,12 +745,12 @@ impl SessionTools {
             },
         };
         let name = text(args.get("name")).unwrap_or_else(|| default_name(&provider, &prompt));
-        if owner == "me" {
+        if how == Start::Delegate {
             if let Some(me) = caller.session() {
                 let live = self.live_children(&workspace, &me.id)?;
                 if live.len() >= LIVE_CAP {
                     return Err(format!(
-                        "You already have {LIVE_CAP} live sessions: {}. Stop one with stop_session first; one idle \
+                        "You already have {LIVE_CAP} live subagents: {}. Stop one with stop_session first; one idle \
                          for {} minutes ends on its own.",
                         live.iter()
                             .map(|row| format!("{} {} ({})", row.name, row.id, row.status))
@@ -716,19 +762,19 @@ impl SessionTools {
             }
         }
         let worktree = self.worktree(caller, &workspace, args.get("worktree"), &name)?;
-        if owner == "user" {
-            return self.hand_off(caller, &workspace, name, provider, model, autonomy, worktree, prompt);
-        }
-        let row = session::create_child(
-            &self.store,
-            workspace.clone(),
-            name.clone(),
-            provider.clone(),
-            model.clone(),
-            autonomy.clone(),
-            worktree.clone(),
-            caller.session_id().map(str::to_string),
-        )?;
+        let row = match how {
+            Start::Delegate => session::create_child(
+                &self.store,
+                workspace.clone(),
+                name.clone(),
+                provider.clone(),
+                model.clone(),
+                autonomy.clone(),
+                worktree.clone(),
+                caller.session_id().map(str::to_string),
+            )?,
+            Start::Launch => self.make_launched(caller, &workspace, &name, &provider, &model, &autonomy, &worktree)?,
+        };
         (self.on_created)(&row);
         // The prompt is the first letter between the two: the pair's thread
         // starts with it.
@@ -736,7 +782,10 @@ impl SessionTools {
         if let Caller::Bot(me) = caller {
             self.turns.transcripts().append_system_letter(
                 &me.id,
-                &format!("Started session {name} ({})", row.id),
+                &match how {
+                    Start::Delegate => format!("Delegated to subagent {name} ({})", row.id),
+                    Start::Launch => format!("Started session {name} ({})", row.id),
+                },
                 &letter.id,
             );
         }
@@ -772,9 +821,27 @@ impl SessionTools {
             "model": model,
             "autonomy": autonomy,
             "worktree": worktree.as_deref().unwrap_or("main checkout"),
-            "owner": "me",
+            "kind": if how == Start::Delegate { "subagent" } else { "session" },
         });
-        let waited = if wait {
+        let waited = if how == Start::Launch {
+            let hears = Self::hears(caller) && caller.session().is_some();
+            json!({
+                "status": "starting",
+                "note": format!(
+                    "{name} is a separate session, the user's: it opens in its own tab in Crew and works on the prompt \
+                     now. It reports to nobody, so its work does not come back to you{}",
+                    if hears {
+                        format!(
+                            "; it can reach you with send_message to {} if the prompt says to. read_session and \
+                             stop_session are for subagents.",
+                            caller.session_id().unwrap_or_default()
+                        )
+                    } else {
+                        ".".to_string()
+                    }
+                )
+            })
+        } else if wait {
             self.await_turn(caller, &row, Duration::from_secs(timeout))?
         } else {
             json!({
@@ -782,8 +849,8 @@ impl SessionTools {
                 "note": match caller {
                     Caller::Bot(_) => "It is working on the prompt now. Its report wakes you when its turn ends: end your \
                                        turn rather than wait. read_session shows what it did; send_message gives it more.",
-                    Caller::Terminal(_) => "It is working on the prompt now. Nothing can wake you, so check it with \
-                                            read_session (or pass wait: true next time); send_message gives it more.",
+                    Caller::Terminal(_) => "It is working on the prompt now. Nothing wakes you when it reports, so check it \
+                                            with read_session (or pass wait: true next time); send_message gives it more.",
                     _ => "It is working on the prompt now; its chat is in Crew. read_session shows what it did.",
                 }
             })
@@ -794,70 +861,41 @@ impl SessionTools {
         Ok(out)
     }
 
-    /// `start_session` with owner user: a terminal session on its own, the
-    /// user's to carry on, with the prompt waiting in its box for its CLI's
-    /// first prompt (see `terminal::launch`); the window opens its tab. It is
-    /// nobody's child and reports to nobody.
+    /// The row `start_session` makes: a top-level session in the chat view,
+    /// fixed at creation, that is the user's. It is nobody's child, so it is
+    /// never reaped and counts against no one's cap, and it records who
+    /// launched it, which grants nothing.
     #[allow(clippy::too_many_arguments)]
-    fn hand_off(
+    fn make_launched(
         &self,
         caller: &Caller,
         workspace: &str,
-        name: String,
-        provider: String,
-        model: String,
-        autonomy: String,
-        worktree: Option<String>,
-        prompt: String,
-    ) -> Result<Value, String> {
+        name: &str,
+        provider: &str,
+        model: &str,
+        autonomy: &str,
+        worktree: &Option<String>,
+    ) -> Result<Session, String> {
         let row = session::create_in_worktree(
             &self.store,
             workspace.to_string(),
             "terminal".into(),
-            name.clone(),
-            provider.clone(),
-            model.clone(),
+            name.to_string(),
+            provider.to_string(),
+            model.to_string(),
             String::new(),
-            autonomy.clone(),
+            autonomy.to_string(),
             worktree.clone(),
-            None,
+            Some("chat".into()),
         )
-        .map_err(|error| match &worktree {
+        .map_err(|error| match worktree {
             Some(tree) => format!("The worktree is at {tree}, but its session could not be made: {error}"),
             None => error,
         })?;
         if let Some(me) = caller.session() {
             session::set_launched_by(&self.store, &row.id, &me.id)?;
         }
-        let letter = mailbox::enqueue(&self.store, &row.id, &caller.sender(), &prompt)?;
-        let row = session::get(&self.store, row.id.clone())?.unwrap_or(row);
-        (self.on_created)(&row);
-        if let Caller::Bot(me) = caller {
-            self.turns.transcripts().append_system_letter(
-                &me.id,
-                &format!("Handed {name} ({}) to the user", row.id),
-                &letter.id,
-            );
-        }
-        let branch = worktree.as_deref().and_then(|tree| {
-            crate::worktree::branches(tree).into_iter().find(|(path, _)| path == tree).and_then(|(_, branch)| branch)
-        });
-        Ok(json!({
-            "id": row.id,
-            "letter_id": letter.id,
-            "name": name,
-            "provider": provider,
-            "model": model,
-            "worktree": worktree.as_deref().unwrap_or("main checkout"),
-            "branch": branch,
-            "owner": "user",
-            "status": "handed off",
-            "note": format!(
-                "{name} opens in a tab of Crew{} and starts on the prompt. It is the user's now: it does not report to \
-                 you, and nothing you send reaches it.",
-                worktree.as_deref().map(|tree| format!(", in {tree},")).unwrap_or_default()
-            )
-        }))
+        Ok(session::get(&self.store, row.id.clone())?.unwrap_or(row))
     }
 
     /// Block until `row` ends a turn (its report), stops on a question, or
@@ -1350,7 +1388,24 @@ fn branch_slug(name: &str) -> String {
 }
 
 fn session_arg() -> Value {
-    json!({ "type": "string", "description": "The session's id, from start_session or list_peers." })
+    json!({ "type": "string", "description": "The subagent's id, from delegate or list_peers." })
+}
+
+/// The arguments `delegate` and `start_session` share; `delegate` also waits.
+fn start_schema(wait: bool) -> Value {
+    let mut properties = json!({
+        "prompt": { "type": "string", "description": "The job, with everything it needs: the goal, the files, the constraints, what done looks like, and whether it may commit." },
+        "provider": { "type": "string", "enum": provider_names(), "description": "Which CLI runs it. Defaults to yours." },
+        "model": { "type": "string", "description": format!("Defaults to yours when the provider is yours, else the provider's first. What there is:\n{}", crate::tools::model_sheet()) },
+        "worktree": { "type": "string", "description": "current (the default), new, or a branch name or worktree path." },
+        "name": { "type": "string", "description": "What it is listed as. Defaults to the provider and the first words of the prompt." },
+        "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"], "description": "Defaults to yours. Never more than yours." }
+    });
+    if wait {
+        properties["wait"] = json!({ "type": "boolean", "description": "Block until its turn ends and return its report." });
+        properties["timeout_s"] = json!({ "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "With wait: seconds to wait, 600 by default, 3600 at most." });
+    }
+    json!({ "type": "object", "properties": properties, "required": ["prompt"] })
 }
 
 /// The session tools. They need no host to be described, so the CLI builds
@@ -1359,7 +1414,7 @@ pub fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_peers",
-            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, kind (bot, session or terminal), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), who started it, where it works (main checkout or its branch), and write: whether send_message reaches it from you.",
+            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, which takes no letters), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), who started it (parent, for a subagent) or launched it (launched_by, for a separate session), where it works (main checkout or its branch), and write: whether send_message reaches it from you.",
             schema: json!({ "type": "object", "properties": {} }),
             audience: Audience::EVERYONE,
             cli: vec![crate::tools::top("peers").about("The bots and sessions here: status, who started them, and whether you can write to them.").eg("crew peers\n  crew peers --json | jq '.[] | select(.kind == \"bot\") | .id'")],
@@ -1367,11 +1422,12 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "send_message",
             description: concat!(
-                "Write to a bot, to a session you started or that wrote to you, or to a top-level session (one nobody started). It arrives as a turn with your name and id on it: idle, the reader starts on it now; busy, it waits until the current turn ends. ",
+                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A session in the terminal view takes no letters. ",
+                "It arrives as a turn, in an envelope naming you: your name and id, and that a model wrote it. Idle, the reader starts on it now; busy, it waits until the current turn ends. ",
                 "steer: true puts it into the running turn instead, to correct its course, where the CLI can take that (Claude and Codex); anywhere else it is queued. ",
-                "To a session you started that is waiting on a question, it answers the question: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
-                "To a session you started that is waiting on an approval, decision allow or deny decides it, if you could do the same yourself (text, if any, follows as a message). ",
-                "The result says how it went: delivery started, queued, steered or answered. Its answer, if any, reaches you as a message of its own. Nobody writes to itself, to someone else's session, or to a terminal."
+                "To a subagent that is waiting on a question, it answers the question, from anyone who may write to it: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
+                "To a subagent you started that is waiting on an approval, decision allow or deny decides it, if you could do the same yourself (text, if any, follows as a message). ",
+                "The result says how it went: delivery started, queued, steered or answered. A reply, if any, reaches you as a message of its own, if your CLI has turns to put it in."
             ),
             schema: json!({
                 "type": "object",
@@ -1379,8 +1435,8 @@ pub fn catalog() -> Vec<Tool> {
                     "to": { "type": "string", "description": "The id of a bot or a session, from list_peers or from the line a message arrived on. Not a name: names are the user's to change." },
                     "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." },
                     "steer": { "type": "boolean", "description": "Into its running turn, read at its next step (Claude and Codex). Only to correct course; otherwise it is queued." },
-                    "answers": { "type": "array", "items": { "type": "string" }, "description": "To a session waiting on several questions: one answer per question, in the order asked." },
-                    "decision": { "type": "string", "enum": ["allow", "deny"], "description": "To a session you started that waits on an approval (a command, an edit, a process it defined): allow or deny it. Only what you could do yourself without asking." }
+                    "answers": { "type": "array", "items": { "type": "string" }, "description": "To a subagent waiting on several questions: one answer per question, in the order asked." },
+                    "decision": { "type": "string", "enum": ["allow", "deny"], "description": "To a subagent you started that waits on an approval (a command, an edit, a process it defined): allow or deny it. Only what you could do yourself without asking." }
                 },
                 "required": ["to"]
             }),
@@ -1388,41 +1444,38 @@ pub fn catalog() -> Vec<Tool> {
             cli: vec![crate::tools::top("send").eg("crew send Reviewer \"look at the diff on main\"\n  crew send 3f2a… run the tests and fix what fails\n  git diff | crew send Reviewer -\n  crew send --steer 3f2a… stop, the API changed")],
         },
         Tool {
+            name: "delegate",
+            description: concat!(
+                "Hand one job to a subagent: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
+                "Each time it ends a turn you started, its final message, its report, comes back to you; a bot is woken by it as a turn of its own, so end your turn rather than wait. Nothing wakes a terminal session, which reads reports with read_session or waits for one. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
+                "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. A subagent cannot delegate. ",
+                "Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
+            ),
+            schema: start_schema(true),
+            audience: Audience::EVERYONE,
+            cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex fix the failing login test\n  crew sessions delegate --wait --timeout-s 300 -- what does the billing webhook do?")],
+        },
+        Tool {
             name: "start_session",
             description: concat!(
-                "Start a session on one job: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace. It sees nothing of your conversation: put everything it needs in the prompt. ",
-                "owner me (the default): it is yours. Each time it ends a turn, its final message, its report, wakes you (a bot) as a turn of its own, so end your turn rather than wait; read_session reads it, send_message gives it more, stop_session ends it. ",
-                "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
-                "owner user: a handoff, a top-level session the user carries on in Crew, with prompt as its first message; it reports to nobody, so it cannot be waited on. ",
-                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live sessions of your own at once. ",
-                "A bot outlives its sessions; a session is one provider CLI process and can be thrown away: to hand work to a bot, use send_message."
+                "Start a separate session: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, that shows in the sidebar like one the user opened. It is the user's: it works for the user, reports to nobody, is not capped and is not ended when idle. It opens as a chat. ",
+                "Use it when the user wants a session they can see and talk to. Do not use it just because the user said \"subagent\": that is delegate. ",
+                "It sees nothing of your conversation: put everything it needs in the prompt. Its first prompt arrives in a message naming you, so it can answer with send_message to your id (unless your CLI takes no letters); to coordinate, say so in the prompt (\"product decisions: ask me with send_message to <your id>, not the user\"). Crew does nothing more for you than record that you launched it. read_session and stop_session are for subagents. ",
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. A subagent may call this."
             ),
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "prompt": { "type": "string", "description": "The job, with everything it needs: the goal, the files, the constraints, what done looks like, and whether it may commit." },
-                    "provider": { "type": "string", "enum": provider_names(), "description": "Which CLI runs it. Defaults to yours." },
-                    "model": { "type": "string", "description": format!("Defaults to yours when the provider is yours, else the provider's first. What there is:\n{}", crate::tools::model_sheet()) },
-                    "owner": { "type": "string", "enum": ["me", "user"], "description": "me (the default): yours, it reports to you. user: handed to the user, reports to nobody." },
-                    "worktree": { "type": "string", "description": "current (the default), new, or a branch name or worktree path." },
-                    "wait": { "type": "boolean", "description": "Block until its turn ends and return its report. Not with owner user." },
-                    "timeout_s": { "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "With wait: seconds to wait, 600 by default, 3600 at most." },
-                    "name": { "type": "string", "description": "What it is listed as. Defaults to the provider and the first words of the prompt." },
-                    "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"], "description": "Defaults to yours. Never more than yours." }
-                },
-                "required": ["prompt"]
-            }),
-            audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --provider codex fix the failing login test\n  crew sessions start --wait --timeout-s 300 -- what does the billing webhook do?\n  crew sessions start --owner user --worktree new -- carry on with the plan in docs/plan.md")],
+            schema: start_schema(false),
+            audience: Audience::EVERYONE,
+            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --name Reviewer review the diff on main")],
         },
         Tool {
             name: "read_session",
-            description: "Read a session you started as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
+            description: "Read a subagent you started as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "session": session_arg(),
-                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from start_session or an earlier read." },
+                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from delegate or an earlier read." },
                     "max_bytes": { "type": "integer", "minimum": 1, "maximum": READ_MAX },
                     "include_tools": { "type": "boolean", "description": "Add each tool's output under its line." }
                 },
@@ -1433,7 +1486,7 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "stop_session",
-            description: "End a session you started: its CLI is killed mid-turn if it is working, and it exits for good. Its transcript stays in Crew, and read_session still reads it.",
+            description: "End a subagent you started: its CLI is killed mid-turn if it is working, and it exits for good. Its transcript stays in Crew, and read_session still reads it.",
             schema: json!({ "type": "object", "properties": { "session": session_arg() }, "required": ["session"] }),
             audience: Audience::PARENTS,
             cli: vec![cli("sessions", "stop").pos(&["session"]).eg("crew sessions stop 3f2a…")],
@@ -1451,18 +1504,20 @@ impl ToolFamily for SessionTools {
             return None;
         }
         // A terminal is told the words and the tools in its own text
-        // (`prompts::terminal`); what is left is its sessions.
+        // (`prompts::terminal`); what is left is its subagents.
         let mut note = if matches!(caller, Caller::Terminal(_)) { String::new() } else { format!(
-            "{GLOSSARY} start_session hands a job to a new session (another provider CLI, in this checkout or a \
-             worktree of its own): its report wakes a bot when its turn ends, or wait: true waits for it; \
-             read_session reads what it did, send_message gives it more, stop_session ends it. list_peers \
-             lists who you can write to."
+            "{GLOSSARY} delegate hands a job to a subagent (another provider CLI, in this checkout or a worktree of \
+             its own): its report wakes a bot when its turn ends, or wait: true waits for it; read_session reads \
+             what it did, send_message gives it more, stop_session ends it. start_session starts a separate session \
+             the user can see and talk to, which reports to nobody; do not use it just because the user said \
+             \"subagent\". send_message writes to any bot or session that does not have more autonomy than you do. \
+             list_peers lists who you can write to."
         ) };
         if let (Some(me), Ok(workspace)) = (caller.session(), caller.workspace_id()) {
             if let Ok(live) = self.live_children(workspace, &me.id) {
                 if !live.is_empty() {
                     note.push_str(&format!(
-                        "{}Sessions you started: {}.",
+                        "{}Subagents you started: {}.",
                         if note.is_empty() { "" } else { " " },
                         live.iter()
                             .map(|row| format!("{} {} ({}, {})", row.name, row.id, row.provider, self.peer_status(caller, row)))
@@ -1479,7 +1534,8 @@ impl ToolFamily for SessionTools {
         let out = match name {
             "list_peers" => self.peers(caller)?,
             "send_message" => self.send(caller, args)?,
-            "start_session" => self.start(caller, args)?,
+            "delegate" => self.start(caller, args, Start::Delegate)?,
+            "start_session" => self.start(caller, args, Start::Launch)?,
             "read_session" => self.read(caller, args)?,
             "stop_session" => self.stop(caller, args)?,
             _ => return Err(format!("Unknown tool \"{name}\"")),
@@ -1894,7 +1950,7 @@ while True:
 
         fn start(&self, caller: &Caller, prompt: &str) -> String {
             let out = self
-                .call(caller, "start_session", json!({ "provider": "opencode", "prompt": prompt }))
+                .call(caller, "delegate", json!({ "provider": "opencode", "prompt": prompt }))
                 .expect("start");
             out["id"].as_str().expect("id").to_string()
         }
@@ -1978,8 +2034,8 @@ while True:
         // turn and kept by opencode; the message is the message alone.
         for launch in &launches {
             let system = launch["system"].as_str().unwrap();
-            assert!(system.contains("Your final message of each turn is delivered to"), "{system}");
-            assert!(system.contains("`crew_send_message`") && !system.contains("`crew_start_session`"), "{system}");
+            assert!(system.contains("is delivered to"), "{system}");
+            assert!(system.contains("`crew_send_message`") && system.contains("`crew_delegate`: not for you"), "{system}");
         }
         let prompt = launches[0]["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("## Message\nFrom: shell (terminal") && !prompt.contains("Your final message"), "{prompt}");
@@ -2063,7 +2119,7 @@ while True:
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         // Its CLI is up once its conversation is bound; the turn follows at once.
         for _ in 0..400 {
@@ -2104,7 +2160,7 @@ while True:
             if let Some(autonomy) = autonomy {
                 args["autonomy"] = json!(autonomy);
             }
-            let started = self.call(parent, "start_session", args).expect("start");
+            let started = self.call(parent, "delegate", args).expect("start");
             (started["id"].as_str().unwrap().to_string(), self.dir.join("claude-launch.log"))
         }
 
@@ -3096,7 +3152,7 @@ time.sleep(600)
             if let Some(autonomy) = autonomy {
                 args["autonomy"] = json!(autonomy);
             }
-            let started = self.call(parent, "start_session", args).expect("start");
+            let started = self.call(parent, "delegate", args).expect("start");
             (started["id"].as_str().unwrap().to_string(), log)
         }
     }
@@ -3160,7 +3216,7 @@ time.sleep(600)
         let first = turn["input"][0]["text"].as_str().unwrap();
         assert!(first.ends_with("remember 4817") && !first.contains("Your final message"), "the persona is in the message: {turn}");
         let context = turn["additionalContext"]["crew"]["value"].as_str().unwrap_or_default();
-        assert!(context.contains("Your final message of each turn is delivered to"), "{context}");
+        assert!(context.contains("is delivered to"), "{context}");
         assert!(context.contains("`mcp__crew__send_message`") && !context.contains("find_tool"), "{context}");
 
         let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
@@ -3553,7 +3609,7 @@ time.sleep(600)
             if let Some(autonomy) = autonomy {
                 args["autonomy"] = json!(autonomy);
             }
-            let started = self.call(parent, "start_session", args).expect("start");
+            let started = self.call(parent, "delegate", args).expect("start");
             (started["id"].as_str().unwrap().to_string(), log)
         }
     }
@@ -3593,9 +3649,9 @@ time.sleep(600)
         let token = crew["env"].as_array().unwrap().iter().find(|pair| pair["name"] == "CREW_TOKEN").expect("token");
         assert!(token["value"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
         let first = sent(&log, "session/prompt")[0]["prompt"][0]["text"].as_str().unwrap().to_string();
-        assert!(first.contains("Your final message of each turn is delivered to"), "the persona is in the message: {first}");
+        assert!(first.contains("is delivered to"), "the persona is in the message: {first}");
         assert!(first.contains("the MCP server `crew`") && first.contains("`send_message`"), "the MCP tools, not the crew CLI: {first}");
-        assert!(!first.contains("find_tool") && !first.contains("start_session"), "{first}");
+        assert!(!first.contains("find_tool") && first.contains("`delegate`: not for you"), "{first}");
         assert!(first.trim_end().ends_with("remember 4817"), "{first}");
 
         let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
@@ -3742,7 +3798,7 @@ time.sleep(600)
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: second");
         assert!(sent(&log, "session/load").is_empty(), "it tried the old chat");
         let second = sent(&log, "session/prompt")[1]["prompt"][0]["text"].as_str().unwrap().to_string();
-        assert!(second.contains("Your final message of each turn is delivered to"), "a new conversation gets the persona: {second}");
+        assert!(second.contains("is delivered to"), "a new conversation gets the persona: {second}");
         let notes = |w: &World| {
             let (blocks, _) = w.turns.transcripts().since(&id, 0);
             blocks.iter().filter(|block| block.text == crate::turns::CURSOR_ACP_NOTE).count()
@@ -3774,7 +3830,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let out = w.wait(&parent, &id, json!({}));
         assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 0.5 + the background command finished", "{out}");
@@ -3819,7 +3875,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "AGENT 30" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "AGENT 30" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let list = until_background(&w, &id, |list| list.waiting);
         let row = &list.commands[0];
@@ -3849,7 +3905,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "AGENTFG 30" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "AGENTFG 30" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let list = until_background(&w, &id, |list| list.commands.first().is_some_and(|row| row.tokens.is_some()));
         let row = &list.commands[0];
@@ -3881,7 +3937,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let list = until_background(&w, &id, |list| list.waiting);
         assert!(list.live);
@@ -3923,7 +3979,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let log = w.dir.join("claude-launch.log");
         let out = w.wait(&parent, &id, json!({}));
@@ -3950,7 +4006,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 60" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "BACKGROUND 60" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let log = w.dir.join("claude-launch.log");
         let list = until_background(&w, &id, |list| list.waiting);
@@ -3975,7 +4031,7 @@ time.sleep(600)
         let into = heard.clone();
         w.turns.background().set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         until_background(&w, &id, |list| list.waiting);
         w.turns.background_clear(&id, None, &[]);
@@ -4056,7 +4112,7 @@ time.sleep(600)
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
         let started = w
-            .call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SUBAGENT TWICE" }))
+            .call(&parent, "delegate", json!({ "provider": "claude", "prompt": "SUBAGENT TWICE" }))
             .expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         w.wait(&parent, &id, json!({}));
@@ -4341,33 +4397,35 @@ time.sleep(600)
     }
 
     #[test]
-    fn only_whoever_started_a_session_drives_it() {
+    fn only_whoever_started_a_subagent_drives_it() {
         let w = world();
         let parent = w.session("terminal", "mine", "full");
         let stranger = w.session("terminal", "other", "full");
         let bot = w.session("bot", "Planner", "full");
         let id = w.start(&parent, "SLEEP 1");
-        for (tool, args) in [
-            ("read_session", json!({ "session": id })),
-            ("send_message", json!({ "to": id, "text": "hi" })),
-            ("stop_session", json!({ "session": id })),
-        ] {
+        for (tool, args) in [("read_session", json!({ "session": id })), ("stop_session", json!({ "session": id }))] {
             let out = w.call(&stranger, tool, args.clone());
             assert!(out.as_ref().is_err_and(|e| e.contains("not by you")), "{tool}: {out:?}");
             let out = w.call(&bot, tool, args);
             assert!(out.is_err_and(|e| e.contains("not by you")), "{tool}");
         }
-        // The user may, from the command line, as in the window.
+        // Writing is not driving: anyone with as much autonomy may send it a letter.
+        for caller in [&stranger, &bot] {
+            let sent = w.call(caller, "send_message", json!({ "to": id, "text": "hi" })).expect("a letter is not driving");
+            assert!(matches!(sent["delivery"].as_str(), Some("queued" | "started")), "{sent}");
+        }
+        // The user may drive it, from the command line, as in the window.
         assert!(w.call(&w.user(), "read_session", json!({ "session": id })).is_ok());
-        // A bot's session is reached as the bot; a terminal is the user's CLI.
+        // A bot is reached with send_message; a session of the user's is not a subagent.
         let theirs = w.call(&parent, "read_session", json!({ "session": bot.session_id().unwrap() }));
         assert!(theirs.is_err_and(|e| e.contains("send_message")));
         let shell = w.call(&parent, "read_session", json!({ "session": stranger.session_id().unwrap() }));
-        assert!(shell.is_err_and(|e| e.contains("terminal session")));
-        // Listing is not driving: someone else's session is not among the
-        // stranger's peers; the parent's is, writable.
+        assert!(shell.is_err_and(|e| e.contains("session of the user's")));
+        // Listing is not driving either: someone else's subagent is among the
+        // stranger's peers, writable, and the parent's own is too.
         let listed = w.call(&stranger, "list_peers", json!({})).expect("list");
-        assert!(!listed.as_array().unwrap().iter().any(|row| row["id"] == id), "{listed}");
+        let seen = listed.as_array().unwrap().iter().find(|row| row["id"] == id).expect("listed to a stranger");
+        assert_eq!((seen["parent"].clone(), seen["write"].clone()), (json!("mine (terminal ".to_string() + parent.session_id().unwrap() + ")"), json!(true)), "{seen}");
         let mine = w.call(&parent, "list_peers", json!({})).expect("list");
         let row = mine.as_array().unwrap().iter().find(|row| row["id"] == id).expect("its child");
         assert_eq!((row["kind"].clone(), row["parent"].clone(), row["write"].clone()), (json!("session"), json!("you"), json!(true)), "{row}");
@@ -4375,7 +4433,7 @@ time.sleep(600)
     }
 
     #[test]
-    fn a_child_sees_no_session_tools() {
+    fn a_subagent_is_offered_the_two_start_tools_and_not_the_driving_ones() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let id = w.start(&parent, "x");
@@ -4384,18 +4442,54 @@ time.sleep(600)
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
         let listed = toolbox.visible_names(CallerKind::Child);
-        for name in ["start_session", "read_session", "stop_session", "create_bot"].iter().chain(crate::tools::REMOVED_TOOLS) {
+        for name in ["read_session", "stop_session", "create_bot"].iter().chain(crate::tools::REMOVED_TOOLS) {
             assert!(!listed.contains(name), "a child is listed {name}");
         }
-        assert!(listed.contains(&"send_message") && listed.contains(&"list_peers"));
+        // delegate is listed so that it can answer "do this yourself"; start_session is open to it.
+        for name in ["send_message", "list_peers", "delegate", "start_session"] {
+            assert!(listed.contains(&name), "a child is not listed {name}");
+        }
         for parent in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
-            assert!(toolbox.visible_names(parent).contains(&"start_session"), "{parent:?}");
+            let listed = toolbox.visible_names(parent);
+            assert!(listed.contains(&"start_session") && listed.contains(&"delegate"), "{parent:?}");
         }
         w.settle(&id);
     }
 
-    /// Models have confused the two words before, so each place a model reads
-    /// about sessions says what one is, and what a bot is.
+    /// Decision 28: a subagent works at depth one. Its `delegate` answers what
+    /// to do instead; `start_session` stays open, and what it starts is a
+    /// session of the user's, launched by it.
+    #[test]
+    fn a_subagent_cannot_delegate_but_may_start_a_session() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.start(&parent, "x");
+        w.settle(&id);
+        let kid = Caller::from_session(w.row(&id));
+        let refused = w.call(&kid, "delegate", json!({ "provider": "claude", "prompt": "y" }));
+        let why = refused.expect_err("a subagent delegated");
+        assert!(why.contains("do this yourself, or ask your parent") && why.contains("shell"), "{why}");
+        assert!(w.live_of(&id).is_empty(), "something was made");
+
+        // One the user started has no parent to ask.
+        let top = w.start(&w.user(), "y");
+        w.settle(&top);
+        let orphan = Caller::from_session(w.row(&top));
+        let why = w.call(&orphan, "delegate", json!({ "prompt": "z" })).expect_err("a subagent delegated");
+        assert!(why.contains("do this yourself, or ask whoever started you"), "{why}");
+
+        let out = w.call(&kid, "start_session", json!({ "provider": "claude", "prompt": "a separate job", "name": "Spin-off" })).expect("start_session is open");
+        let made = out["id"].as_str().unwrap().to_string();
+        let row = w.row(&made);
+        assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", "chat", None, Some(id.as_str())));
+        w.settle(&made);
+    }
+
+    /// Models have confused the words before, so each place a model reads
+    /// about sessions says what a bot, a session, a subagent, a message and a
+    /// report are, in the same words.
     #[test]
     fn the_words_are_said_wherever_a_model_reads_them() {
         let w = world();
@@ -4403,14 +4497,23 @@ time.sleep(600)
         toolbox.register(Arc::new(catalog_only()));
         let shell = w.session("terminal", "shell", "full");
         let told = crate::tools::instructions(&toolbox, &shell);
-        assert!(told.contains("A bot outlives its sessions; a session is one provider CLI process and can be thrown away."), "{told}");
+        assert!(told.contains(GLOSSARY), "{told}");
+        for word in ["A bot is", "A session is", "A subagent is", "independent one", "A message is", "A report is", "A subagent works for the session that started it"] {
+            assert!(GLOSSARY.contains(word), "{word}: {GLOSSARY}");
+        }
+        for name in ["delegate", "start_session"] {
+            let tool = catalog().into_iter().find(|tool| tool.name == name).unwrap();
+            assert!(!tool.description.contains("owner"), "{name}: {}", tool.description);
+            assert!(tool.description.contains("subagent") || tool.description.contains("separate session"), "{name}: {}", tool.description);
+        }
         let start = catalog().into_iter().find(|tool| tool.name == "start_session").unwrap();
-        assert!(start.description.contains("A bot outlives its sessions"), "{}", start.description);
+        assert!(start.description.contains("Do not use it just because the user said \"subagent\""), "{}", start.description);
         assert!(w.tools.instructions(&shell).is_none(), "the terminal's own text says it already");
         let bot = w.session("bot", "Planner", "full");
-        assert!(w.tools.instructions(&bot).unwrap().contains("A bot outlives its sessions"));
+        let bot_told = w.tools.instructions(&bot).unwrap();
+        assert!(bot_told.contains(GLOSSARY) && bot_told.contains("do not use it just because the user said"), "{bot_told}");
         let id = w.start(&shell, "x");
-        assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its sessions");
+        assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its subagents");
         let child = Caller::from_session(w.row(&id));
         assert!(w.tools.instructions(&child).is_none(), "a child is told about tools it cannot see");
         w.settle(&id);
@@ -4435,8 +4538,8 @@ time.sleep(600)
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let ids: Vec<String> = (0..LIVE_CAP).map(|n| w.start(&parent, &format!("job {n}"))).collect();
-        let fifth = w.call(&parent, "start_session", json!({ "provider": "opencode", "prompt": "one more" }));
-        assert!(fifth.is_err_and(|e| e.contains("already have 4 live sessions")), "the cap let a fifth through");
+        let fifth = w.call(&parent, "delegate", json!({ "provider": "opencode", "prompt": "one more" }));
+        assert!(fifth.is_err_and(|e| e.contains("already have 4 live subagents")), "the cap let a fifth through");
         for id in &ids {
             w.settle(id);
         }
@@ -4452,14 +4555,14 @@ time.sleep(600)
     fn a_session_never_has_more_autonomy_than_whoever_started_it() {
         let w = world();
         let careful = w.session("terminal", "careful", "ask");
-        let full = w.call(&careful, "start_session", json!({ "provider": "opencode", "prompt": "x", "autonomy": "full" }));
+        let full = w.call(&careful, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "full" }));
         assert!(full.is_err_and(|e| e.contains("cannot have full")));
         let id = w.start(&careful, "x");
         assert_eq!(w.row(&id).autonomy, "ask");
         let trusted = w.session("terminal", "trusted", "full");
         let inherits = w.start(&trusted, "y");
         assert_eq!(w.row(&inherits).autonomy, "full");
-        let lowered = w.call(&trusted, "start_session", json!({ "provider": "opencode", "prompt": "z", "autonomy": "ask" })).expect("start");
+        let lowered = w.call(&trusted, "delegate", json!({ "provider": "opencode", "prompt": "z", "autonomy": "ask" })).expect("start");
         assert_eq!(lowered["autonomy"], "ask");
         for id in [id, inherits, lowered["id"].as_str().unwrap().to_string()] {
             w.settle(&id);
@@ -4470,7 +4573,7 @@ time.sleep(600)
     fn a_new_worktree_is_a_branch_of_its_own() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let out = w.call(&parent, "start_session", json!({ "provider": "opencode", "prompt": "x", "worktree": "new", "name": "Fix login" })).expect("start");
+        let out = w.call(&parent, "delegate", json!({ "provider": "opencode", "prompt": "x", "worktree": "new", "name": "Fix login" })).expect("start");
         let id = out["id"].as_str().unwrap();
         let tree = w.row(id).worktree.expect("a worktree");
         assert!(tree.contains("crew-fix-login-"), "{tree}");
@@ -4699,6 +4802,11 @@ time.sleep(600)
                 .expect("busy");
         }
 
+        /// The live subagents of `parent`.
+        fn live_of(&self, parent: &str) -> Vec<Session> {
+            self.tools.live_children(&self.workspace, parent).expect("live")
+        }
+
         fn peer(&self, caller: &Caller, id: &str) -> Value {
             let peers = self.call(caller, "list_peers", json!({})).expect("peers");
             peers.as_array().unwrap().iter().find(|row| row["id"] == id).cloned().unwrap_or(Value::Null)
@@ -4747,17 +4855,19 @@ time.sleep(600)
         w.settle(&to);
     }
 
-    /// Who may write to whom (plan §4.2, P1): anyone to a bot and to a
-    /// top-level session; a session's own parent and the user to a child;
-    /// nobody to itself, to a terminal or to someone else's child.
+    /// Who may write to whom (decision 11): any bot or session but itself and
+    /// an exited subagent, none that has more autonomy than the caller; the
+    /// user may write to any. A session in the terminal view takes no letters.
     #[test]
     fn who_may_write_to_whom() {
         let w = world();
         let shell = w.session("terminal", "shell", "full");
         let other = w.session("terminal", "other", "full");
         let bot = w.session("bot", "Planner", "full");
+        let careful = w.session("bot", "Careful", "ask");
         let child = w.start(&shell, "x");
         let top = w.start(&w.user(), "y");
+        let chat = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
         w.settle(&child);
         w.settle(&top);
         let refused = |caller: &Caller, to: &str, why: &str| {
@@ -4765,41 +4875,91 @@ time.sleep(600)
             assert!(out.as_ref().is_err_and(|e| e.contains(why)), "{to}: {out:?}");
         };
         refused(&bot, bot.session_id().unwrap(), "That is you");
-        refused(&bot, shell.session_id().unwrap(), "terminal session");
-        refused(&other, &child, "not by you");
-        refused(&bot, &child, "not by you");
+        refused(&bot, shell.session_id().unwrap(), "terminal view");
         refused(&bot, "Planner", "addressed by id");
         refused(&bot, "Nobody", "list_peers has the ids");
         let missing = w.call(&shell, "send_message", json!({ "to": child }));
         assert!(missing.is_err_and(|e| e.contains("text is required")));
-        // Its own parent, the user, and anyone to a top-level session.
-        assert_eq!(w.call(&shell, "send_message", json!({ "to": child, "text": "more" })).expect("parent")["delivery"], "started");
+        // The reach is the workspace's: a parent, a stranger, a bot and the
+        // user all write to a subagent, to a user's subagent, to a bot and to
+        // a session of the user's that is in the chat.
+        let delivered = |caller: &Caller, to: &str| {
+            let out = w.call(caller, "send_message", json!({ "to": to, "text": "more" })).expect("send");
+            assert!(matches!(out["delivery"].as_str(), Some("started" | "queued")), "{to}: {out}");
+        };
+        delivered(&shell, &child);
         w.settle(&child);
-        assert_eq!(w.call(&w.user(), "send_message", json!({ "to": child, "text": "more" })).expect("user")["delivery"], "started");
+        delivered(&other, &child);
         w.settle(&child);
-        assert_eq!(w.call(&other, "send_message", json!({ "to": top, "text": "hello" })).expect("top")["delivery"], "started");
+        delivered(&bot, &child);
+        w.settle(&child);
+        delivered(&w.user(), &child);
+        w.settle(&child);
+        delivered(&other, &top);
         w.settle(&top);
-        // A child writes to its parent's peers: a bot.
-        let kid = Caller::from_session(w.row(&child));
-        assert_eq!(w.call(&kid, "send_message", json!({ "to": bot.session_id().unwrap(), "text": "a question" })).expect("kid")["delivery"], "started");
+        delivered(&other, bot.session_id().unwrap());
         w.settle(bot.session_id().unwrap());
-        // It asked, so the bot may answer it, though it did not start it; a
-        // bot it never wrote to may not.
-        let other_bot = w.session("bot", "Other", "full");
-        refused(&other_bot, &child, "not by you");
-        assert_eq!(w.call(&bot, "send_message", json!({ "to": child, "text": "an answer" })).expect("reply")["delivery"], "started");
-        w.settle(&child);
+        delivered(&shell, &chat.id);
+        w.settle(&chat.id);
+        // A subagent writes to its parent's peers, and the parent's peers write to it.
+        let kid = Caller::from_session(w.row(&child));
+        delivered(&kid, bot.session_id().unwrap());
+        w.settle(bot.session_id().unwrap());
+        // The one rule: not to a target with more autonomy than the caller has.
+        for to in [bot.session_id().unwrap(), child.as_str(), chat.id.as_str()] {
+            refused(&careful, to, "allowed more than it is");
+        }
+        let ask_peer = w.session("bot", "Ask", "ask");
+        delivered(&bot, ask_peer.session_id().unwrap());
+        delivered(&careful, ask_peer.session_id().unwrap());
+        w.settle(ask_peer.session_id().unwrap());
+        // The user is exempt, whatever the target runs with.
+        delivered(&w.user(), bot.session_id().unwrap());
+        w.settle(bot.session_id().unwrap());
         // The listing says the same.
         assert_eq!(w.peer(&shell, &child)["write"], json!(true));
+        assert_eq!(w.peer(&other, &child)["write"], json!(true));
         assert_eq!(w.peer(&other, &top)["write"], json!(true));
+        assert_eq!(w.peer(&careful, &child)["write"], json!(false));
+        assert_eq!(w.peer(&careful, ask_peer.session_id().unwrap())["write"], json!(true));
         assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(false));
         assert_eq!(w.peer(&bot, shell.session_id().unwrap())["kind"], "terminal");
+        assert_eq!((w.peer(&bot, &chat.id)["kind"].clone(), w.peer(&bot, &chat.id)["write"].clone()), (json!("session"), json!(true)));
         assert!(w.peer(&bot, bot.session_id().unwrap()).is_null(), "a caller is not its own peer");
-        // Someone else's child is not listed; a top-level one is.
-        assert!(w.peer(&other, &child).is_null() && w.peer(&bot, &child).is_null());
-        // An exited session takes nothing.
+        // An exited subagent takes nothing, and only its parent still lists it.
         w.call(&shell, "stop_session", json!({ "session": child })).expect("stop");
-        refused(&shell, &child, "has exited");
+        refused(&shell, &child, "start another with delegate");
+        refused(&other, &child, "start another with delegate");
+        assert!(w.peer(&other, &child).is_null() && w.peer(&bot, &child).is_null());
+        assert_eq!(w.peer(&shell, &child)["status"], "exited");
+        assert_eq!(w.peer(&shell, &child)["write"], json!(false));
+    }
+
+    /// Decision 12: whoever may write to a subagent waiting on a question may
+    /// answer it, the first answer counting; an approval stays with its parent
+    /// and the user.
+    #[test]
+    fn whoever_may_write_may_answer_a_question_and_only_the_parent_decides() {
+        let w = world();
+        let (fake, _) = crate::turns::fake_codex(&w.dir);
+        w.turns.override_binary("codex", fake);
+        let shell = w.session("terminal", "shell", "full");
+        let stranger = w.session("terminal", "stranger", "full");
+        let careful = w.session("terminal", "careful", "ask");
+        let asks = w.call(&shell, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" })).expect("start");
+        let id = asks["id"].as_str().unwrap().to_string();
+        until_asking(&w, &id);
+        // Less autonomy than the one asking: it may not write, so it may not answer.
+        let low = w.call(&careful, "send_message", json!({ "to": id, "text": "Red" }));
+        assert!(low.is_err_and(|e| e.contains("allowed more than it is")));
+        // An approval is not a stranger's to decide, question or none.
+        let decided = w.call(&stranger, "send_message", json!({ "to": id, "decision": "allow" }));
+        assert!(decided.is_err_and(|e| e.contains("not a session you started")));
+        let asked_at = w.row(&id).cursor;
+        let answered = w.call(&stranger, "send_message", json!({ "to": id, "text": "Blue" })).expect("a stranger answers");
+        assert_eq!(answered["delivery"], "answered", "{answered}");
+        let done = w.wait(&shell, &id, json!({ "since": asked_at }));
+        assert_eq!(done["sessions"][0]["report"], r#"report: QUESTION + answers: {"color": {"answers": ["Blue"]}}"#, "{done}");
     }
 
     /// A bot that waits gets the report back from the call, and only there:
@@ -4810,7 +4970,7 @@ time.sleep(600)
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
         w.busy(&bot, 2.0);
-        let out = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "find it", "wait": true, "timeout_s": 20 })).expect("start");
+        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "find it", "wait": true, "timeout_s": 20 })).expect("start");
         assert_eq!((out["status"].clone(), out["report"].clone()), (json!("reported"), json!("report: find it")), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         w.settle(&me);
@@ -4834,7 +4994,7 @@ time.sleep(600)
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
         w.busy(&bot, 0.5);
-        let out = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
+        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
         assert_eq!(out["status"], "running", "{out}");
         assert!(out["note"].as_str().unwrap().contains("Its report will wake you"), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
@@ -4844,12 +5004,15 @@ time.sleep(600)
         assert!(woke.contains("report: SLEEP 2"), "{woke}");
 
         let shell = w.session("terminal", "shell", "full");
-        let out = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
+        let out = w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
         assert_eq!(out["status"], "running", "{out}");
         assert!(out["note"].as_str().unwrap().contains("read_session"), "{out}");
         w.settle(out["id"].as_str().unwrap());
-        let refused = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "wait": true, "owner": "user" }));
+        // A separate session reports to nobody, so there is nothing to wait for.
+        let refused = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "wait": true }));
         assert!(refused.is_err_and(|e| e.contains("nothing to wait for")));
+        let refused = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "timeout_s": 5 }));
+        assert!(refused.is_err_and(|e| e.contains("does not wait")));
     }
 
     /// A child's question ends a wait early; send_message answers it, and
@@ -4861,7 +5024,7 @@ time.sleep(600)
         w.turns.override_binary("codex", fake);
         let shell = w.session("terminal", "shell", "full");
         let out = w
-            .call(&shell, "start_session", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION", "wait": true, "timeout_s": 20 }))
+            .call(&shell, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION", "wait": true, "timeout_s": 20 }))
             .expect("start");
         assert_eq!(out["status"], "question", "{out}");
         assert_eq!(out["questions"][0]["question"], "Which color?", "{out}");
@@ -4890,7 +5053,7 @@ time.sleep(600)
         w.turns.override_binary("codex", fake);
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
-        let asks = w.call(&bot, "start_session", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" })).expect("start");
+        let asks = w.call(&bot, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" })).expect("start");
         let id = asks["id"].as_str().unwrap().to_string();
         w.heard(&me, &id);
         w.settle(&me);
@@ -5012,7 +5175,7 @@ time.sleep(600)
         let family = crate::process_tools::ProcessTools::new(processes.clone(), w.turns.store().clone()).with_turns(w.turns.clone());
         let bot = w.session("bot", "Lead", "full");
         let me = bot.session_id().unwrap().to_string();
-        let started = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("start");
+        let started = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         w.settle(&id);
         w.heard(&me, &id);
@@ -5055,7 +5218,7 @@ time.sleep(600)
         w.turns.override_binary("codex", fake);
         let bot = w.session("bot", "Lead", "full");
         let out = w
-            .call(&bot, "start_session", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "ASK", "autonomy": "ask", "wait": true, "timeout_s": 20 }))
+            .call(&bot, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "ASK", "autonomy": "ask", "wait": true, "timeout_s": 20 }))
             .expect("start");
         assert_eq!(out["status"], "approval", "{out}");
         assert!(out["approval"].as_str().unwrap().contains("touch asked.txt"), "{out}");
@@ -5066,45 +5229,160 @@ time.sleep(600)
         w.settle(bot.session_id().unwrap());
     }
 
-    /// owner user: a terminal session of the user's, in its worktree, with
-    /// the prompt waiting for its CLI; nobody's child, handed off by the
-    /// caller, and no turn started.
+    /// Decisions 6 to 8: `start_session` makes a top-level session in the chat
+    /// view, fixed at creation, that is the user's: nobody's child, not capped,
+    /// not reaped, owed no report. It records who launched it, and its first
+    /// prompt arrives in an envelope that names the launcher.
     #[test]
-    fn a_handoff_is_the_users_session_with_the_prompt_waiting_for_its_cli() {
+    fn start_session_makes_a_top_level_chat_session_that_reports_to_nobody() {
         let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
         let bot = w.session("bot", "Lead", "full");
+        let me = bot.session_id().unwrap().to_string();
         let out = w
-            .call(&bot, "start_session", json!({ "prompt": "Carry on with the plan: step 2.", "owner": "user", "worktree": "new", "name": "Auth refactor" }))
-            .expect("hand off");
-        assert_eq!((out["owner"].clone(), out["status"].clone()), (json!("user"), json!("handed off")), "{out}");
+            .call(&bot, "start_session", json!({ "provider": "claude", "prompt": "Carry on with the plan: step 2.", "worktree": "new", "name": "Auth refactor" }))
+            .expect("start");
+        assert_eq!((out["kind"].clone(), out["status"].clone()), (json!("session"), json!("starting")), "{out}");
+        assert!(out["note"].as_str().unwrap().contains("reports to nobody"), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         let row = w.row(&id);
-        assert_eq!((row.kind.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", None, bot.session_id()));
+        assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref()), ("terminal", "chat", None));
+        assert_eq!(row.launched_by.as_deref(), Some(me.as_str()));
         assert!(row.worktree.as_deref().is_some_and(|tree| tree.contains("crew-auth-refactor-")), "{row:?}");
         assert_eq!(out["worktree"], json!(row.worktree));
-        assert_eq!(row.provider, "opencode", "the caller's provider");
         assert!(w.made.lock().unwrap().contains(&id), "the window was not told");
-        let waiting = mailbox::waiting(w.turns.store(), &id).unwrap();
-        assert_eq!(waiting.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Carry on with the plan: step 2."]);
-        assert!(w.launches().is_empty(), "a turn was started for it");
+        w.settle(&id);
+
+        // The first prompt is a message from the launcher, in the envelope that names it.
+        let first = w.claude_inputs().into_iter().next().expect("the CLI was never handed a prompt");
+        assert!(first[0].1.starts_with(&format!("## Message\nFrom: Lead (bot {me}), a model")), "{first:?}");
+        assert!(first[0].1.contains(&format!("Reply with `send_message` to `{me}`")), "{first:?}");
+        assert!(first[0].1.trim_end().ends_with("Carry on with the plan: step 2."), "{first:?}");
+        let said = w.blocks(&id).into_iter().find(|block| block.role == BlockRole::User).expect("the prompt");
+        assert_eq!(said.text, "Carry on with the plan: step 2.");
+        assert_eq!(said.from_bot.map(|from| from.id), Some(me.clone()));
+
+        // Listed for what it is, and the launcher's chat says it started it.
         let peer = w.peer(&bot, &id);
-        assert_eq!((peer["kind"].clone(), peer["launched_by"].clone(), peer["write"].clone()), (json!("terminal"), json!("you"), json!(false)), "{peer}");
-        let blocks = w.turns.transcripts().since(bot.session_id().unwrap(), 0).0;
-        assert!(blocks.iter().any(|b| b.text.contains(&format!("Handed Auth refactor ({id}) to the user"))), "{blocks:?}");
-        let bad = w.call(&bot, "start_session", json!({ "prompt": "x", "owner": "them" }));
-        assert!(bad.is_err_and(|e| e.contains("owner is me or user")));
+        assert_eq!((peer["kind"].clone(), peer["launched_by"].clone(), peer["write"].clone()), (json!("session"), json!("you"), json!(true)), "{peer}");
+        assert!(peer.get("parent").is_none(), "{peer}");
+        let blocks = w.turns.transcripts().since(&me, 0).0;
+        assert!(blocks.iter().any(|b| b.text.contains(&format!("Started session Auth refactor ({id})"))), "{blocks:?}");
+
+        // It reports to nobody, and launching grants nothing: no report, no
+        // event, no driving it.
+        assert_eq!(letters_from(&w, &id, "report"), 0);
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0);
+        assert!(session_events::latest(w.turns.store(), &id).unwrap().is_none());
+        for (tool, args) in [("read_session", json!({ "session": id })), ("stop_session", json!({ "session": id }))] {
+            let out = w.call(&bot, tool, args);
+            assert!(out.is_err_and(|e| e.contains("session of the user's")), "{tool}");
+        }
+        // The user has it in their chat like any session of theirs.
+        assert_eq!(w.say(&w.row(&id), "and then?").status, "done");
+    }
+
+    /// Decisions 1 and 6: no `owner`, no wait; and a separate session is not
+    /// capped, not counted against anyone, and not reaped when idle.
+    #[test]
+    fn independent_sessions_are_not_capped_not_counted_and_not_reaped() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let shell = w.session("terminal", "shell", "full");
+        for tool in ["delegate", "start_session"] {
+            let out = w.call(&shell, tool, json!({ "provider": "claude", "prompt": "x", "owner": "user" }));
+            assert!(out.is_err_and(|e| e.contains("owner is gone")), "{tool}");
+        }
+        let ids: Vec<String> = (0..=LIVE_CAP)
+            .map(|n| {
+                let out = w.call(&shell, "start_session", json!({ "provider": "claude", "prompt": format!("job {n}") })).expect("start");
+                out["id"].as_str().unwrap().to_string()
+            })
+            .collect();
+        for id in &ids {
+            w.settle(id);
+        }
+        assert_eq!(ids.len(), LIVE_CAP + 1);
+        assert!(w.live_of(shell.session_id().unwrap()).is_empty(), "a session of the user's counted against its launcher");
+        // The cap still holds for subagents beside them.
+        let subagents: Vec<String> = (0..LIVE_CAP).map(|n| w.start(&shell, &format!("sub {n}"))).collect();
+        assert!(w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "one more" })).is_err());
+        for id in subagents.iter().chain(&ids) {
+            w.settle(id);
+        }
+        let gone = w.tools.reap(Duration::ZERO).expect("reap");
+        assert!(ids.iter().all(|id| !gone.contains(id)), "an independent session was reaped: {gone:?}");
+        assert!(ids.iter().all(|id| w.row(id).status != "exited"));
+        // A fifth subagent started, and a session started by one the cap forbade, are not the same thing.
+        w.call(&shell, "start_session", json!({ "provider": "claude", "prompt": "and another" })).expect("still open");
+    }
+
+    /// Decision 3: a report goes to whoever started the turn. The parent's
+    /// prompt and messages report to it; a turn the user starts by writing in
+    /// the subagent's tab reports only to the user.
+    #[test]
+    fn a_report_goes_to_whoever_started_the_turn() {
+        let w = world();
+        let bot = w.session("bot", "Lead", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let child = w.start(&bot, "x");
+        w.settle(&child);
+        until("the first report", || letters_from(&w, &child, "report") == 1);
+        w.heard(&me, &child);
+        w.settle(&me);
+
+        let before = w.row(&child).cursor;
+        w.type_to(&w.row(&child), "use the new client", None, None);
+        w.settle(&child);
+        until("the user's turn to be written as an event", || w.row(&child).cursor > before);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(letters_from(&w, &child, "report"), 1, "the user's turn was reported to the parent");
+        assert!(mailbox::waiting(w.turns.store(), &me).unwrap().is_empty());
+        // The event is still there for a wait that wants it.
+        assert_eq!(session_events::latest(w.turns.store(), &child).unwrap().unwrap().kind, "turn");
+
+        // The parent writes to it, and that turn is the parent's.
+        w.call(&bot, "send_message", json!({ "to": child, "text": "and the signup" })).expect("send");
+        w.settle(&child);
+        until("the parent's turn to be reported", || letters_from(&w, &child, "report") == 2);
+    }
+
+    /// Decision 13: a steer and a turn read one envelope: the sender's name and
+    /// id, that a model wrote it, how to reply and that no reply is needed.
+    /// Only the time a waiting letter was written differs.
+    #[test]
+    fn a_steer_and_a_turn_read_the_same_envelope() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.start(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        let from = crew_protocol::BotRef { id: "s1".into(), name: "Sender".into(), kind: Some("session".into()) };
+        let steer = w.turns.steer_text(&id, &from, "look at the diff");
+        let letter = mailbox::Letter::new(&id, &from, "look at the diff", mailbox::MESSAGE, None);
+        let turn = mailbox::render(&letter, w.row(&id).parent_id.as_deref());
+        let untimed: Vec<&str> = turn.lines().filter(|line| !line.starts_with("At: ")).collect();
+        assert_eq!(steer, untimed.join("\n"));
+        for said in ["From: Sender (session s1), a model", "Reply with `send_message` to `s1`", "No reply is needed"] {
+            assert!(steer.contains(said), "{said}: {steer}");
+        }
+        // The parent's own, which answers by its report.
+        let from_parent = crate::caller::Caller::from_session(w.row(parent.session_id().unwrap())).sender();
+        let steered = w.turns.steer_text(&id, &from_parent, "more");
+        assert!(steered.contains("your report at the end of this turn reaches it"), "{steered}");
     }
 
     #[test]
     fn autonomy_is_never_above_the_callers() {
         let w = world();
         let edits = w.session("terminal", "edits", "edits");
-        let auto = w.call(&edits, "start_session", json!({ "provider": "opencode", "prompt": "x", "autonomy": "auto" }));
+        let auto = w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "auto" }));
         assert!(auto.is_err_and(|e| e.contains("Your autonomy is edits, so a session you start cannot have auto")));
-        let odd = w.call(&edits, "start_session", json!({ "provider": "opencode", "prompt": "x", "autonomy": "yolo" }));
+        let odd = w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "yolo" }));
         assert!(odd.is_err_and(|e| e.contains("ask, edits, auto or full")));
         for wanted in ["ask", "edits"] {
-            let out = w.call(&edits, "start_session", json!({ "provider": "opencode", "prompt": "x", "autonomy": wanted })).expect("start");
+            let out = w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": wanted })).expect("start");
             assert_eq!(out["autonomy"], wanted);
             w.settle(out["id"].as_str().unwrap());
         }
@@ -5113,8 +5391,8 @@ time.sleep(600)
         w.settle(&inherits);
     }
 
-    /// The tool a terminal reads does not promise it a reply, and nothing a
-    /// model reads names a tool that is gone.
+    /// What a model reads about `send_message` is the same for every session,
+    /// and nothing a model reads names a tool that is gone.
     #[test]
     fn what_a_model_reads_names_only_the_tools_there_are() {
         let w = world();
@@ -5125,7 +5403,9 @@ time.sleep(600)
         let host = crate::tools::Host { store: w.turns.store(), transcripts: w.turns.transcripts(), on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let listed = crate::tools::handle(&host, &shell, "tools/list", json!({})).expect("list");
         let send = listed["tools"].as_array().unwrap().iter().find(|t| t["name"] == "send_message").expect("send_message");
-        assert!(send["description"].as_str().unwrap().contains("You cannot receive a reply"), "{send}");
+        let said = send["description"].as_str().unwrap();
+        assert!(said.contains("any but yourself and a subagent that has exited") && said.contains("more autonomy"), "{send}");
+        assert!(!said.contains("You cannot receive a reply"), "{send}");
         for caller in [&shell, &bot, &w.user()] {
             let said = format!(
                 "{}{}",
@@ -5148,7 +5428,7 @@ time.sleep(600)
         let bot = w.session("bot", "Lead", "full");
         let me = bot.session_id().unwrap().to_string();
         let started = w
-            .call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "fix the login", "name": "Auth" }))
+            .call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "fix the login", "name": "Auth" }))
             .expect("start");
         let child = started["id"].as_str().unwrap().to_string();
         let first = started["letter_id"].as_str().expect("start_session names its letter").to_string();
@@ -5173,7 +5453,7 @@ time.sleep(600)
         assert_eq!(read, [first.clone(), second.clone()]);
         let lead = w.turns.transcripts().since(&me, 0).0;
         let line = lead.iter().find(|block| block.letter_id.as_deref() == Some(first.as_str())).expect("the starter's line");
-        assert!(line.text.starts_with("Started session Auth"), "{}", line.text);
+        assert!(line.text.starts_with("Delegated to subagent Auth"), "{}", line.text);
         // The reports came back as letters too, and the bot's blocks say which.
         let reports: Vec<&Block> = lead.iter().filter(|block| block.from_bot.as_ref().is_some_and(|f| f.id == child)).collect();
         assert_eq!(reports.len(), 2);
@@ -5271,7 +5551,7 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         for _ in 0..400 {
             if w.row(&id).provider_session_id.is_some() {
@@ -5371,7 +5651,7 @@ time.sleep(600)
         w.say(&mine, "hello");
         // The same CLI as a subagent, for comparison.
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "hello" })).expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "hello" })).expect("start");
         w.wait(&parent, started["id"].as_str().unwrap(), json!({}));
 
         let launches = launched(&w.dir.join("claude-launch.log"));
@@ -5553,7 +5833,7 @@ time.sleep(600)
         let id = w.start(&parent, "one");
         w.wait(&parent, &id, json!({}));
         let steer = w.turns.steer_text(&id, &mailbox::user(), "x");
-        assert!(steer.starts_with("## Message\nFrom: you (the user, from the crew command line)"), "{steer}");
+        assert!(steer.starts_with("## Message\nFrom: the user (a person, from the crew command line)"), "{steer}");
     }
 
     /// Nobody waits on the user's turn, so it ends as a bot's does: done until

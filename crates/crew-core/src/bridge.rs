@@ -863,12 +863,12 @@ mod tests {
         assert_eq!(who("ses_bot"), format!("Coder (bot {bot})"));
         assert_eq!(who("ses_kid"), format!("Kid (session {kid})"));
 
-        // A bot may start a session (the stand-in family says "not here"); a
+        // A bot may read a session (the stand-in family says "not here"); a
         // child may not, and is told so before the tool is asked.
-        let bot_start = said(&rig.call(&run.host_token, "start_session", Some("ses_bot")));
+        let bot_start = said(&rig.call(&run.host_token, "read_session", Some("ses_bot")));
         assert!(bot_start.starts_with("not here"), "{bot_start}");
-        let kid_start = said(&rig.call(&run.host_token, "start_session", Some("ses_kid")));
-        assert_eq!(kid_start, "This session cannot use start_session: it is not offered to a child session.");
+        let kid_start = said(&rig.call(&run.host_token, "read_session", Some("ses_kid")));
+        assert_eq!(kid_start, "This session cannot use read_session: it is not offered to a child session.");
     }
 
     #[test]
@@ -906,9 +906,9 @@ mod tests {
         let whoami = rig.ask(&shell, "whoami", json!({}), None);
         assert_eq!(whoami["result"]["kind"], "child");
         assert_eq!(whoami["result"]["sessionId"], kid.as_str());
-        // The same limits as its own token: no starting sessions.
-        let refused = said(&rig.call(&shell, "start_session", None));
-        assert!(refused.starts_with("Unknown tool \"start_session\""), "{refused}");
+        // The same limits as its own token: no reading sessions.
+        let refused = said(&rig.call(&shell, "read_session", None));
+        assert!(refused.starts_with("Unknown tool \"read_session\""), "{refused}");
 
         host.unbind(&run.run_id, "ses_1");
         assert_eq!(rig.ask(&shell, "whoami", json!({}), None)["error"], "Bad token");
