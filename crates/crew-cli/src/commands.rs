@@ -333,17 +333,23 @@ fn arguments(matches: &ArgMatches, tool: &Tool, verb: &CliVerb) -> Result<Value,
             Kind::Integer => matches.get_one::<i64>(&name).map(|n| json!(n)),
             Kind::Number => matches.get_one::<f64>(&name).map(|n| json!(n)),
             Kind::Boolean => matches.get_one::<bool>(&name).map(|b| json!(b)),
-            Kind::List => matches.get_many::<String>(&name).map(|items| {
-                let item_kind = spec.get("items").map(kind).unwrap_or(Kind::Text);
-                Value::Array(
-                    items
+            Kind::List => match matches.get_many::<String>(&name) {
+                Some(items) => {
+                    let item_kind = spec.get("items").map(kind).unwrap_or(Kind::Text);
+                    let items = items
                         .map(|item| match item_kind {
-                            Kind::Integer | Kind::Number => serde_json::from_str(item).unwrap_or_else(|_| json!(item)),
-                            _ => json!(item),
+                            Kind::Integer | Kind::Number => Ok(serde_json::from_str(item).unwrap_or_else(|_| json!(item))),
+                            // A list of objects: each flag is one, as JSON.
+                            Kind::Json => serde_json::from_str::<Value>(item).map_err(|e| {
+                                CliError::Usage(format!("--{} takes JSON for each item: {e}", name.replace('_', "-")))
+                            }),
+                            _ => Ok(json!(item)),
                         })
-                        .collect(),
-                )
-            }),
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Some(Value::Array(items))
+                }
+                None => None,
+            },
             Kind::Pairs => match matches.get_many::<String>(&name) {
                 Some(pairs) => Some(json!(processes::parse_env(&pairs.cloned().collect::<Vec<_>>())?)),
                 None => None,
@@ -521,6 +527,19 @@ mod tests {
         let (_, _, matches) = parse(&["sessions", "delegate", "--wait", "--timeout-s", "30", "--", "go"]);
         let (verb, tool) = find("sessions", "delegate");
         assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "go", "wait": true, "timeout_s": 30 }));
+    }
+
+    /// A list of objects is given as one JSON flag per item.
+    #[test]
+    fn a_list_of_objects_takes_a_json_flag_per_item() {
+        let (_, _, matches) = parse(&["sessions", "start-many", "--sessions", r#"{"prompt":"a"}"#, "--sessions", r#"{"prompt":"b","worktree":"new"}"#, "--request-id", "r1"]);
+        let (verb, tool) = find("sessions", "start-many");
+        assert_eq!(
+            arguments(&matches, &tool, &verb).expect("args"),
+            json!({ "sessions": [{ "prompt": "a" }, { "prompt": "b", "worktree": "new" }], "request_id": "r1" })
+        );
+        let (_, _, matches) = parse(&["sessions", "start-many", "--sessions", "nope"]);
+        assert!(arguments(&matches, &tool, &verb).is_err());
     }
 
     /// `crew send` and `crew peers` are commands of their own, beside the groups.

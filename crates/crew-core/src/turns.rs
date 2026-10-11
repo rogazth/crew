@@ -1101,6 +1101,22 @@ impl TurnHost {
             return Err(format!("{} has no queue of the user's to send from.", session.name));
         }
         mailbox::send_first(&self.store, session_id, letter_id)?;
+        Ok(self.stop_and_hand_over(session_id, letter_id))
+    }
+
+    /// `interrupt_session` with a message: the letter (anyone's) goes to the
+    /// head of the box, the running turn stops, and the queue goes over as
+    /// one turn headed by it, as for Send now.
+    pub fn interrupt_with(&self, session_id: &str, letter_id: &str) -> Result<TurnStarted, String> {
+        let session = session::get(&self.store, session_id.to_string())?.ok_or_else(|| "Session not found".to_string())?;
+        if driven(&session).is_none() {
+            return Err(format!("{} runs in the terminal view and takes no letters.", session.name));
+        }
+        mailbox::reorder(&self.store, session_id, &[letter_id.to_string()])?;
+        Ok(self.stop_and_hand_over(session_id, letter_id))
+    }
+
+    fn stop_and_hand_over(&self, session_id: &str, letter_id: &str) -> TurnStarted {
         if self.is_running(session_id) {
             self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
             self.cancel(session_id, true);
@@ -1111,11 +1127,11 @@ impl TurnHost {
             self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
             self.drain_mailbox(session_id)
         };
-        Ok(TurnStarted {
+        TurnStarted {
             working: true,
             delivery: Some(if started { "started" } else { "queued" }.into()),
             letter_id: Some(letter_id.to_string()),
-        })
+        }
     }
 
     /// Who started a subagent's turn decides where its report goes (plan

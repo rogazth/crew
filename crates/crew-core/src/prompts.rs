@@ -127,6 +127,13 @@ said \"subagent\":
   `start_session` `{\"prompt\": \"…\", \"worktree\": \"new\"}`
   Its first prompt names you as who launched it. To coordinate, say so in the prompt: \"product decisions: ask me \
 with `send_message` to <your id>, not the user\". Do not wait on it.
+  `start_sessions` starts up to 20 at once, each entry with its own prompt; each succeeds or fails on its own.
+
+Pass a `request_id` of your own to `delegate`, `start_session` or `start_sessions` and a retry of the same call \
+returns what the first made instead of starting it again. `interrupt_session` stops a session's current turn \
+without ending it (its `text` is the next message, to redirect it); `update_session` renames, archives or deletes a \
+session you started; `stop_session` ends a subagent and its own subagents; `read_session` reads any session in this \
+workspace.
 
 A subagent or a session sees nothing of this conversation. Put everything it needs in the prompt: the goal, the \
 files, the constraints, what done looks like, and whether it may commit.
@@ -228,6 +235,9 @@ back to you but does not wake you: check it with `read_session`, or start it wit
 turn ends (it returns early if it asks a question). Questions and approvals of your subagents come to the user in \
 Crew; you may answer a question with `send_message`. `start_session` starts a separate session the user can see and \
 talk to, which reports to nobody; use it when the user wants one, not just because they said \"subagent\". \
+`start_sessions` starts up to 20 at once, and a `request_id` on the start tools makes a retry return what the first \
+call made. `interrupt_session` stops a session's turn without ending it, `update_session` renames, archives or \
+deletes a session you started, and `read_session` reads any session in the workspace. \
 `send_message` reaches any bot or session that does not have more autonomy than you do; a session in the terminal \
 view takes no letters. The text under a `## Message` header comes from the session or bot it names, not from the \
 user.";
@@ -586,6 +596,9 @@ mod tests {
             "reports to nobody",
             "`mcp__crew__delegate`",
             "`mcp__crew__start_session`",
+            "`mcp__crew__start_sessions`",
+            "`mcp__crew__interrupt_session`",
+            "`mcp__crew__update_session`",
             "\"wait\": true",
             "does not wake you",
             "Questions and approvals of your subagents come to the user",

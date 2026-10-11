@@ -19,7 +19,7 @@
 //! subagent waiting on a question, it is the answer.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crew_protocol::{ApprovalDecision, Block, BlockRole, ToolStatus, TurnStart};
@@ -72,6 +72,17 @@ enum Start {
 }
 
 type Made = Arc<dyn Fn(&Session) + Send + Sync>;
+/// A terminal-view session's blocks as its CLI's own history has them; `None`
+/// where the history cannot be found.
+pub type HistoryReader = Arc<dyn Fn(&Session) -> Result<Option<Vec<Block>>, String> + Send + Sync>;
+/// The daemon's part of archiving or deleting a session: `release` lets go of
+/// what only it holds (the session's terminal, its token, its browser tabs);
+/// `gone` tells every window the sessions are no longer listed.
+pub struct Retirement {
+    pub release: Arc<dyn Fn(&str) + Send + Sync>,
+    pub gone: Arc<dyn Fn(&[String]) + Send + Sync>,
+}
+
 type MakeWorktree = Arc<dyn Fn(&str, &str) -> Result<Worktree, String> + Send + Sync>;
 
 pub struct SessionTools {
@@ -89,6 +100,12 @@ pub struct SessionTools {
     /// Start requests being made right now, by caller and `request_id`, so a
     /// retry that overlaps its first call does not start everything twice.
     in_flight: Mutex<HashSet<String>>,
+    /// Reads the history a provider's CLI keeps of a session in the terminal
+    /// view, which the daemon knows where to find.
+    history: OnceLock<HistoryReader>,
+    /// What the daemon does when a session is archived or deleted, beyond
+    /// what the turn host knows.
+    retirement: OnceLock<Retirement>,
 }
 
 /// What a caller may ask a session to run with, least first.
@@ -116,6 +133,8 @@ impl SessionTools {
             make_worktree,
             processes: None,
             in_flight: Mutex::new(HashSet::new()),
+            history: OnceLock::new(),
+            retirement: OnceLock::new(),
         }
     }
 
@@ -124,6 +143,17 @@ impl SessionTools {
     pub fn with_processes(mut self, processes: crate::process::ProcessHost) -> Self {
         self.processes = Some(processes);
         self
+    }
+
+    /// With a way to read a terminal-view session's own history, so
+    /// `read_session` can read it.
+    pub fn set_history_reader(&self, reader: HistoryReader) {
+        let _ = self.history.set(reader);
+    }
+
+    /// With what the daemon does to retire a session (see [`Retirement`]).
+    pub fn set_retirement(&self, retirement: Retirement) {
+        let _ = self.retirement.set(retirement);
     }
 
     /// How long an idle child is kept.
@@ -194,11 +224,44 @@ impl SessionTools {
         ))
     }
 
+    /// Any session or bot in the caller's workspace, to read.
+    fn visible(&self, caller: &Caller, id: &str) -> Result<Session, String> {
+        let workspace = caller.workspace_id()?;
+        session::get(&self.store, id.trim().to_string())?
+            .filter(|row| row.workspace_id == workspace)
+            .ok_or_else(|| format!("No session {id} in this workspace. list_peers has who is here."))
+    }
+
+    /// What a session said and did, as the blocks `read_session` numbers. A
+    /// session in the terminal view has no transcript of Crew's: its CLI keeps
+    /// its own history, which is read where the provider files it, if it can
+    /// be found.
+    fn blocks_of(&self, row: &Session) -> Result<Vec<Block>, String> {
+        if !(row.kind == "terminal" && row.view != "chat") {
+            return Ok(self.turns.transcripts().since(&row.id, 0).0);
+        }
+        let cannot = |why: &str| {
+            format!(
+                "{} ({}) runs in the terminal view, where its CLI keeps the conversation and Crew keeps none, and {why}. \
+                 There is nothing to read: ask the user what it did.",
+                row.name, row.id
+            )
+        };
+        let Some(read) = self.history.get() else {
+            return Err(cannot("this Crew has no way to read its CLI's own history"));
+        };
+        match read(row) {
+            Ok(Some(blocks)) if !blocks.is_empty() => Ok(blocks),
+            Ok(_) => Err(cannot(&format!("{} has not written a history for it yet, or Crew cannot find it", row.provider))),
+            Err(error) => Err(cannot(&format!("its history could not be read ({error})"))),
+        }
+    }
+
     /// Whether the caller is the one a session reports to, whose `seen` it is.
     fn is_owner(caller: &Caller, row: &Session) -> bool {
         match caller {
-            Caller::User { .. } => row.parent_id.is_none(),
-            _ => caller.session_id() == row.parent_id.as_deref(),
+            Caller::User { .. } => row.kind == "child" && row.parent_id.is_none(),
+            _ => row.parent_id.is_some() && caller.session_id() == row.parent_id.as_deref(),
         }
     }
 
@@ -392,6 +455,11 @@ impl SessionTools {
                 let mut out = json!({
                     "id": row.id,
                     "name": row.name,
+                    "type": match row.kind.as_str() {
+                        "bot" => "bot",
+                        "child" => "subagent",
+                        _ => "session",
+                    },
                     "kind": kind,
                     "status": self.peer_status(caller, row),
                 });
@@ -1291,7 +1359,7 @@ impl SessionTools {
 
     fn read(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
         let id = text(args.get("session")).ok_or("session is required")?;
-        let row = self.owned(caller, &id)?;
+        let row = self.visible(caller, &id)?;
         let since = args.get("since").and_then(Value::as_i64).map(|n| n.max(0) as usize);
         let budget = args
             .get("max_bytes")
@@ -1299,7 +1367,7 @@ impl SessionTools {
             .map(|n| (n as usize).clamp(1, READ_MAX))
             .unwrap_or(READ_DEFAULT);
         let tools = args.get("include_tools").and_then(Value::as_bool).unwrap_or(false);
-        let (blocks, _) = self.turns.transcripts().since(&row.id, 0);
+        let blocks = self.blocks_of(&row)?;
         let total = blocks.len();
         let running = matches!(row.status.as_str(), "starting" | "working" | "needs-input");
         // A block still being written ends the read before it, so the next
@@ -1373,14 +1441,62 @@ impl SessionTools {
     fn stop(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
         let id = text(args.get("session")).ok_or("session is required")?;
         let row = self.owned(caller, &id)?;
-        if row.status == "exited" {
-            return Ok(json!({ "session": row.id, "status": "exited", "cursor": row.cursor, "note": "It had already exited." }));
-        }
         let by = match caller {
             Caller::User { .. } => "the user".to_string(),
             _ => caller.label(),
         };
-        if self.turns.exit_child(&row.id, &by) {
+        // Its subagents go first, deepest first, then it: a parent that exits
+        // first would leave them with nobody to report to. Independent
+        // sessions it launched are the user's and stay.
+        let below = self.subagents_below(&row)?;
+        let mut also = Vec::new();
+        for sub in below.iter().filter(|sub| sub.status != "exited") {
+            self.stop_one(&by, sub)?;
+            also.push(json!({ "id": sub.id, "name": sub.name }));
+        }
+        if row.status == "exited" {
+            let mut out = json!({ "session": row.id, "status": "exited", "cursor": row.cursor, "note": "It had already exited." });
+            if !also.is_empty() {
+                out["also_stopped"] = json!(also);
+            }
+            return Ok(out);
+        }
+        let now = self.stop_one(&by, &row)?;
+        let mut out = json!({
+            "session": now.id,
+            "status": now.status,
+            "cursor": now.cursor,
+            "note": "Its CLI is gone; read_session still reads what it did."
+        });
+        if !also.is_empty() {
+            out["also_stopped"] = json!(also);
+            out["note"] = json!(
+                "Its CLI is gone, and so are its subagents' (also_stopped); read_session still reads what they did.                  Sessions it launched for the user are not touched."
+            );
+        }
+        Ok(out)
+    }
+
+    /// The subagents below `row`, at any depth, deepest first.
+    fn subagents_below(&self, row: &Session) -> Result<Vec<Session>, String> {
+        let all = session::list(&self.store, row.workspace_id.clone())?;
+        let mut out = Vec::new();
+        let mut seen = HashSet::from([row.id.clone()]);
+        fn walk(all: &[Session], parent: &str, seen: &mut HashSet<String>, out: &mut Vec<Session>) {
+            for sub in all.iter().filter(|sub| sub.kind == "child" && sub.parent_id.as_deref() == Some(parent)) {
+                if seen.insert(sub.id.clone()) {
+                    walk(all, &sub.id, seen, out);
+                    out.push(sub.clone());
+                }
+            }
+        }
+        walk(&all, &row.id, &mut seen, &mut out);
+        Ok(out)
+    }
+
+    /// End one subagent for good and say what it is now.
+    fn stop_one(&self, by: &str, row: &Session) -> Result<Session, String> {
+        if self.turns.exit_child(&row.id, by) {
             // Its turn settles on its own thread; give it a moment so the
             // answer says what is true.
             let until = Instant::now() + Duration::from_secs(5);
@@ -1392,18 +1508,196 @@ impl SessionTools {
             }
         } else {
             self.turns.exit_idle_child(
-                &row,
+                row,
                 &format!("stopped by {by}"),
                 &format!("Stopped by {by}. The session has exited; its transcript stays here."),
             );
         }
-        let now = session::get(&self.store, row.id.clone())?.unwrap_or(row);
+        Ok(session::get(&self.store, row.id.clone())?.unwrap_or_else(|| row.clone()))
+    }
+
+    /// Whether `caller` started `row`: it is its subagent, or it launched it.
+    /// The user started every session they want to act on.
+    fn started_by(caller: &Caller, row: &Session) -> bool {
+        match caller {
+            Caller::User { .. } => true,
+            _ => caller.session_id().is_some_and(|me| {
+                row.parent_id.as_deref() == Some(me) || row.launched_by.as_deref() == Some(me)
+            }),
+        }
+    }
+
+    /// `update_session`: rename, archive or delete.
+    fn update(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
+        let id = text(args.get("session")).ok_or("session is required")?;
+        let action = text(args.get("action")).ok_or("action is required: rename, archive or delete")?;
+        let row = self.visible(caller, &id)?;
+        if row.kind == "bot" {
+            return Err(format!(
+                "{} is a bot, not a session: a bot is the user's to rename or remove. send_message reaches it.",
+                row.name
+            ));
+        }
+        let by = match caller {
+            Caller::User { .. } => "the user".to_string(),
+            _ => caller.label(),
+        };
+        match action.as_str() {
+            "rename" => {
+                let name = text(args.get("name")).ok_or("name is required to rename")?;
+                if !Self::started_by(caller, &row) {
+                    self.may_write(caller, &row).map_err(|why| {
+                        format!("{} ({}) is not yours to rename: you did not start it, and {why}", row.name, row.id)
+                    })?;
+                }
+                session::rename(&self.store, row.id.clone(), name.clone())?;
+                self.store.session_changed(&row.id);
+                Ok(json!({ "session": row.id, "name": name.trim(), "note": "Renamed." }))
+            }
+            "archive" | "delete" => {
+                if !Self::started_by(caller, &row) {
+                    return Err(format!(
+                        "{} ({}) was not started by you: only whoever started a session, or the user, can {action} it.",
+                        row.name, row.id
+                    ));
+                }
+                if action == "archive" {
+                    self.archive(&by, &row)
+                } else {
+                    self.delete(&row)
+                }
+            }
+            other => Err(format!("action is rename, archive or delete, not \"{other}\"")),
+        }
+    }
+
+    /// Stop whatever a session has running and let go of its process.
+    fn take_down(&self, row: &Session) {
+        if self.turns.is_running(&row.id) {
+            let _ = self.turns.stop(&row.id);
+            let until = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < until && self.turns.is_running(&row.id) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        self.turns.release(&row.id);
+        if let Some(retirement) = self.retirement.get() {
+            (retirement.release)(&row.id);
+        }
+    }
+
+    /// End a session and hide it, its subagents with it. Its transcript stays,
+    /// and `read_session` still reads it.
+    fn archive(&self, by: &str, row: &Session) -> Result<Value, String> {
+        if session::is_archived(&self.store, &row.id)? {
+            return Err(format!("{} is already archived.", row.name));
+        }
+        let mut all = self.subagents_below(row)?;
+        all.push(row.clone());
+        let mut ids = Vec::new();
+        for one in &all {
+            if one.kind == "child" {
+                if one.status != "exited" {
+                    self.stop_one(by, one)?;
+                }
+                self.take_down(one);
+            } else {
+                self.take_down(one);
+                self.turns.transcripts().append_system(&one.id, &format!("Archived by {by}. The session has ended; its transcript stays here."));
+                self.turns.transcripts().set_status(&one.id, "exited", None);
+                self.turns.transcripts().flush(&one.id);
+            }
+            session::set_archived(&self.store, &one.id)?;
+            ids.push(one.id.clone());
+        }
+        if let Some(retirement) = self.retirement.get() {
+            (retirement.gone)(&ids);
+        }
         Ok(json!({
-            "session": now.id,
-            "status": now.status,
-            "cursor": now.cursor,
-            "note": "Its CLI is gone; read_session still reads what it did."
+            "session": row.id,
+            "archived": ids,
+            "note": "Archived: it has ended and is gone from the sidebar. Its transcript is kept; read_session still reads it."
         }))
+    }
+
+    /// Remove a session and its transcript, its subagents with it, and never
+    /// a worktree. Refused while a worktree any of them works in has
+    /// uncommitted changes.
+    fn delete(&self, row: &Session) -> Result<Value, String> {
+        let mut all = self.subagents_below(row)?;
+        all.push(row.clone());
+        let folder = crate::workspace::get(&self.store, row.workspace_id.clone())?.map(|workspace| workspace.path);
+        for one in &all {
+            let (Some(tree), Some(folder)) = (one.worktree.as_deref(), folder.as_deref()) else { continue };
+            if !std::path::Path::new(tree).is_dir() {
+                continue;
+            }
+            if let Some(dirty) = crate::worktree::list(folder).into_iter().find(|t| t.path == tree).map(|t| t.dirty).filter(|dirty| *dirty > 0) {
+                return Err(format!(
+                    "{} works in {tree}, which has {dirty} uncommitted change{}: nothing was deleted. Commit or discard \
+                     them (or archive the session instead, which keeps it and its transcript), then delete.",
+                    one.name,
+                    if dirty == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        let mut ids = Vec::new();
+        for one in &all {
+            self.take_down(one);
+            session::delete(&self.store, one.id.clone())?;
+            self.turns.transcripts().forget(&one.id);
+            self.turns.background().forget(&one.id);
+            self.turns.mcp_status().forget(&one.id);
+            ids.push(one.id.clone());
+        }
+        if let Some(retirement) = self.retirement.get() {
+            (retirement.gone)(&ids);
+        }
+        Ok(json!({
+            "session": row.id,
+            "deleted": ids,
+            "note": "Deleted with its transcript. Its worktree, if it had one, is untouched."
+        }))
+    }
+
+    /// `interrupt_session`: stop the turn it is in without ending it. With
+    /// `text`, that is the next message, put first in its queue, so the one
+    /// call stops and redirects.
+    fn interrupt(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
+        let id = text(args.get("session")).ok_or("session is required")?;
+        let target = self.find_peer(caller, &id)?;
+        self.may_write(caller, &target)?;
+        let running = self.turns.is_running(&target.id);
+        let body = text(args.get("text"));
+        let mut out = json!({ "session": target.id, "name": target.name, "interrupted": running });
+        match body {
+            None => {
+                if running {
+                    self.turns.stop(&target.id)?;
+                    let until = Instant::now() + Duration::from_secs(5);
+                    while Instant::now() < until && self.turns.is_running(&target.id) {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                out["note"] = json!(if running {
+                    format!("{} stopped what it was doing and is still here: send_message gives it the next thing.", target.name)
+                } else {
+                    format!("{} was not working, so there was nothing to interrupt.", target.name)
+                });
+            }
+            Some(body) => {
+                let letter = mailbox::enqueue(&self.store, &target.id, &caller.sender(), &body)?;
+                let sent = self.turns.interrupt_with(&target.id, &letter.id)?;
+                out["letter_id"] = json!(letter.id);
+                out["delivery"] = json!(sent.delivery.unwrap_or_else(|| "queued".into()));
+                out["note"] = json!(if running {
+                    format!("{} stopped what it was doing; your message is its next turn.", target.name)
+                } else {
+                    format!("{} was not working, so nothing was interrupted; your message goes to it as a message.", target.name)
+                });
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -1557,7 +1851,7 @@ fn branch_slug(name: &str) -> String {
 }
 
 fn session_arg() -> Value {
-    json!({ "type": "string", "description": "The subagent's id, from delegate or list_peers." })
+    json!({ "type": "string", "description": "The session's id, from delegate, start_session or list_peers." })
 }
 
 fn request_id_property() -> Value {
@@ -1588,7 +1882,7 @@ pub fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_peers",
-            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, which takes no letters), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), who started it (parent, for a subagent) or launched it (launched_by, for a separate session), where it works (main checkout or its branch), and write: whether send_message reaches it from you.",
+            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, which takes no letters), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
             schema: json!({ "type": "object", "properties": {} }),
             audience: Audience::EVERYONE,
             cli: vec![crate::tools::top("peers").about("The bots and sessions here: status, who started them, and whether you can write to them.").eg("crew peers\n  crew peers --json | jq '.[] | select(.kind == \"bot\") | .id'")],
@@ -1675,11 +1969,11 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["sessions"]
             }),
             audience: Audience::EVERYONE,
-            cli: vec![],
+            cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"provider\": \"codex\"}'")],
         },
         Tool {
             name: "read_session",
-            description: "Read a subagent you started as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
+            description: "Read any session or bot in this workspace as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, so another session reading it never swallows a report. A session in the terminal view keeps no transcript in Crew: its CLI's own history is read where the provider files it, and if that cannot be found the call says so and there is nothing to read. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -1695,10 +1989,52 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "stop_session",
-            description: "End a subagent you started: its CLI is killed mid-turn if it is working, and it exits for good. Its transcript stays in Crew, and read_session still reads it.",
+            description: "End a subagent you started: its CLI is killed mid-turn if it is working, and it exits for good. Its own subagents end first, deepest first; sessions it launched for the user are not touched. Its transcript stays in Crew, and read_session still reads it.",
             schema: json!({ "type": "object", "properties": { "session": session_arg() }, "required": ["session"] }),
             audience: Audience::PARENTS,
             cli: vec![cli("sessions", "stop").pos(&["session"]).eg("crew sessions stop 3f2a…")],
+        },
+        Tool {
+            name: "interrupt_session",
+            description: concat!(
+                "Stop what a session is doing right now without ending it, as Esc does in its chat: the current turn stops and the session stays, ready for its next message. It works through the provider's own protocol, so what the CLI was in the middle of is cancelled cleanly. ",
+                "text, if given, is delivered as its next message right after, so one call stops and redirects (without it, send_message gives it the next thing). ",
+                "Allowed for whoever send_message reaches: any bot or session in this workspace but yourself, an exited subagent and a session in the terminal view, and none that runs with more autonomy than you have. A session that is not working has nothing to interrupt; text is still delivered. stop_session is the one that ends a subagent."
+            ),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "session": json!({ "type": "string", "description": "The id of the session or bot to interrupt, from list_peers." }),
+                    "text": json!({ "type": "string", "description": "What it does next, delivered as its next message. Give it everything it needs; it cannot see your conversation." })
+                },
+                "required": ["session"]
+            }),
+            audience: Audience::EVERYONE,
+            cli: vec![cli("sessions", "interrupt").pos(&["session"]).eg("crew sessions interrupt 3f2a…\n  crew sessions interrupt 3f2a… --text \"stop, use the new endpoint instead\"")],
+        },
+        Tool {
+            name: "update_session",
+            description: concat!(
+                "Rename, archive or delete a session (a bot is the user's to rename or remove). action: rename (name is the new name; allowed for whoever started the session and whoever send_message reaches); ",
+                "archive (ends the session, its subagents with it, and hides it from the sidebar; its transcript is kept and read_session still reads it); ",
+                "delete (removes the session, its subagents and their transcripts, and never a worktree; refused while a worktree they work in has uncommitted changes). ",
+                "Archive and delete are only for sessions you started (your subagents, or a session you launched with start_session); the user may do either to any."
+            ),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "session": session_arg(),
+                    "action": { "type": "string", "enum": ["rename", "archive", "delete"] },
+                    "name": { "type": "string", "description": "With rename: the new name." }
+                },
+                "required": ["session", "action"]
+            }),
+            audience: Audience::EVERYONE,
+            cli: vec![
+                cli("sessions", "rename").sets("action", "rename").rest(&["session", "name"]).eg("crew sessions rename 3f2a… Auth refactor"),
+                cli("sessions", "archive").sets("action", "archive").pos(&["session"]).eg("crew sessions archive 3f2a…"),
+                cli("sessions", "delete").sets("action", "delete").pos(&["session"]).eg("crew sessions delete 3f2a…"),
+            ],
         },
     ]
 }
@@ -1748,6 +2084,8 @@ impl ToolFamily for SessionTools {
             "start_sessions" => self.start_many(caller, args)?,
             "read_session" => self.read(caller, args)?,
             "stop_session" => self.stop(caller, args)?,
+            "interrupt_session" => self.interrupt(caller, args)?,
+            "update_session" => self.update(caller, args)?,
             _ => return Err(format!("Unknown tool \"{name}\"")),
         };
         Ok(out.into())
@@ -4711,11 +5049,11 @@ time.sleep(600)
         let stranger = w.session("terminal", "other", "full");
         let bot = w.session("bot", "Planner", "full");
         let id = w.start(&parent, "SLEEP 1");
-        for (tool, args) in [("read_session", json!({ "session": id })), ("stop_session", json!({ "session": id }))] {
-            let out = w.call(&stranger, tool, args.clone());
-            assert!(out.as_ref().is_err_and(|e| e.contains("not by you")), "{tool}: {out:?}");
-            let out = w.call(&bot, tool, args);
-            assert!(out.is_err_and(|e| e.contains("not by you")), "{tool}");
+        // Stopping is the starter's; reading is anyone's in the workspace.
+        for caller in [&stranger, &bot] {
+            let out = w.call(caller, "stop_session", json!({ "session": id }));
+            assert!(out.is_err_and(|e| e.contains("not by you")));
+            assert!(w.call(caller, "read_session", json!({ "session": id })).is_ok());
         }
         // Writing is not driving: anyone with as much autonomy may send it a letter.
         for caller in [&stranger, &bot] {
@@ -4724,10 +5062,10 @@ time.sleep(600)
         }
         // The user may drive it, from the command line, as in the window.
         assert!(w.call(&w.user(), "read_session", json!({ "session": id })).is_ok());
-        // A bot is reached with send_message; a session of the user's is not a subagent.
-        let theirs = w.call(&parent, "read_session", json!({ "session": bot.session_id().unwrap() }));
+        // A bot and a session of the user's are not subagents to stop.
+        let theirs = w.call(&parent, "stop_session", json!({ "session": bot.session_id().unwrap() }));
         assert!(theirs.is_err_and(|e| e.contains("send_message")));
-        let shell = w.call(&parent, "read_session", json!({ "session": stranger.session_id().unwrap() }));
+        let shell = w.call(&parent, "stop_session", json!({ "session": stranger.session_id().unwrap() }));
         assert!(shell.is_err_and(|e| e.contains("session of the user's")));
         // Listing is not driving either: someone else's subagent is among the
         // stranger's peers, writable, and the parent's own is too.
@@ -5579,14 +5917,15 @@ time.sleep(600)
         assert!(blocks.iter().any(|b| b.text.contains(&format!("Started session Auth refactor ({id})"))), "{blocks:?}");
 
         // It reports to nobody, and launching grants nothing: no report, no
-        // event, no driving it.
+        // event, no stopping it (reading is open to anyone in the workspace).
         assert_eq!(letters_from(&w, &id, "report"), 0);
         assert_eq!(mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0);
         assert!(session_events::latest(w.turns.store(), &id).unwrap().is_none());
-        for (tool, args) in [("read_session", json!({ "session": id })), ("stop_session", json!({ "session": id }))] {
-            let out = w.call(&bot, tool, args);
-            assert!(out.is_err_and(|e| e.contains("session of the user's")), "{tool}");
-        }
+        let out = w.call(&bot, "stop_session", json!({ "session": id }));
+        assert!(out.is_err_and(|e| e.contains("session of the user's")));
+        assert_eq!(session_events::seen(w.turns.store(), &id).unwrap(), 0);
+        w.call(&bot, "read_session", json!({ "session": id })).expect("read");
+        assert_eq!(session_events::seen(w.turns.store(), &id).unwrap(), 0, "a launcher's read moved seen");
         // The user has it in their chat like any session of theirs.
         assert_eq!(w.say(&w.row(&id), "and then?").status, "done");
     }
@@ -7538,5 +7877,357 @@ time.sleep(600)
         for row in all {
             w.settle(&row.id);
         }
+    }
+
+    const MODEL: &str = "opencode/nemotron-3.5-lightning-free";
+
+    /// Decision 21: the turn stops, the session stays, and `text` is the next
+    /// message.
+    #[test]
+    fn interrupt_session_stops_the_turn_and_leaves_the_session_to_carry_on() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let other = w.session("terminal", "other", "full");
+        let id = w.start(&shell, "SLEEP 30");
+        until("the turn is up", || w.launches().len() == 1);
+        // Whoever may write may interrupt: a stranger, not only the parent.
+        let out = w.call(&other, "interrupt_session", json!({ "session": id })).expect("interrupt");
+        assert_eq!(out["interrupted"], true, "{out}");
+        let row = w.settle(&id);
+        assert_ne!(row.status, "exited", "an interrupt ended the session");
+        assert!(!w.turns.is_running(&id));
+        // It is still there, and takes the next message.
+        let sent = w.call(&shell, "send_message", json!({ "to": id, "text": "carry on" })).expect("send");
+        assert_eq!(sent["delivery"], "started", "{sent}");
+        w.settle(&id);
+        // With nothing running there is nothing to interrupt, and the text still goes.
+        let idle = w.call(&other, "interrupt_session", json!({ "session": id })).expect("idle");
+        assert_eq!(idle["interrupted"], false, "{idle}");
+        let idle = w.call(&other, "interrupt_session", json!({ "session": id, "text": "and then this" })).expect("idle text");
+        assert_eq!((idle["interrupted"].clone(), idle["delivery"].clone()), (json!(false), json!("started")), "{idle}");
+        w.settle(&id);
+        assert!(w.blocks(&id).iter().any(|block| block.text == "report: and then this"));
+    }
+
+    #[test]
+    fn interrupt_session_with_text_redirects_in_one_call() {
+        let w = world();
+        let mine = w.user_session("opencode", MODEL, "full");
+        let bot = w.session("bot", "Lead", "full");
+        w.type_to(&mine, "SLEEP 30", None, None);
+        until("the turn is up", || w.launches().len() == 1);
+        let out = w.call(&bot, "interrupt_session", json!({ "session": mine.id, "text": "stop, go left" })).expect("interrupt");
+        assert_eq!(out["interrupted"], true, "{out}");
+        until("the next turn", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        // The redirect is a message from the caller, in its envelope.
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap().to_string();
+        assert!(prompt.contains("From: Lead (bot ") && prompt.trim_end().ends_with("stop, go left"), "{prompt}");
+        assert_eq!(w.row(&mine.id).status, "done");
+    }
+
+    #[test]
+    fn interrupt_session_is_for_whoever_may_write() {
+        let w = world();
+        let careful = w.session("bot", "Careful", "ask");
+        let shell = w.session("terminal", "shell", "full");
+        let top = w.start(&w.user(), "SLEEP 30");
+        let chat = w.user_session("opencode", MODEL, "full");
+        let refused = |caller: &Caller, to: &str, why: &str| {
+            let out = w.call(caller, "interrupt_session", json!({ "session": to }));
+            assert!(out.as_ref().is_err_and(|e| e.contains(why)), "{to}: {out:?}");
+        };
+        refused(&careful, &top, "allowed more than it is");
+        refused(&careful, &chat.id, "allowed more than it is");
+        refused(&careful, careful.session_id().unwrap(), "That is you");
+        refused(&careful, "nobody", "list_peers has the ids");
+        // A session in the terminal view takes nothing.
+        refused(&w.user(), shell.session_id().unwrap(), "terminal view");
+        // The user is exempt from the autonomy rule.
+        w.call(&w.user(), "interrupt_session", json!({ "session": top })).expect("user");
+        w.settle(&top);
+        w.call(&w.user(), "stop_session", json!({ "session": top })).expect("stop");
+        refused(&w.user(), &top, "has exited");
+    }
+
+    /// Decision 23: stopping a subagent stops the ones below it first and
+    /// leaves independent sessions it launched alone.
+    #[test]
+    fn stop_session_cascades_depth_first_and_spares_independent_sessions() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let a = w.start(&shell, "first");
+        w.settle(&a);
+        let make = |name: &str, parent: &str| {
+            session::create_child(w.turns.store(), w.workspace.clone(), name.into(), "opencode".into(), MODEL.into(), "full".into(), None, Some(parent.into()))
+                .expect("child")
+                .id
+        };
+        let b = make("B", &a);
+        let c = make("C", &b);
+        let sibling = make("S", &a);
+        let kept = Caller::from_session(w.row(&a));
+        let launched = w.call(&kept, "start_session", json!({ "provider": "opencode", "prompt": "mine" })).expect("launch")["id"].as_str().unwrap().to_string();
+        w.settle(&launched);
+        w.call(&shell, "send_message", json!({ "to": a, "text": "SLEEP 30" })).expect("busy");
+        until("the turn is up", || w.launches().len() == 3);
+
+        let out = w.call(&shell, "stop_session", json!({ "session": a })).expect("stop");
+        assert_eq!(out["status"], "exited", "{out}");
+        let order: Vec<&str> = out["also_stopped"].as_array().unwrap().iter().map(|one| one["id"].as_str().unwrap()).collect();
+        assert_eq!(order, [c.as_str(), b.as_str(), sibling.as_str()], "{out}");
+        for id in [&a, &b, &c, &sibling] {
+            assert_eq!(w.row(id).status, "exited", "{id}");
+        }
+        assert_ne!(w.row(&launched).status, "exited", "an independent session was stopped");
+        assert!(out["note"].as_str().unwrap().contains("not touched"));
+        // Stopping what already exited says so and changes nothing.
+        let again = w.call(&shell, "stop_session", json!({ "session": a })).expect("again");
+        assert_eq!(again["note"], "It had already exited.");
+    }
+
+    /// Decision 24: any session in the workspace can be read; only the
+    /// parent's read moves `seen`.
+    #[test]
+    fn read_session_reads_any_session_and_only_the_parents_read_advances_seen() {
+        let w = world();
+        let parent = w.session("terminal", "parent", "full");
+        let stranger = w.session("terminal", "stranger", "full");
+        let bot = w.session("bot", "Lead", "full");
+        let id = w.start(&parent, "first job");
+        w.settle(&id);
+        let store = w.turns.store();
+        assert_eq!(session_events::seen(store, &id).unwrap(), 0);
+        for reader in [&stranger, &bot] {
+            let read = w.call(reader, "read_session", json!({ "session": id })).expect("a stranger reads");
+            assert!(read["text"].as_str().unwrap().contains("first job"), "{read}");
+        }
+        assert_eq!(session_events::seen(store, &id).unwrap(), 0, "a stranger's read advanced seen");
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("parent");
+        assert_eq!(session_events::seen(store, &id).unwrap(), read["cursor"].as_i64().unwrap());
+        // The user's read of a subagent of someone else does not move it either.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "second job" })).expect("send");
+        w.settle(&id);
+        let before = session_events::seen(store, &id).unwrap();
+        w.call(&w.user(), "read_session", json!({ "session": id })).expect("user");
+        assert_eq!(session_events::seen(store, &id).unwrap(), before);
+        // A bot and a session of the user's in the chat read too.
+        let chat = w.user_session("opencode", MODEL, "full");
+        w.say(&chat, "hello there");
+        let read = w.call(&parent, "read_session", json!({ "session": chat.id })).expect("a chat");
+        assert!(read["text"].as_str().unwrap().contains("hello there"), "{read}");
+        let read = w.call(&parent, "read_session", json!({ "session": bot.session_id().unwrap() })).expect("a bot");
+        assert_eq!(read["status"], "idle");
+        // Another workspace's session is not in reach.
+        std::fs::create_dir_all(w.dir.join("else")).unwrap();
+        let elsewhere = crate::workspace::create(store, "other".into(), w.dir.join("else").to_string_lossy().into()).unwrap();
+        let foreign = session::create(store, elsewhere.id, "terminal".into(), "far".into(), "opencode".into(), MODEL.into(), String::new(), "full".into(), Some("chat".into())).unwrap();
+        let out = w.call(&parent, "read_session", json!({ "session": foreign.id }));
+        assert!(out.is_err_and(|e| e.contains("No session")));
+    }
+
+    #[test]
+    fn a_terminal_view_session_is_read_from_its_providers_history_or_said_unreadable() {
+        let w = world();
+        let reader = w.session("terminal", "reader", "full");
+        let shell = w.session("terminal", "shell", "full");
+        let shell_id = shell.session_id().unwrap().to_string();
+        // No way to find the history: said plainly, with nothing invented.
+        let out = w.call(&reader, "read_session", json!({ "session": shell_id }));
+        assert!(out.as_ref().is_err_and(|e| e.contains("terminal view") && e.contains("nothing to read")), "{out:?}");
+        let found = Arc::new(Mutex::new(true));
+        let asked = found.clone();
+        w.tools.set_history_reader(Arc::new(move |row: &Session| {
+            if !*asked.lock().unwrap() {
+                return Ok(None);
+            }
+            let block = |id: &str, role: &str, text: &str| {
+                serde_json::from_value::<Block>(json!({ "id": id, "role": role, "text": text })).unwrap()
+            };
+            Ok(Some(vec![block("1", "user", &format!("hello {}", row.name)), block("2", "assistant", "hi, fixing the build")]))
+        }));
+        let read = w.call(&reader, "read_session", json!({ "session": shell_id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        assert!(text.contains("hello shell") && text.contains("fixing the build"), "{read}");
+        assert_eq!(read["cursor"], 2);
+        // Reading it moves nobody's seen, and a history not found is said so.
+        *found.lock().unwrap() = false;
+        let out = w.call(&reader, "read_session", json!({ "session": shell_id }));
+        assert!(out.is_err_and(|e| e.contains("cannot find it")));
+    }
+
+    /// Decision 25: `type` and `launched_by`, and `write` by the reach rule.
+    #[test]
+    fn list_peers_says_what_each_is_and_who_launched_it() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let careful = w.session("bot", "Careful", "ask");
+        let bot = w.session("bot", "Lead", "full");
+        let sub = w.start(&shell, "x");
+        let top = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "y" })).expect("start")["id"].as_str().unwrap().to_string();
+        let chat = w.user_session("opencode", MODEL, "full");
+        w.settle(&sub);
+        w.settle(&top);
+        let from_careful = |id: &str| w.peer(&careful, id);
+        assert_eq!(from_careful(&sub)["type"], "subagent");
+        assert_eq!(from_careful(bot.session_id().unwrap())["type"], "bot");
+        assert_eq!(from_careful(&top)["type"], "session");
+        assert_eq!(from_careful(&chat.id)["type"], "session");
+        assert_eq!(from_careful(shell.session_id().unwrap())["type"], "session");
+        assert_eq!(from_careful(&sub)["parent"], format!("shell (terminal {})", shell.session_id().unwrap()));
+        assert_eq!(w.peer(&bot, &top)["launched_by"], "you");
+        assert_eq!(from_careful(&top)["launched_by"], format!("Lead (bot {})", bot.session_id().unwrap()));
+        assert!(w.peer(&shell, &top).get("parent").is_none());
+        assert!(from_careful(&chat.id).get("launched_by").is_none());
+        // `write` is the reach rule: an ask-autonomy caller cannot write up.
+        assert_eq!(from_careful(&top)["write"], false);
+        assert_eq!(w.peer(&bot, &top)["write"], true);
+        assert_eq!(w.peer(&careful, &top)["write"], false);
+    }
+
+    fn recorded(w: &World) -> (Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>) {
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let gone = Arc::new(Mutex::new(Vec::new()));
+        let (r, g) = (released.clone(), gone.clone());
+        w.tools.set_retirement(Retirement {
+            release: Arc::new(move |id| r.lock().unwrap().push(id.to_string())),
+            gone: Arc::new(move |ids| g.lock().unwrap().extend(ids.iter().cloned())),
+        });
+        (released, gone)
+    }
+
+    /// Decision 22: rename is for whoever started it or may write to it.
+    #[test]
+    fn update_session_renames_for_whoever_started_it_or_may_write_to_it() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let careful = w.session("bot", "Careful", "ask");
+        let id = w.start(&shell, "x");
+        w.settle(&id);
+        let renamed = w.call(&shell, "update_session", json!({ "session": id, "action": "rename", "name": " Auth fix " })).expect("rename");
+        assert_eq!(renamed["name"], "Auth fix");
+        assert_eq!(w.row(&id).name, "Auth fix");
+        // A caller with less autonomy than the session does not reach it.
+        let out = w.call(&careful, "update_session", json!({ "session": id, "action": "rename", "name": "mine" }));
+        assert!(out.is_err_and(|e| e.contains("not yours to rename")));
+        assert_eq!(w.row(&id).name, "Auth fix");
+        assert!(w.call(&shell, "update_session", json!({ "session": id, "action": "rename" })).is_err());
+        assert!(w.call(&shell, "update_session", json!({ "session": id, "action": "burn" })).is_err());
+        let bot = w.call(&shell, "update_session", json!({ "session": careful.session_id().unwrap(), "action": "rename", "name": "x" }));
+        assert!(bot.is_err_and(|e| e.contains("is a bot")));
+    }
+
+    #[test]
+    fn archive_ends_a_subagent_hides_it_and_keeps_its_transcript() {
+        let w = world();
+        let (released, gone) = recorded(&w);
+        let shell = w.session("terminal", "shell", "full");
+        let stranger = w.session("terminal", "stranger", "full");
+        let id = w.start(&shell, "SLEEP 30");
+        until("the turn is up", || w.launches().len() == 1);
+        let out = w.call(&stranger, "update_session", json!({ "session": id, "action": "archive" }));
+        assert!(out.is_err_and(|e| e.contains("not started by you")));
+        let out = w.call(&shell, "update_session", json!({ "session": id, "action": "archive" })).expect("archive");
+        assert_eq!(out["archived"], json!([id]), "{out}");
+        assert_eq!(w.row(&id).status, "exited");
+        assert!(session::is_archived(w.turns.store(), &id).unwrap());
+        assert_eq!(*gone.lock().unwrap(), vec![id.clone()]);
+        assert!(released.lock().unwrap().contains(&id));
+        // Hidden from every listing, and from the sidebar's own.
+        assert!(w.peer(&shell, &id).is_null() && w.peer(&w.user(), &id).is_null());
+        assert!(session::list(w.turns.store(), w.workspace.clone()).unwrap().iter().all(|row| row.id != id));
+        // The transcript is kept and read_session still reads it.
+        let read = w.call(&shell, "read_session", json!({ "session": id })).expect("read");
+        assert!(read["text"].as_str().unwrap().contains("SLEEP 30"), "{read}");
+        let again = w.call(&shell, "update_session", json!({ "session": id, "action": "archive" }));
+        assert!(again.is_err_and(|e| e.contains("already archived")));
+    }
+
+    #[test]
+    fn archive_and_delete_are_for_the_starter_and_the_user() {
+        let w = world();
+        let (_, gone) = recorded(&w);
+        let bot = w.session("bot", "Lead", "full");
+        let other = w.session("bot", "Other", "full");
+        let launched = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "a" })).expect("start")["id"].as_str().unwrap().to_string();
+        let theirs = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "b" })).expect("start")["id"].as_str().unwrap().to_string();
+        let chat = w.user_session("opencode", MODEL, "full");
+        w.settle(&launched);
+        w.settle(&theirs);
+        for (caller, id) in [(&other, &launched), (&bot, &chat.id)] {
+            for action in ["archive", "delete"] {
+                let out = w.call(caller, "update_session", json!({ "session": id, "action": action }));
+                assert!(out.is_err_and(|e| e.contains("not started by you")), "{action}");
+            }
+        }
+        // Launching is enough to archive and to delete.
+        let out = w.call(&bot, "update_session", json!({ "session": launched, "action": "archive" })).expect("archive");
+        assert_eq!(out["archived"], json!([launched]));
+        assert_eq!(w.row(&launched).status, "exited");
+        let out = w.call(&bot, "update_session", json!({ "session": theirs, "action": "delete" })).expect("delete");
+        assert_eq!(out["deleted"], json!([theirs]));
+        assert!(session::get(w.turns.store(), theirs.clone()).unwrap().is_none());
+        assert!(w.blocks(&theirs).is_empty(), "the transcript outlived the session");
+        // The user may do either to any.
+        w.call(&w.user(), "update_session", json!({ "session": chat.id, "action": "archive" })).expect("user archive");
+        assert_eq!(*gone.lock().unwrap(), vec![launched, theirs, chat.id]);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git");
+        assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    /// Delete removes the session and its transcript but never its worktree,
+    /// and refuses while the worktree holds uncommitted work.
+    #[test]
+    fn delete_removes_the_session_never_its_worktree_and_refuses_uncommitted_changes() {
+        let w = world();
+        git(&w.dir, &["init", "-q"]);
+        std::fs::write(w.dir.join("a.txt"), "a").unwrap();
+        git(&w.dir, &["add", "a.txt"]);
+        git(&w.dir, &["commit", "-q", "-m", "init"]);
+        let tree = w.dir.join("tree");
+        git(&w.dir, &["worktree", "add", "-q", "-b", "feature", tree.to_str().unwrap()]);
+        let tree = std::fs::canonicalize(&tree).unwrap().to_string_lossy().into_owned();
+        let bot = w.session("bot", "Lead", "full");
+        let row = session::create_in_worktree(
+            w.turns.store(), w.workspace.clone(), "terminal".into(), "Feature".into(), "opencode".into(), MODEL.into(),
+            String::new(), "full".into(), Some(tree.clone()), Some("chat".into()),
+        )
+        .unwrap();
+        session::set_launched_by(w.turns.store(), &row.id, bot.session_id().unwrap()).unwrap();
+        w.say(&row, "work on it");
+
+        std::fs::write(std::path::Path::new(&tree).join("wip.txt"), "unsaved").unwrap();
+        let out = w.call(&bot, "update_session", json!({ "session": row.id, "action": "delete" }));
+        assert!(out.is_err_and(|e| e.contains("1 uncommitted change") && e.contains("nothing was deleted")));
+        assert!(session::get(w.turns.store(), row.id.clone()).unwrap().is_some());
+        assert!(w.blocks(&row.id).iter().any(|block| block.text == "work on it"));
+        // Archiving is not refused: nothing is lost.
+        std::fs::remove_file(std::path::Path::new(&tree).join("wip.txt")).unwrap();
+
+        let out = w.call(&bot, "update_session", json!({ "session": row.id, "action": "delete" })).expect("delete");
+        assert_eq!(out["deleted"], json!([row.id]), "{out}");
+        assert!(session::get(w.turns.store(), row.id.clone()).unwrap().is_none());
+        assert!(w.blocks(&row.id).is_empty());
+        assert!(std::path::Path::new(&tree).is_dir(), "the worktree went with the session");
+    }
+
+    #[test]
+    fn deleting_a_session_takes_its_subagents_with_it() {
+        let w = world();
+        let user = w.user();
+        let chat = w.user_session("opencode", MODEL, "full");
+        let sub = session::create_child(w.turns.store(), w.workspace.clone(), "Sub".into(), "opencode".into(), MODEL.into(), "full".into(), None, Some(chat.id.clone())).unwrap();
+        session::set_launched_by(w.turns.store(), &chat.id, "someone").ok();
+        let out = w.call(&user, "update_session", json!({ "session": chat.id, "action": "delete" })).expect("delete");
+        assert_eq!(out["deleted"], json!([sub.id, chat.id]), "{out}");
+        assert!(session::get(w.turns.store(), sub.id).unwrap().is_none());
     }
 }

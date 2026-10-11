@@ -129,6 +129,20 @@ impl SessionWatch {
         Ok(!history.blocks().is_empty() || history.has_earlier())
     }
 
+    /// Everything `id`'s CLI has written of its conversation, as the chat's
+    /// blocks; None while the CLI has not said where its history is.
+    pub(crate) fn read_blocks(&self, store: &Store, id: &str, cwd: &str) -> Result<Option<Vec<crew_protocol::Block>>, String> {
+        let inner = self.lock();
+        let Some(mut history) = open_history(&inner.board, store, id, cwd)? else { return Ok(None) };
+        // The open window holds the latest messages; read back to the start.
+        while history.has_earlier() {
+            if history.load_earlier(OPEN_MESSAGES).map_err(|error| error.to_string())? == 0 && !history.has_earlier() {
+                break;
+            }
+        }
+        Ok(Some(history.blocks().to_vec()))
+    }
+
     /// `id` runs another provider's CLI now: what its hooks said, and the
     /// history a chat reads, start over for the new one.
     pub(crate) fn switched(&self, store: &Store, hub: &Hub, id: &str) {

@@ -667,6 +667,24 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         children,
         socks_port: 0,
     };
+    // `read_session` on a session in the terminal view reads its CLI's own history.
+    let watch = hosts.sessions.clone();
+    let read_store = hosts.store.clone();
+    hosts.children.set_history_reader(Arc::new(move |row| {
+        let cwd = session::cwd(&read_store, row)?;
+        watch.read_blocks(&read_store, &row.id, &cwd)
+    }));
+    // `update_session` archives and deletes: what only the daemon holds is
+    // let go as `delete_session` does, and every window forgets the rows.
+    let (pty, bridge, leases, gone) = (hosts.pty.clone(), hosts.bridge.clone(), hosts.browser.leases().clone(), hosts.hub.clone());
+    hosts.children.set_retirement(crew_core::session_tools::Retirement {
+        release: Arc::new(move |id| {
+            pty.kill_session(id);
+            bridge.revoke(id);
+            leases.release_all(id, app_state::now_millis());
+        }),
+        gone: Arc::new(move |ids| gone.emit("sessions-deleted", SessionsDeleted { ids: ids.to_vec() })),
+    });
 
     thread::Builder::new()
         .name("crewd".into())

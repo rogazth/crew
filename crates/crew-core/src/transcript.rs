@@ -77,6 +77,12 @@ impl TranscriptHub {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Let go of a session's blocks in memory: it was deleted, and its rows
+    /// went with it.
+    pub fn forget(&self, session_id: &str) {
+        self.lock().remove(session_id);
+    }
+
     fn hydrate(&self, session_id: &str) -> Live {
         let blocks = self
             .store

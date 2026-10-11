@@ -568,6 +568,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 36 {
+        let tx = conn.unchecked_transaction()?;
+        // A session an agent or the user archived: ended, hidden, transcript kept.
+        if !has_column(&tx, "sessions", "archived")? {
+            tx.execute_batch(crate::session::MIGRATION_V36)?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
