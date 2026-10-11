@@ -1179,7 +1179,7 @@ state = {"migration": int(read(BASE + ".migrating", "0") or 0), "menus": set()}
 def append(path, record):
     with lock:
         with open(path, "a") as f: f.write(json.dumps(record) + "\n")
-append(BASE + ".launch", {"argv": sys.argv[1:], "pid": os.getpid(), "env": sorted(k for k in os.environ if k.startswith(("CREW_", "OPENCODE_"))), "config": json.loads(CONFIG or "{}"), "password_on_argv": PASSWORD != "" and any(PASSWORD in a for a in sys.argv)})
+append(BASE + ".launch", {"argv": sys.argv[1:], "pid": os.getpid(), "env": sorted(k for k in os.environ if k.startswith(("CREW_", "OPENCODE_"))), "env_values": sorted(os.environ.values()), "config": json.loads(CONFIG or "{}"), "password_on_argv": PASSWORD != "" and any(PASSWORD in a for a in sys.argv)})
 def now(): return int(time.time() * 1000)
 def hexid(prefix): return prefix + uuid.uuid4().hex[:24]
 def emit(kind, data, sid=None):

@@ -4352,6 +4352,35 @@ mod mailbox_tests {
         assert!(silent_and_watched, "a provider with no output was not being watched");
     }
 
+    /// The run's host token speaks for whichever session names itself, so it
+    /// lives in the MCP server's own environment and nowhere a shell the
+    /// server runs could read it off: not in the server's environment, not on
+    /// its argv.
+    #[test]
+    fn the_server_process_does_not_hold_the_runs_host_token() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = bot(&world, &ws, "Coder");
+        turn(&world, &coder, "hello");
+        let launch = std::fs::read_dir(&world.dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "launch"))
+            .expect("the server was launched");
+        let launched: Value = serde_json::from_str(std::fs::read_to_string(launch).expect("log").lines().next().expect("a launch")).expect("json");
+        let token = launched
+            .pointer("/config/mcp/servers/crew/environment/CREW_TOKEN")
+            .and_then(Value::as_str)
+            .expect("the MCP server's own environment holds the token");
+        assert!(!token.is_empty());
+        let values = launched["env_values"].as_array().expect("env values");
+        assert!(!values.is_empty());
+        assert!(values.iter().all(|value| !value.as_str().unwrap_or_default().contains(token)), "the server's environment: {values:?}");
+        assert!(!launched["env"].as_array().unwrap().iter().any(|key| key == "CREW_TOKEN"), "{}", launched["env"]);
+        assert!(!launched["argv"].to_string().contains(token), "{}", launched["argv"]);
+    }
+
     #[test]
     fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
         let world = world();
