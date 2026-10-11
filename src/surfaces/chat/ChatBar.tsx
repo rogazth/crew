@@ -6,6 +6,7 @@ import {
   GitBranchIcon,
   MessageCircleQuestionIcon,
   MessagesSquareIcon,
+  PauseIcon,
   ShieldQuestionIcon,
   SquareIcon,
   XIcon,
@@ -114,6 +115,19 @@ function Owner({ session, sessions }: { session: Session; sessions: readonly Ses
   );
 }
 
+/** Letters stopped waking this session after 20 turns in a row they started; the user writing resumes it. */
+function Paused() {
+  return (
+    <span
+      title="Messages and reports from other sessions still arrive, but no longer start a turn. Write here to resume it."
+      className="flex h-7 shrink-0 items-center gap-1.5 rounded-chrome bg-card px-2 text-[12.5px] text-warning"
+    >
+      <PauseIcon className="size-3.5" />
+      Paused after 20 automatic turns
+    </span>
+  );
+}
+
 const BAR_BUTTON =
   "flex h-7 shrink-0 items-center gap-1.5 rounded-chrome px-2 text-[12.5px] text-icon transition-colors hover:bg-hover hover:text-text data-popup-open:bg-hover data-popup-open:text-text";
 
@@ -197,7 +211,7 @@ type Props = {
  */
 export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenThread }: Props) {
   const owned = Boolean(session.parentId || session.launchedBy);
-  if (kids.length === 0 && !owned && pairs.length === 0) return null;
+  if (kids.length === 0 && !owned && pairs.length === 0 && !session.paused) return null;
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-hairline py-2 pr-2 pl-4">
       {kids.length > 0 ? (
@@ -207,6 +221,7 @@ export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenT
       ) : (
         <span className="flex-1" />
       )}
+      {session.paused && <Paused />}
       <Conversations pairs={pairs} owner={sessionParty(session)} sessions={sessions} onOpen={onOpenThread} />
     </div>
   );

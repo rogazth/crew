@@ -542,6 +542,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
             cursor: event.cursor,
         }),
         view: row.view.clone(),
+        paused: row.paused,
     }
 }
 

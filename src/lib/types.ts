@@ -70,6 +70,8 @@ export type Session = {
   userSeen?: number;
   /** Its last event (a child's): with `status`, what its chip says. */
   lastEvent?: SessionLastEvent;
+  /** Letters no longer wake it (20 automatic turns in a row); the user's next message resumes it. */
+  paused?: boolean;
 };
 
 /** A git worktree of a workspace's repo. The main checkout comes first; outside git there is only it, branchless. */

@@ -986,7 +986,12 @@ lastEvent?: SessionLastEvent,
  * CLI turn by turn) or `terminal` (the CLI's own screen). A bot and a
  * child are always `terminal`, where it means nothing.
  */
-view: "chat" | "terminal", };
+view: "chat" | "terminal", 
+/**
+ * Whether letters no longer wake it: 20 turns in a row were started by
+ * letters, and the user's next message resumes it.
+ */
+paused: boolean, };
 
 /**
  * A permission prompt or a question form on the CLI's screen.

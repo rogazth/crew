@@ -640,6 +640,10 @@ pub struct Session {
     #[serde(default = "terminal_view")]
     #[ts(type = "\"chat\" | \"terminal\"")]
     pub view: String,
+    /// Whether letters no longer wake it: 20 turns in a row were started by
+    /// letters, and the user's next message resumes it.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 fn terminal_view() -> String {

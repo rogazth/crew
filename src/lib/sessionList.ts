@@ -46,5 +46,6 @@ export function applyUpdated(held: Session, row: Session): Session {
     ...(row.lastEvent ? { lastEvent: row.lastEvent } : {}),
     ...(row.parentName !== undefined ? { parentName: row.parentName } : {}),
     ...(row.launchedByName !== undefined ? { launchedByName: row.launchedByName } : {}),
+    ...(row.paused !== undefined ? { paused: row.paused } : {}),
   };
 }
