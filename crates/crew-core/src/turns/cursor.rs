@@ -514,7 +514,7 @@ impl TurnHost {
         let Some((used, window)) = dir.and_then(|dir| read_store_context(&dir, &acp_session)) else {
             return;
         };
-        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None, stale: None }));
     }
 
     /// The meter while the turn runs: the store is read again every
@@ -953,7 +953,7 @@ impl TurnHost {
                 if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
                     live.usage_seen = true;
                 }
-                self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+                self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None, stale: None }));
             }
             return;
         }
@@ -1891,7 +1891,7 @@ mod tests {
     fn the_meter_reads_the_store_after_each_prompt_and_while_a_turn_runs() {
         let k = Kept::child();
         k.say("one");
-        assert_eq!(k.reading(), Some(ContextReading { used: 2000, window: Some(256_000), auto_compact_at: None }));
+        assert_eq!(k.reading(), Some(ContextReading { used: 2000, window: Some(256_000), auto_compact_at: None, stale: None }));
         k.send("SLEEP 3");
         // The turn started with 3000 in the store, which the timer picks up
         // before the turn ends.
@@ -1906,7 +1906,7 @@ mod tests {
     fn a_usage_update_is_preferred_to_the_store() {
         let k = Kept::child();
         k.say("USAGE");
-        assert_eq!(k.reading(), Some(ContextReading { used: 7000, window: Some(100_000), auto_compact_at: None }));
+        assert_eq!(k.reading(), Some(ContextReading { used: 7000, window: Some(100_000), auto_compact_at: None, stale: None }));
         k.say("two");
         assert_eq!(k.reading().map(|reading| reading.used), Some(7000));
     }
