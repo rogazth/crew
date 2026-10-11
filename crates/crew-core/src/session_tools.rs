@@ -5989,28 +5989,29 @@ time.sleep(600)
         w.turns.release(&mine.id);
     }
 
-    /// Cursor and opencode take nothing into a turn that runs (`steer` asked
-    /// for or not): the message waits, and goes as the next turn.
+    /// opencode reads a steer at the running turn's next step, once the turn is
+    /// in it; a message asked to queue waits and goes as the next turn.
     #[test]
-    fn on_opencode_a_message_sent_while_a_turn_works_is_queued_and_goes_as_the_next_turn() {
+    fn on_opencode_a_message_is_steered_unless_asked_to_queue() {
         let w = world();
         let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
         w.type_to(&mine, "SLEEP 1", None, None);
-        let queued = w.type_to(&mine, "and this", None, None);
+        until("the turn is in opencode", || w.launches().len() == 1);
+        let queued = w.type_to(&mine, "and this", Some("queue"), None);
         assert_eq!((queued.working, queued.delivery.as_deref()), (true, Some("queued")));
         assert!(queued.letter_id.is_some());
-        let asked_to_steer = w.type_to(&mine, "and that", Some("steer"), None);
-        assert_eq!(asked_to_steer.delivery.as_deref(), Some("queued"));
+        let steered = w.type_to(&mine, "and that", None, None);
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
         assert_eq!(
             w.queue(&mine.id),
-            [("and this".to_string(), "waiting".to_string()), ("and that".to_string(), "waiting".to_string())]
+            [("and this".to_string(), "waiting".to_string()), ("and that".to_string(), "steering".to_string())]
         );
 
         until("the queue went over", || w.launches().len() == 2);
         w.settle(&mine.id);
         let launches = w.launches();
         assert_eq!(launches[0]["prompt"].as_str().map(str::trim_end), Some("SLEEP 1"));
-        assert_eq!(launches[1]["prompt"].as_str().map(str::trim_end), Some("and this\n\nand that"), "one turn for what waited");
+        assert_eq!(launches[1]["prompt"].as_str().map(str::trim_end), Some("and this"));
         assert!(w.queue(&mine.id).is_empty());
     }
 
@@ -6611,6 +6612,66 @@ time.sleep(600)
         says_one(&w.live_say(&parent, &id, "Once more: reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the effort change started another app server");
+    }
+
+    /// Runs the real opencode 2.x server on a free model, with its own data,
+    /// config and home folders so nothing of the user's is read or written: a
+    /// plain turn, a steer into a turn running a command, and the meter.
+    /// Needs the network. `OPENCODE_LIVE_MODEL` names another free model.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_opencode`
+    #[test]
+    #[ignore]
+    fn live_opencode_a_turn_a_steer_and_the_meter_run_on_the_shared_server() {
+        let w = world();
+        // Found with the user's own home, before the server gets another.
+        let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
+        let home = w.dir.join("opencode-home");
+        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+            let dir = home.join(sub);
+            std::fs::create_dir_all(&dir).expect("dir");
+            std::env::set_var(key, dir);
+        }
+        w.turns.override_binary("opencode", binary);
+        // The server is the daemon's, not a session's: it outlives the test.
+        let _reap = Reap(&w, "opencode:server".into());
+        let model = std::env::var("OPENCODE_LIVE_MODEL").unwrap_or_else(|_| "opencode/nemotron-3.5-lightning-free".into());
+        let mine = w.user_session("opencode", &model, "full");
+        let words = |w: &World| -> String {
+            w.blocks(&mine.id)
+                .iter()
+                .filter(|block| block.role == crew_protocol::BlockRole::Assistant)
+                .map(|block| block.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let idle = |w: &World| !w.turns.is_running(&mine.id);
+
+        w.type_to(&mine, "Reply with just the word one.", None, None);
+        until_long("the first turn ended", Duration::from_secs(180), || idle(&w) && !words(&w).is_empty());
+        assert!(words(&w).to_lowercase().contains("one"), "{}", words(&w));
+        let reading = w.live_window(&mine.id);
+        assert!(reading.used > 0 && reading.window.is_some_and(|window| window > reading.used), "{reading:?}");
+        let bound = w.row(&mine.id).provider_session_id.expect("bound to an opencode session");
+        // The `/` menu is what the server reports for the folder.
+        let menu = w.turns.commands_list(&mine.id).expect("menu");
+        assert!(menu.entries.iter().any(|entry| entry.kind != "crew"), "nothing of opencode's in {menu:?}");
+
+        w.type_to(&mine, "Run `sleep 6` in the shell, then say done.", None, None);
+        until_tool(&w, &w.user(), &mine.id);
+        let steered = w.type_to(&mine, "Also finish your answer with the word banana.", Some("steer"), None);
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
+        until_long("the second turn ended", Duration::from_secs(240), || idle(&w) && w.queue(&mine.id).is_empty());
+        let said = words(&w).to_lowercase();
+        assert!(said.contains("banana"), "the steer was never read: {said}");
+        assert_eq!(w.row(&mine.id).provider_session_id, Some(bound), "the second turn carried the conversation on");
+        let after = w.live_window(&mine.id);
+        assert!(after.used >= reading.used, "{reading:?} then {after:?}");
+
+        // `/compact` goes to the server's compaction, and ends as a turn does.
+        w.type_with(&mine, "/compact", Some("compact"), &[], None, None);
+        until_long("the compaction ended", Duration::from_secs(240), || idle(&w));
+        let compacted = w.live_window(&mine.id);
+        assert!(compacted.used < after.used || compacted.stale.is_some(), "{after:?} then {compacted:?}");
     }
 
     /// Runs the real `cursor-agent acp` on its auto model: three short turns.
