@@ -45,6 +45,7 @@ mod opencode;
 mod opencode_server;
 use codex::CodexLive;
 use cursor::CursorLive;
+pub use opencode::OpencodeAttach;
 use opencode::OpencodeLive;
 #[cfg(test)]
 pub(crate) use opencode::fake_opencode_server;
@@ -4379,6 +4380,34 @@ mod mailbox_tests {
         assert!(values.iter().all(|value| !value.as_str().unwrap_or_default().contains(token)), "the server's environment: {values:?}");
         assert!(!launched["env"].as_array().unwrap().iter().any(|key| key == "CREW_TOKEN"), "{}", launched["env"]);
         assert!(!launched["argv"].to_string().contains(token), "{}", launched["argv"]);
+    }
+
+    /// A terminal session's TUI attaches to the shared server on one opencode
+    /// session, made once and held by the row; the server's own token never
+    /// goes with it.
+    #[test]
+    fn a_terminal_attaches_to_the_shared_server_on_the_session_its_row_holds() {
+        let world = world();
+        let ws = workspace(&world);
+        let row = crate::session::create(
+            world.host.test_store(),
+            ws,
+            "terminal".into(),
+            "mine".into(),
+            "opencode".into(),
+            "m".into(),
+            "".into(),
+            "full".into(),
+            None,
+        )
+        .expect("session");
+        let cwd = world.dir.to_string_lossy().into_owned();
+        let first = world.host.opencode_terminal(&row, &cwd).expect("attach");
+        assert!(first.url.starts_with("http://127.0.0.1:") && !first.password.is_empty(), "{}", first.url);
+        let held = crate::session::get(world.host.test_store(), row.id.clone()).unwrap().unwrap();
+        assert_eq!(held.provider_session_id.as_deref(), Some(first.session.as_str()));
+        let again = world.host.opencode_terminal(&held, &cwd).expect("attach again");
+        assert_eq!((again.session, again.url), (first.session, first.url), "one session, one server");
     }
 
     #[test]

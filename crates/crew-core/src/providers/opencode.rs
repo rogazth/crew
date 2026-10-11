@@ -30,20 +30,6 @@ pub const TESTED_VERSION: (u32, u32, u32) = (2, 0, 26);
 /// What tells a 1.x install from a 2.x one, and how to get 2.x.
 pub const INSTALL: &str = "Crew needs opencode 2.x: npm i -g @opencode/cli";
 
-/// The inline config with Crew's MCP server alone, in the 1.x format the
-/// terminal view still hands its own `opencode` (step 5 task 10 moves it
-/// onto Crew's server).
-pub fn opencode_config(mcp: Option<&(String, Vec<String>)>) -> Option<String> {
-    let (exe, args) = mcp?;
-    let mut command = vec![exe.clone()];
-    command.extend(args.iter().cloned());
-    serde_json::to_string(&json!({
-        "$schema": "https://opencode.ai/config.json",
-        "mcp": { "crew": { "type": "local", "command": command, "enabled": true, "timeout": MCP_TIMEOUT_MS } }
-    }))
-    .ok()
-}
-
 /// The config Crew's `opencode serve` starts with, a file `OPENCODE_CONFIG`
 /// names, in the 2.x format: it merges over the user's own, so their
 /// providers, servers and rules stand.

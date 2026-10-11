@@ -1256,6 +1256,7 @@ fn terminal_launch(
     store: &Store,
     bridge: &Bridge,
     leases: &Leases,
+    turns: &TurnHost,
     session_id: &str,
     mut command: Vec<String>,
 ) -> Result<(Vec<String>, SpawnOptions), String> {
@@ -1274,6 +1275,13 @@ fn terminal_launch(
     if row.provider == "opencode" && command.first().is_some_and(|binary| binary == "opencode") {
         command[0] = crew_core::shell_path::resolve_opencode()?.to_string_lossy().into_owned();
     }
+    // The TUI of opencode runs on Crew's server, opened on the session's
+    // opencode session before anything is minted or claimed.
+    let attach = if row.provider == "opencode" && command.first().is_some_and(|binary| binary.ends_with("opencode")) {
+        Some(turns.opencode_terminal(&row, &crew_core::session::cwd(store, &row)?)?)
+    } else {
+        None
+    };
     let info = bridge.info()?;
     let token = bridge.mint_process(session_id);
     // The prompt a handoff (`start_session` with owner user) left it, taken
@@ -1285,7 +1293,7 @@ fn terminal_launch(
         &row.provider,
         command,
         opening.as_deref(),
-        &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
+        &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token, opencode: attach.as_ref() },
     );
     // Handed over as the CLI's opening prompt, or back in the box for the
     // next launch that can take one.
@@ -1391,11 +1399,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let bridge = hosts.bridge.clone();
             let leases = hosts.browser.leases().clone();
+            let turns = hosts.turns.clone();
             json(
                 block(move || {
                     let prepare = move |command: Vec<String>| {
                         let (command, options) = match session {
-                            Some(session) => terminal_launch(&store, &bridge, &leases, &session, command)?,
+                            Some(session) => terminal_launch(&store, &bridge, &leases, &turns, &session, command)?,
                             None => (command, SpawnOptions::default()),
                         };
                         Ok((command, SpawnOptions { dark, ..options }))

@@ -164,6 +164,13 @@ impl OpencodeLive {
     }
 }
 
+/// Where a terminal session's TUI attaches.
+pub struct OpencodeAttach {
+    pub url: String,
+    pub password: String,
+    pub session: String,
+}
+
 /// How a turn takes its binding.
 enum Arm {
     /// The binding the last turn left, run with these settings until now.
@@ -390,6 +397,39 @@ impl TurnHost {
             "set the session's environment",
         )?;
         Ok(())
+    }
+
+    /// The server a terminal session's TUI attaches to, and the opencode
+    /// session it opens on: the one it already has when opencode still has
+    /// it, otherwise a new one, which the row then holds. Bound with the
+    /// bridge so the session's tools answer as it, but not routed: the TUI
+    /// answers its own permissions and questions.
+    pub fn opencode_terminal(&self, session: &session::Session, cwd: &str) -> Result<OpencodeAttach, String> {
+        let conn = self.opencode_conn(None)?;
+        let client = conn.client();
+        let known = session.provider_session_id.clone().filter(|oc| {
+            client.get_json(&format!("/api/session/{oc}")).is_ok_and(|reply| reply.status == 200)
+        });
+        let oc = match known {
+            Some(oc) => oc,
+            None => {
+                let mut body = json!({ "title": session.name, "location": { "directory": cwd } });
+                if let Some(model) = model_ref(&session.model, &session.effort) {
+                    body["model"] = model;
+                }
+                let created = ok(client.post_json("/api/session", &body), "open a session")?;
+                let oc = created
+                    .pointer("/data/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or("opencode opened no session.")?;
+                session::set_provider_session(&self.store, session.id.clone(), oc.clone())?;
+                oc
+            }
+        };
+        let token = self.bridge.opencode().bind(&conn.run_id, &oc, &session.id)?;
+        self.opencode_shell(&conn, &oc, &token)?;
+        Ok(OpencodeAttach { url: format!("http://127.0.0.1:{}", conn.port), password: conn.password.to_string(), session: oc })
     }
 
     /// A kept binding, told what moved since its last turn: the model in

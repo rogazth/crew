@@ -6663,9 +6663,14 @@ time.sleep(600)
         until_long("the second turn ended", Duration::from_secs(240), || idle(&w) && w.queue(&mine.id).is_empty());
         let said = words(&w).to_lowercase();
         assert!(said.contains("banana"), "the steer was never read: {said}");
-        assert_eq!(w.row(&mine.id).provider_session_id, Some(bound), "the second turn carried the conversation on");
+        assert_eq!(w.row(&mine.id).provider_session_id, Some(bound.clone()), "the second turn carried the conversation on");
         let after = w.live_window(&mine.id);
         assert!(after.used >= reading.used, "{reading:?} then {after:?}");
+
+        // The terminal view attaches to this server on the session it has.
+        let attach = w.turns.opencode_terminal(&w.row(&mine.id), &w.dir.to_string_lossy()).expect("terminal");
+        assert_eq!(attach.session, bound);
+        assert!(attach.url.starts_with("http://127.0.0.1:") && !attach.password.is_empty(), "{}", attach.url);
 
         // `/compact` goes to the server's compaction, and ends as a turn does.
         w.type_with(&mine, "/compact", Some("compact"), &[], None, None);

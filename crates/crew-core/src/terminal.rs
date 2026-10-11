@@ -18,7 +18,7 @@ use std::path::Path;
 
 use crate::providers::claude::claude_mcp_config;
 use crate::providers::codex::codex_mcp_overrides;
-use crate::providers::opencode::opencode_config;
+use crate::turns::OpencodeAttach;
 
 /// How the child reaches the bridge.
 pub struct BridgeLink<'a> {
@@ -27,6 +27,9 @@ pub struct BridgeLink<'a> {
     pub socket: &'a str,
     /// Minted for this one process; see `Bridge::mint_process`.
     pub token: &'a str,
+    /// The opencode server a session's TUI attaches to, which runs its tools
+    /// as Crew's; without one opencode starts a server of its own.
+    pub opencode: Option<&'a OpencodeAttach>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -79,9 +82,25 @@ pub fn launch(provider: &str, mut argv: Vec<String>, opening: Option<&str>, link
             argv.extend(opening.map(String::from));
         }
         // Its positional is the project folder; the TUI takes a prompt by flag.
+        // On Crew's server it shares the chat's process and its interrupt, and
+        // the server holds Crew's tools; the session is named by flag.
         ("opencode", "opencode") => {
-            if let Some(config) = opencode_config(Some(&(link.exe.to_string(), mcp_args))) {
-                env.push(("OPENCODE_CONFIG_CONTENT".into(), config));
+            match link.opencode {
+                Some(attach) => {
+                    let mut kept = Vec::with_capacity(argv.len());
+                    let mut words = std::mem::take(&mut argv).into_iter();
+                    while let Some(word) = words.next() {
+                        if matches!(word.as_str(), "--session" | "-s") {
+                            words.next();
+                        } else {
+                            kept.push(word);
+                        }
+                    }
+                    argv = kept;
+                    argv.extend(["--server".to_string(), attach.url.clone(), "--session".to_string(), attach.session.clone()]);
+                    env.push(("OPENCODE_SERVER_PASSWORD".into(), attach.password.clone()));
+                }
+                None => {}
             }
             if let Some(prompt) = opening {
                 argv.extend(["--prompt".to_string(), prompt.to_string()]);
@@ -97,7 +116,7 @@ pub fn launch(provider: &str, mut argv: Vec<String>, opening: Option<&str>, link
 mod tests {
     use super::*;
 
-    const LINK: BridgeLink<'static> = BridgeLink { exe: "/app/crewd", socket: "/data/crew.sock", token: "t-1" };
+    const LINK: BridgeLink<'static> = BridgeLink { exe: "/app/crewd", socket: "/data/crew.sock", token: "t-1", opencode: None };
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| part.to_string()).collect()
@@ -161,18 +180,20 @@ mod tests {
         assert_eq!(out.argv, want);
     }
 
+    /// The TUI attaches to Crew's server, which holds Crew's tools and the
+    /// session's own token; the TUI's environment carries only the password
+    /// to reach it.
     #[test]
-    fn opencode_takes_crew_on_its_config_env() {
-        let out = launch("opencode", argv(&["opencode", "--session", "x"]), None, &LINK);
-        assert_eq!(out.argv, argv(&["opencode", "--session", "x"]));
-        let config = out
-            .env
-            .iter()
-            .find(|(key, _)| key == "OPENCODE_CONFIG_CONTENT")
-            .map(|(_, value)| value.clone())
-            .expect("no config");
-        let config: serde_json::Value = serde_json::from_str(&config).expect("json");
-        assert_eq!(config["mcp"]["crew"]["command"], serde_json::json!(["/app/crewd", "--mcp"]));
+    fn opencode_attaches_to_crews_server_on_the_session() {
+        let attach = OpencodeAttach { url: "http://127.0.0.1:4100".into(), password: "pw".into(), session: "ses_2".into() };
+        let link = BridgeLink { opencode: Some(&attach), ..LINK };
+        let out = launch("opencode", argv(&["opencode", "--session", "ses_1", "-m", "opencode/x"]), Some("go"), &link);
+        assert_eq!(
+            out.argv,
+            argv(&["opencode", "-m", "opencode/x", "--server", "http://127.0.0.1:4100", "--session", "ses_2", "--prompt", "go"])
+        );
+        assert!(out.env.contains(&("OPENCODE_SERVER_PASSWORD".into(), "pw".into())));
+        assert!(!out.env.iter().any(|(key, _)| key == "OPENCODE_CONFIG_CONTENT"), "the server's config holds Crew's tools");
         assert!(out.env.starts_with(&crew_env()));
     }
 
