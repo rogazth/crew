@@ -1,6 +1,7 @@
 // A session in the main checkout hands its work to a branch of its own:
-// `start_session` makes the worktree and a terminal session in
-// it, handed off by the caller, whose CLI starts with the prompt as its first.
+// `start_session` makes the worktree and a session in it, in the chat view and
+// launched by the caller, whose CLI Crew drives over the protocol with the
+// prompt as its first message (in an envelope naming the caller).
 // The caller stays where it was, and the window shows the new worktree and its
 // session without being refocused.
 import assert from "node:assert/strict";
@@ -10,6 +11,7 @@ import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
   gitWorktrees,
+  goToWorktree,
   launchCrew,
   newTerminal,
   sessionRow,
@@ -64,13 +66,17 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   assert.equal(handedTo.worktree, handed.worktree);
   assert.equal(rows.find((row: Session) => row.id === shell.id)?.worktree ?? null, null);
 
-  // Its tab opens behind the one on screen, and its CLI starts on the task.
+  // The session is a chat: Crew drives its CLI over the protocol, so the task
+  // is its first message, in an envelope naming who launched it, and not on
+  // the command line.
+  assert.equal(handedTo.view, "chat");
   const started = await waitFor(
-    async () =>
-      (await crew.claudeLaunches()).find((row) => row.argv.includes(handedTo.id) && row.argv.some((arg) => arg.includes(task))),
-    { timeout: 15_000, message: "the new session's CLI starts on the task" },
+    async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(handedTo.id)),
+    { timeout: 15_000, message: "the new session's CLI starts" },
   );
   assert.equal(started.cwd, handed.worktree);
+  assert.ok(started.argv.join(" ").includes("--input-format stream-json"), started.argv.join(" "));
+  assert.ok(!started.argv.some((arg) => arg.includes(task)), "the task is not on the command line");
 
   // The window lists the worktree, with no focus to prompt a reread, and the
   // session under it. The window stays on the main checkout, so it comes folded.
@@ -78,5 +84,14 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   await header.waitFor({ timeout: 15_000 });
   assert.equal(await header.getAttribute("aria-expanded"), "false");
   await header.click();
-  await sessionRow(crew, "feat/handoff").waitFor({ timeout: 15_000 });
+  const row = sessionRow(crew, "feat/handoff");
+  await row.waitFor({ timeout: 15_000 });
+
+  // Its chat has the task as the message it was launched with, from the
+  // caller, and the fake claude's reply to it.
+  await goToWorktree(crew, "feat/handoff");
+  await row.click();
+  const reply = crew.window.getByText(/Reply 1: .*Build the login form\./).first();
+  await reply.waitFor({ timeout: 15_000 });
+  assert.match((await reply.textContent()) ?? "", new RegExp(`${shell.id}|${shell.name}`), "the envelope names who launched it");
 });
