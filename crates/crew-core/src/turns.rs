@@ -711,6 +711,9 @@ pub struct TurnHost {
     /// Where Cursor keeps its ACP sessions' stores (`~/.cursor/acp-sessions`),
     /// when not under `$HOME`.
     cursor_acp_sessions: Arc<Mutex<Option<std::path::PathBuf>>>,
+    /// Where Cursor keeps its installed plugins (`~/.cursor/plugins/cache`),
+    /// when not under `$HOME`. Its skills are read from there.
+    cursor_plugins: Arc<Mutex<Option<std::path::PathBuf>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
     /// Questions answered, by session and request: the second answer to one,
@@ -770,6 +773,7 @@ impl TurnHost {
             binaries: Arc::new(Mutex::new(HashMap::new())),
             claude_home: Arc::new(Mutex::new(None)),
             cursor_acp_sessions: Arc::new(Mutex::new(None)),
+            cursor_plugins: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
             answered: Arc::new(Mutex::new(HashSet::new())),
@@ -880,6 +884,12 @@ impl TurnHost {
     /// `~/.cursor/acp-sessions`.
     pub fn override_cursor_acp_sessions(&self, dir: impl Into<std::path::PathBuf>) {
         *self.cursor_acp_sessions.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.into());
+    }
+
+    /// Look for Cursor's installed plugins in `dir` instead of
+    /// `~/.cursor/plugins/cache`.
+    pub fn override_cursor_plugins(&self, dir: impl Into<std::path::PathBuf>) {
+        *self.cursor_plugins.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.into());
     }
 
     /// Look for Claude's conversations under `home` instead of `$HOME`.

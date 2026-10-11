@@ -30,7 +30,7 @@ use super::{
     carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Launch, Live, QuestionReply,
     TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
-use crate::command_sources::cursor_commands;
+use crate::command_sources::{cursor_commands, cursor_plugin_skills, cursor_skill_bodies, with_skill_bodies};
 use crate::providers::cursor::{
     authenticate_params, build_cursor_prompt, build_cursor_spawn_args, cancel_params, classify_request,
     initialize_params, mcp_servers, new_session_id, permission_answer, permission_response, plan_accepted,
@@ -219,14 +219,46 @@ impl TurnHost {
         if bot {
             return;
         }
+        // `cursor-agent acp` loads no plugin skill, so the ones Crew reads from
+        // the plugin cache are listed beside its commands. A command of the same
+        // name is Cursor's own and wins.
+        let plugins: Vec<crew_protocol::CommandEntry> = self
+            .cursor_plugin_dir()
+            .map(|dir| cursor_plugin_skills(&dir))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|skill| !entries.iter().any(|entry| entry.name == skill.name))
+            .collect();
+        let skills: HashSet<String> = plugins.iter().map(|skill| skill.name.clone()).collect();
+        let entries: Vec<crew_protocol::CommandEntry> = entries.into_iter().chain(plugins).collect();
         let actions = crate::commands::crew_actions(offers_fast("cursor"));
-        self.commands().learn_for_session(session_id, "cursor", cwd, Some(entries), None, actions);
+        self.commands().learn_for_session(session_id, "cursor", cwd, Some(entries), Some(skills), actions);
+    }
+
+    /// Where Cursor keeps its installed plugins: the folder a test put them in,
+    /// or `~/.cursor/plugins/cache`.
+    fn cursor_plugin_dir(&self) -> Option<std::path::PathBuf> {
+        self.cursor_plugins.lock().unwrap_or_else(|e| e.into_inner()).clone().or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(|home| std::path::Path::new(&home).join(".cursor").join("plugins").join("cache"))
+        })
+    }
+
+    /// The text a Cursor turn sends for a message: the instructions of the
+    /// plugin skills it names go ahead of it, since Cursor's ACP loads none. A
+    /// command is the whole message, as it is for Codex, so it gets none.
+    fn cursor_skill_text(&self, text: &str, command: Option<&str>, names: &[String]) -> String {
+        match self.cursor_plugin_dir() {
+            Some(dir) if command.is_none() => with_skill_bodies(text, &cursor_skill_bodies(&dir, names)),
+            _ => text.to_string(),
+        }
     }
 
     pub(super) fn run_cursor(
         &self,
         session: crate::session::Session,
-        params: crew_protocol::TurnStart,
+        mut params: crew_protocol::TurnStart,
         history: Option<String>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
@@ -246,6 +278,7 @@ impl TurnHost {
         // No system channel: the persona and the tool sheet are the first
         // user message of a conversation, a bot's every turn.
         let persona = self.persona(&session, Harness::Cursor, mcp.is_some(), &params.cwd);
+        params.text = self.cursor_skill_text(&params.text, params.command.as_deref(), params.skills.as_deref().unwrap_or_default());
         let texts = if carries {
             Texts {
                 fresh: self.child_prompt(persona.as_deref(), false, &params),
@@ -1242,8 +1275,32 @@ mod tests {
     use super::*;
     use crate::turns::TurnHost;
 
-    fn host(id: &str) -> (TurnHost, std::sync::Arc<crate::turns::Applied>) {
+    /// A host whose Cursor plugin folder is one that does not exist, so no test
+    /// reads the plugins installed in the real home.
+    fn host_without_plugins() -> TurnHost {
         let host = TurnHost::test_new();
+        host.override_cursor_plugins(std::env::temp_dir().join(format!("crew-no-plugins-{}", uuid::Uuid::new_v4())));
+        host
+    }
+
+    /// A plugin cache with one enabled plugin, whose finished install has one
+    /// skill, `search`.
+    fn plugin_cache() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("crew-cursor-plugins-{}", uuid::Uuid::new_v4()));
+        let skill = dir.join("cursor-public/101/aaa/skills/search/SKILL.md");
+        std::fs::create_dir_all(skill.parent().expect("parent")).expect("dir");
+        std::fs::write(&skill, "---\nname: search\ndescription: Search Notion.\n---\n\nFind things.\n").expect("skill");
+        std::fs::write(dir.join("cursor-public/101/aaa.installed"), "").expect("marker");
+        std::fs::write(
+            dir.join(".cloud-plugin-manifest.json"),
+            r#"{"plugins":[{"name":"notion","pluginId":"101","enabledCapabilities":["static"]}]}"#,
+        )
+        .expect("manifest");
+        dir
+    }
+
+    fn host(id: &str) -> (TurnHost, std::sync::Arc<crate::turns::Applied>) {
+        let host = host_without_plugins();
         let cap = host.test_capture();
         host.test_install_cursor(id);
         (host, cap)
@@ -1412,7 +1469,7 @@ mod tests {
     /// A session of `kind` on the fake `cursor-agent acp`, started with `text`.
     /// Returns the host, the session's id and the folder.
     fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, String) {
-        let host = TurnHost::test_new();
+        let host = host_without_plugins();
         host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
         let (session, cwd) = cursor_session(&host, kind, view);
         let (fake, _log) = crate::turns::fake_cursor(std::path::Path::new(&cwd));
@@ -1438,6 +1495,50 @@ mod tests {
 
     fn started(text: &str) -> (TurnHost, String, String) {
         started_as("terminal", Some("chat"), text)
+    }
+
+    fn acp_command(name: &str) -> crew_protocol::CommandEntry {
+        crew_protocol::CommandEntry {
+            name: name.into(),
+            description: "Cursor's own".into(),
+            argument_hint: None,
+            aliases: None,
+            kind: "command".into(),
+            path: None,
+        }
+    }
+
+    /// Cursor's menu lists the plugin skills beside its own commands, and a
+    /// plugin skill that shares a name with one of them is left out.
+    #[test]
+    fn a_cursor_plugin_skill_is_listed_beside_its_commands() {
+        let host = host_without_plugins();
+        host.override_cursor_plugins(plugin_cache());
+        host.cursor_catalog("s1", "/work/x", vec![acp_command("clear")]);
+        let entries = host.commands().catalog("cursor", "/work/x", Vec::new(), 1).entries;
+        let search = entries.iter().find(|entry| entry.name == "search").expect("search");
+        assert_eq!(search.kind, "skill");
+        assert!(search.path.as_deref().is_some_and(|path| path.ends_with("aaa/skills/search/SKILL.md")));
+        assert_eq!(entries.iter().find(|entry| entry.name == "clear").expect("clear").kind, "command");
+
+        host.cursor_catalog("s1", "/work/x", vec![acp_command("clear"), acp_command("search")]);
+        let entries = host.commands().catalog("cursor", "/work/x", Vec::new(), 2).entries;
+        assert_eq!(entries.iter().filter(|entry| entry.name == "search").count(), 1);
+        assert_eq!(entries.iter().find(|entry| entry.name == "search").expect("search").kind, "command");
+    }
+
+    /// A message that names a plugin skill sends its instructions ahead of
+    /// its text; a command, or a name that is no plugin skill, sends the text
+    /// as it was.
+    #[test]
+    fn a_named_plugin_skill_goes_into_the_prompt_ahead_of_the_message() {
+        let host = host_without_plugins();
+        host.override_cursor_plugins(plugin_cache());
+        let names = ["search".to_string()];
+        let sent = host.cursor_skill_text("look up crew", None, &names);
+        assert!(sent.contains("Find things.") && sent.ends_with("look up crew"), "{sent}");
+        assert_eq!(host.cursor_skill_text("look up crew", Some("create_plan"), &names), "look up crew");
+        assert_eq!(host.cursor_skill_text("look up crew", None, &["nope".to_string()]), "look up crew");
     }
 
     struct Lines(TurnHost);
