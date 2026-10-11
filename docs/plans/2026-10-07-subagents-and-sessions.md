@@ -227,13 +227,13 @@ orca and grok-bot: the batching window (17), the most entries of
 | 10 | `request_id` | done |
 | 11–12 | Reach by autonomy; who answers and decides | done |
 | 13 | Envelope names the sender | done |
-| 14 | Resume on message | todo |
-| 15–18 | Delivery | todo |
+| 14 | Resume on message | done |
+| 15–18 | Delivery | done |
 | 21 | `interrupt_session` | done |
 | 22 | `update_session` | done |
 | 23 | Cascading stop | done |
 | 24 | `read_session` on any session | done |
 | 25 | `list_peers` fields | done |
-| 26 | Prompts | step 1 done (two tools, the words, envelope); step 3 done (batch, `request_id`, interrupt, update, wider reads); wake-on-report text with step 2 |
-| 27 | Pause after 20 automatic turns | todo |
+| 26 | Prompts | step 1 done (two tools, the words, envelope); step 3 done (batch, `request_id`, interrupt, update, wider reads); wake-on-report text done with step 2 |
+| 27 | Pause after 20 automatic turns | done |
 | 28 | Subagents cannot delegate | done |

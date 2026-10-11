@@ -1,7 +1,7 @@
 // Plan 2026-10-05 (UI decision 1): a session started with start_session lives
 // in whoever started it — a chip in its parent's bar, not a sidebar row — and
 // opens as Crew's chat. The terminal's CLI starts it
-// from its own shell with `crew sessions start`, with the terminal's token, so
+// from its own shell with `crew sessions delegate`, with the terminal's token, so
 // the parent is the terminal; a fake opencode in $HOME/.local/bin answers.
 import assert from "node:assert/strict";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
@@ -44,7 +44,7 @@ test("a session a terminal started is a chip in its parent and opens as a chat",
   await installFakeOpencode(crew);
 
   const shell = await newTerminal(crew, main.id);
-  await typeInTerminal(crew, `!'${CREW}' sessions start --provider opencode --name "Lint pass" -- tidy the imports`);
+  await typeInTerminal(crew, `!'${CREW}' sessions delegate --provider opencode --name "Lint pass" -- tidy the imports`);
 
   const child = await waitFor(
     async () => (await sessions(crew, main.id)).find((row) => row.kind === "child"),

@@ -283,7 +283,7 @@ function assert(ok, message) {
 const word = (base) => `${base}${Math.floor(1000 + Math.random() * 9000)}`;
 
 async function start(token, provider, prompt, extra = {}) {
-  const out = await must(token, "start_session", { provider, model: MODELS[provider], prompt, ...extra });
+  const out = await must(token, "delegate", { provider, model: MODELS[provider], prompt, ...extra });
   return out.id;
 }
 
@@ -413,10 +413,10 @@ const scenarios = {
     const out = join(dataDir, `a-${provider}.txt`);
     const job = `Create a file named greeting.txt containing exactly the word ${secret}, and commit it to git with the message 'add greeting'. Report the commit hash.`;
     const prompt = [
-      "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__start_session, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
-      `1. start_session with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}", wait true, and prompt: ${JSON.stringify(job)}`,
+      "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__delegate, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
+      `1. delegate with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}", wait true, and prompt: ${JSON.stringify(job)}`,
       "2. If its status is not \"reported\", call read_session on its id every 30 seconds until the transcript shows the turn ended.",
-      `3. Write the report it gave (the report field of start_session's answer, or its last message) into the file ${out}, then stop.`,
+      `3. Write the report it gave (the report field of delegate's answer, or its last message) into the file ${out}, then stop.`,
     ].join("\n");
     await rpc("pty_spawn", {
       id: shell.id, cwd: repo, cols: 120, rows: 40, session: shell.id,
@@ -448,7 +448,7 @@ const scenarios = {
     });
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and prompt "What is 17 times 23? Reply with the number only." Do not wait for it: end your turn right after starting it. Its report wakes you; then tell me the number it reported, written as RESULT: <number>.`,
+      text: `Use Crew's delegate with provider "${provider}", model "${MODELS[provider]}" and prompt "What is 17 times 23? Reply with the number only." Do not wait for it: end your turn right after starting it. Its report wakes you; then tell me the number it reported, written as RESULT: <number>.`,
     });
     const until = Date.now() + 15 * 60_000;
     let text = "";
@@ -477,7 +477,7 @@ const scenarios = {
     });
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}", wait true and prompt "What is 19 times 21? Reply with the number only." Then tell me the number it reported, written as RESULT: <number>.`,
+      text: `Use Crew's delegate with provider "${provider}", model "${MODELS[provider]}", wait true and prompt "What is 19 times 21? Reply with the number only." Then tell me the number it reported, written as RESULT: <number>.`,
     });
     const until = Date.now() + 15 * 60_000;
     let tail;
@@ -515,7 +515,7 @@ const scenarios = {
   // A wait that runs out says the child is still running and leaves it be.
   async d(provider) {
     const shell = await terminal(`d-${provider}`);
-    const out = await must(shell.token, "start_session", {
+    const out = await must(shell.token, "delegate", {
       provider, model: MODELS[provider], prompt: "Run the shell command `sleep 25`, then reply with the word DONE.", wait: true, timeout_s: 5,
     });
     assert(out.status === "running" && /read_session/.test(out.note), `the first wait answered ${JSON.stringify(out)}`);
@@ -672,7 +672,7 @@ const scenarios = {
     if (provider !== "claude" && provider !== "codex") return "n/a: its question tool is not offered headless";
     const shell = await terminal(`q-${provider}`);
     const ask = provider === "claude" ? "your AskUserQuestion tool" : "your request_user_input tool";
-    const out = await must(shell.token, "start_session", {
+    const out = await must(shell.token, "delegate", {
       provider, model: MODELS[provider], wait: true, timeout_s: 300,
       prompt: `Use ${ask} to ask me which color I prefer, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by my answer.`,
     });
@@ -695,7 +695,7 @@ const scenarios = {
     const ask = provider === "claude" ? "your AskUserQuestion tool" : "your request_user_input tool";
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and this prompt: "Use ${ask} to ask which color to use, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by the answer." Do not wait for it: end your turn. If it asks you something, answer it with send_message. When its report arrives, tell me what it reported, as RESULT: <report>.`,
+      text: `Use Crew's delegate with provider "${provider}", model "${MODELS[provider]}" and this prompt: "Use ${ask} to ask which color to use, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by the answer." Do not wait for it: end your turn. If it asks you something, answer it with send_message. When its report arrives, tell me what it reported, as RESULT: <report>.`,
     });
     const until = Date.now() + 10 * 60_000;
     let tail;
@@ -727,7 +727,7 @@ const scenarios = {
     const job = askJob(provider, file);
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}", autonomy "ask" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, tell me what it reported, as RESULT: <report>.`,
+      text: `Use Crew's delegate with provider "${provider}", model "${MODELS[provider]}", autonomy "ask" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, tell me what it reported, as RESULT: <report>.`,
     });
     const until = Date.now() + 10 * 60_000;
     let tail;
@@ -764,7 +764,7 @@ const scenarios = {
     const job = askJob(provider, file);
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, reply RESULT: <report>.`,
+      text: `Use Crew's delegate with provider "${provider}", model "${MODELS[provider]}" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, reply RESULT: <report>.`,
     });
     let child;
     for (let i = 0; i < 200 && !child; i++) {
@@ -817,18 +817,18 @@ const scenarios = {
     const childToken = readFileSync(file, "utf8").trim();
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
-    assert(names.includes("send_message") && names.includes("list_peers") && !names.includes("start_session"), `a child is listed: ${names}`);
-    const call = await tool(childToken, "start_session", { provider: "claude", prompt: "x" });
-    assert(!call.ok && /Unknown tool/.test(call.text), `a child ran start_session: ${call.text}`);
+    assert(names.includes("send_message") && names.includes("list_peers"), `a child is listed: ${names}`);
+    const call = await tool(childToken, "delegate", { provider: "claude", prompt: "x" });
+    assert(!call.ok && /yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.
     const more = [];
     for (let n = 0; n < 3; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
-    const fifth = await tool(shell.token, "start_session", { provider, model: MODELS[provider], prompt: "Reply with OK." });
+    const fifth = await tool(shell.token, "delegate", { provider, model: MODELS[provider], prompt: "Reply with OK." });
     assert(!fifth.ok && /4 live sessions/.test(fifth.text), `a fifth started: ${fifth.text}`);
     // Autonomy never grows.
     const careful = await terminal(`h-ask-${provider}`);
     await setAutonomy(careful, "ask");
-    const full = await tool(careful.token, "start_session", { provider, model: MODELS[provider], prompt: "x", autonomy: "full" });
+    const full = await tool(careful.token, "delegate", { provider, model: MODELS[provider], prompt: "x", autonomy: "full" });
     assert(!full.ok && /cannot have full/.test(full.text), `an ask parent made a full child: ${full.text}`);
     // Nobody else drives it.
     const stranger = await terminal(`h-stranger-${provider}`);
@@ -890,12 +890,12 @@ const scenarios = {
     const peers = await must(shell.token, "list_peers", {});
     assert(Array.isArray(peers), "list_peers");
     const branch = word("k-branch-");
-    const handed = await must(shell.token, "start_session", { owner: "user", worktree: branch, prompt: "Nothing to do; this is a test." });
-    assert(handed.owner === "user" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
+    const handed = await must(shell.token, "start_session", { worktree: branch, prompt: "Nothing to do; this is a test." });
+    assert(handed.kind === "session" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
     const made = await row(handed.id);
-    assert(made.kind === "terminal" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
-    const waited = await tool(shell.token, "start_session", { owner: "user", wait: true, prompt: "x" });
-    assert(!waited.ok && /nothing to wait for/.test(waited.text), waited.text);
+    assert(made.kind === "terminal" && made.view === "chat" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
+    const waited = await tool(shell.token, "start_session", { wait: true, prompt: "x" });
+    assert(!waited.ok, `start_session took wait: ${waited.text}`);
     await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
     await must(shell.token, "control_process", { process: "k-proc", action: "start" });
     const ready = await must(shell.token, "wait_for_log", { process: "k-proc", pattern: "READY-K", timeout_s: 30 });
@@ -903,7 +903,7 @@ const scenarios = {
     const logs = await must(shell.token, "read_logs", { process: "k-proc" });
     assert(/READY-K/.test(logs.text), logs.text);
     await must(shell.token, "control_process", { process: "k-proc", action: "stop" });
-    return `handed off ${made.name} on ${branch} (launchedBy ${made.handedOffBy.slice(0, 8)}); list_peers; processes`;
+    return `handed off ${made.name} on ${branch} (launched by ${made.launchedBy.slice(0, 8)}); list_peers; processes`;
   },
 };
 
