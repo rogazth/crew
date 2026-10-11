@@ -86,7 +86,7 @@ export function SessionsStrip({ kids, onOpen, label = true }: { kids: Session[];
   );
 }
 
-/** A child's chat says whose it is; a handoff says it is yours now. */
+/** A child's chat says whose it is; a session launched by another is yours. */
 function Owner({ session, sessions }: { session: Session; sessions: readonly Session[] }) {
   const id = session.launchedBy ?? session.parentId ?? "";
   const name = (session.launchedBy ? session.launchedByName : session.parentName) ?? "a session";
@@ -97,7 +97,7 @@ function Owner({ session, sessions }: { session: Session; sessions: readonly Ses
       <Face party={party} sessions={sessions} className="size-4" />
       {session.launchedBy ? (
         <span className="truncate">
-          Handed off by <span className="text-text">{name}</span> · yours
+          Started by <span className="text-text">{name}</span> · yours
         </span>
       ) : (
         <span className="truncate">

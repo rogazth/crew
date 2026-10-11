@@ -518,8 +518,9 @@ mod tests {
         assert_eq!((group.as_str(), verb.as_str()), ("sessions", "start"));
         let (verb, tool) = find("sessions", "start");
         assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "run the -e2e", "provider": "codex" }));
-        let (_, _, matches) = parse(&["sessions", "start", "--wait", "--owner", "user", "--", "go"]);
-        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "go", "wait": true, "owner": "user" }));
+        let (_, _, matches) = parse(&["sessions", "delegate", "--wait", "--timeout-s", "30", "--", "go"]);
+        let (verb, tool) = find("sessions", "delegate");
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "go", "wait": true, "timeout_s": 30 }));
     }
 
     /// `crew send` and `crew peers` are commands of their own, beside the groups.

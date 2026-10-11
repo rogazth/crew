@@ -56,6 +56,8 @@ describe("checkpointOf", () => {
   it("reads who a start and a write to a child were between off their notes", () => {
     const started: Block = { id: "s1", role: "system", text: "Started session Auth refactor (auth)", letterId: "L4" };
     expect(checkpointOf(started, LEAD)).toMatchObject({ from: LEAD, to: { id: "auth", name: "Auth refactor" } });
+    const delegated: Block = { id: "s3", role: "system", text: "Delegated to subagent Auth (auth)", letterId: "L6" };
+    expect(checkpointOf(delegated, LEAD)?.to).toMatchObject({ id: "auth", name: "Auth" });
     const handed: Block = { id: "s2", role: "system", text: "Handed Docs pass (docs) to the user", letterId: "L5" };
     expect(checkpointOf(handed, LEAD)?.to).toMatchObject({ id: "docs", name: "Docs pass" });
     const wrote: Block = { id: "s3", role: "system", text: "You wrote to Auth refactor", letterId: "L6" };

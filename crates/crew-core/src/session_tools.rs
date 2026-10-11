@@ -822,6 +822,9 @@ impl SessionTools {
             "autonomy": autonomy,
             "worktree": worktree.as_deref().unwrap_or("main checkout"),
             "kind": if how == Start::Delegate { "subagent" } else { "session" },
+            "branch": worktree.as_deref().and_then(|tree| {
+                crate::worktree::branches(tree).into_iter().find(|(path, _)| path == tree).and_then(|(_, branch)| branch)
+            }),
         });
         let waited = if how == Start::Launch {
             let hears = Self::hears(caller) && caller.session().is_some();

@@ -34,8 +34,8 @@ export function sessionParty(session: Pick<Session, "id" | "name" | "kind">): Pa
   return { id: session.id, name: session.name, kind: session.kind === "terminal" ? "terminal" : "session" };
 }
 
-/** "Started session Auth refactor (id)", "Handed Docs (id) to the user": the system lines a start leaves. */
-const STARTED = /^(?:Started session (.+) \(([^()]+)\)|Handed (.+) \(([^()]+)\) to the user)$/;
+/** "Delegated to subagent Auth (id)", "Started session Auth refactor (id)", "Handed Docs (id) to the user": the system lines a start leaves. */
+const STARTED = /^(?:(?:Started session|Delegated to subagent) (.+) \(([^()]+)\)|Handed (.+) \(([^()]+)\) to the user)$/;
 /** The line a parent gets when the user writes to its child. */
 const WROTE = /^You wrote to (.+)$/;
 
@@ -179,7 +179,7 @@ export function childState(session: Pick<Session, "status" | "lastEvent">): Chil
   }
 }
 
-/** A child is one its parent owns: started with `owner: "me"`, not handed to the user. */
+/** A child is one its parent owns: started with `delegate`, not launched as a session of the user's. */
 export function isOwnedChild(session: Pick<Session, "kind" | "parentId" | "launchedBy">): boolean {
   return session.kind === "child" && Boolean(session.parentId) && !session.launchedBy;
 }

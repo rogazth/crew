@@ -60,7 +60,7 @@ export type Session = {
   parentId?: string;
   /** How far its transcript had got at its last event. */
   cursor?: number;
-  /** The session that handed it to the user (`start_session` with owner user). */
+  /** The session that launched it with `start_session`; grants nothing. */
   launchedBy?: string;
   /** `launchedBy`'s name now. */
   launchedByName?: string;

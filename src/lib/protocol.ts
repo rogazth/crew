@@ -958,8 +958,9 @@ parentId?: string,
  */
 cursor: number, 
 /**
- * The session that handed it to the user (`start_session` with owner
- * user); absent for any other.
+ * The session that started it with `start_session`: an independent
+ * session of the user's. It records who launched it and grants nothing;
+ * absent for any other.
  */
 launchedBy?: string, 
 /**

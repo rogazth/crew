@@ -144,7 +144,7 @@ export function useWorkContext(
     latest.current = { workspace, current, tabs, worktrees, everywhere, scope };
   });
 
-  // A session handed to the user (`start_session` with owner user) joins its
+  // A session handed to the user (`start_session`) joins its
   // worktree's strip behind whatever is on screen, and its CLI starts on the
   // prompt out of sight: the window stays where it was.
   useEffect(() => {

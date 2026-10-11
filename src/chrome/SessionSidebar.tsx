@@ -857,7 +857,7 @@ function Row({
   onRemove,
   onRename,
 }: CardProps & { onRename: () => void }) {
-  const handed = session.launchedBy ? `Handed off by ${session.launchedByName ?? "a session"} · yours` : null;
+  const handed = session.launchedBy ? `Started by ${session.launchedByName ?? "a session"} · yours` : null;
   const fresh = handed !== null && unseen(session) && !active;
   return (
     <button

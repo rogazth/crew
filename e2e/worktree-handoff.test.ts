@@ -1,5 +1,5 @@
 // A session in the main checkout hands its work to a branch of its own:
-// `start_session` with owner user makes the worktree and a terminal session in
+// `start_session` makes the worktree and a terminal session in
 // it, handed off by the caller, whose CLI starts with the prompt as its first.
 // The caller stays where it was, and the window shows the new worktree and its
 // session without being refocused.
@@ -37,16 +37,15 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   const task = "Build the login form.";
   await typeInTerminal(
     crew,
-    `!'${crewCli}' sessions start --owner user --worktree feat/handoff --name feat/handoff --json -- '${task}' > '${out}' 2>&1`,
+    `!'${crewCli}' sessions start --worktree feat/handoff --name feat/handoff --json -- '${task}' > '${out}' 2>&1`,
   );
   const answer = await waitFor(() => readFile(out, "utf8").catch(() => ""), {
     timeout: 30_000,
     message: "crew sessions start answers",
   });
-  const handed = JSON.parse(answer) as { id: string; name: string; worktree: string; branch: string; owner: string };
+  const handed = JSON.parse(answer) as { id: string; name: string; worktree: string; branch: string };
   assert.equal(handed.branch, "feat/handoff", answer);
   assert.equal(handed.name, "feat/handoff", answer);
-  assert.equal(handed.owner, "user", answer);
 
   // Git has it where Crew keeps worktrees, on the branch.
   const trees = await gitWorktrees(crew, main.path);
@@ -60,7 +59,7 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   const handedTo = rows.find((row: Session) => row.id === handed.id);
   assert.ok(handedTo, "crewd has the new session");
   assert.equal(handedTo.kind, "terminal");
-  assert.equal(handedTo.handedOffBy, shell.id);
+  assert.equal(handedTo.launchedBy, shell.id);
   assert.equal(handedTo.parentId, undefined);
   assert.equal(handedTo.worktree, handed.worktree);
   assert.equal(rows.find((row: Session) => row.id === shell.id)?.worktree ?? null, null);

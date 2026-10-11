@@ -5,7 +5,13 @@
 Models have confused these before, so they are said the same way everywhere a model reads them: here, the MCP `instructions()` and every session tool's description.
 
 - **Bot** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `bots` table. `send_message` reaches it. ("Agent" is not a Crew noun: in the industry's sense, a model plus its harness, it is what Crew calls a session.)
-- **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to a bot (the session its turns run in, under the bot's own id), to whoever started it with `start_session` (a *child*), or to nobody (a *terminal* the user drives).
+- **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to a bot (the session its turns run in, under the bot's own id), to whoever started it with `delegate` (a *child*, a subagent), or to the user (a *terminal*: one the user opened, or one `start_session` started).
+- **Subagent** — a session started with `delegate` to do one job for the session that started it, with any provider, as a harness's own subagent would. It is nested under its parent and reports to it. Disposable.
+- **Independent session** — a session started with `start_session`. It is a top-level chat session that shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. It is the user's. `launched_by` records which session started it and grants nothing.
+- **Message** — a letter written with `send_message`. It arrives as a turn, in an envelope that names who wrote it.
+- **Report** — a subagent's last message of a turn its parent started. It needs no tool.
+
+A subagent works for the session that started it. A session works for the user.
 
 A bot outlives its sessions; a session is one provider CLI process and can be thrown away.
 
@@ -78,7 +84,7 @@ Each provider is a module under `crates/crew-core/src/providers/`. It knows how 
 
 ## Sessions a caller starts
 
-Any bot, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. `start_session` starts it (`owner: "me"`, the default); a bot parent is woken by the report, a terminal reads it with `read_session` or blocks on it with `wait: true`.
+Any bot, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. `delegate` starts it; a bot parent is woken by the report, a terminal session (in either view: nothing starts a turn in it for a report yet) reads it with `read_session` or blocks on it with `wait: true`. A report goes to whoever started the turn: a turn the parent started (the first prompt, a message) reports to the parent, and a turn the user started by writing in the subagent's tab reports only to the user (`note_starter` in `turns.rs`).
 
 ```mermaid
 sequenceDiagram
@@ -86,7 +92,7 @@ sequenceDiagram
   participant D as crewd
   participant C as Child CLI
 
-  P->>D: start_session { prompt, provider?, worktree?, wait? }
+  P->>D: delegate { prompt, provider?, worktree?, wait? }
   D->>C: first turn (a fresh provider session)
   C-->>D: stream; the process stays up
   D->>D: "Turn ended" block, event at its position
@@ -109,13 +115,13 @@ A message the user sends to a child or a chat session while its turn runs is a l
 
 A bot parent finds each report in its mailbox as a `report` letter, which wakes it; reports that land while it is busy are handed over together when its turn ends. A report the parent already read (with `read_session`, or as the answer of `start_session`'s `wait`) is taken back out, so it never arrives twice. `wait` blocks 600 s by default and 3600 at most; on timeout the child carries on and its report wakes the bot later. A child that stops on a question (Claude's `AskUserQuestion`, Codex's user-input request, Cursor's `ask_question`) wakes its bot parent with a `question` letter, ends a `wait` early, and is answered by `send_message` to it (`text` for one question, `answers` for several); the user can answer the same card in the window, and whichever comes second is told it was already answered (`TurnHost::answer` is the one door). An approval is the user's alone: it wakes nobody, and `list_peers` shows the child as `waiting_for_user`.
 
-`start_session` with `owner: "user"` is a handoff: a terminal session of the user's (in a new worktree if asked), nobody's child, with `handed_off_by` set and the prompt waiting in its box as its CLI's first prompt; it reports to nobody, so `wait` is refused.
+`start_session` starts an independent session: a top-level session in the chat view (fixed at creation; kind `terminal`, view `chat`, in a new worktree if asked), nobody's child, with `launched_by` set. Its first prompt is a turn started at once, in an envelope that names the launcher. It reports to nobody, so `wait` is refused, is never reaped, and counts against no cap. `delegate` and `start_session` replaced `start_session`'s `owner`, which is refused.
 
-The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower; only the parent, or the user, drives a child. Idle children exit after 30 minutes, and their process goes with them. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
+The limits: a subagent cannot `delegate` (depth one: it is told to do the job itself or ask its parent) but may `start_session`; a parent has at most four live subagents; a subagent's autonomy is the parent's or lower; only the parent, or the user, drives (`read_session`, `stop_session`, decides an approval of) a subagent. A subagent that has exited stays exited: `send_message` to it answers that another is started with `delegate`. Idle children exit after 30 minutes, and their process goes with them. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
 
 ## Writing to each other
 
-`send_message` writes to anyone the caller may write to: any bot; a session it started; a top-level session (one nobody started); never itself, someone else's child, or a terminal (which has no turns to put a message in). The letter goes in the reader's mailbox; the daemon hands it over as a turn with the sender on it (`## Message`, `From: <name> (<kind> <id>)`, and how to reply). If the reader is busy, the letter waits until the current turn ends; `steer: true` writes it into the running turn instead where the CLI takes that (Claude, whose `--replay-user-messages` echo says when; Codex's `turn/steer`), and queues it anywhere else. The answer says how it went: `delivery: started | queued | steered | answered`.
+`send_message` writes to any bot or session in the workspace except the caller itself, an exited subagent and a session in the terminal view (which has no turns to put a message in, until letters wait in its mailbox). The one rule is that the target's autonomy may not be higher than the caller's; the user is exempt. Whoever may write to a subagent waiting on a question may answer it; an approval is decided only by the parent or the user. The letter goes in the reader's mailbox; the daemon hands it over as a turn with the sender on it. One envelope text serves a turn and a steer (`mailbox::envelope`): `## Message`, `From: <name> (<kind> <id>), a model` (or the user, a person), how to reply with `send_message` to that id, and that no reply is needed. The prompts say that text is from another session, not the user. If the reader is busy, the letter waits until the current turn ends; `steer: true` writes it into the running turn instead where the CLI takes that (Claude, whose `--replay-user-messages` echo says when; Codex's `turn/steer`), and queues it anywhere else. The answer says how it went: `delivery: started | queued | steered | answered`.
 
 ```mermaid
 sequenceDiagram

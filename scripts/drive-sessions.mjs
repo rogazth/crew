@@ -893,7 +893,7 @@ const scenarios = {
     const handed = await must(shell.token, "start_session", { owner: "user", worktree: branch, prompt: "Nothing to do; this is a test." });
     assert(handed.owner === "user" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
     const made = await row(handed.id);
-    assert(made.kind === "terminal" && made.worktree === handed.worktree && made.handedOffBy === shell.id && !made.parentId, JSON.stringify(made));
+    assert(made.kind === "terminal" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
     const waited = await tool(shell.token, "start_session", { owner: "user", wait: true, prompt: "x" });
     assert(!waited.ok && /nothing to wait for/.test(waited.text), waited.text);
     await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
@@ -903,7 +903,7 @@ const scenarios = {
     const logs = await must(shell.token, "read_logs", { process: "k-proc" });
     assert(/READY-K/.test(logs.text), logs.text);
     await must(shell.token, "control_process", { process: "k-proc", action: "stop" });
-    return `handed off ${made.name} on ${branch} (handedOffBy ${made.handedOffBy.slice(0, 8)}); list_peers; processes`;
+    return `handed off ${made.name} on ${branch} (launchedBy ${made.handedOffBy.slice(0, 8)}); list_peers; processes`;
   },
 };
 
