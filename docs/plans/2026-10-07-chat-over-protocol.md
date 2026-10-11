@@ -404,11 +404,11 @@ the terminal view.
 | # | Decision | Status |
 |---|---|---|
 | 1–3 | One writer, two views, fixed at creation | done |
-| 4–7 | Live process per session | done for Claude and Codex subagents and chat sessions; opencode and Cursor with step 5 |
+| 4–7 | Live process per session | done for Claude, Codex and opencode subagents and chat sessions (opencode on one shared server); Cursor with step 5 |
 | 8 | Setting sources by kind | done |
-| 9 | opencode on `serve` | todo |
-| 10–11 | `/` menu from the provider, anywhere in the message | done for Claude, Codex and Cursor; opencode with step 5 |
-| 12–14 | Dispatch per provider | done for Claude, Codex and Cursor; opencode with step 5 |
+| 9 | opencode on `serve` | done (2.x only; the terminal view opens `opencode --server <url> --session <id>`; checked live on 2.0.26) |
+| 10–11 | `/` menu from the provider, anywhere in the message | done for Claude, Codex, Cursor and opencode (`GET /command`, `GET /skill`) |
+| 12–14 | Dispatch per provider | done for Claude, Codex, Cursor and opencode (`session.command`, `compact`) |
 | 15 | Reload and Restart session | done |
 | 16 | Fast mode check and toggle | done |
 | 17 | Cursor plugin skills | done (read from the plugin cache; its body goes in the prompt) |
@@ -416,6 +416,6 @@ the terminal view.
 | 22 | Cursor stays on ACP | done (no change) |
 | 23–25 | `--disable-codebase-ref`, group kill on reap, startup sweep | done |
 | 26–27 | History reading and `ptySend.ts` | done (chat over the PTY removed) |
-| 28–29 | Context meter | Claude and Codex emit it, shown under the composer; opencode and Cursor with step 5 |
+| 28–29 | Context meter | Claude, Codex and opencode (`session.step.ended` over the model's window) emit it, shown under the composer; Cursor with step 5 |
 | 30–32 | Enter never interrupts; steer or queue | done |
 | 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | done |
