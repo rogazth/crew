@@ -303,6 +303,7 @@ impl TurnHost {
                 ok(client.post_json(&format!("/api/session/{oc}/prompt"), &prompt_body(&text, &skills)), "take the message")?;
             }
         }
+        self.confirm_carried(id);
         Ok(())
     }
 
@@ -595,6 +596,7 @@ impl TurnHost {
         from: BotRef,
         letter: Option<String>,
         files: Vec<AttachedFile>,
+        rest: Vec<super::Extra>,
     ) -> Result<(), String> {
         let typed = session::get(&self.store, session_id.to_string())
             .ok()
@@ -603,7 +605,7 @@ impl TurnHost {
             .and_then(driven)
             .is_some_and(|drive| typed_by_user(drive, &from));
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
-        let sent = crate::providers::with_files(self.steer_text(session_id, &from, text).trim(), &paths);
+        let sent = crate::providers::with_files(self.steer_text_all(session_id, &from, text, &rest).trim(), &paths);
         let oc = {
             let mut map = self.lock();
             let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
@@ -613,7 +615,7 @@ impl TurnHost {
                 return Err("No opencode turn is running to take it.".into());
             };
             // In before the request: its delivery can beat the answer.
-            live.steers.push((None, Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed }));
+            live.steers.push((None, Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest }));
             oc
         };
         let forget = || {
@@ -660,11 +662,12 @@ impl TurnHost {
     /// A steer opencode read: in the transcript where it was read, and its
     /// letter delivered.
     fn opencode_read(&self, session_id: &str, steer: Steer) {
-        let event = steer.read();
-        if let HarnessEvent::UserMessage { letter_id: Some(id), .. } = &event {
-            let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+        for event in steer.read() {
+            if let HarnessEvent::UserMessage { letter_id: Some(id), .. } = &event {
+                let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+            }
+            self.transcripts.apply(session_id, event);
         }
-        self.transcripts.apply(session_id, event);
     }
 
     pub(super) fn opencode_respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Option<()> {

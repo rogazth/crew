@@ -848,6 +848,7 @@ impl TurnHost {
         from: crew_protocol::BotRef,
         letter: Option<String>,
         files: Vec<crew_protocol::AttachedFile>,
+        rest: Vec<super::Extra>,
     ) -> Result<(), String> {
         let typed = session::get(&self.store, session_id.to_string())
             .ok()
@@ -857,7 +858,7 @@ impl TurnHost {
             .is_some_and(|drive| typed_by_user(drive, &from));
         // Files go in the text, as a turn's do.
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
-        let sent = crate::providers::with_files(self.steer_text(session_id, &from, text).trim(), &paths);
+        let sent = crate::providers::with_files(self.steer_text_all(session_id, &from, text, &rest).trim(), &paths);
         let (thread, turn) = {
             let mut map = self.lock();
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
@@ -867,7 +868,7 @@ impl TurnHost {
                 return Err("No Codex turn is running to take it.".into());
             };
             // In before the request: its echo can beat the answer.
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed });
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest });
             target
         };
         match self.codex_call(session_id, "turn/steer", steer_params(&thread, &turn, &sent), STEER_TIMEOUT) {
@@ -1259,6 +1260,7 @@ impl TurnHost {
                 "turn/started" => {
                     if live.active && live.turn_id.is_none() {
                         live.turn_id = params.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
+                        self.confirm_carried(session_id);
                     }
                 }
                 "item/agentMessage/delta" => {
@@ -1415,7 +1417,7 @@ fn codex_item(
             };
             if let Some(at) = steers.iter().position(|steer| steer.sent.trim() == echo.trim()) {
                 let steer = steers.remove(at);
-                events.push(steer.read());
+                events.extend(steer.read());
             }
         }
         // Codex does not stream a review's words: the finished review is in

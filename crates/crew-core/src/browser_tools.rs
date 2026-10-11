@@ -587,6 +587,8 @@ mod tests {
             cursor: 0,
             launched_by: None,
             launched_by_name: None,
+            auto_turns: 0,
+            paused: false,
             parent_name: None,
             user_seen: 0,
             last_event: None,

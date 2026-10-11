@@ -109,6 +109,22 @@ fn control_timeout(request: &Value) -> Duration {
 /// the result it had, so a server left running in the background cannot hold
 /// it forever; the process stays up with the work, and the turn the CLI
 /// starts when it reports is the child's next.
+/// How long a letter waits for the next one before a turn starts on it, and
+/// the most any letter waits from the first of its batch (plan decision 17):
+/// reports from several subagents become one turn, not one interruption each.
+/// A question or an approval waits for nothing: someone is blocked on it.
+/// Tests that are not about batching run with no window, so a letter goes the
+/// moment it lands; the ones about it set one (`set_batch_window`).
+const BATCH_WAIT: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 2_000 });
+const BATCH_MAX: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 10_000 });
+
+/// How many milliseconds are left before a batch of letters goes: it goes
+/// `wait` after the newest, but never later than `max` after the oldest. At
+/// zero or less, now.
+pub(crate) fn batch_remaining(oldest: i64, newest: i64, now: i64, wait: i64, max: i64) -> i64 {
+    (newest + wait).min(oldest + max) - now
+}
+
 const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 600 });
 /// How long a session's process stays up with no turn on it before it is let
 /// go. A process holds its CLI and its MCP servers in memory; the next message
@@ -450,6 +466,17 @@ struct Steer {
     /// Whether the transcript shows it as the user's own message rather than
     /// as a letter from somebody (see [`typed_by_user`]).
     typed: bool,
+    /// The other letters of a batch written in the same message (plan
+    /// decision 17): each is claimed, and each reads and is delivered with it.
+    rest: Vec<Extra>,
+}
+
+/// A letter that rides in the same steer as another.
+#[derive(Clone)]
+pub(crate) struct Extra {
+    letter: String,
+    text: String,
+    from: crew_protocol::BotRef,
 }
 
 impl Steer {
@@ -457,6 +484,9 @@ impl Steer {
     /// id it was written with, and the end of the turn hands it over as the
     /// next one.
     fn put_back(self, store: &crate::store::Store, session_id: &str) {
+        for extra in &self.rest {
+            let _ = mailbox::release(store, &extra.letter);
+        }
         match self.letter {
             Some(id) => {
                 let _ = mailbox::release(store, &id);
@@ -467,16 +497,27 @@ impl Steer {
         }
     }
 
-    /// The message as the transcript shows it once the turn has read it.
-    fn read(self) -> HarnessEvent {
+    /// The message as the transcript shows it once the turn has read it: one
+    /// block per letter it carried.
+    fn read(self) -> Vec<HarnessEvent> {
         let typed = self.typed;
-        HarnessEvent::UserMessage {
+        let mut events = vec![HarnessEvent::UserMessage {
             text: self.text,
             hidden: None,
             files: Some(self.files).filter(|files| !files.is_empty()),
             from_bot: (!typed).then_some(self.from),
             letter_id: self.letter,
+        }];
+        for extra in self.rest {
+            events.push(HarnessEvent::UserMessage {
+                text: extra.text,
+                hidden: None,
+                files: None,
+                from_bot: Some(extra.from),
+                letter_id: Some(extra.letter),
+            });
         }
+        events
     }
 }
 
@@ -691,6 +732,19 @@ pub struct TurnHost {
     /// Subagents whose latest turn only the user started, by writing in their
     /// tab: its report is the user's alone, and does not go to the parent.
     user_started: Arc<Mutex<HashSet<String>>>,
+    /// The letters each session's running turn was handed, until the provider
+    /// confirms it read them (plan decision 18): a daemon that stops before
+    /// that hands them over again.
+    carrying: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    /// Sessions with a timer running to hand over a batch of letters.
+    batching: Arc<Mutex<HashSet<String>>>,
+    /// Sessions whose last turn failed before reading its letters: they wait
+    /// for the user, a new letter or a restart rather than start the same
+    /// failing turn again.
+    held: Arc<Mutex<HashSet<String>>>,
+    /// How long a letter waits for the next, and the most it waits from the
+    /// first (see [`BATCH_WAIT`]).
+    batch_window: Arc<Mutex<(Duration, Duration)>>,
     /// Sessions with a turn from `start` until its outcome is in, claimed in
     /// one step. The live CLI is installed later, on the turn's own thread, so
     /// a check on it alone let a message that arrived in between start a
@@ -747,6 +801,10 @@ impl TurnHost {
             signal: crate::session_events::Signal::default(),
             exiting: Arc::new(Mutex::new(HashMap::new())),
             user_started: Arc::new(Mutex::new(HashSet::new())),
+            carrying: Arc::new(Mutex::new(HashMap::new())),
+            batching: Arc::new(Mutex::new(HashSet::new())),
+            held: Arc::new(Mutex::new(HashSet::new())),
+            batch_window: Arc::new(Mutex::new((BATCH_WAIT, BATCH_MAX))),
             running: Arc::new(Mutex::new(HashSet::new())),
             background,
             commands: crate::commands::CommandsHost::default(),
@@ -982,6 +1040,7 @@ impl TurnHost {
         if drive == Some(Driven::Child) && session.status == "exited" {
             return Err("This session has exited. Start another one.".into());
         }
+        self.user_wrote(&session.id);
         let mode = match params.mode.as_deref() {
             None | Some("auto") => SendMode::Auto,
             Some("steer") => SendMode::Steer,
@@ -1049,7 +1108,7 @@ impl TurnHost {
                 files.clone(),
                 None,
             )?;
-            match self.steer_files(id, &params.text, mailbox::user(), Some(letter.id.clone()), files.clone()) {
+            match self.steer_files(id, &params.text, mailbox::user(), Some(letter.id.clone()), files.clone(), Vec::new()) {
                 Ok(()) => {
                     self.tell_parent(session, &letter.id);
                     return Ok(TurnStarted {
@@ -1295,8 +1354,19 @@ impl TurnHost {
         if let Some(id) = params.letter_id.as_deref() {
             let _ = mailbox::claim_id(&self.store, id);
         }
+        let letters_from_others: Vec<String> = letters
+            .iter()
+            .filter(|letter| letter.from.kind.as_deref() != Some("user"))
+            .map(|letter| letter.id.clone())
+            .collect();
         let carried: Vec<String> =
             letters.into_iter().map(|letter| letter.id).chain(params.letter_id.clone()).collect();
+        // Only the letters of other sessions are held back until the provider
+        // confirms them: what the user typed is on their screen already.
+        let held_back: Vec<String> = letters_from_others;
+        if !held_back.is_empty() {
+            self.carrying.lock().unwrap_or_else(|e| e.into_inner()).insert(params.session_id.clone(), held_back);
+        }
         thread::spawn(move || {
             host.run_turn(session, params, history, carried);
         });
@@ -1809,7 +1879,7 @@ impl TurnHost {
         if mailbox::put(&self.store, letter).is_err() {
             return false;
         }
-        self.drain_mailbox(&parent.id);
+        self.wake(&parent.id);
         true
     }
 
@@ -2284,7 +2354,20 @@ impl TurnHost {
         // The letters it carried are delivered now that it has ended, however
         // it ended. A daemon that dies first leaves them claimed, and the next
         // start hands them over again.
-        let _ = mailbox::delivered(&self.store, &carried);
+        // Ones the provider never confirmed it read (its process failed before
+        // they were taken) go back in the box, and the session waits for the
+        // user or a new letter instead of starting the same turn again.
+        let unread = self.carrying.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+        let mut released: Vec<String> = Vec::new();
+        if let (TurnOutcome::Failed(_), Some(unread)) = (&outcome, unread) {
+            for id in unread {
+                let _ = mailbox::release(&self.store, &id);
+                released.push(id);
+            }
+            self.held.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.clone());
+        }
+        let delivered: Vec<String> = carried.into_iter().filter(|id| !released.contains(id)).collect();
+        let _ = mailbox::delivered(&self.store, &delivered);
         // The turn is over: the next one may start, and the drain below is
         // what starts it. A turn the CLI began by itself while this one was
         // ending found the session still running, and waits for no turn of
@@ -2364,6 +2447,14 @@ impl TurnHost {
         if self.is_running(session_id) {
             return false;
         }
+        let user_wrote = |letters: &[mailbox::Letter]| letters.iter().any(|letter| letter.from.kind.as_deref() == Some("user"));
+        // A paused session, or one whose last turn failed before reading its
+        // letters, is started by the user alone.
+        let stalled = session::paused(&self.store, session_id)
+            || self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id);
+        if stalled && !mailbox::waiting(&self.store, session_id).is_ok_and(|waiting| user_wrote(&waiting)) {
+            return false;
+        }
         let letters = match mailbox::claim_batch(&self.store, session_id, mailbox::BATCH_CHARS) {
             Ok(letters) if !letters.is_empty() => letters,
             _ => return false,
@@ -2420,13 +2511,170 @@ impl TurnHost {
         for (child, cursor) in reported {
             let _ = crate::session_events::mark_seen(&self.store, &child, cursor);
         }
+        // A turn the user's letter started is the user writing: the count
+        // starts over. One that only sessions' letters started is one more in
+        // a row (plan decision 27).
+        if self.counts_turns(session_id) {
+            let count = if user_wrote(&letters) { 0 } else { session::auto_turns(&self.store, session_id) + 1 };
+            session::set_auto_turns(&self.store, session_id, count);
+        }
         true
     }
 
-    /// Drain a bot's box by id, for a caller that has only that. Used when a
-    /// letter has just been dropped in.
+    /// Whether `session_id` can be paused: a bot answers whoever writes to it.
+    fn counts_turns(&self, session_id: &str) -> bool {
+        session::get(&self.store, session_id.to_string())
+            .ok()
+            .flatten()
+            .is_some_and(|session| driven(&session).is_some_and(|drive| drive != Driven::Bot))
+    }
+
+    /// The user writes to a session: it is theirs again, however many turns
+    /// letters had started in it.
+    fn user_wrote(&self, session_id: &str) {
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        if session::auto_turns(&self.store, session_id) > 0 {
+            session::set_auto_turns(&self.store, session_id, 0);
+        }
+    }
+
+    /// The provider read the letters its turn was handed (Claude replayed the
+    /// message, Codex started the turn, opencode and Cursor took the prompt):
+    /// they are delivered now, not when the turn ends (plan decision 18).
+    pub(crate) fn confirm_carried(&self, session_id: &str) {
+        let read = self.carrying.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        if let Some(read) = read {
+            let _ = mailbox::delivered(&self.store, &read);
+        }
+    }
+
+    /// Hand over what a letter that has just been dropped in left waiting.
+    /// A subagent, a session in the chat view and a bot take it as a turn;
+    /// see [`TurnHost::wake`].
     pub fn deliver_to(&self, target: &crate::session::Session) -> bool {
-        self.drain_mailbox(&target.id)
+        self.wake(&target.id)
+    }
+
+    /// A letter has landed in `session_id`'s box: start the turn it asks for,
+    /// or steer it into the one that runs. A session in the terminal view has
+    /// no turns, and the letter waits where the user sees it (decision 16). A
+    /// session that has had [`session::PAUSE_AFTER`] automatic turns in a row
+    /// is not woken (27). Letters from sessions wait for the next to come
+    /// close behind them (17); a question, an approval and anything the user
+    /// wrote do not. Returns whether a turn started.
+    pub fn wake(&self, session_id: &str) -> bool {
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
+            return false;
+        };
+        let Some(drive) = driven(&session) else {
+            return false;
+        };
+        if drive == Driven::Bot {
+            return self.drain_mailbox(session_id);
+        }
+        let Ok(pending) = mailbox::waiting(&self.store, session_id) else {
+            return false;
+        };
+        let from_user = |letter: &mailbox::Letter| letter.from.kind.as_deref() == Some("user");
+        let (Some(oldest), Some(newest)) =
+            (pending.iter().map(|letter| letter.at).min(), pending.iter().map(|letter| letter.at).max())
+        else {
+            return false;
+        };
+        if !pending.iter().any(from_user) && session::paused(&self.store, session_id) {
+            return false;
+        }
+        let urgent = pending.iter().any(|letter| {
+            from_user(letter) || letter.kind == mailbox::QUESTION || letter.kind == mailbox::APPROVAL || letter.dispatch.is_some()
+        });
+        if !urgent {
+            let (wait, max) = *self.batch_window.lock().unwrap_or_else(|e| e.into_inner());
+            let left = batch_remaining(oldest, newest, crate::store::now_millis(), wait.as_millis() as i64, max.as_millis() as i64);
+            if left > 0 {
+                self.wake_later(session_id, Duration::from_millis(left as u64));
+                return false;
+            }
+        }
+        if self.is_running(session_id) {
+            return self.steer_waiting(&session, &pending);
+        }
+        self.drain_mailbox(session_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn carrying_for_test(&self, session_id: &str, letters: Vec<String>) {
+        self.carrying.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string(), letters);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_batch_window(&self, wait: Duration, max: Duration) {
+        *self.batch_window.lock().unwrap_or_else(|e| e.into_inner()) = (wait, max);
+    }
+
+    /// Look at the box again once the batch window has passed. One timer per
+    /// session: a letter that comes meanwhile is seen when it fires.
+    fn wake_later(&self, session_id: &str, after: Duration) {
+        if !self.batching.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string()) {
+            return;
+        }
+        let host = self.clone();
+        let id = session_id.to_string();
+        thread::spawn(move || {
+            thread::sleep(after);
+            host.batching.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            host.wake(&id);
+        });
+    }
+
+    /// What its subagents report, ask and need decided goes into a running
+    /// turn as one steer, where its provider takes a steer without
+    /// interrupting a tool. A message waits for the turn's end unless its
+    /// sender asked for a steer (`send_message` with `steer`), so do the
+    /// user's own (they chose to queue), one with a command, and anything for
+    /// Cursor, which would cancel the turn: they wait for its end, which
+    /// hands them over as one turn.
+    fn steer_waiting(&self, session: &crate::session::Session, pending: &[mailbox::Letter]) -> bool {
+        if !STEERABLE.contains(&session.provider.as_str())
+            || pending.iter().any(|letter| {
+                letter.dispatch.is_some() || letter.from.kind.as_deref() == Some("user") || letter.kind == mailbox::MESSAGE
+            })
+        {
+            return false;
+        }
+        let letters = match mailbox::claim_batch(&self.store, &session.id, mailbox::BATCH_CHARS) {
+            Ok(letters) if !letters.is_empty() => letters,
+            _ => return false,
+        };
+        let first = &letters[0];
+        let rest: Vec<Extra> = letters[1..]
+            .iter()
+            .map(|letter| Extra { letter: letter.id.clone(), text: letter.text.clone(), from: letter.from.clone() })
+            .collect();
+        let tried = self.steer_files(&session.id, &first.text, first.from.clone(), Some(first.id.clone()), Vec::new(), rest);
+        match tried {
+            Ok(()) => {
+                self.mark_reports_seen(&letters);
+                true
+            }
+            Err(_) => {
+                for letter in &letters {
+                    let _ = mailbox::release(&self.store, &letter.id);
+                }
+                false
+            }
+        }
+    }
+
+    /// What each report or question shows of its child is seen once it is
+    /// handed over: a read or a wait after this does not hand it out again.
+    fn mark_reports_seen(&self, letters: &[mailbox::Letter]) {
+        for letter in letters {
+            let reported = letter.is_report() || letter.kind == mailbox::QUESTION || letter.kind == mailbox::APPROVAL;
+            if let (true, false, Some(cursor)) = (reported, letter.from.id.is_empty(), letter.event_cursor) {
+                let _ = crate::session_events::mark_seen(&self.store, &letter.from.id, cursor);
+            }
+        }
     }
 
     /// Letters left waiting for an idle bot — a delivery that raced a turn
@@ -2514,7 +2762,7 @@ impl TurnHost {
         }
         self.signal.notify();
         if let (Ok(()), Some(letter)) = (written, letter) {
-            self.drain_mailbox(&letter.to_session);
+            self.wake(&letter.to_session);
         }
     }
 
@@ -2549,7 +2797,9 @@ impl TurnHost {
             .parent_id
             .as_deref()
             .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
-        if parent.kind != "bot" {
+        // A bot, or a session in the chat view, has turns a report can wake. A
+        // parent in the terminal view reads them with `read_session`.
+        if driven(&parent).is_none() {
             return None;
         }
         // What the user started in the subagent's tab is theirs: how the turn
@@ -2929,20 +3179,21 @@ impl TurnHost {
         from: crew_protocol::BotRef,
         letter: Option<String>,
     ) -> Result<(), String> {
-        self.steer_files(session_id, text, from, letter, Vec::new())
+        self.steer_files(session_id, text, from, letter, Vec::new(), Vec::new())
     }
 
     /// [`TurnHost::steer`] for a message with files attached. They go in as
     /// the turn's own message would carry them: Claude takes an image as an
     /// image and the other files as paths to read, Codex takes every one as a
     /// path in the text.
-    pub fn steer_files(
+    pub(crate) fn steer_files(
         &self,
         session_id: &str,
         text: &str,
         from: crew_protocol::BotRef,
         letter: Option<String>,
         files: Vec<AttachedFile>,
+        rest: Vec<Extra>,
     ) -> Result<(), String> {
         // The kind first, out of the lock: `codex_steer` takes it again.
         let (codex, cursor, opencode) = match self.lock().get(session_id) {
@@ -2952,10 +3203,10 @@ impl TurnHost {
             _ => (false, false, false),
         };
         if codex {
-            return self.codex_steer(session_id, text, from, letter, files);
+            return self.codex_steer(session_id, text, from, letter, files, rest);
         }
         if opencode {
-            return self.opencode_steer(session_id, text, from, letter, files);
+            return self.opencode_steer(session_id, text, from, letter, files, rest);
         }
         if cursor {
             // No `session/steer`, and a second prompt cancels the first.
@@ -2967,7 +3218,7 @@ impl TurnHost {
             .as_ref()
             .and_then(driven)
             .is_some_and(|drive| typed_by_user(drive, &from));
-        let steered = self.steer_text(session_id, &from, text);
+        let steered = self.steer_text_all(session_id, &from, text, &rest);
         let images = crate::files::load_inline_images(&files);
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
         let paths: Vec<String> = files.iter().filter(|file| !inline.contains(&file.path)).map(|file| file.path.clone()).collect();
@@ -2985,7 +3236,7 @@ impl TurnHost {
             if !live.active || live.cancelled || !live.initialized {
                 return Err("No Claude turn is running to take it.".into());
             }
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed });
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest });
             build_claude_user_message(&live.claude_session_id, None, steered.trim(), &paths, &images)
         };
         if let Err(error) = self.agents.write(session_id, &serde_json::to_string(&message).unwrap_or_default()) {
@@ -3006,6 +3257,24 @@ impl TurnHost {
         }
         let parent = row.and_then(|row| row.parent_id);
         mailbox::envelope(from, text, None, parent.as_deref())
+    }
+
+    /// A batch of letters written into a running turn as one message: each
+    /// under its own envelope, one after the other, as a turn would be handed
+    /// them.
+    fn steer_text_all(
+        &self,
+        session_id: &str,
+        from: &crew_protocol::BotRef,
+        text: &str,
+        rest: &[Extra],
+    ) -> String {
+        let mut all = self.steer_text(session_id, from, text);
+        for extra in rest {
+            all.push_str("\n\n");
+            all.push_str(&self.steer_text(session_id, &extra.from, &extra.text));
+        }
+        all
     }
 
     /// How much a turn may do alone: the session's own autonomy, unless
@@ -3612,10 +3881,17 @@ impl TurnHost {
                 if let Some(echo) = crate::providers::claude::replayed_text(&rec).filter(|_| live.active) {
                     if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo) {
                         let steer = live.steers.remove(at);
-                        if let Some(id) = steer.letter.as_ref() {
-                            let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+                        let read = steer.read();
+                        for event in &read {
+                            if let HarnessEvent::UserMessage { letter_id: Some(id), .. } = event {
+                                let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+                            }
                         }
-                        events.push(steer.read());
+                        events.extend(read);
+                    } else {
+                        // Not a steer's: the message the turn was started
+                        // with, read.
+                        self.confirm_carried(session_id);
                     }
                 }
                 for result in tool_results_from_user_message(&rec) {

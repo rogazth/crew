@@ -488,7 +488,10 @@ impl TurnHost {
             id
         };
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": "session/prompt", "params": prompt_params(acp_session, text) });
-        self.agents.write(session_id, &line.to_string())
+        self.agents.write(session_id, &line.to_string())?;
+        // The prompt is in Cursor's hands: its letters are read.
+        self.confirm_carried(session_id);
+        Ok(())
     }
 
     /// Reads how full the session's context is from Cursor's store and tells

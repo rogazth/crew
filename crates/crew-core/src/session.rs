@@ -71,6 +71,43 @@ pub struct Session {
     /// children are always `terminal`, where it means nothing.
     #[serde(default = "default_view")]
     pub view: String,
+    /// Turns in a row that letters started (plan decision 27); the user
+    /// writing sets it back to 0.
+    #[serde(default)]
+    pub auto_turns: i64,
+    /// Whether it has had [`PAUSE_AFTER`] of them: letters keep landing in
+    /// its mailbox but no longer wake it, until the user writes. A bot never
+    /// pauses.
+    #[serde(default)]
+    pub paused: bool,
+}
+
+/// How many turns in a row letters may start in a session before it waits for
+/// the user (plan decision 27).
+pub const PAUSE_AFTER: i64 = 20;
+
+/// Where a session's count of automatic turns is kept.
+const AUTO_TURNS_KEY: &str = "auto_turns:";
+
+/// How many turns in a row letters have started in `session_id`.
+pub fn auto_turns(store: &Store, session_id: &str) -> i64 {
+    crate::store::get(store, format!("{AUTO_TURNS_KEY}{session_id}"))
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Sets the count, and tells whoever shows the session.
+pub fn set_auto_turns(store: &Store, session_id: &str, count: i64) {
+    let key = format!("{AUTO_TURNS_KEY}{session_id}");
+    let _ = if count <= 0 { crate::store::delete(store, key) } else { crate::store::set(store, key, count.to_string()) };
+    store.session_changed(session_id);
+}
+
+/// Whether letters no longer wake `session_id`.
+pub fn paused(store: &Store, session_id: &str) -> bool {
+    auto_turns(store, session_id) >= PAUSE_AFTER
 }
 
 /// A session's view when none was stated: its CLI's own screen.
@@ -137,14 +174,17 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    (SELECT json_object('kind', e.kind, 'outcome', e.outcome,
                                                        'asks', json_extract(e.request, '$.kind'), 'at', e.at)
                                       FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor),
-                                   s.view";
-pub const SESSION_COLUMN_COUNT: usize = 25;
+                                   s.view,
+                                   COALESCE((SELECT CAST(value AS INTEGER) FROM app_state
+                                              WHERE key = 'auto_turns:' || s.id), 0)";
+pub const SESSION_COLUMN_COUNT: usize = 26;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
 
 pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
     let provider: String = row.get(at + 4)?;
+    let kind_can_pause = row.get::<_, String>(at + 2)? != "bot";
     let model = or_default_model(&provider, row.get(at + 5)?);
     let effort = or_default_effort(&provider, row.get(at + 17)?);
     let service_tier = or_default_service_tier(&provider, row.get(at + 18)?);
@@ -174,6 +214,8 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         user_seen: row.get(at + 22)?,
         last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
         view: row.get(at + 24)?,
+        auto_turns: row.get(at + 25)?,
+        paused: kind_can_pause && row.get::<_, i64>(at + 25)? >= PAUSE_AFTER,
     })
 }
 
@@ -414,6 +456,8 @@ fn insert(
         cursor: 0,
         launched_by: None,
         launched_by_name: None,
+        auto_turns: 0,
+        paused: false,
         parent_name: None,
         user_seen: 0,
         last_event: None,
