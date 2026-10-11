@@ -231,16 +231,26 @@ const TERMINAL: &str = "Crew is the app this runs in: it holds a workspace of bo
 reach them. You are the session \"{name}\"{where}
 {glossary} A routine wakes a bot on a schedule, or once.
 `delegate` hands a job to a subagent that works for you. Its report, its final message of a turn you started, comes \
-back to you but does not wake you: check it with `read_session`, or start it with \"wait\": true to block until its \
-turn ends (it returns early if it asks a question). Questions and approvals of your subagents come to the user in \
-Crew; you may answer a question with `send_message`. `start_session` starts a separate session the user can see and \
+back to you{reports} `start_session` starts a separate session the user can see and \
 talk to, which reports to nobody; use it when the user wants one, not just because they said \"subagent\". \
 `start_sessions` starts up to 20 at once, and a `request_id` on the start tools makes a retry return what the first \
 call made. `interrupt_session` stops a session's turn without ending it, `update_session` renames, archives or \
 deletes a session you started, and `read_session` reads any session in the workspace. \
-`send_message` reaches any bot or session that does not have more autonomy than you do; a session in the terminal \
-view takes no letters. The text under a `## Message` header comes from the session or bot it names, not from the \
+`send_message` reaches any bot or session that does not have more autonomy than you do (your own parent, always); a \
+letter to a session in the terminal view waits in its mailbox for the user. The text under a `## Message` header comes from the session or bot it names, not from the \
 user.";
+
+/// What a terminal-view session is told of its subagents' reports.
+const REPORTS_READ: &str = " but does not wake you: check it with `read_session`, or start it with \"wait\": true to block until \
+its turn ends (it returns early if it asks a question). Questions and approvals of your subagents come to the user \
+in Crew; you may answer a question with `send_message`.";
+
+/// What a chat-view session is told: its subagents wake it.
+const REPORTS_WAKE: &str = " and wakes you as a turn of your own, even after this turn has ended, so end your turn \
+instead of polling with `read_session`; reports that arrive close together come as one turn. Use \"wait\": true only \
+when you need the answer to carry on in this turn. A question or an approval of a subagent wakes you too, and is also \
+the user's in Crew, where the first answer counts: answer a question with `send_message`. A session pauses after 20 \
+turns in a row that letters started, until the user writes to it.";
 
 const TERMINAL_VIEW: &str = ": the user runs your CLI in the terminal, and Crew cannot start a turn in it, so nothing wakes you, and \
 nothing can write to you: bots and sessions you write to cannot write back.";
@@ -431,7 +441,11 @@ pub fn session(session: &Session) -> String {
 /// chat view; otherwise the user runs it in the terminal.
 pub fn terminal(name: &str, harness: Harness, chat: bool) -> String {
     let place = if chat { TERMINAL_CHAT } else { TERMINAL_VIEW };
-    spell(&fill(TERMINAL, &[("glossary", crate::tools::GLOSSARY), ("name", name), ("where", place)]), harness)
+    let reports = if chat { REPORTS_WAKE } else { REPORTS_READ };
+    spell(
+        &fill(TERMINAL, &[("glossary", crate::tools::GLOSSARY), ("name", name), ("where", place), ("reports", reports)]),
+        harness,
+    )
 }
 
 #[cfg(test)]
@@ -602,6 +616,7 @@ mod tests {
             "\"wait\": true",
             "does not wake you",
             "Questions and approvals of your subagents come to the user",
+            "waits in its mailbox for the user",
             "not just because they said \"subagent\"",
             "not have more autonomy than you do",
             "not from the user",
@@ -613,7 +628,11 @@ mod tests {
         assert!(!text.contains("owner"), "{text}");
         let chat = terminal("shell", Harness::Mcp, true);
         assert!(chat.contains("Crew drives in the chat") && chat.contains("arrives as a turn"), "{chat}");
-        assert!(!chat.contains("nothing can write to you") && chat.contains("does not wake you"), "{chat}");
+        assert!(!chat.contains("nothing can write to you") && !chat.contains("does not wake you"), "{chat}");
+        for said in ["wakes you as a turn of your own", "end your turn instead of polling", "one turn", "pauses after 20"] {
+            assert!(chat.contains(said), "{said}:\n{chat}");
+        }
+        assert!(!text.contains("end your turn instead of polling"), "{text}");
         assert!(terminal("shell", Harness::Opencode, false).contains("`crew_start_session`"));
     }
 }

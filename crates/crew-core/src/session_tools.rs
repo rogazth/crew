@@ -6,8 +6,9 @@
 //! persistent identity Crew keeps; a session is one provider CLI and can be
 //! thrown away. A subagent is a session `delegate` starts for the session that
 //! started it: it is that session's child, and each turn its parent starts
-//! ends with a final message, its report, which wakes a bot parent; a terminal
-//! parent (which cannot be woken) reads it, or waits for it with `wait: true`.
+//! ends with a final message, its report, which wakes a bot parent or a parent
+//! in the chat view; a parent in the terminal view (which cannot be woken)
+//! reads it, or waits for it with `wait: true`.
 //! An independent session is one `start_session` starts: a top-level chat
 //! session that is the user's, reports to nobody and records who launched it.
 //!
@@ -357,6 +358,19 @@ impl SessionTools {
     /// does not. The user is exempt. A session in the terminal view is the
     /// user at the keyboard of its CLI and has no turn to put a letter in.
     fn may_write(&self, caller: &Caller, target: &Session) -> Result<(), String> {
+        self.reach(caller, target, false)
+    }
+
+    /// Whether `caller` may send `target` a letter: as `may_write`, except
+    /// that a letter to a session in the terminal view waits in its mailbox
+    /// for the user (plan decision 16), one to an independent session that
+    /// has exited resumes it (14), and a subagent may always write to the
+    /// session that started it, since its reports reach that parent anyway.
+    fn may_send(&self, caller: &Caller, target: &Session) -> Result<(), String> {
+        self.reach(caller, target, true)
+    }
+
+    fn reach(&self, caller: &Caller, target: &Session, letter: bool) -> Result<(), String> {
         if caller.session_id() == Some(target.id.as_str()) {
             return Err(
                 "That is you. Nothing writes to itself: carry on in this turn, or to come back to something later, \
@@ -364,13 +378,13 @@ impl SessionTools {
                     .into(),
             );
         }
-        if target.kind == "terminal" && target.view != "chat" {
+        if target.kind == "terminal" && target.view != "chat" && !letter {
             return Err(format!(
                 "{} ({}) is in the terminal view: the user drives its CLI, and Crew has no turns to put a message in.",
                 target.name, target.id
             ));
         }
-        if target.status == "exited" {
+        if target.status == "exited" && (target.kind == "child" || !letter) {
             return Err(if target.kind == "child" {
                 format!(
                     "{} is a subagent that has exited, and a subagent stays exited. read_session still reads it; start \
@@ -381,7 +395,12 @@ impl SessionTools {
                 format!("{} has exited, so nothing can reach it.", target.name)
             });
         }
-        if !matches!(caller, Caller::User { .. }) {
+        let to_my_parent = letter
+            && match caller {
+                Caller::Child(me) => me.parent_id.as_deref() == Some(target.id.as_str()),
+                _ => false,
+            };
+        if !matches!(caller, Caller::User { .. }) && !to_my_parent {
             let (mine, theirs) = (caller.autonomy(), target.autonomy.as_str());
             if autonomy_rank(theirs).unwrap_or(0) > autonomy_rank(mine).unwrap_or(0) {
                 return Err(format!(
@@ -392,6 +411,16 @@ impl SessionTools {
             }
         }
         Ok(())
+    }
+
+    /// Whether a subagent's report starts a turn of `caller`'s: a bot's, or a
+    /// session's in the chat view. A session in the terminal view reads them.
+    fn woken_by_reports(caller: &Caller) -> bool {
+        match caller {
+            Caller::Bot(_) => true,
+            Caller::Terminal(me) => me.view == "chat",
+            _ => false,
+        }
     }
 
     /// Whether a letter to `caller` is read: a bot, a subagent and a session
@@ -478,7 +507,7 @@ impl SessionTools {
                     let about: String = line.chars().take(100).collect();
                     out["about"] = json!(if about.len() < line.len() { format!("{about}…") } else { about });
                 }
-                out["write"] = json!(self.may_write(caller, row).is_ok());
+                out["write"] = json!(self.may_send(caller, row).is_ok());
                 out
             })
             .collect();
@@ -518,7 +547,7 @@ impl SessionTools {
             return Err("text is required".into());
         }
         let target = self.find_peer(caller, &to)?;
-        self.may_write(caller, &target)?;
+        self.may_send(caller, &target)?;
         if let Some(decision) = decision {
             return self.decide(caller, &target, decision, body.as_deref());
         }
@@ -530,10 +559,30 @@ impl SessionTools {
         let Some(body) = body else {
             return Err(format!("{} is not waiting on a question, so there is nothing for answers to answer: send text.", target.name));
         };
+        // The user is at the keyboard of its CLI: no turn of Crew's can take
+        // the letter, so it waits in the mailbox, where the user sees it.
+        if target.kind == "terminal" && target.view != "chat" {
+            let letter = mailbox::enqueue(&self.store, &target.id, &caller.sender(), &body)?;
+            return Ok(json!({
+                "to": target.name,
+                "id": target.id,
+                "letter_id": letter.id,
+                "delivery": "waiting_for_user",
+                "waiting": mailbox::waiting_count(&self.store, &target.id)?,
+                "note": format!(
+                    "{} is in the terminal view, where the user drives its CLI and Crew cannot start a turn. The \
+                     letter waits in its mailbox for the user to see; do not expect a reply from it.",
+                    target.name
+                )
+            }));
+        }
+        // An independent session that has exited takes the letter as a turn
+        // on the conversation it left (plan decision 14).
+        let resuming = target.status == "exited";
         let mut fell_back = None;
         // The letter a steer that did not go through left in the box.
         let mut released = None;
-        if steer {
+        if steer && !resuming {
             let tried = if !STEERABLE.contains(&target.provider.as_str()) {
                 Err(format!("{} cannot take a message in the middle of a turn", target.provider))
             } else if !self.turns.is_running(&target.id) {
@@ -571,12 +620,27 @@ impl SessionTools {
         };
         // What goes over is the oldest letter, which may not be this one: a
         // queue that delivers out of order is worse than one that waits.
-        let started = self.turns.deliver_to(&target);
+        let started = if resuming { self.turns.drain_mailbox(&target.id) } else { self.turns.deliver_to(&target) };
         let waiting = mailbox::waiting_count(&self.store, &target.id)?;
-        let mut note = if started {
+        let mut note = if resuming && started {
+            format!("{} had exited. It is resumed on its conversation and reads this now.", target.name)
+        } else if resuming {
+            format!("{} had exited, and could not be resumed now; the letter waits in its mailbox.", target.name)
+        } else if started {
             format!("{} is reading it now.", target.name)
         } else if target.status == "needs-input" {
             format!("{} is waiting for the user's approval in Crew; it reads this when its turn ends.", target.name)
+        } else if crate::session::paused(&self.store, &target.id) {
+            format!(
+                "{} is paused after {} automatic turns in a row. The letter waits in its mailbox until the user writes to it.",
+                target.name,
+                crate::session::PAUSE_AFTER
+            )
+        } else if !self.turns.is_running(&target.id) && target.kind != "bot" {
+            format!(
+                "{} reads it in a moment, with any letter that comes close behind it: letters that arrive together go as one turn.",
+                target.name
+            )
         } else {
             format!("{} is busy; it reads this the moment its current turn ends.", target.name)
         };
@@ -594,7 +658,7 @@ impl SessionTools {
             "to": target.name,
             "id": target.id,
             "letter_id": letter,
-            "delivery": if started { "started" } else { "queued" },
+            "delivery": if resuming && started { "resumed" } else if started { "started" } else { "queued" },
             "waiting": waiting,
             "note": note
         }))
@@ -652,7 +716,7 @@ impl SessionTools {
         self.saw(caller, target, target.cursor);
         let letter = mailbox::record_delivered(&self.store, &target.id, &caller.sender(), &said)?;
         let note = match caller {
-            Caller::Bot(_) => "It carries on with your answer. Its report wakes you when its turn ends.",
+            c if Self::woken_by_reports(c) => "It carries on with your answer. Its report wakes you when its turn ends.",
             Caller::Terminal(_) => "It carries on with your answer. Nothing wakes you when it reports: check it with read_session.",
             _ => "It carries on with your answer.",
         };
@@ -746,7 +810,7 @@ impl SessionTools {
             out["message_letter_id"] = json!(queued.id);
             text.push_str(" Your text follows as a message, read when its current turn ends.");
         }
-        if matches!(caller, Caller::Bot(_)) {
+        if Self::woken_by_reports(caller) {
             text.push_str(" Its report wakes you when its turn ends.");
         }
         out["note"] = json!(text);
@@ -836,7 +900,7 @@ impl SessionTools {
             json!({
                 "status": "starting",
                 "note": match caller {
-                    Caller::Bot(_) => "It is working on the prompt now. Its report wakes you when its turn ends: end your \
+                    c if Self::woken_by_reports(c) => "It is working on the prompt now. Its report wakes you when its turn ends: end your \
                                        turn rather than wait. read_session shows what it did; send_message gives it more.",
                     Caller::Terminal(_) => "It is working on the prompt now. Nothing wakes you when it reports, so check it \
                                             with read_session (or pass wait: true next time); send_message gives it more.",
@@ -1220,7 +1284,7 @@ impl SessionTools {
             note.push_str(" It is waiting for the user to approve something in Crew.");
         }
         note.push_str(match caller {
-            Caller::Bot(_) => " Its report will wake you: end your turn.",
+            c if Self::woken_by_reports(c) => " Its report will wake you: end your turn.",
             Caller::Terminal(_) => " Check it with read_session.",
             _ => " Check it with read_session, or in Crew.",
         });
@@ -1882,7 +1946,7 @@ pub fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_peers",
-            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, which takes no letters), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
+            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, whose letters wait in its mailbox for the user), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
             schema: json!({ "type": "object", "properties": {} }),
             audience: Audience::EVERYONE,
             cli: vec![crate::tools::top("peers").about("The bots and sessions here: status, who started them, and whether you can write to them.").eg("crew peers\n  crew peers --json | jq '.[] | select(.kind == \"bot\") | .id'")],
@@ -1890,7 +1954,7 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "send_message",
             description: concat!(
-                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A session in the terminal view takes no letters. ",
+                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A letter to a session in the terminal view waits in its mailbox for the user; one to an independent session that has exited resumes it (the result says resumed); a subagent may always write to the session that started it. ",
                 "It arrives as a turn, in an envelope naming you: your name and id, and that a model wrote it. Idle, the reader starts on it now; busy, it waits until the current turn ends. ",
                 "steer: true puts it into the running turn instead, to correct its course, where the CLI can take that (Claude and Codex); anywhere else it is queued. ",
                 "To a subagent that is waiting on a question, it answers the question, from anyone who may write to it: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
@@ -1915,7 +1979,7 @@ pub fn catalog() -> Vec<Tool> {
             name: "delegate",
             description: concat!(
                 "Hand one job to a subagent: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
-                "Each time it ends a turn you started, its final message, its report, comes back to you; a bot is woken by it as a turn of its own, so end your turn rather than wait. Nothing wakes a terminal session, which reads reports with read_session or waits for one. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
+                "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session in the chat is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. Nothing wakes a session in the terminal view, which reads reports with read_session or waits for one. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
                 "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. A subagent cannot delegate. ",
                 "request_id makes the call safe to retry: the same id from you returns the subagent the first call made. Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
@@ -5521,7 +5585,12 @@ time.sleep(600)
             assert!(out.as_ref().is_err_and(|e| e.contains(why)), "{to}: {out:?}");
         };
         refused(&bot, bot.session_id().unwrap(), "That is you");
-        refused(&bot, shell.session_id().unwrap(), "terminal view");
+        // A session in the terminal view takes the letter into its mailbox,
+        // where the user sees it (decision 16).
+        let waits = w.call(&bot, "send_message", json!({ "to": shell.session_id().unwrap(), "text": "hi" })).expect("accepted");
+        assert_eq!((waits["delivery"].clone(), waits["waiting"].clone()), (json!("waiting_for_user"), json!(1)), "{waits}");
+        assert!(waits["note"].as_str().unwrap().contains("waits in its mailbox"), "{waits}");
+        assert_eq!(mailbox::waiting_count(w.turns.store(), shell.session_id().unwrap()).unwrap(), 1);
         refused(&bot, "Planner", "addressed by id");
         refused(&bot, "Nobody", "list_peers has the ids");
         let missing = w.call(&shell, "send_message", json!({ "to": child }));
@@ -5568,7 +5637,7 @@ time.sleep(600)
         assert_eq!(w.peer(&other, &top)["write"], json!(true));
         assert_eq!(w.peer(&careful, &child)["write"], json!(false));
         assert_eq!(w.peer(&careful, ask_peer.session_id().unwrap())["write"], json!(true));
-        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(false));
+        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(true), "its letters wait for the user");
         assert_eq!(w.peer(&bot, shell.session_id().unwrap())["kind"], "terminal");
         assert_eq!((w.peer(&bot, &chat.id)["kind"].clone(), w.peer(&bot, &chat.id)["write"].clone()), (json!("session"), json!(true)));
         assert!(w.peer(&bot, bot.session_id().unwrap()).is_null(), "a caller is not its own peer");
@@ -8229,5 +8298,303 @@ time.sleep(600)
         let out = w.call(&user, "update_session", json!({ "session": chat.id, "action": "delete" })).expect("delete");
         assert_eq!(out["deleted"], json!([sub.id, chat.id]), "{out}");
         assert!(session::get(w.turns.store(), sub.id).unwrap().is_none());
+    }
+
+    /// Product decision after step 1: a subagent may always write to the
+    /// session that started it, whatever its autonomy, since its reports reach
+    /// that parent anyway; the autonomy rule holds for everyone else.
+    #[test]
+    fn a_subagent_may_write_to_its_parent_whatever_its_autonomy() {
+        let w = world();
+        let lead = w.session("bot", "Lead", "full");
+        let other = w.session("bot", "Other", "full");
+        let out = w
+            .call(&lead, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" }))
+            .expect("delegate");
+        let id = out["id"].as_str().unwrap().to_string();
+        w.settle(&id);
+        let kid = Caller::from_session(w.row(&id));
+        assert_eq!(kid.autonomy(), "ask");
+        let to_parent = w.call(&kid, "send_message", json!({ "to": lead.session_id().unwrap(), "text": "a question" }));
+        assert!(to_parent.is_ok(), "{to_parent:?}");
+        assert_eq!(w.peer(&kid, lead.session_id().unwrap())["write"], json!(true));
+        let to_other = w.call(&kid, "send_message", json!({ "to": other.session_id().unwrap(), "text": "hi" }));
+        assert!(to_other.is_err_and(|e| e.contains("allowed more than it is")));
+        w.settle(lead.session_id().unwrap());
+    }
+
+    // ---- Delivery to a session in the chat: wake, batch, steer, confirm, resume, pause ----
+
+    impl World {
+        /// A subagent of `parent`, with a report from it dropped in `parent`'s
+        /// box the way the end of its turn would, and the wake after it.
+        fn report_to(&self, parent: &str, kid: &Session, text: &str, cursor: i64) -> mailbox::Letter {
+            let from = crate::caller::Caller::from_session(kid.clone()).sender();
+            let letter = mailbox::Letter::new(parent, &from, text, mailbox::REPORT, Some(cursor));
+            session_events::record_reporting(self.turns.store(), &kid.id, cursor, "turn", "completed", "", None, Some(&letter))
+                .unwrap();
+            self.turns.wake(parent);
+            letter
+        }
+
+        fn kid_of(&self, parent: &str, name: &str) -> Session {
+            session::create_child(
+                self.turns.store(),
+                self.workspace.clone(),
+                name.into(),
+                "opencode".into(),
+                "m".into(),
+                "full".into(),
+                None,
+                Some(parent.to_string()),
+            )
+            .unwrap()
+        }
+    }
+
+    #[test]
+    fn a_batch_goes_wait_after_the_newest_letter_and_never_later_than_max_after_the_first() {
+        use crate::turns::batch_remaining as left;
+        // Two seconds after the newest while that is inside the ten seconds.
+        assert_eq!(left(1_000, 1_000, 1_000, 2_000, 10_000), 2_000);
+        assert_eq!(left(1_000, 2_500, 3_000, 2_000, 10_000), 1_500);
+        // A letter every second keeps pushing the window; the ten seconds cut it.
+        assert_eq!(left(1_000, 10_500, 10_600, 2_000, 10_000), 400);
+        assert!(left(1_000, 10_900, 11_000, 2_000, 10_000) <= 0, "the tenth second from the first goes now");
+        // Long overdue goes at once.
+        assert!(left(0, 100, 50_000, 2_000, 10_000) < 0);
+    }
+
+    /// Decision 15 and 17: what its subagents report wakes a session in the
+    /// chat, and reports that land close together are one turn.
+    #[test]
+    fn reports_to_a_chat_session_wake_it_as_one_turn() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.turns.set_batch_window(Duration::from_millis(400), Duration::from_millis(3_000));
+        let (a, b) = (w.kid_of(&mine.id, "kid a"), w.kid_of(&mine.id, "kid b"));
+        w.report_to(&mine.id, &a, "a is done", 2);
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(w.launches().is_empty(), "the first report did not wait for the next");
+        w.report_to(&mine.id, &b, "b is done", 2);
+        until("one turn on both reports", || w.launches().len() == 1);
+        w.settle(&mine.id);
+        let woke = prompts(&w);
+        assert_eq!(woke.len(), 1, "{woke:?}");
+        assert_eq!(woke[0].matches("## Report from session").count(), 2, "{}", woke[0]);
+        assert_eq!(mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap(), 0);
+        // The count of turns that letters started went up by one.
+        assert_eq!(session::auto_turns(w.turns.store(), &mine.id), 1);
+    }
+
+    #[test]
+    fn a_question_does_not_wait_for_the_batch() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.turns.set_batch_window(Duration::from_secs(30), Duration::from_secs(60));
+        let kid = w.kid_of(&mine.id, "asker");
+        let from = crate::caller::Caller::from_session(kid.clone()).sender();
+        mailbox::put(
+            w.turns.store(),
+            mailbox::Letter::new(&mine.id, &from, "which branch?", mailbox::QUESTION, Some(2)),
+        )
+        .unwrap();
+        assert!(w.turns.wake(&mine.id), "a question waited for the window");
+        w.settle(&mine.id);
+        // A report in the same window does wait.
+        w.report_to(&mine.id, &kid, "done", 3);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(w.launches().len(), 1, "a report did not wait");
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 1);
+    }
+
+    /// Decision 15 and 17 on a running turn: reports go in as one steer, and
+    /// each is a letter delivered where the model read it.
+    #[test]
+    fn reports_for_a_running_chat_turn_are_one_steer() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.turns.set_batch_window(Duration::from_millis(200), Duration::from_millis(2_000));
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until("the process", || w.row(&mine.id).provider_session_id.is_some());
+        std::thread::sleep(Duration::from_millis(300));
+        let (a, b) = (w.kid_of(&mine.id, "kid a"), w.kid_of(&mine.id, "kid b"));
+        let (la, lb) = (w.report_to(&mine.id, &a, "a is done", 2), w.report_to(&mine.id, &b, "b is done", 2));
+        until("both letters read", || mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap() == 0);
+        w.settle(&mine.id);
+        // One message into the turn that ran, carrying both reports.
+        let input = std::fs::read_to_string(w.dir.join("claude-input.log")).unwrap_or_default();
+        let steers: Vec<&str> = input.lines().filter(|line| line.contains("a is done")).collect();
+        assert_eq!(steers.len(), 1, "{input}");
+        assert!(steers[0].contains("b is done"), "{input}");
+        let blocks = w.blocks(&mine.id);
+        for letter in [&la, &lb] {
+            assert!(blocks.iter().any(|b| b.letter_id.as_deref() == Some(letter.id.as_str())), "{}", letter.text);
+        }
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the reports ran on the turn that was running");
+    }
+
+    /// Decision 16: a letter to a session in the terminal view waits in its
+    /// mailbox, and no wake starts anything.
+    #[test]
+    fn a_letter_to_a_terminal_view_session_waits_for_the_user() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let bot = w.session("bot", "Planner", "full");
+        let out = w.call(&bot, "send_message", json!({ "to": shell.session_id().unwrap(), "text": "look at this" })).expect("send");
+        assert_eq!(out["delivery"], "waiting_for_user", "{out}");
+        assert!(out["note"].as_str().unwrap().contains("waits in its mailbox"), "{out}");
+        assert!(!w.turns.wake(shell.session_id().unwrap()));
+        assert_eq!(mailbox::waiting_count(w.turns.store(), shell.session_id().unwrap()).unwrap(), 1);
+        assert!(w.launches().is_empty());
+    }
+
+    /// Decision 18: a letter handed to a turn stays undelivered until the
+    /// provider says it read it; a daemon that stops first hands it over again.
+    #[test]
+    fn a_letter_stays_in_the_box_until_the_provider_confirms_it() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        let kid = w.kid_of(&mine.id, "kid");
+        let from = crate::caller::Caller::from_session(kid).sender();
+        let letter = mailbox::enqueue(w.turns.store(), &mine.id, &from, "hello").unwrap();
+        let claimed = mailbox::claim_batch(w.turns.store(), &mine.id, 1000).unwrap();
+        assert_eq!(claimed.len(), 1);
+        // Handed to a turn that has not been confirmed: still on its way.
+        w.turns.carrying_for_test(&mine.id, vec![letter.id.clone()]);
+        assert_eq!(mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap(), 1);
+        // The daemon restarts: it goes back in the box, and the sweep hands it over.
+        w.turns.store().with(mailbox::release_unfinished).unwrap();
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 1);
+        w.turns.deliver_waiting();
+        w.settle(&mine.id);
+        assert_eq!(mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap(), 0);
+        assert!(prompts(&w)[0].contains("hello"), "{:?}", prompts(&w));
+        // The confirmation itself marks the letters of the turn delivered.
+        let again = mailbox::enqueue(w.turns.store(), &mine.id, &from_of(&w, &mine.id), "again").unwrap();
+        mailbox::claim_batch(w.turns.store(), &mine.id, 1000).unwrap();
+        w.turns.carrying_for_test(&mine.id, vec![again.id.clone()]);
+        assert_eq!(mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap(), 1);
+        w.turns.confirm_carried(&mine.id);
+        assert_eq!(mailbox::undelivered_count(w.turns.store(), &mine.id).unwrap(), 0);
+    }
+
+    fn from_of(w: &World, parent: &str) -> crew_protocol::BotRef {
+        crate::caller::Caller::from_session(w.kid_of(parent, "someone")).sender()
+    }
+
+    /// Decision 18: a turn that fails before the provider read its letters
+    /// gives them back, and does not start the same turn again by itself.
+    #[test]
+    fn a_turn_that_failed_unread_gives_its_letters_back_and_waits() {
+        let w = world();
+        let mine = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "terminal".into(),
+            "mine".into(),
+            "nothing-wired".into(),
+            String::new(),
+            String::new(),
+            "full".into(),
+            Some("chat".into()),
+        )
+        .unwrap();
+        let from = from_of(&w, &mine.id);
+        let letter = mailbox::enqueue(w.turns.store(), &mine.id, &from, "hello").unwrap();
+        assert!(w.turns.drain_mailbox(&mine.id));
+        w.settle(&mine.id);
+        let page = mailbox::waiting(w.turns.store(), &mine.id).unwrap();
+        assert_eq!(page.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), [letter.id.as_str()], "the letter is back in the box");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!w.turns.is_running(&mine.id), "the same failing turn started again");
+    }
+
+    /// Decision 14: a letter to an exited independent session is a turn on
+    /// its conversation.
+    #[test]
+    fn a_message_to_an_exited_independent_session_resumes_it() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.say(&mine, "first");
+        let bound = w.row(&mine.id).provider_session_id.clone();
+        assert!(bound.is_some());
+        w.turns.transcripts().set_status(&mine.id, "exited", None);
+        w.turns.transcripts().flush(&mine.id);
+        let bot = w.session("bot", "Planner", "full");
+        let out = w.call(&bot, "send_message", json!({ "to": mine.id, "text": "and now this" })).expect("send");
+        assert_eq!(out["delivery"], "resumed", "{out}");
+        w.settle(&mine.id);
+        assert_eq!(prompts(&w).last().map(|p| p.contains("and now this")), Some(true), "{:?}", prompts(&w));
+        assert_eq!(w.row(&mine.id).provider_session_id, bound, "it resumed the conversation it had");
+        // A subagent that exited stays exited.
+        let lead = w.session("terminal", "shell", "full");
+        let kid = w.start(&lead, "x");
+        w.settle(&kid);
+        w.call(&lead, "stop_session", json!({ "session": kid })).expect("stop");
+        let refused = w.call(&bot, "send_message", json!({ "to": kid, "text": "again" }));
+        assert!(refused.is_err_and(|e| e.contains("start another with delegate")));
+    }
+
+    /// Decision 18: the startup sweep also hands a top-level session the
+    /// letters its subagents left, even long after the batch window.
+    #[test]
+    fn the_startup_sweep_delivers_a_top_level_sessions_reports() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.turns.set_batch_window(Duration::from_secs(2), Duration::from_secs(10));
+        let kid = w.kid_of(&mine.id, "kid");
+        let from = crate::caller::Caller::from_session(kid).sender();
+        let mut old = mailbox::Letter::new(&mine.id, &from, "done while the daemon was down", mailbox::REPORT, Some(2));
+        old.at -= 60_000;
+        mailbox::put(w.turns.store(), old).unwrap();
+        w.turns.deliver_waiting();
+        w.settle(&mine.id);
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 0);
+        assert!(prompts(&w)[0].contains("done while the daemon was down"), "{:?}", prompts(&w));
+    }
+
+    /// Decision 27: twenty turns in a row that letters started pause a
+    /// session; letters keep landing without waking it, and the user writing
+    /// resumes it.
+    #[test]
+    fn a_session_pauses_after_twenty_automatic_turns_and_the_user_resumes_it() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        let kid = w.kid_of(&mine.id, "kid");
+        session::set_auto_turns(w.turns.store(), &mine.id, session::PAUSE_AFTER - 1);
+        assert!(!w.row(&mine.id).paused);
+        w.report_to(&mine.id, &kid, "nineteen and one", 2);
+        w.settle(&mine.id);
+        assert_eq!(session::auto_turns(w.turns.store(), &mine.id), session::PAUSE_AFTER);
+        assert!(w.row(&mine.id).paused, "the row says it is paused");
+        let launches = w.launches().len();
+        // Letters still land, and wake nothing.
+        w.report_to(&mine.id, &kid, "one more", 3);
+        let from = from_of(&w, &mine.id);
+        let sent = mailbox::enqueue(w.turns.store(), &mine.id, &from, "and a message").unwrap();
+        assert!(!w.turns.deliver_to(&w.row(&mine.id)));
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(w.launches().len(), launches);
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 2);
+        assert!(sent.at > 0);
+        // The user writes: the count starts over and what waited goes in the turn.
+        w.say(&mine, "carry on");
+        assert_eq!(session::auto_turns(w.turns.store(), &mine.id), 0);
+        assert!(!w.row(&mine.id).paused);
+        let last = prompts(&w).last().cloned().unwrap();
+        assert!(last.contains("carry on") && last.contains("one more") && last.contains("and a message"), "{last}");
+    }
+
+    /// A bot answers whoever writes to it, whatever the count.
+    #[test]
+    fn a_bot_is_never_paused() {
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let id = bot.session_id().unwrap();
+        session::set_auto_turns(w.turns.store(), id, 50);
+        assert!(!w.row(id).paused);
     }
 }
