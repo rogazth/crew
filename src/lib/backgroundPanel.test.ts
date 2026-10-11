@@ -75,7 +75,7 @@ describe("panelEntries", () => {
     const children = [
       session("c1", { name: "Fallback", createdAt: 30 }),
       session("other", { name: "Elsewhere", parentId: "s2" }),
-      session("handed", { name: "Handed", handedOffBy: "s9" }),
+      session("handed", { name: "Handed", launchedBy: "s9" }),
     ];
     const processes = [
       processOf("dev", [

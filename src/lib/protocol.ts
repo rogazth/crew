@@ -961,11 +961,11 @@ cursor: number,
  * The session that handed it to the user (`start_session` with owner
  * user); absent for any other.
  */
-handedOffBy?: string, 
+launchedBy?: string, 
 /**
- * `handed_off_by`'s name now.
+ * `launched_by`'s name now.
  */
-handedOffByName?: string, 
+launchedByName?: string, 
 /**
  * `parent_id`'s name now.
  */

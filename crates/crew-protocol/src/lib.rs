@@ -610,15 +610,16 @@ pub struct Session {
     #[serde(default)]
     #[ts(type = "number")]
     pub cursor: i64,
-    /// The session that handed it to the user (`start_session` with owner
-    /// user); absent for any other.
+    /// The session that started it with `start_session`: an independent
+    /// session of the user's. It records who launched it and grants nothing;
+    /// absent for any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub handed_off_by: Option<String>,
-    /// `handed_off_by`'s name now.
+    pub launched_by: Option<String>,
+    /// `launched_by`'s name now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub handed_off_by_name: Option<String>,
+    pub launched_by_name: Option<String>,
     /// `parent_id`'s name now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

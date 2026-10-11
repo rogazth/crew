@@ -532,8 +532,8 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         bot_id: row.bot_id.clone(),
         parent_id: row.parent_id.clone(),
         cursor: row.cursor,
-        handed_off_by: row.handed_off_by.clone(),
-        handed_off_by_name: row.handed_off_by_name.clone(),
+        launched_by: row.launched_by.clone(),
+        launched_by_name: row.launched_by_name.clone(),
         parent_name: row.parent_name.clone(),
         user_seen: row.user_seen,
         last_event: row.last_event.as_ref().map(|event| proto::SessionLastEvent {

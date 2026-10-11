@@ -180,8 +180,8 @@ export function childState(session: Pick<Session, "status" | "lastEvent">): Chil
 }
 
 /** A child is one its parent owns: started with `owner: "me"`, not handed to the user. */
-export function isOwnedChild(session: Pick<Session, "kind" | "parentId" | "handedOffBy">): boolean {
-  return session.kind === "child" && Boolean(session.parentId) && !session.handedOffBy;
+export function isOwnedChild(session: Pick<Session, "kind" | "parentId" | "launchedBy">): boolean {
+  return session.kind === "child" && Boolean(session.parentId) && !session.launchedBy;
 }
 
 /** The sessions each one started and owns, oldest first, by the starter's id. */

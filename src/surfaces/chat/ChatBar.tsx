@@ -88,14 +88,14 @@ export function SessionsStrip({ kids, onOpen, label = true }: { kids: Session[];
 
 /** A child's chat says whose it is; a handoff says it is yours now. */
 function Owner({ session, sessions }: { session: Session; sessions: readonly Session[] }) {
-  const id = session.handedOffBy ?? session.parentId ?? "";
-  const name = (session.handedOffBy ? session.handedOffByName : session.parentName) ?? "a session";
+  const id = session.launchedBy ?? session.parentId ?? "";
+  const name = (session.launchedBy ? session.launchedByName : session.parentName) ?? "a session";
   const parent = sessions.find((row) => row.id === id);
   const party: Party = parent ? sessionParty(parent) : { id, name };
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 text-[12.5px] text-text-muted">
       <Face party={party} sessions={sessions} className="size-4" />
-      {session.handedOffBy ? (
+      {session.launchedBy ? (
         <span className="truncate">
           Handed off by <span className="text-text">{name}</span> · yours
         </span>
@@ -196,7 +196,7 @@ type Props = {
  * conversations on the right. Nothing to say, no bar.
  */
 export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenThread }: Props) {
-  const owned = Boolean(session.parentId || session.handedOffBy);
+  const owned = Boolean(session.parentId || session.launchedBy);
   if (kids.length === 0 && !owned && pairs.length === 0) return null;
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-hairline py-2 pr-2 pl-4">

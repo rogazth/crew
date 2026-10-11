@@ -15,7 +15,7 @@ const PEER_COLUMNS: &[Column] = &[
     Column::new("ID", &["id"]),
     Column::new("KIND", &["kind"]),
     Column::new("STATUS", &["status"]),
-    Column::new("PARENT", &["parent", "handed_off_by"]),
+    Column::new("PARENT", &["parent", "launched_by"]),
     Column::new("WORKTREE", &["worktree"]),
     Column::with("WRITE", &["write"], yes),
 ];

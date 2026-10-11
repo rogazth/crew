@@ -50,13 +50,13 @@ pub struct Session {
     /// cursor `read_session` counts in.
     #[serde(default)]
     pub cursor: i64,
-    /// The session that handed it to the user (`start_session` with owner
-    /// user): a top-level session, nobody's child.
+    /// The session that started it with `start_session`: a top-level
+    /// session, nobody's child. It records who launched it and grants nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handed_off_by: Option<String>,
-    /// `handed_off_by`'s name now.
+    pub launched_by: Option<String>,
+    /// `launched_by`'s name now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handed_off_by_name: Option<String>,
+    pub launched_by_name: Option<String>,
     /// `parent_id`'s name now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_name: Option<String>,
@@ -128,9 +128,9 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    s.provider_session_id, COALESCE(b.description, s.description),
                                    COALESCE(b.notifications, s.notifications),
                                    s.status, s.created_at, s.updated_at, COALESCE(b.autonomy, s.autonomy), s.worktree,
-                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.service_tier, s.handed_off_by,
+                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.service_tier, s.launched_by,
                                    (SELECT COALESCE(hb.name, h.name) FROM sessions h LEFT JOIN bots hb ON hb.id = h.bot_id
-                                     WHERE h.id = s.handed_off_by),
+                                     WHERE h.id = s.launched_by),
                                    (SELECT COALESCE(pb.name, p.name) FROM sessions p LEFT JOIN bots pb ON pb.id = p.bot_id
                                      WHERE p.id = s.parent_id),
                                    s.user_seen,
@@ -168,8 +168,8 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         cursor: row.get(at + 16)?,
         effort,
         service_tier,
-        handed_off_by: row.get(at + 19)?,
-        handed_off_by_name: row.get(at + 20)?,
+        launched_by: row.get(at + 19)?,
+        launched_by_name: row.get(at + 20)?,
         parent_name: row.get(at + 21)?,
         user_seen: row.get(at + 22)?,
         last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
@@ -342,10 +342,10 @@ pub fn create_child(
     insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent, DEFAULT_VIEW.into())
 }
 
-/// Mark a session as handed to the user by `by`.
-pub fn set_handed_off_by(store: &Store, id: &str, by: &str) -> Result<(), String> {
+/// Record that `by` launched the session.
+pub fn set_launched_by(store: &Store, id: &str, by: &str) -> Result<(), String> {
     store.with(|conn| {
-        conn.prepare_cached("UPDATE sessions SET handed_off_by = ?2 WHERE id = ?1")?.execute(params![id, by])
+        conn.prepare_cached("UPDATE sessions SET launched_by = ?2 WHERE id = ?1")?.execute(params![id, by])
     })?;
     Ok(())
 }
@@ -392,8 +392,8 @@ fn insert(
         updated_at: now,
         parent_id: parent,
         cursor: 0,
-        handed_off_by: None,
-        handed_off_by_name: None,
+        launched_by: None,
+        launched_by_name: None,
         parent_name: None,
         user_seen: 0,
         last_event: None,

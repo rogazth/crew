@@ -447,7 +447,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         crate::mailbox::migrate_lifecycle(&tx)?;
         // Who handed a session over to whom, and how far the user has read
         // it: kept for the phases that use them.
-        if !has_column(&tx, "sessions", "handed_off_by")? {
+        if !has_column(&tx, "sessions", "handed_off_by")? && !has_column(&tx, "sessions", "launched_by")? {
             tx.execute_batch(
                 "ALTER TABLE sessions ADD COLUMN handed_off_by TEXT REFERENCES sessions(id) ON DELETE SET NULL;",
             )?;
@@ -541,6 +541,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(crate::background::MIGRATION_V33)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 34 {
+        let tx = conn.unchecked_transaction()?;
+        // `launched_by` replaces `handed_off_by`: the session that started a
+        // top-level session. It records who launched it and grants nothing.
+        if has_column(&tx, "sessions", "handed_off_by")? && !has_column(&tx, "sessions", "launched_by")? {
+            tx.execute_batch("ALTER TABLE sessions RENAME COLUMN handed_off_by TO launched_by;")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?1)",
             params![now_millis()],
         )?;
         tx.commit()?;
@@ -1158,7 +1171,7 @@ mod lifecycle_tests {
                          ALTER TABLE mailbox DROP COLUMN event_cursor;
                          ALTER TABLE mailbox DROP COLUMN claimed_at;
                          ALTER TABLE mailbox DROP COLUMN disposed_at;
-                         ALTER TABLE sessions DROP COLUMN handed_off_by;
+                         ALTER TABLE sessions DROP COLUMN launched_by;
                          ALTER TABLE sessions DROP COLUMN user_seen;
                          DELETE FROM schema_migrations WHERE version >= 26;",
                     )?;
@@ -1208,20 +1221,20 @@ mod lifecycle_tests {
                     conn.prepare(sql)?.query_map([], |row| row.get(0))?.collect()
                 };
                 Ok((
-                    names("SELECT name FROM pragma_table_info('sessions') WHERE name IN ('handed_off_by', 'user_seen') ORDER BY name")?,
+                    names("SELECT name FROM pragma_table_info('sessions') WHERE name IN ('launched_by', 'user_seen') ORDER BY name")?,
                     names("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'mailbox_%' ORDER BY name")?,
                 ))
             })
             .unwrap();
-        assert_eq!(columns, ["handed_off_by", "user_seen"]);
+        assert_eq!(columns, ["launched_by", "user_seen"]);
         assert_eq!(index, ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"]);
         // The new reference holds: whoever handed a session over can go.
         store
-            .with(|conn| conn.execute("UPDATE sessions SET handed_off_by = ?2 WHERE id = ?1", params![shell, child]))
+            .with(|conn| conn.execute("UPDATE sessions SET launched_by = ?2 WHERE id = ?1", params![shell, child]))
             .unwrap();
         crate::session::delete(&store, child).unwrap();
         let handed: Option<String> = store
-            .with(|conn| conn.query_row("SELECT handed_off_by FROM sessions WHERE id = ?1", params![shell], |row| row.get(0)))
+            .with(|conn| conn.query_row("SELECT launched_by FROM sessions WHERE id = ?1", params![shell], |row| row.get(0)))
             .unwrap();
         assert_eq!(handed, None);
 

@@ -122,7 +122,7 @@ describe("children", () => {
     const list = [
       session("b", { parentId: "lead", createdAt: 2 }),
       session("a", { parentId: "lead", createdAt: 1 }),
-      session("h", { kind: "terminal", handedOffBy: "lead" }),
+      session("h", { kind: "terminal", launchedBy: "lead" }),
     ];
     expect(childrenOf(list).get("lead")?.map((s) => s.id)).toEqual(["a", "b"]);
     expect(childrenOf(list).size).toBe(1);

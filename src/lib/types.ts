@@ -61,9 +61,9 @@ export type Session = {
   /** How far its transcript had got at its last event. */
   cursor?: number;
   /** The session that handed it to the user (`start_session` with owner user). */
-  handedOffBy?: string;
-  /** `handedOffBy`'s name now. */
-  handedOffByName?: string;
+  launchedBy?: string;
+  /** `launchedBy`'s name now. */
+  launchedByName?: string;
   /** `parentId`'s name now. */
   parentName?: string;
   /** How far the user has read it, in `cursor` positions: `cursor > userSeen` is unread. */

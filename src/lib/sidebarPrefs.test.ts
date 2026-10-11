@@ -56,7 +56,7 @@ describe("children in the sidebar", () => {
     child("mine", "planner", 5),
     child("loose", undefined, 7),
     child("orphan", "gone", 8),
-    { ...session("handed", "terminal", 9), handedOffBy: "planner", handedOffByName: "planner" } as Session,
+    { ...session("handed", "terminal", 9), launchedBy: "planner", launchedByName: "planner" } as Session,
   ];
 
   it("leaves out a child its starter owns: it lives in that one's chat", () => {

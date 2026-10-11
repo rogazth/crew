@@ -45,6 +45,6 @@ export function applyUpdated(held: Session, row: Session): Session {
     ...(row.userSeen !== undefined ? { userSeen: row.userSeen } : {}),
     ...(row.lastEvent ? { lastEvent: row.lastEvent } : {}),
     ...(row.parentName !== undefined ? { parentName: row.parentName } : {}),
-    ...(row.handedOffByName !== undefined ? { handedOffByName: row.handedOffByName } : {}),
+    ...(row.launchedByName !== undefined ? { launchedByName: row.launchedByName } : {}),
   };
 }

@@ -349,8 +349,8 @@ impl SessionTools {
                 if let Some(parent) = row.parent_id.as_deref() {
                     out["parent"] = json!(if Some(parent) == me { "you".to_string() } else { self.who(Some(parent)) });
                 }
-                if let Some(by) = row.handed_off_by.as_deref() {
-                    out["handed_off_by"] = json!(if Some(by) == me { "you".to_string() } else { self.who(Some(by)) });
+                if let Some(by) = row.launched_by.as_deref() {
+                    out["launched_by"] = json!(if Some(by) == me { "you".to_string() } else { self.who(Some(by)) });
                 }
                 out["worktree"] = json!(match row.worktree.as_deref() {
                     None => "main checkout".to_string(),
@@ -827,7 +827,7 @@ impl SessionTools {
             None => error,
         })?;
         if let Some(me) = caller.session() {
-            session::set_handed_off_by(&self.store, &row.id, &me.id)?;
+            session::set_launched_by(&self.store, &row.id, &me.id)?;
         }
         let letter = mailbox::enqueue(&self.store, &row.id, &caller.sender(), &prompt)?;
         let row = session::get(&self.store, row.id.clone())?.unwrap_or(row);
@@ -5079,7 +5079,7 @@ time.sleep(600)
         assert_eq!((out["owner"].clone(), out["status"].clone()), (json!("user"), json!("handed off")), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         let row = w.row(&id);
-        assert_eq!((row.kind.as_str(), row.parent_id.as_deref(), row.handed_off_by.as_deref()), ("terminal", None, bot.session_id()));
+        assert_eq!((row.kind.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", None, bot.session_id()));
         assert!(row.worktree.as_deref().is_some_and(|tree| tree.contains("crew-auth-refactor-")), "{row:?}");
         assert_eq!(out["worktree"], json!(row.worktree));
         assert_eq!(row.provider, "opencode", "the caller's provider");
@@ -5088,7 +5088,7 @@ time.sleep(600)
         assert_eq!(waiting.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Carry on with the plan: step 2."]);
         assert!(w.launches().is_empty(), "a turn was started for it");
         let peer = w.peer(&bot, &id);
-        assert_eq!((peer["kind"].clone(), peer["handed_off_by"].clone(), peer["write"].clone()), (json!("terminal"), json!("you"), json!(false)), "{peer}");
+        assert_eq!((peer["kind"].clone(), peer["launched_by"].clone(), peer["write"].clone()), (json!("terminal"), json!("you"), json!(false)), "{peer}");
         let blocks = w.turns.transcripts().since(bot.session_id().unwrap(), 0).0;
         assert!(blocks.iter().any(|b| b.text.contains(&format!("Handed Auth refactor ({id}) to the user"))), "{blocks:?}");
         let bad = w.call(&bot, "start_session", json!({ "prompt": "x", "owner": "them" }));
