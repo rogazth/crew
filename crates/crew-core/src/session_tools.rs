@@ -1495,34 +1495,13 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
-    /// An opencode that answers with the last line it was handed, keeps the
-    /// session it was told to carry on, and logs every launch. `SLEEP n` in
-    /// the prompt makes it take that long; `CRASH` makes it die mid-turn.
+    /// opencode's server (`turns::fake_opencode_server`), and the log of each
+    /// turn's message beside it: a turn answers with the last line of what it
+    /// was handed, `SLEEP n` makes it take that long, `CRASH` kills the server
+    /// mid-turn.
     fn fake_opencode(dir: &Path) -> (String, PathBuf) {
-        let path = crate::fakes::install(
-            dir,
-            "fake-opencode",
-            r#"#!/usr/bin/env python3
-import json, os, sys, time, re, uuid
-prompt = sys.stdin.read()
-args = sys.argv[1:]
-sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
-config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
-system = "".join(open(path).read() for path in config.get("instructions", []))
-with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "launches.jsonl"), "a") as f:
-    f.write(json.dumps({"args": args, "prompt": prompt, "system": system}) + "\n")
-print(json.dumps({"type": "step_start", "sessionID": sid, "part": {"id": "st", "type": "step-start"}}), flush=True)
-m = re.search(r"SLEEP (\d+(?:\.\d+)?)", prompt)
-if m:
-    time.sleep(float(m.group(1)))
-if "CRASH" in prompt:
-    sys.exit(3)
-last = prompt.strip().splitlines()[-1]
-print(json.dumps({"type": "text", "sessionID": sid, "part": {"id": "t" + uuid.uuid4().hex[:6], "type": "text", "text": "report: " + last}}), flush=True)
-print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "sf", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}}), flush=True)
-"#,
-        );
-        (path.to_string_lossy().into_owned(), dir.join("launches.jsonl"))
+        let (path, _) = crate::turns::fake_opencode_server(dir);
+        (path, dir.join("launches.jsonl"))
     }
 
     /// A Claude Code on stream-json: it answers the initialize request, echoes
@@ -1992,14 +1971,11 @@ while True:
 
         let launches = w.launches();
         assert_eq!(launches.len(), 2);
-        let first: Vec<String> = serde_json::from_value(launches[0]["args"].clone()).unwrap();
-        let second: Vec<String> = serde_json::from_value(launches[1]["args"].clone()).unwrap();
-        assert!(!first.contains(&"--session".to_string()), "the first turn resumed something: {first:?}");
+        assert_eq!(launches[0]["resumed"], json!(false), "the first turn carried something on: {launches:?}");
         let bound = w.row(&id).provider_session_id.expect("bound");
-        let at = second.iter().position(|arg| arg == "--session").expect("the second turn did not resume");
-        assert_eq!(second[at + 1], bound);
-        // The persona is the system prompt of every turn, through the file
-        // opencode's config names; the message is the message alone.
+        assert_eq!((launches[1]["resumed"].clone(), launches[1]["session"].clone()), (json!(true), json!(bound)));
+        // The persona is the session's instruction entry, set on its first
+        // turn and kept by opencode; the message is the message alone.
         for launch in &launches {
             let system = launch["system"].as_str().unwrap();
             assert!(system.contains("Your final message of each turn is delivered to"), "{system}");
@@ -2859,7 +2835,7 @@ time.sleep(600)
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
         assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
 
-        for (provider, head) in [("cursor", "Cursor reads"), ("opencode", "opencode reads")] {
+        for (provider, head) in [("cursor", "Cursor reads")] {
             let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), provider.into(), String::new(), String::new(), "ask".into(), None)
                 .expect("session")
                 .id;
@@ -4687,8 +4663,9 @@ time.sleep(600)
         assert_eq!(out["result"], "event", "{out}");
         assert!(out["sessions"][0]["report"].as_str().unwrap().contains("Crew restarted"), "{out}");
         let launches = w.launches();
-        let args: Vec<String> = serde_json::from_value(launches.last().unwrap()["args"].clone()).unwrap();
-        assert!(args.contains(&"--session".to_string()), "the turn started over instead of carrying on: {args:?}");
+        let last = launches.last().unwrap();
+        assert_eq!(last["resumed"], json!(true), "the turn started over instead of carrying on: {last}");
+        assert_eq!(last["session"], launches[0]["session"], "{launches:?}");
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
         assert!(read["text"].as_str().unwrap().contains("Crew restarted mid-turn"), "{read}");
     }
@@ -4745,17 +4722,28 @@ time.sleep(600)
         w.busy(&bot, 1.5);
         let queued = w.call(&shell, "send_message", json!({ "to": to, "text": "when you get a minute" })).expect("send");
         assert_eq!((queued["delivery"].clone(), queued["waiting"].clone()), (json!("queued"), json!(1)), "{queued}");
-        // opencode takes nothing mid-turn: a steer is queued, and says why.
-        let steer = w.call(&shell, "send_message", json!({ "to": to, "text": "and this", "steer": true })).expect("send");
-        assert_eq!(steer["delivery"], "queued", "{steer}");
-        assert!(steer["note"].as_str().unwrap().contains("opencode cannot take a message"), "{steer}");
+        // opencode reads a steer at the running turn's next step; what was
+        // queued goes as the next turn. The turn has to be in opencode first.
         for _ in 0..200 {
-            if prompts(&w).iter().any(|p| p.contains("when you get a minute") && p.contains("and this")) {
+            if prompts(&w).iter().any(|p| p.contains("SLEEP 1.5")) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        assert!(prompts(&w).iter().any(|p| p.contains("when you get a minute") && p.contains("and this")), "the two were not handed over together");
+        let steer = w.call(&shell, "send_message", json!({ "to": to, "text": "and this", "steer": true })).expect("send");
+        assert_eq!(steer["delivery"], "steered", "{steer}");
+        for _ in 0..200 {
+            if prompts(&w).iter().any(|p| p.contains("when you get a minute")) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        // The next turn is what waited, under the tail that holds the steer
+        // where the busy turn read it.
+        let next = prompts(&w).into_iter().find(|p| p.contains("when you get a minute")).expect("the queue never went over");
+        let (tail, this_turn) = next.split_once("## This turn").expect("a tail");
+        assert!(tail.contains("] and this\n") && tail.contains("report: SLEEP 1.5 + and this"), "{next}");
+        assert!(!this_turn.contains("and this"), "{next}");
         w.settle(&to);
     }
 

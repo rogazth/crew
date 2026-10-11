@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use crew_protocol::{
     ApprovalDecision, ApprovalResolution, AttachedFile, AttachedFileKind, ContextReading, HarnessEvent, ToolStatus,
-    TurnStart, TurnStarted, TurnUsage,
+    TurnStart, TurnStarted,
 };
 use serde_json::{json, Map, Value};
 
@@ -30,12 +30,6 @@ use crate::providers::claude::{
     ClaudeSpawn, Subagents,
 };
 use crate::providers::parse_json_line;
-use crate::providers::opencode::{
-    opencode_turn_config, step_failure as opencode_step_failure, build_opencode_message,
-    add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
-    parse_tool_call as parse_opencode_tool_call, session_id_from_event as opencode_session_id,
-    stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
-};
 use crate::providers::{string_field, Autonomy};
 use crate::mailbox;
 pub(crate) use crate::prompts::Harness;
@@ -47,8 +41,13 @@ use crate::transcript::TranscriptHub;
 mod codex;
 mod cursor;
 mod mcp;
+mod opencode;
+mod opencode_server;
 use codex::CodexLive;
 use cursor::CursorLive;
+use opencode::OpencodeLive;
+#[cfg(test)]
+pub(crate) use opencode::fake_opencode_server;
 #[cfg(test)]
 pub(crate) use codex::fake_codex;
 #[cfg(test)]
@@ -191,7 +190,7 @@ fn typed_by_user(drive: Driven, from: &crew_protocol::BotRef) -> bool {
 
 /// The CLIs that take a message into a turn that is running; a message to any
 /// other waits for the turn to end.
-pub(crate) const STEERABLE: [&str; 2] = ["claude", "codex"];
+pub(crate) const STEERABLE: [&str; 3] = ["claude", "codex", "opencode"];
 
 /// What the user asked a message sent while a turn runs to become.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -402,28 +401,6 @@ impl Launch {
     fn none() -> Self {
         Self { model: None, effort: None, service_tier: None, autonomy: Autonomy::Ask, cwd: String::new() }
     }
-}
-
-/// An opencode turn's persona, on disk for as long as the turn runs:
-/// `instructions` in its config names files, never text.
-struct InstructionsFile(std::path::PathBuf);
-
-impl Drop for InstructionsFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Written readable by the user alone, since a persona is the user's text.
-fn write_opencode_instructions(session_id: &str, persona: &str) -> Option<InstructionsFile> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let dir = std::env::temp_dir().join("crew-opencode");
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("{session_id}.md"));
-    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).ok()?;
-    file.write_all(persona.as_bytes()).ok()?;
-    Some(InstructionsFile(path))
 }
 
 type Answers = HashMap<String, String>;
@@ -674,28 +651,11 @@ impl ClaudeLive {
     }
 }
 
-struct StreamLive {
-    cancelled: bool,
-    active: bool,
-    turn_tx: Option<oneshot::Sender<TurnOutcome>>,
-    seen_tools: HashSet<String>,
-    stderr: Vec<String>,
-    /// Any line at all, of any shape. A provider that answers nothing is hung.
-    saw_output: bool,
-    settled: bool,
-    /// opencode's text parts are snapshots, each carrying its whole text. One
-    /// slot per part, because two that grow in turn would otherwise forget each
-    /// other and re-emit what the transcript already has.
-    text_parts: HashMap<String, String>,
-    /// opencode counts every step apart, so the turn's usage adds up here.
-    usage: Option<TurnUsage>,
-}
-
 enum Live {
     Claude(Box<ClaudeLive>),
     Codex(Box<CodexLive>),
     Cursor(Box<CursorLive>),
-    Opencode(StreamLive),
+    Opencode(Box<OpencodeLive>),
 }
 
 #[derive(Clone)]
@@ -739,6 +699,8 @@ pub struct TurnHost {
     commands: crate::commands::CommandsHost,
     /// The MCP servers of each session, and how they stand.
     mcp_status: crate::mcp_status::McpHost,
+    /// The one `opencode serve` every opencode session runs on.
+    opencode: opencode_server::OpencodeServer,
     /// The newest context reading of each session, merged as they come.
     contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
     /// Sessions whose process is up with no turn on it, since when. Apart from
@@ -784,6 +746,7 @@ impl TurnHost {
             background,
             commands: crate::commands::CommandsHost::default(),
             mcp_status: crate::mcp_status::McpHost::default(),
+            opencode: opencode_server::OpencodeServer::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
@@ -863,9 +826,9 @@ impl TurnHost {
             place,
             harness,
             tools: &tools,
-            // Claude's AskUserQuestion and Codex's user-input requests reach
-            // the parent; Cursor offers none, and opencode run has no channel.
-            question_tool: matches!(session.provider.as_str(), "claude" | "codex"),
+            // Claude's AskUserQuestion, Codex's user-input requests and
+            // opencode's question forms reach the parent; Cursor offers none.
+            question_tool: matches!(session.provider.as_str(), "claude" | "codex" | "opencode"),
         }))
     }
 
@@ -1329,6 +1292,13 @@ impl TurnHost {
                 }
             }
         }
+        // opencode's server answers for any folder; it is read when nothing
+        // fresh is held, and again whenever it says the folder's changed.
+        if session.provider == "opencode" && !self.commands.is_fresh("opencode", &cwd, crate::store::now_millis()) {
+            if let Err(error) = self.opencode_menu(Some(session_id), &cwd) {
+                eprintln!("[commands] {error}");
+            }
+        }
         Ok(self.menu_of(&session, &cwd))
     }
 
@@ -1353,14 +1323,17 @@ impl TurnHost {
     ///   does, past the age that list trusts.
     /// - Codex with a process: `skills/list` past its cache, then
     ///   `config/mcpServer/reload`. Without one its thread reads them as it opens.
-    /// - Cursor and opencode list nothing a running CLI could be asked to read
-    ///   again: they do when the session restarts.
+    /// - opencode: its server reads every folder again (`location/reload`),
+    ///   unless another session has an ask open that it would cancel.
+    /// - Cursor lists nothing a running CLI could be asked to read again: it
+    ///   does when the session restarts.
     pub fn commands_reload(&self, session_id: &str) -> Result<crew_protocol::CommandCatalog, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
         let cwd = if session.kind == "bot" { String::new() } else { session::cwd(&self.store, &session)? };
         let note = match session.provider.as_str() {
             "claude" => self.reload_claude(&session, &cwd)?,
             "codex" => self.reload_codex(&session, &cwd)?,
+            "opencode" => self.reload_opencode(&session, &cwd)?,
             other => {
                 let name = if other == "cursor" { "Cursor" } else { other };
                 format!("{name} reads its commands and skills again when the session restarts. Use /restart.")
@@ -1425,8 +1398,13 @@ impl TurnHost {
     /// and servers afresh. Only between turns, and what the board shows
     /// running in the background goes with the process, so that needs `force`;
     /// the refusal names it.
+    ///
+    /// opencode's sessions share one server, so restarting it is not one
+    /// session's to do: theirs reads its folder again (decision of
+    /// 2026-10-09), and the binding is let go, taken up again by the next
+    /// message. The server itself restarts only from Settings.
     pub fn session_restart(&self, session_id: &str, force: bool) -> Result<(), String> {
-        session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
+        let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
         let running: Vec<String> = self
             .background
             .list(session_id)
@@ -1456,6 +1434,12 @@ impl TurnHost {
             self.release(session_id);
         }
         self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        if session.provider == "opencode" {
+            let cwd = if session.kind == "bot" { String::new() } else { session::cwd(&self.store, &session)? };
+            let note = self.reload_opencode(&session, &cwd)?;
+            self.transcripts.append_system(session_id, &note);
+            return Ok(());
+        }
         let note = if had {
             "Restarted. The CLI starts again with the next message."
         } else {
@@ -1730,6 +1714,7 @@ impl TurnHost {
         let key = (session_id.to_string(), request_id);
         let taken = self.codex_respond(session_id, request_id, decision.clone()).is_some()
             || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
+            || self.opencode_respond(session_id, request_id, decision.clone()).is_some()
             || {
                 let mut map = self.lock();
                 match map.get_mut(session_id) {
@@ -1806,6 +1791,7 @@ impl TurnHost {
         let key = (session_id.to_string(), request_id);
         let taken = self.codex_answer(session_id, request_id, answers.clone()).is_some()
             || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
+            || self.opencode_answer(session_id, request_id, answers.clone()).is_some()
             || {
                 let mut map = self.lock();
                 match map.get_mut(session_id) {
@@ -1840,6 +1826,10 @@ impl TurnHost {
     }
 
     pub fn on_agent_lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+        if session_id == opencode_server::SERVER_KEY {
+            self.on_opencode_server_lines(lines);
+            return;
+        }
         if event == "agent-stderr" {
             let mut map = self.lock();
             if let Some(live) = map.get_mut(session_id) {
@@ -1847,7 +1837,8 @@ impl TurnHost {
                     Live::Claude(row) => &mut row.stderr,
                     Live::Codex(row) => &mut row.stderr,
                     Live::Cursor(row) => &mut row.stderr,
-                    Live::Opencode(row) => &mut row.stderr,
+                    // A binding on the server has no process of its own.
+                    Live::Opencode(_) => return,
                 };
                 for line in lines {
                     stderr.push(line);
@@ -1864,6 +1855,10 @@ impl TurnHost {
     }
 
     pub fn on_agent_exit(&self, session_id: &str, code: Option<i32>) {
+        if session_id == opencode_server::SERVER_KEY {
+            self.on_opencode_server_exit(code);
+            return;
+        }
         let mut map = self.lock();
         let Some(live) = map.get_mut(session_id) else {
             return;
@@ -1943,18 +1938,8 @@ impl TurnHost {
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
-            Live::Opencode(row) => {
-                if row.cancelled || row.settled {
-                    return;
-                }
-                let mid = row.active;
-                let stderr = row.stderr.clone();
-                if mid {
-                    drop(map);
-                    self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
-                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
-                }
-            }
+            // Its server's exit is the server's (`on_opencode_server_exit`).
+            Live::Opencode(_) => {}
         }
     }
 
@@ -1996,7 +1981,7 @@ impl TurnHost {
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
         // this one. Without a turn to interrupt, it settles here.
-        if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) {
+        if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) || self.opencode_interrupt(session_id) {
             return;
         }
         // Claude is interrupted, never told to stop its tasks: `initialize`
@@ -2062,6 +2047,7 @@ impl TurnHost {
                         row.cancelled = true;
                         row.active = false;
                         row.settled = true;
+                        row.release_asks();
                         if let Some(tx) = row.turn_tx.take() {
                             let _ = tx.send(TurnOutcome::Stopped);
                         }
@@ -2104,10 +2090,14 @@ impl TurnHost {
     fn detach(&self, session_id: &str) {
         let gone = self.lock().remove(session_id);
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
-        if let Some(Live::Claude(mut live)) = gone {
-            for steer in std::mem::take(&mut live.steers) {
-                steer.put_back(&self.store, session_id);
+        match gone {
+            Some(Live::Claude(mut live)) => {
+                for steer in std::mem::take(&mut live.steers) {
+                    steer.put_back(&self.store, session_id);
+                }
             }
+            Some(Live::Opencode(live)) => self.opencode_forget(*live, session_id),
+            _ => {}
         }
     }
 
@@ -2753,14 +2743,16 @@ impl TurnHost {
         session_id: &str,
     ) -> Option<oneshot::Receiver<TurnOutcome>> {
         let mut map = self.lock();
-        let Some(Live::Claude(live)) = map.get_mut(session_id) else {
-            return None;
+        let slot = match map.get_mut(session_id) {
+            Some(Live::Claude(live)) if live.unclaimed() => &mut live.turn_tx,
+            Some(Live::Opencode(live)) if live.unclaimed() => &mut live.turn_tx,
+            _ => return None,
         };
-        if !live.unclaimed() || running.contains(session_id) {
+        if running.contains(session_id) {
             return None;
         }
         let (tx, rx) = oneshot::channel();
-        live.turn_tx = Some(tx);
+        *slot = Some(tx);
         running.insert(session_id.to_string());
         Some(rx)
     }
@@ -2775,7 +2767,11 @@ impl TurnHost {
         let row = row.clone();
         thread::spawn(move || {
             let outcome = host.block_on(rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-            host.claude_turn_ended(&row, &outcome);
+            if row.provider == "opencode" {
+                host.opencode_turn_ended(&row, &outcome);
+            } else {
+                host.claude_turn_ended(&row, &outcome);
+            }
             host.finish_turn(row, outcome, Vec::new());
         });
     }
@@ -2898,13 +2894,17 @@ impl TurnHost {
         files: Vec<AttachedFile>,
     ) -> Result<(), String> {
         // The kind first, out of the lock: `codex_steer` takes it again.
-        let (codex, cursor) = match self.lock().get(session_id) {
-            Some(Live::Codex(_)) => (true, false),
-            Some(Live::Cursor(_)) => (false, true),
-            _ => (false, false),
+        let (codex, cursor, opencode) = match self.lock().get(session_id) {
+            Some(Live::Codex(_)) => (true, false, false),
+            Some(Live::Cursor(_)) => (false, true, false),
+            Some(Live::Opencode(_)) => (false, false, true),
+            _ => (false, false, false),
         };
         if codex {
             return self.codex_steer(session_id, text, from, letter, files);
+        }
+        if opencode {
+            return self.opencode_steer(session_id, text, from, letter, files);
         }
         if cursor {
             // No `session/steer`, and a second prompt cancels the first.
@@ -3235,108 +3235,6 @@ impl TurnHost {
         Ok(())
     }
 
-    fn run_opencode(
-        &self,
-        session: crate::session::Session,
-        params: TurnStart,
-        history: Option<String>,
-    ) -> TurnOutcome {
-        let session_id = session.id.clone();
-        let mcp = self.mcp();
-        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Opencode) {
-            Ok(pair) => pair,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        // A stop that came before the CLI was there to take it.
-        if self.stop_requested(&session_id) {
-            self.detach(&session_id);
-            return TurnOutcome::Stopped;
-        }
-        let path = match self.resolve_bin("opencode") {
-            Ok(path) => path,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        let resume = conversation_to_resume(&session);
-        let carries = carries_conversation(&session);
-        let files = path_list(&params, &HashSet::new());
-        // The persona goes in the system prompt, through a file the config
-        // names, every turn; only if that file cannot be written does it ride
-        // in the message, as it used to.
-        let persona = self.persona(&session, Harness::Opencode, mcp.is_some(), &params.cwd);
-        let instructions = persona.as_deref().and_then(|persona| write_opencode_instructions(&session_id, persona));
-        let prompt = match (&instructions, carries) {
-            (Some(_), true) => crate::providers::with_files(params.text.trim(), &files),
-            (Some(_), false) => build_opencode_message(history.as_deref(), &params.text, &files),
-            (None, true) => self.child_prompt(persona.as_deref(), resume.is_some(), &params),
-            (None, false) => {
-                build_opencode_prompt(persona.as_deref().unwrap_or_default(), history.as_deref(), &params.text, &files)
-            }
-        };
-        // opencode has no approval channel: without --auto it falls back to the
-        // user's own permission config, which Crew cannot answer for. Saying so
-        // once beats an "ask" that silently never asks.
-        let first = if carries { resume.is_none() } else { history.is_none() };
-        if first && self.autonomy(&session) != Autonomy::Full {
-            self.transcripts.append_system(
-                &session_id,
-                "opencode decides its own permissions: it has no way to ask Crew, so it runs under your opencode config.",
-            );
-        }
-        let mut env = self.agent_env(&session_id);
-        let instructions_path = instructions.as_ref().map(|file| file.0.to_string_lossy().into_owned());
-        if let Some(config) = opencode_turn_config(mcp.as_ref(), instructions_path.as_deref()) {
-            env.insert("OPENCODE_CONFIG_CONTENT".into(), config);
-        }
-        if let Err(error) = self.agents.spawn(
-            session_id.clone(),
-            path,
-            build_opencode_spawn_args(&OpencodeSpawn {
-                model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                autonomy: self.autonomy(&session),
-                resume,
-            }),
-            params.cwd,
-            Some(env),
-        ) {
-            return TurnOutcome::Failed(error);
-        }
-        if let Err(error) = self.agents.write(&session_id, &prompt) {
-            return TurnOutcome::Failed(error);
-        }
-        self.agents.close_stdin(&session_id);
-        self.transcripts
-            .apply(&session_id, HarnessEvent::SessionStarted {});
-        let outcome = self
-            .block_on(turn_rx)
-            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
-        outcome
-    }
-
-    fn install_stream(
-        &self,
-        session_id: &str,
-        _cwd: String,
-        wrap: fn(StreamLive) -> Live,
-    ) -> Result<(oneshot::Receiver<TurnOutcome>, ()), String> {
-        let (tx, rx) = oneshot::channel();
-        let live = StreamLive {
-            cancelled: false,
-            active: true,
-            turn_tx: Some(tx),
-            seen_tools: HashSet::new(),
-            stderr: Vec::new(),
-            saw_output: false,
-            settled: false,
-            text_parts: HashMap::new(),
-            usage: None,
-        };
-        self.lock().insert(session_id.to_string(), wrap(live));
-        self.watch_for_silence(session_id);
-        Ok((rx, ()))
-    }
-
     /// A provider that has not said one word is not working, it is stuck: no
     /// output and no exit. Once anything arrives the turn is its own business —
     /// a long tool call is silent too, and killing that would be worse than
@@ -3374,7 +3272,6 @@ impl TurnHost {
             match map.get_mut(session_id) {
                 Some(Live::Codex(live)) => live.saw_output = true,
                 Some(Live::Cursor(live)) => live.saw_output = true,
-                Some(Live::Opencode(live)) => live.saw_output = true,
                 _ => {}
             }
         }
@@ -3384,15 +3281,13 @@ impl TurnHost {
                 Some(Live::Claude(_)) => "claude",
                 Some(Live::Codex(_)) => "codex",
                 Some(Live::Cursor(_)) => "cursor",
-                Some(Live::Opencode(_)) => "opencode",
-                None => return,
+                Some(Live::Opencode(_)) | None => return,
             }
         };
         match kind {
             "claude" => self.handle_claude_line(session_id, line),
             "codex" => self.handle_codex_line(session_id, line),
             "cursor" => self.handle_cursor_line(session_id, line),
-            "opencode" => self.handle_opencode_line(session_id, line),
             _ => {}
         }
     }
@@ -3999,136 +3894,6 @@ impl TurnHost {
         );
     }
 
-    pub(crate) fn handle_opencode_line(&self, session_id: &str, line: &str) {
-        let Some(rec) = parse_json_line(line) else {
-            return;
-        };
-        if let Some(provider_session_id) = opencode_session_id(&rec) {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::SessionProviderBound { provider_session_id },
-            );
-        }
-        let blocked = {
-            let map = self.lock();
-            matches!(
-                map.get(session_id),
-                Some(Live::Opencode(row)) if row.settled || row.cancelled
-            )
-        };
-        if blocked {
-            return;
-        }
-        let type_name = string_field(Some(&rec), "type");
-        if type_name.as_deref() == Some("text") {
-            if let Some(part) = text_part(&rec) {
-                self.opencode_text(session_id, &part);
-            }
-            return;
-        }
-        if type_name.as_deref() == Some("tool_use") {
-            let Some(call) = parse_opencode_tool_call(&rec) else {
-                return;
-            };
-            let first = {
-                let mut map = self.lock();
-                let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
-                    return;
-                };
-                live.seen_tools.insert(call.call_id.clone())
-            };
-            if first {
-                self.transcripts.apply(
-                    session_id,
-                    HarnessEvent::ToolStarted {
-                        call_id: call.call_id.clone(),
-                        name: call.name,
-                        title: call.title,
-                        detail: call.detail.clone(),
-                    },
-                );
-            }
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::ToolUpdated {
-                    call_id: call.call_id,
-                    title: None,
-                    status: Some(call.status),
-                    detail: call.detail,
-                },
-            );
-            return;
-        }
-        if type_name.as_deref() == Some("error") {
-            // The steps before it were paid for; a failure is not a reason to
-            // forget what the turn cost.
-            let usage = {
-                let map = self.lock();
-                match map.get(session_id) {
-                    Some(Live::Opencode(live)) => live.usage.clone(),
-                    _ => None,
-                }
-            };
-            if usage.is_some() {
-                self.transcripts
-                    .apply(session_id, HarnessEvent::TurnCompleted { usage });
-            }
-            self.signal(session_id, TurnOutcome::Failed(opencode_error_message(&rec)));
-            return;
-        }
-        if type_name.as_deref() != Some("step_finish") {
-            return;
-        }
-        let usage = {
-            let mut map = self.lock();
-            let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
-                return;
-            };
-            live.usage = Some(add_step_usage(live.usage.as_ref(), &rec));
-            live.usage.clone()
-        };
-        // Nothing is printed when the session goes idle, so the step that stops
-        // calling tools is the only word that the turn is over.
-        if !turn_ended(&rec) {
-            return;
-        }
-        self.transcripts
-            .apply(session_id, HarnessEvent::MessageCompleted {});
-        // A step can stop for a reason that is not success — out of room, cut
-        // off by the provider — and a turn that died mid-answer must not paint
-        // green just because nothing else follows it.
-        if let Some(reason) = opencode_step_failure(&rec) {
-            self.signal(session_id, TurnOutcome::Failed(reason));
-            return;
-        }
-        self.transcripts
-            .apply(session_id, HarnessEvent::TurnCompleted { usage });
-        self.signal(session_id, TurnOutcome::Completed);
-    }
-
-    fn opencode_text(&self, session_id: &str, part: &OpencodeText) {
-        let extra = {
-            let mut map = self.lock();
-            let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
-                return;
-            };
-            let emitted = live.text_parts.entry(part.id.clone()).or_default();
-            let extra = part
-                .text
-                .strip_prefix(emitted.as_str())
-                .unwrap_or(&part.text)
-                .to_string();
-            *emitted = part.text.clone();
-            extra
-        };
-        if extra.is_empty() {
-            return;
-        }
-        self.transcripts
-            .apply(session_id, HarnessEvent::MessageDelta { text: extra });
-        self.transcripts
-            .apply(session_id, HarnessEvent::MessageCompleted {});
-    }
 }
 
 /// The reading a new one makes after the last: one without a window keeps the
@@ -4388,9 +4153,6 @@ impl TurnHost {
         self.lock().insert(id.to_string(), Live::Cursor(Box::new(CursorLive::new(None, Autonomy::Ask))));
     }
 
-    pub(crate) fn test_install_opencode(&self, id: &str) {
-        let _ = self.install_stream(id, String::new(), Live::Opencode);
-    }
 }
 
 
@@ -4429,55 +4191,20 @@ mod mailbox_tests {
     use super::*;
     use crew_protocol::{BotRef, BlockRole};
 
-    /// An opencode that answers once and stops. Enough to end a turn, which is
-    /// the moment the box is drained. `pause` makes it slow enough to interrupt.
+    /// opencode's server (`fake_opencode_server`): a turn answers at once,
+    /// which ends it, the moment the box is drained.
     fn fake_opencode(dir: &std::path::Path) -> String {
-        fake_opencode_paused(dir, 0.0)
+        fake_opencode_server(dir).0
     }
 
-    fn fake_opencode_paused(dir: &std::path::Path, pause: f32) -> String {
-        let path = crate::fakes::install(
-            dir,
-            &format!("fake-opencode-{pause}"),
-            &format!(
-                r#"#!/usr/bin/env python3
-import json, sys, time
-sys.stdin.read()
-time.sleep({pause})
-sid = "ses_test"
-print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
-print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
-"#
-            ),
-        );
-        path.to_string_lossy().into_owned()
-    }
-
-    /// Same fake, but it keeps what the provider was handed: the prompt is the
-    /// only place the envelope shows up, since the transcript holds the letter
-    /// as it was written.
-    fn fake_opencode_recording(dir: &std::path::Path, seen: &std::path::Path) -> String {
-        let path = dir.join(format!("fake-opencode-rec-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::write(
-            &path,
-            format!(
-                r#"#!/usr/bin/env python3
-import json, os, sys
-open({seen:?}, "w").write(sys.stdin.read())
-config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))
-open({seen:?} + ".config", "w").write(json.dumps(config))
-open({seen:?} + ".system", "w").write("".join(open(path).read() for path in config.get("instructions", [])))
-sid = "ses_test"
-print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
-print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
-"#,
-                seen = seen.to_string_lossy()
-            ),
-        )
-        .expect("write fake");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        path.to_string_lossy().into_owned()
+    /// What each turn handed the server: its message, the session's persona
+    /// and settings, as the fake logs them beside itself.
+    fn launches(world: &World) -> Vec<Value> {
+        std::fs::read_to_string(world.dir.join("launches.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
     }
 
     struct World {
@@ -4589,21 +4316,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let world = world();
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
-        let path = world.dir.join("mute-opencode");
-        std::fs::write(&path, "#!/usr/bin/env python3\nimport sys, time\nsys.stdin.read()\ntime.sleep(600)\n")
-            .expect("write");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        world
-            .host
-            .override_binary("opencode", path.to_string_lossy().into_owned());
-
         world
             .host
             .start(TurnStart {
                 session_id: coder.id.clone(),
                 cwd: world.dir.to_string_lossy().into_owned(),
-                text: "hello".into(),
+                text: "SILENT".into(),
                 files: None,
                 mentions: None,
                 hidden: None,
@@ -4618,6 +4336,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             .expect("start");
         // The watchdog's own timeout is two minutes; this asserts it is armed,
         // not that the test waits for it.
+        for _ in 0..200 {
+            if !launches(&world).is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         std::thread::sleep(std::time::Duration::from_millis(200));
         let silent_and_watched = {
             let map = world.host.lock();
@@ -4658,66 +4382,47 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     /// The turn is the whole prompt: every turn is a new provider session, so
-    /// nothing a bot knows survives except what Crew hands it back.
+    /// nothing a bot knows survives except what Crew hands it back. Its
+    /// session goes when its turn ends; Crew keeps the transcript.
     #[test]
     fn a_second_turn_is_handed_the_first_one() {
         let world = world();
-        let seen = world.dir.join("prompt.txt");
-        world
-            .host
-            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
 
         turn(&world, &coder, "el parser se cae con tabs");
-        let first = std::fs::read_to_string(&seen).expect("the provider was never spawned");
-        assert!(!first.contains("## The conversation so far"), "{first}");
+        let first = launches(&world)[0].clone();
+        assert!(!first["prompt"].as_str().unwrap().contains("## The conversation so far"), "{first}");
 
         turn(&world, &coder, "y ahora?");
-        let second = std::fs::read_to_string(&seen).expect("the provider was never spawned");
-        // The persona is in the system prompt, through the file the config
-        // names, and gone once the turn is over.
-        let system = std::fs::read_to_string(world.dir.join("prompt.txt.system")).expect("system");
+        let second = launches(&world)[1].clone();
+        assert_ne!(first["session"], second["session"], "a bot's turn carried on its last session");
+        let log = world.dir.read_dir().unwrap().flatten().map(|entry| entry.path()).find(|path| {
+            path.extension().is_some_and(|ext| ext == "log") && path.to_string_lossy().contains("fake-opencode-")
+        });
+        let requests = std::fs::read_to_string(log.expect("the request log")).unwrap();
+        let deleted = format!("\"method\": \"DELETE\", \"path\": \"/api/session/{}\"", first["session"].as_str().unwrap());
+        assert!(requests.contains(&deleted), "the first turn's session outlived it: {requests}");
+        // The persona is the session's instruction entry, on every turn.
+        let system = second["system"].as_str().unwrap();
         assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
-        assert!(system.contains("`crew_search_messages`") && !second.contains("You are Coder,"), "{second}");
-        let config: Value = serde_json::from_str(&std::fs::read_to_string(world.dir.join("prompt.txt.config")).expect("config")).expect("json");
-        assert_eq!(config["permission"]["crew_*"], "allow", "{config}");
-        assert_eq!(config["mcp"]["crew"]["timeout"], 3_900_000, "{config}");
-        assert!(!std::path::Path::new(config["instructions"][0].as_str().unwrap()).exists(), "the persona file outlived the turn");
-        assert!(second.contains("· user] el parser se cae con tabs"), "{second}");
-        assert!(second.contains("· you] ok"), "the reply is in the tail too: {second}");
-        assert!(second.trim_end().ends_with("y ahora?"), "{second}");
-        assert!(
-            second.find("· user] el parser").unwrap() < second.find("## This turn").unwrap(),
-            "{second}"
-        );
+        let prompt = second["prompt"].as_str().unwrap();
+        assert!(system.contains("`crew_search_messages`") && !prompt.contains("You are Coder,"), "{prompt}");
+        assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
+        assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
+        assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
+        assert!(prompt.find("· user] el parser").unwrap() < prompt.find("## This turn").unwrap(), "{prompt}");
+        // A bot has nobody to put a question to, and Crew's tools never ask.
+        let rules = second["permissions"].as_array().unwrap();
+        assert!(rules.contains(&json!({ "action": "question", "resource": "*", "effect": "deny" })), "{rules:?}");
+        assert_eq!(rules.last(), Some(&json!({ "action": "crew_*", "resource": "*", "effect": "allow" })));
     }
 
-    /// The setting overrides a bot that asks: its next turn is spawned the
+    /// The setting overrides a bot that asks: its next session is made the
     /// way a "full" one is, and turning it off gives the bot its own back.
     #[test]
     fn bypass_permissions_runs_an_asking_bot_without_asking() {
         let world = world();
-        let argv = world.dir.join("argv.txt");
-        let fake = world.dir.join("fake-opencode-argv");
-        std::fs::write(
-            &fake,
-            format!(
-                r#"#!/usr/bin/env python3
-import json, sys
-open({argv:?}, "w").write(json.dumps(sys.argv[1:]))
-sys.stdin.read()
-sid = "ses_test"
-print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
-print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
-"#,
-                argv = argv.to_string_lossy()
-            ),
-        )
-        .expect("write fake");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        world.host.override_binary("opencode", fake.to_string_lossy().into_owned());
         let ws = workspace(&world);
         let asker = crate::session::create(
             world.host.test_store(),
@@ -4731,21 +4436,21 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             None,
         )
         .expect("bot");
-        let ran_auto = || {
-            let raw = std::fs::read_to_string(&argv).expect("the provider was never spawned");
-            serde_json::from_str::<Vec<String>>(&raw).expect("argv").iter().any(|arg| arg == "--auto")
+        let allowed_all = || {
+            let last = launches(&world).last().cloned().expect("the provider was never asked");
+            last["permissions"].as_array().unwrap().contains(&json!({ "action": "*", "resource": "*", "effect": "allow" }))
         };
 
         turn(&world, &asker, "one");
-        assert!(!ran_auto(), "an asking bot asks by default");
+        assert!(!allowed_all(), "an asking bot asks by default");
 
         crate::store::set(world.host.test_store(), crate::session::BYPASS_KEY.into(), "on".into()).expect("set");
         turn(&world, &asker, "two");
-        assert!(ran_auto(), "bypass runs it without asking");
+        assert!(allowed_all(), "bypass runs it without asking");
 
         crate::store::delete(world.host.test_store(), crate::session::BYPASS_KEY.into()).expect("delete");
         turn(&world, &asker, "three");
-        assert!(!ran_auto(), "off again, it asks again");
+        assert!(!allowed_all(), "off again, it asks again");
     }
 
     /// Without this the model gets a turn shaped exactly like something the
@@ -4753,10 +4458,6 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     #[test]
     fn a_letter_reaches_the_model_with_the_sender_on_it() {
         let world = world();
-        let seen = world.dir.join("prompt.txt");
-        world
-            .host
-            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
         let cuddles = bot(&world, &ws, "Cuddles");
@@ -4771,16 +4472,10 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         world.host.deliver_to(&cuddles);
         settle(&world, &cuddles.id);
 
-        let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        let prompt = launches(&world)[0]["prompt"].as_str().expect("the provider was never asked").to_string();
         // The id, so the reader has an address and not only a label, and the
         // time it was written rather than the time it was handed over.
-        assert!(
-            prompt.contains(&format!(
-                "## Message\nFrom: Coder (bot {})\nAt: ",
-                coder.id
-            )),
-            "{prompt}"
-        );
+        assert!(prompt.contains(&format!("## Message\nFrom: Coder (bot {})\nAt: ", coder.id)), "{prompt}");
         assert!(prompt.contains("\n\nthe branch is green"), "{prompt}");
         // And the reader sees the letter, not the envelope.
         let rows = blocks(&world, &cuddles.id);
@@ -4809,13 +4504,10 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         // Slow enough that the stop lands mid-turn instead of after it.
         world
             .host
-            .override_binary("opencode", fake_opencode_paused(&world.dir, 5.0));
-        world
-            .host
             .start(TurnStart {
                 session_id: cuddles.id.clone(),
                 cwd: world.dir.to_string_lossy().into_owned(),
-                text: "hello".into(),
+                text: "SLEEP 5".into(),
                 files: None,
                 mentions: None,
                 hidden: None,
@@ -4828,7 +4520,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 skills: None,
             })
             .expect("start");
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        for _ in 0..200 {
+            if !launches(&world).is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         world.host.stop(&cuddles.id).expect("stop");
         settle(&world, &cuddles.id);
 

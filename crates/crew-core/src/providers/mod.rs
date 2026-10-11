@@ -566,11 +566,10 @@ mod tests {
 
     const TAIL: &str = "## The conversation so far\n\n[user] hola\n[you] hola a ti";
 
+    /// The providers that take the persona in the prompt itself. opencode's
+    /// is an instruction entry of its session (`turns/opencode.rs`).
     fn turn_prompts(history: Option<&str>) -> Vec<String> {
-        vec![
-            opencode::build_opencode_prompt(PERSONA, history, "y ahora?", &[]),
-            cursor::build_cursor_prompt(PERSONA, history, "y ahora?", &[]),
-        ]
+        vec![cursor::build_cursor_prompt(PERSONA, history, "y ahora?", &[])]
     }
 
     /// The bug this replaced: every provider was resumed, so the persona and the
@@ -688,11 +687,6 @@ mod tests {
                 fast: false,
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
-            opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
-                model: None,
-                autonomy: Autonomy::Ask,
-                resume: None,
-            }),
         ];
         for args in runs {
             for arg in &args {
@@ -739,12 +733,6 @@ mod tests {
         assert_eq!(method, "session/load", "{cursor}");
         assert_eq!(cursor["sessionId"], "acp-1", "{cursor}");
 
-        let opencode = opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
-            model: None,
-            autonomy: Autonomy::Ask,
-            resume: Some("ses_1".into()),
-        });
-        assert!(opencode.windows(2).any(|pair| pair == ["--session", "ses_1"]), "{opencode:?}");
     }
 
     /// A message row, once its call answers, names the letter it made and

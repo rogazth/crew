@@ -359,24 +359,10 @@ mod tests {
     use crate::routine::{RoutineRun, MAX_RUNS};
     use crew_protocol::BlockRole;
 
-    /// An opencode that answers once and stops: enough for a turn to end, which
+    /// opencode's server: a turn answers at once, enough for it to end, which
     /// is when a run stops being "running".
     fn fake_opencode(dir: &std::path::Path) -> String {
-        let path = dir.join("fake-opencode");
-        std::fs::write(
-            &path,
-            r#"#!/usr/bin/env python3
-import json, sys
-sys.stdin.read()
-sid = "ses_test"
-print(json.dumps({"type":"text","sessionID":sid,"part":{"id":"p1","type":"text","text":"ok"}}), flush=True)
-print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":"step-finish","reason":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}), flush=True)
-"#,
-        )
-        .expect("write fake");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        path.to_string_lossy().into_owned()
+        crate::turns::fake_opencode_server(dir).0
     }
 
     /// The daemon wires the agent process's stdout back into the turn host; a

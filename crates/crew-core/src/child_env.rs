@@ -13,7 +13,7 @@ use std::process::Command;
 
 use crate::provider_session::CLAUDE_BIND_ENV;
 
-fn inherited_from_parent(key: &str) -> bool {
+pub(crate) fn inherited_from_parent(key: &str) -> bool {
     // crewd sets the bind folder to its own before any child starts.
     (key.starts_with("CREW_") && key != CLAUDE_BIND_ENV)
         || key == "CLAUDECODE"
