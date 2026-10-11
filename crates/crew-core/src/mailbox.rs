@@ -213,8 +213,9 @@ const PENDING: &str = "claimed_at IS NULL AND delivered_at IS NULL AND disposed_
 ///
 /// A letter arrives as a user turn — the same shape as something the person
 /// typed — so the header is what tells them apart: who wrote it, the id they
-/// are reached at, when (for a letter that waited in the box), and how to
-/// answer.
+/// are reached at, whether a model or a person wrote it, when (for a letter
+/// that waited in the box), and how to answer. It is one text for a letter
+/// that starts a turn and one steered into a turn that runs.
 ///
 /// The id and not the name, because the name is the user's: they rename a
 /// bot and a reply addressed to the old one reaches nobody. A sender that
@@ -227,21 +228,33 @@ const PENDING: &str = "claimed_at IS NULL AND delivered_at IS NULL AND disposed_
 pub fn envelope(from: &BotRef, body: &str, at: Option<i64>, parent: Option<&str>) -> String {
     let kind = from.kind.as_deref().unwrap_or("bot");
     let (who, reply) = if kind == "user" {
-        ("you (the user, from the crew command line)".to_string(), "They read your reply here.".to_string())
+        (
+            "the user (a person, from the crew command line)".to_string(),
+            "They read your reply here.".to_string(),
+        )
     } else if from.id.is_empty() {
-        (format!("{} ({kind}, no longer in this workspace)", from.name), String::new())
+        (format!("{} ({kind}, no longer in this workspace), a model", from.name), String::new())
     } else if parent == Some(from.id.as_str()) {
         (
-            format!("{} ({kind} {})", from.name, from.id),
-            "It started you: your report at the end of this turn reaches it.".to_string(),
-        )
-    } else if kind == "terminal" {
-        (
-            format!("{} (terminal {})", from.name, from.id),
-            "A terminal cannot be written to: what you write here is read by the user, not by it.".to_string(),
+            format!("{} ({kind} {}), a model", from.name, from.id),
+            "It started you: your report at the end of this turn reaches it, so there is no need for `send_message`. \
+             No reply is needed beyond it."
+                .to_string(),
         )
     } else {
-        (format!("{} ({kind} {})", from.name, from.id), format!("Reply with send_message to {}.", from.id))
+        let terminal = if kind == "terminal" {
+            " A session in the terminal view takes no letters: if that is where it is, nothing reaches it."
+        } else {
+            ""
+        };
+        (
+            format!("{} ({kind} {}), a model", from.name, from.id),
+            format!(
+                "Reply with `send_message` to `{}` if you want to answer. No reply is needed: end your turn when you \
+                 have nothing to add.{terminal}",
+                from.id
+            ),
+        )
     };
     let mut head = format!("## Message\nFrom: {who}");
     if let Some(at) = at {
@@ -1226,7 +1239,11 @@ mod tests {
     #[test]
     fn the_envelope_carries_the_id_the_sender_is_reached_at() {
         let letter = envelope(&sender("s1"), "the branch is green", None, None);
-        assert_eq!(letter, "## Message\nFrom: Coder (bot s1)\nReply with send_message to s1.\n\nthe branch is green");
+        assert_eq!(
+            letter,
+            "## Message\nFrom: Coder (bot s1), a model\nReply with `send_message` to `s1` if you want to answer. No reply is \
+             needed: end your turn when you have nothing to add.\n\nthe branch is green"
+        );
     }
 
     /// The time it was written, not the time it was handed over: a letter that
@@ -1247,22 +1264,28 @@ mod tests {
         assert!(!letter.contains("send_message"), "{letter}");
     }
 
-    /// Each kind of sender says what a reply can do: a terminal cannot be
-    /// written to, the user reads the chat, and a session's own parent reads
-    /// its report.
+    /// Each kind of sender says who wrote it and what a reply can do: a
+    /// session in the terminal view takes no letters, the user is a person who
+    /// reads the chat, and a session's own parent reads its report. None
+    /// needs an answer.
     #[test]
     fn the_envelope_says_how_to_answer_each_kind_of_sender() {
         let terminal = BotRef { id: "t1".into(), name: "shell".into(), kind: Some("terminal".into()) };
         let out = envelope(&terminal, "hi", None, None);
-        assert!(out.starts_with("## Message\nFrom: shell (terminal t1)\nA terminal cannot be written to"), "{out}");
+        assert!(out.starts_with("## Message\nFrom: shell (terminal t1), a model\nReply with `send_message` to `t1`"), "{out}");
+        assert!(out.contains("A session in the terminal view takes no letters"), "{out}");
         let user = BotRef { id: String::new(), name: "You".into(), kind: Some("user".into()) };
-        assert!(envelope(&user, "hi", None, None).contains("From: you (the user"), "user");
+        let person = envelope(&user, "hi", None, None);
+        assert!(person.contains("From: the user (a person") && !person.contains("a model"), "{person}");
         let session = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
-        assert!(envelope(&session, "hi", None, None).contains("From: codex: fix (session c1)\nReply with send_message to c1."));
+        let from_session = envelope(&session, "hi", None, None);
+        assert!(from_session.contains("From: codex: fix (session c1), a model\nReply with `send_message` to `c1`"), "{from_session}");
+        assert!(from_session.contains("No reply is needed"), "{from_session}");
         let parent = envelope(&sender("p1"), "more", None, Some("p1"));
         assert!(parent.contains("your report at the end of this turn reaches it") && !parent.contains("Reply with"), "{parent}");
+        assert!(parent.contains("(bot p1), a model"), "{parent}");
         let shell = envelope(&terminal, "the job", None, Some("t1"));
-        assert!(shell.contains("your report at the end of this turn reaches it") && !shell.contains("cannot be written"), "{shell}");
+        assert!(shell.contains("your report at the end of this turn reaches it") && !shell.contains("takes no letters"), "{shell}");
     }
 
     /// A question lists each question with its options, and says how to answer.
@@ -1408,8 +1431,8 @@ mod tests {
     fn a_message_from_a_session_says_how_to_reply_and_not_to_wait() {
         let from = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
         let out = render(&Letter::new("p1", &from, "a question about the API", MESSAGE, None), None);
-        assert!(out.starts_with("## Message\nFrom: codex: fix (session c1)\nAt: "), "{out}");
-        assert!(out.contains("Reply with send_message to c1."), "{out}");
+        assert!(out.starts_with("## Message\nFrom: codex: fix (session c1), a model\nAt: "), "{out}");
+        assert!(out.contains("Reply with `send_message` to `c1`"), "{out}");
         assert!(!out.contains("wait_for_session") && !out.contains("read_session"), "{out}");
     }
 

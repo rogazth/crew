@@ -688,6 +688,9 @@ pub struct TurnHost {
     /// Child sessions being stopped for good, and who stopped them: the end of
     /// their turn is an exit, not a pause.
     exiting: Arc<Mutex<HashMap<String, String>>>,
+    /// Subagents whose latest turn only the user started, by writing in their
+    /// tab: its report is the user's alone, and does not go to the parent.
+    user_started: Arc<Mutex<HashSet<String>>>,
     /// Sessions with a turn from `start` until its outcome is in, claimed in
     /// one step. The live CLI is installed later, on the turn's own thread, so
     /// a check on it alone let a message that arrived in between start a
@@ -743,6 +746,7 @@ impl TurnHost {
             toolbox: crate::tools::Toolbox::default(),
             signal: crate::session_events::Signal::default(),
             exiting: Arc::new(Mutex::new(HashMap::new())),
+            user_started: Arc::new(Mutex::new(HashSet::new())),
             running: Arc::new(Mutex::new(HashSet::new())),
             background,
             commands: crate::commands::CommandsHost::default(),
@@ -1114,6 +1118,27 @@ impl TurnHost {
         })
     }
 
+    /// Who started a subagent's turn decides where its report goes (plan
+    /// decision 3): a turn the user alone started, by writing in its tab, is
+    /// reported only to the user. Any other (the parent's prompt or message,
+    /// another session's, or Crew carrying a broken turn on) goes to the
+    /// parent as before. Read when the turn ends; an adopted turn nobody sent
+    /// keeps what the last one said.
+    fn note_starter(&self, params: &TurnStart, letters: &[mailbox::Letter]) {
+        let from_user = |from: &crew_protocol::BotRef| from.kind.as_deref() == Some("user");
+        let user_only = if letters.is_empty() {
+            params.hidden != Some(true) && params.from_bot.as_ref().map_or(true, from_user)
+        } else {
+            letters.iter().all(|letter| from_user(&letter.from))
+        };
+        let mut started = self.user_started.lock().unwrap_or_else(|e| e.into_inner());
+        if user_only {
+            started.insert(params.session_id.clone());
+        } else {
+            started.remove(&params.session_id);
+        }
+    }
+
     /// Start a turn. With `letters`, the turn carries them: each goes in the
     /// transcript as its own message, with its own sender, and the model is
     /// handed their envelopes one after the other. They count as delivered
@@ -1144,6 +1169,9 @@ impl TurnHost {
             }
         }
         self.clear_stop(&params.session_id);
+        if drive == Driven::Child {
+            self.note_starter(&params, &letters);
+        }
         if drive == Driven::Bot {
             // A bot's persona must not see the user's commands or skills.
             params.command = None;
@@ -2506,6 +2534,12 @@ impl TurnHost {
             .as_deref()
             .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
         if parent.kind != "bot" {
+            return None;
+        }
+        // What the user started in the subagent's tab is theirs: how the turn
+        // ended is not the parent's to hear. Questions, approvals and an exit
+        // still are.
+        if matches!(kind, "turn" | "error") && self.user_started.lock().unwrap_or_else(|e| e.into_inner()).contains(&session.id) {
             return None;
         }
         let from = crew_protocol::BotRef {
@@ -4533,7 +4567,7 @@ mod mailbox_tests {
         let prompt = launches(&world)[0]["prompt"].as_str().expect("the provider was never asked").to_string();
         // The id, so the reader has an address and not only a label, and the
         // time it was written rather than the time it was handed over.
-        assert!(prompt.contains(&format!("## Message\nFrom: Coder (bot {})\nAt: ", coder.id)), "{prompt}");
+        assert!(prompt.contains(&format!("## Message\nFrom: Coder (bot {}), a model\nAt: ", coder.id)), "{prompt}");
         assert!(prompt.contains("\n\nthe branch is green"), "{prompt}");
         // And the reader sees the letter, not the envelope.
         let rows = blocks(&world, &cuddles.id);
@@ -4610,11 +4644,11 @@ mod mailbox_tests {
             .expect("child");
         let cwd = dir.to_string_lossy().into_owned();
         let told = host.persona(&bot, Harness::Mcp, true, &cwd).expect("bot persona");
-        assert!(told.starts_with("## Crew bot") && told.contains("`mcp__crew__start_session`") && told.contains("## Message"), "{told}");
+        assert!(told.starts_with("## Crew bot") && told.contains("`mcp__crew__delegate`") && told.contains("## Message"), "{told}");
         assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
         let child_told = host.persona(&child, Harness::Mcp, true, &cwd).expect("child persona");
         assert!(child_told.starts_with("## Crew session"), "{child_told}");
-        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && !child_told.contains("start_session"), "{child_told}");
+        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && child_told.contains("`mcp__crew__delegate`: not for you"), "{child_told}");
         assert!(child_told.contains("your question tool reaches B"), "{child_told}");
         for gone in crate::tools::REMOVED_TOOLS {
             assert!(!told.contains(gone) && !child_told.contains(gone), "{gone}: {told}\n{child_told}");
