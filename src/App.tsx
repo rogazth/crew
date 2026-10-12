@@ -238,7 +238,7 @@ export function App() {
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useBotSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
-  const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
+  const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
 
   const { activate } = workspaces;
   const openNotified = useNotificationTarget({

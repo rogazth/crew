@@ -1213,11 +1213,18 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows, dark } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, reuse, dark } = parse(params)?;
             let host = hosts.pty.clone();
+            let options = SpawnOptions { dark, ..SpawnOptions::default() };
             json(
-                block(move || host.spawn_with(id, cwd, command, cols, rows, SpawnOptions { dark, ..SpawnOptions::default() }))
-                    .await?,
+                block(move || {
+                    if reuse == Some(true) {
+                        host.open(id, cwd, command, cols, rows, options)
+                    } else {
+                        host.spawn_with(id, cwd, command, cols, rows, options)
+                    }
+                })
+                .await?,
             )
         }
         "pty_write" => {
@@ -2033,6 +2040,7 @@ mod tests {
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
+                reuse: None,
                 dark: None,
             })
             .unwrap(),
@@ -2216,6 +2224,7 @@ mod tests {
                     command: vec!["/usr/bin/yes".into()],
                     cols: 80,
                     rows: 24,
+                    reuse: None,
                     dark: None,
                 })
                 .unwrap(),
@@ -2288,6 +2297,7 @@ mod tests {
             command: vec!["/usr/bin/yes".into()],
             cols: 80,
             rows: 24,
+            reuse: None,
             dark: None,
         })
         .unwrap();
@@ -2329,6 +2339,7 @@ mod tests {
                     ],
                     cols: 80,
                     rows: 24,
+                    reuse: None,
                     dark: None,
                 })
                 .unwrap(),
@@ -3835,6 +3846,7 @@ for line in sys.stdin:
                         command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
                         cols: 80,
                         rows: 24,
+                        reuse: None,
                         dark: None,
                     })
                     .unwrap(),

@@ -95,7 +95,7 @@ test("a session in the main checkout hands its task to a new session on a worktr
   // caller, and the fake claude's reply to it.
   await goToWorktree(crew, "feat/handoff");
   await sessionTab(crew, handedTo).click();
-  const reply = crew.window.getByText(/Reply 1: .*Build the login form\./).first();
+  const reply = crew.window.getByText(/^Reply 1: .*Build the login form\./).first();
   await reply.waitFor({ timeout: 15_000 });
   assert.match((await reply.textContent()) ?? "", new RegExp(`${shell.id}|${shell.name}`), "the envelope names who launched it");
 });

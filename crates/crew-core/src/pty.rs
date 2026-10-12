@@ -340,6 +340,30 @@ impl PtyHost {
         }
     }
 
+    /// Like `spawn_with`, but a process still running under `id` is kept: it
+    /// gets the new size and its stream id comes back. A window that opens
+    /// again (a reload, an update, a relaunch) finds the terminal it left.
+    pub fn open(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+        options: SpawnOptions,
+    ) -> Result<u32, String> {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(live) = self.get(&id).filter(|live| !live.exited.load(Ordering::Acquire)) {
+            let _ = resize_fd(live.master_fd, cols.max(2), rows.max(2));
+            return Ok(live.stream_id);
+        }
+        if let Some(prev) = self.remove(&id) {
+            let _ = terminate(&prev);
+            close_fd(prev.master_fd);
+        }
+        self.spawn_locked(id, cwd, command, cols, rows, options)
+    }
+
     /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
@@ -1163,12 +1187,25 @@ mod tests {
     }
 
     #[test]
+    fn open_keeps_a_live_process() {
+        let host = PtyHost::new();
+        let id = "session:reuse".to_string();
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        let first = host.open(id.clone(), "/".into(), command.clone(), 80, 24, SpawnOptions::default()).expect("first open");
+        let pid = host.get(&id).expect("live").pid;
+        let second = host.open(id.clone(), "/".into(), command, 100, 30, SpawnOptions::default()).expect("second open");
+        assert_eq!(first, second, "open replaced the stream");
+        assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
+        host.kill(&id);
+    }
+
+    #[test]
     fn attach_past_the_ring_has_the_child_redraw_at_its_own_size() {
         let host = PtyHost::new();
         let id = "session:redraw".to_string();
         let script = "trap 'printf W' WINCH; while :; do sleep 0.02; done";
         let command = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
-        host.spawn(id.clone(), "/".into(), command, 80, 24, None).expect("spawn");
+        host.open(id.clone(), "/".into(), command, 80, 24, SpawnOptions::default()).expect("open");
         let live = host.get(&id).expect("live");
         let winches = || live.state.lock().unwrap_or_else(|e| e.into_inner()).ring.buf.iter().filter(|b| **b == b'W').count();
 

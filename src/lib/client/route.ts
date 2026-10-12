@@ -92,17 +92,13 @@ export function routeEnv(
 }
 
 /**
- * The environment of a terminal's PTY. Its id is the pane's, or for a
- * session's terminal, the session's: `<workspace>[@<worktree>]/session:<session>`.
- * A command's run is `process:<process>:<run>`.
+ * The environment of a terminal's PTY. Its id is the pane's:
+ * `<workspace>[@<worktree>]/<tab>`. A command's run is `process:<process>:<run>`.
  */
 export function envForPane(id: string, maps: Pick<RouteMaps, "session" | "workspace" | "process">): string | null {
   const direct = maps.session.get(id);
   if (direct) return direct;
   if (id.startsWith("process:")) return maps.process.get(id.split(":")[1] ?? "") ?? null;
-  const at = id.lastIndexOf("session:");
-  const session = at >= 0 ? maps.session.get(id.slice(at + "session:".length)) : undefined;
-  if (session) return session;
   const workspace = id.split("/")[0]?.split("@")[0];
   return (workspace && maps.workspace.get(workspace)) || null;
 }

@@ -13,6 +13,7 @@ import {
   launchCrew,
   newSession,
   sendInChat,
+  storedStatus,
   newWorktree,
   returnToWindow,
   waitFor,
@@ -100,6 +101,8 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
     message: "the session's CLI is launched",
   });
   assert.equal(first.cwd, tree);
+  // Its turn ends before the app goes: one caught mid-turn carries on after the restart.
+  await waitFor(async () => (await storedStatus(crew, session.id)) === "idle", { message: "the first turn ends" });
   const tabId = await tabOf(crew, session);
 
   // From the system's terminal, not from crew.

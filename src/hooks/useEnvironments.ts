@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
-import { LOCAL, envOf, linkOf, pinSessionCwd, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
+import { LOCAL, envOf, linkOf, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
 import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, filesHost, remotesHost } from "../lib/host";
 import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, WAKE_ON } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
-import type { Session, SessionKind, Workspace } from "../lib/types";
+import type { Workspace } from "../lib/types";
 import type { useWorkspaces } from "./useWorkspaces";
-import { useDefaultAgent } from "./useDefaultAgent";
 import { remoteAliases, useEnvStates } from "./useEnvLinks";
 
 type Deps = {
@@ -15,8 +14,8 @@ type Deps = {
   active: Workspace | null;
   closePage: () => void;
   openSettings: (section?: SettingsSectionId) => void;
-  create: (kind: SessionKind, input: Parameters<typeof api.createSession>[2]) => Promise<Session | null>;
-  openSession: (session: Session) => void;
+  /** A new shell in a workspace's main checkout, which need not be on screen yet. */
+  openTerminalIn: (workspaceId: string) => void;
 };
 
 /**
@@ -24,12 +23,10 @@ type Deps = {
  * ⌘O's machine picker, the rail's badge, "Open terminal on machine", and
  * pointing each remote workspace's files and pages at the daemon that has them.
  */
-export function useEnvironments({ workspaces, active, closePage, openSettings, create, openSession }: Deps) {
+export function useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn }: Deps) {
   const links = useEnvStates();
-  const agent = useDefaultAgent();
   /** Open, and the machine it starts on: null for the machine list. */
   const [picker, setPicker] = useState<{ start: string | null } | null>(null);
-  const pendingTerminal = useRef<{ workspaceId: string; home: string } | null>(null);
   const hasRemotes = links.some((link) => link.id !== LOCAL);
   const { create: pickLocalFolder, adopt, activate } = workspaces;
 
@@ -66,50 +63,25 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, c
     [activate, adopt, closePage, workspaces.workspaces],
   );
 
-  const startTerminal = useCallback(
-    async (home: string) => {
-      const session = await create("terminal", {
-        name: "Terminal",
-        provider: agent.effective.provider,
-        model: agent.effective.model,
-        description: "",
-        autonomy: "ask",
-        worktree: home,
-      });
-      if (!session) return;
-      pinSessionCwd(session.id, home);
-      openSession(session);
-    },
-    [agent.effective, create, openSession],
-  );
-
-  /** A shell in the machine's home, in a workspace on it: the first one, or a new one on its home. */
+  /**
+   * A shell on the machine: in the workspace on its home, or else in the first
+   * workspace it has, or in a new one on its home.
+   */
   const openTerminalOn = useCallback(
     async (envId: string) => {
       const link = linkOf(envId);
       const home = link?.home;
       if (!link || link.status !== "online" || !home) throw new Error(`${link?.name ?? "That machine"} is not connected`);
-      const existing = workspaces.workspaces.find((item) => envOf(item.id) === envId);
+      const here = workspaces.workspaces.filter((item) => envOf(item.id) === envId);
+      const existing = here.find((item) => item.path === home) ?? here[0];
       const workspace = existing ?? (await api.createWorkspace(link.name, home, envId));
       closePage();
-      if (active?.id === workspace.id) {
-        await startTerminal(home);
-        return;
-      }
-      pendingTerminal.current = { workspaceId: workspace.id, home };
+      openTerminalIn(workspace.id);
       if (existing) activate(existing.id);
       else adopt(workspace);
     },
-    [activate, active?.id, adopt, closePage, startTerminal, workspaces.workspaces],
+    [activate, adopt, closePage, openTerminalIn, workspaces.workspaces],
   );
-
-  // The terminal waits for its workspace to be the active one: sessions are created in that one.
-  useEffect(() => {
-    const job = pendingTerminal.current;
-    if (!job || active?.id !== job.workspaceId) return;
-    pendingTerminal.current = null;
-    void startTerminal(job.home);
-  }, [active?.id, startTerminal]);
 
   useEffect(() => {
     setFocusEnv(active ? envOf(active.id) : LOCAL);

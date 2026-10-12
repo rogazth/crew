@@ -33,7 +33,6 @@ type Listener = (payload: unknown) => void;
 
 const connections = new Map<string, Connection>();
 const rows = new Map<string, RemoteEnv>();
-const pins = new Map<string, string>();
 const infos = new Map<string, MachineInfo>();
 const workspaceEnv = new Map<string, string>();
 const sessionEnv = new Map<string, string>();
@@ -92,15 +91,6 @@ export function homeFor(path: string): string | null {
   const env = envForPath(path, pathEnv);
   if (env && env !== LOCAL) return infos.get(env)?.home ?? null;
   return null;
-}
-
-/** A terminal opened on a machine starts in that home, not the workspace folder. */
-export function pinSessionCwd(sessionId: string, cwd: string) {
-  pins.set(sessionId, cwd);
-}
-
-export function sessionCwd(sessionId: string): string | null {
-  return pins.get(sessionId) ?? null;
 }
 
 export function subscribeLinks(listener: () => void): () => void {

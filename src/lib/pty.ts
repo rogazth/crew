@@ -79,6 +79,8 @@ export function subscribePty(
 }
 
 export type SpawnOptions = {
+  /** Keep a process still running under this id: a window opening again finds it. */
+  reuse?: boolean;
   /** Whether the window paints the terminal dark, for COLORFGBG. */
   dark?: boolean;
 };
@@ -91,10 +93,10 @@ export async function spawnPty(
   rows: number,
   options: SpawnOptions = {},
 ): Promise<number> {
-  const { dark } = options;
+  const { reuse = false, dark } = options;
   const generation = (generations.get(id) ?? 0) + 1;
   generations.set(id, generation);
-  const params: PtySpawn = { id, cwd, command, cols, rows, ...(dark === undefined ? {} : { dark }) };
+  const params: PtySpawn = { id, cwd, command, cols, rows, reuse, ...(dark === undefined ? {} : { dark }) };
   const streamId = await client.request<number>("pty_spawn", params);
   if (generations.get(id) !== generation) {
     // The pane was torn down (or respawned) while this spawn was in flight, as

@@ -719,6 +719,15 @@ export async function openShell(crew: Crew): Promise<void> {
   await pressChord(crew, `${MOD}+t`);
   await crew.window.getByLabel("Open a tab").waitFor();
   await crew.window.keyboard.press("Enter");
+  await waitFor(
+    () =>
+      crew.window.evaluate(() =>
+        [...document.querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")].some(
+          (area) => area.closest("[hidden]") === null && area.getClientRects().length > 0,
+        ),
+      ),
+    { message: "the shell's terminal is on screen" },
+  );
 }
 
 /**

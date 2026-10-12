@@ -44,12 +44,11 @@ describe("routeEnv", () => {
     expect(routeEnv("write_temp_file", { extension: "png" }, known, undefined, "vps")).toBe("vps");
   });
 
-  it("follows a terminal's PTY, named for its pane, to the session's machine", () => {
-    const known = maps({ workspace: new Map([["w", "vps"]]), session: new Map([["s", "vps"]]) });
-    expect(routeEnv("pty_attach", { id: "w/session:s", from: 0 }, known)).toBe("vps");
-    expect(routeEnv("pty_write", { id: "w@/home/agent/app-wt/session:s", data: "x" }, known)).toBe("vps");
-    expect(routeEnv("pty_kill", { id: "w/session:unknown" }, known)).toBe("vps");
-    expect(routeEnv("pty_kill", { id: "other/session:unknown" }, known)).toBe(LOCAL);
+  it("follows a terminal's PTY, named for its pane, to its workspace's machine", () => {
+    const known = maps({ workspace: new Map([["w", "vps"]]) });
+    expect(routeEnv("pty_attach", { id: "w/stub:terminal:t", from: 0 }, known)).toBe("vps");
+    expect(routeEnv("pty_write", { id: "w@/home/agent/app-wt/stub:terminal:t", data: "x" }, known)).toBe("vps");
+    expect(routeEnv("pty_kill", { id: "other/stub:terminal:t" }, known)).toBe(LOCAL);
   });
 
   it("follows a command's PTY, named for the command alone, to its machine", () => {

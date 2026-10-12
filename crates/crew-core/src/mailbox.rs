@@ -782,9 +782,8 @@ pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
     })
 }
 
-/// Claim the first waiting letter alone, for a hand-over that takes one: a
-/// terminal's opening prompt. Claiming in the same statement that picks it is
-/// what keeps two callers from handing the same letter over twice.
+/// Claim the first waiting letter alone. Claiming in the same statement that
+/// picks it is what keeps two callers from handing the same letter over twice.
 pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!(

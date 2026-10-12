@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { launchCrew, openShell, waitFor } from "./harness.ts";
+import { launchCrew, MOD, openShell, pressChord, waitFor } from "./harness.ts";
 
 test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal is composing", async (t) => {
   const crew = await launchCrew({ repos: ["app", "lib", "web"] });
@@ -26,13 +26,20 @@ test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal 
   const home = (await crew.request<Workspace[]>("workspace_list")).find((w) => w.home);
   assert.ok(home, "home was never made");
   const order = [home.id, ...crew.workspaces.map((w) => w.id)];
-  const withTerminal = new Set<string>();
+  // A shell in each workspace first, while the field is clean: an open
+  // composition would eat the launcher's Enter.
+  for (const key of ["1", "2", "3"]) {
+    await pressChord(crew, `${MOD}+${key}`);
+    // The workspace restores its tabs as it opens: a tab opened before that is lost.
+    await page.waitForTimeout(800);
+    await openShell(crew);
+  }
+  await pressChord(crew, `${MOD}+Shift+H`);
+  await page.waitForTimeout(800);
+  await openShell(crew);
+  assert.equal(await crew.request("active_workspace_get"), home.id, "home is where the chord starts");
   for (let i = 0; i < 6; i++) {
     const before = (await crew.request<string>("active_workspace_get")) as string;
-    if (!withTerminal.has(before)) {
-      await openShell(crew);
-      withTerminal.add(before);
-    }
     await waitFor(
       () =>
         page.evaluate(() => {

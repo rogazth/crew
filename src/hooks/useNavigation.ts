@@ -95,6 +95,15 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /** A new shell in a workspace's main checkout, on screen or not: the tab waits for the workspace's saved tabs. */
+  const openTerminalIn = useCallback(
+    (workspaceId: string) => {
+      closePage();
+      tabs.openIn(workspaceId, newTerminalTab(null));
+    },
+    [closePage, tabs],
+  );
+
   /**
    * An MCP server's login for a session, run in a terminal tab of the session's worktree; its end has the
    * session connect the server. Every call is a new shell.
@@ -187,6 +196,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openFileInBrowser,
     openStub,
     openTerminal,
+    openTerminalIn,
     openSignIn,
     openBrowser,
     openProcessRun,

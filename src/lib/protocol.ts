@@ -835,6 +835,11 @@ export type PtyResync = { id: string, };
 
 export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
 /**
+ * Keep a live process under this id instead of replacing it: a window
+ * opening again (a reload, an update) finds the terminal it left.
+ */
+reuse?: boolean, 
+/**
  * Whether the window paints the terminal dark. It becomes COLORFGBG, which
  * CLIs fall back to when their OSC 11 query outlives a remote round trip.
  */

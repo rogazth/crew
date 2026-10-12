@@ -4,11 +4,10 @@
 // be removed.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { launchCrew, MOD, sessions, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -39,36 +38,6 @@ test("a fresh install lands in home, made with its folder", async () => {
   await crew.window.getByRole("heading", { name: "Welcome to Crew" }).waitFor();
   assert.equal(await crew.window.locator("[data-rail-marks] button[data-nav]").count(), 0, "home is listed among the projects");
   await assert.rejects(crew.request("workspace_delete", { id: made.id }), /Home cannot be removed/);
-});
-
-test("a message from home's start page starts claude in home's folder with it", async () => {
-  const made = await home();
-  const field = crew.window.getByRole("textbox", { name: "Ask anything" });
-  await field.fill("say hi from home");
-  await field.press("Enter");
-
-  let launched: { argv: string[]; cwd: string } | undefined;
-  const ok = await waitFor(async () => {
-    launched = (await crew.claudeLaunches()).at(-1);
-    return launched !== undefined;
-  });
-  assert.ok(ok, "claude never launched");
-  assert.equal(launched!.cwd, made.path);
-  assert.deepEqual(launched!.argv.slice(-2), ["--", "say hi from home"]);
-  // Taken as its first turn: the CLI's transcript has it as the user's prompt.
-  const projects = path.join(crew.home, ".claude/projects");
-  const heard = await waitFor(async () => {
-    for (const dir of await readdir(projects).catch(() => [])) {
-      for (const file of await readdir(path.join(projects, dir)).catch(() => [])) {
-        if ((await readFile(path.join(projects, dir, file), "utf8")).includes("say hi from home")) return true;
-      }
-    }
-    return false;
-  });
-  assert.ok(heard, "the message never reached claude as a turn");
-  const [session] = await sessions(crew, made.id);
-  assert.equal(session?.provider, "claude");
-  await crew.window.locator("[data-sidebar-panel] button[data-session]").first().waitFor();
 });
 
 test("a project opens under home, and ⇧⌘H goes back home", async () => {

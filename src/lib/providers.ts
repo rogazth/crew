@@ -33,34 +33,18 @@ export type Model = {
   tiers?: { id: string; label: string }[];
 };
 
-/**
- * How a terminal session learns its provider's session id: Crew hands Claude
- * its own; cursor-agent creates one before launch; codex and opencode name it
- * themselves once the first message is sent.
- */
-export type SessionBinding = "own" | "before" | "after";
-
 export type ProviderDef = {
   id: ProviderId;
   /** Short mark used in labels: "Claude Opus 5", not "Claude Code Opus 5". */
   label: string;
   binary: string;
-  modelFlag: string;
-  binding: SessionBinding;
-  resumeArgs: (id: string) => string[];
   /**
-   * The flags each access starts the CLI in. A mode the CLI has no flag for is
-   * left out, and is not offered for it. Claude's "ask" is said out loud: the
-   * user's own `defaultMode` would otherwise decide where it starts.
+   * The flags each access runs the CLI in, which is what says the CLI has the
+   * mode: one it has no flag for is left out, and is not offered for it.
    */
   access: Partial<Record<Access, string[]>>;
-  /** The efforts its CLI takes, and the flags that set one. None: it has no such knob. */
+  /** The efforts its CLI takes. None: it has no such knob. */
   efforts: Effort[];
-  effortArgs: (effort: Effort) => string[];
-  /** The flags a service tier sets. None: it has no such knob. */
-  tierArgs?: (tier: string) => string[];
-  /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
-  promptArgs: (text: string) => string[];
   models: Model[];
   /** Its CLI lists the account's models (`agent_models`), which replace `models` once read. */
   listsModels?: boolean;
@@ -79,9 +63,6 @@ export const PROVIDERS: ProviderDef[] = [
     id: "claude",
     label: "Claude",
     binary: "claude",
-    modelFlag: "--model",
-    binding: "own",
-    resumeArgs: (id) => ["--resume", id],
     access: {
       ask: ["--permission-mode", "default"],
       edits: ["--permission-mode", "acceptEdits"],
@@ -89,8 +70,6 @@ export const PROVIDERS: ProviderDef[] = [
       full: ["--dangerously-skip-permissions"],
     },
     efforts: ["low", "medium", "high", "xhigh", "max"],
-    effortArgs: (effort) => ["--effort", effort],
-    promptArgs: (text) => ["--", text],
     defaultModel: "claude-opus-5-5",
     defaultEffort: "high",
     models: [
@@ -111,15 +90,10 @@ export const PROVIDERS: ProviderDef[] = [
     id: "cursor",
     label: "Cursor",
     binary: "cursor-agent",
-    modelFlag: "--model",
-    binding: "before",
-    resumeArgs: (id) => ["--resume", id],
     access: { ask: [], auto: ["--auto-review"], full: ["--force"] },
     // Its model ids carry their effort, `grok-4.7-high`: each model's
     // `variants`, read from `cursor-agent models` (`loadListedModels`).
     efforts: [],
-    effortArgs: () => [],
-    promptArgs: (text) => ["--", text],
     listsModels: true,
     defaultModel: "auto",
     models: [
@@ -147,14 +121,8 @@ export const PROVIDERS: ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binary: "codex",
-    modelFlag: "-m",
-    binding: "after",
-    resumeArgs: (id) => ["resume", id],
     access: { ask: [], auto: ["--approve-for-me"], full: ["--dangerously-bypass-approvals-and-sandbox"] },
     efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
-    effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
-    tierArgs: (tier) => (/^[a-z0-9_-]+$/.test(tier) ? ["-c", `service_tier="${tier}"`] : []),
-    promptArgs: (text) => ["--", text],
     listsModels: true,
     defaultModel: "gpt-6-astra",
     defaultEffort: "medium",
@@ -172,14 +140,9 @@ export const PROVIDERS: ProviderDef[] = [
     label: "opencode",
     binary: "opencode",
     /** opencode's own models, which answer without any login. */
-    modelFlag: "-m",
-    binding: "after",
-    resumeArgs: (id) => ["--session", id],
     access: { ask: [], full: ["--auto"] },
     efforts: [],
-    effortArgs: () => [],
     // Its one positional is the project folder.
-    promptArgs: (text) => [`--prompt=${text}`],
     defaultModel: "opencode/ling-3.0-flash-fin-free",
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },

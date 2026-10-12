@@ -192,6 +192,11 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    /// Keep a live process under this id instead of replacing it: a window
+    /// opening again (a reload, an update) finds the terminal it left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reuse: Option<bool>,
     /// Whether the window paints the terminal dark. It becomes COLORFGBG, which
     /// CLIs fall back to when their OSC 11 query outlives a remote round trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]

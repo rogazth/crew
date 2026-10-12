@@ -125,7 +125,7 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
 
   // Ctrl+Shift+click (⌘⇧ on macOS) sends it out even so. Back to the terminal first.
   const strip = await savedStrip(crew, workspace.id);
-  const terminalTab = strip?.ids.find((id) => id.startsWith("session:"));
+  const terminalTab = strip?.ids.find((id) => id.startsWith("stub:terminal:"));
   assert.ok(terminalTab, "the terminal's tab is still on the strip");
   await page.locator(`[data-tab-strip] [role="tab"][data-tab-id="${terminalTab}"]`).click();
   await screen(crew).waitFor();
