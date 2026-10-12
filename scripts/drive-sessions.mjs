@@ -130,8 +130,14 @@ function rpc(method, params = {}) {
   });
 }
 
-/** A tool call over the bridge, as whoever `token` is. Resolves to the parsed answer. */
-function bridge(token, method, params = {}, timeoutMs = 90_000) {
+/**
+ * A call over the bridge, as whoever `who` is: a token, or `{ token,
+ * opencodeSession }` for an opencode session, whose calls reach Crew through
+ * the one server's host token and name the session they are from. Resolves to
+ * the parsed answer.
+ */
+function bridge(who, method, params = {}, timeoutMs = 90_000) {
+  const { token, opencodeSession } = typeof who === "string" ? { token: who } : who;
   const socket = JSON.parse(readFileSync(join(dataDir, "daemon.json"), "utf8")).socket;
   return new Promise((resolve, reject) => {
     const conn = connect(socket);
@@ -141,7 +147,7 @@ function bridge(token, method, params = {}, timeoutMs = 90_000) {
       reject(new Error(`${method} ${params.name ?? ""} timed out`));
     }, timeoutMs);
     // The user's token names its workspace on every call; a session's is ignored.
-    conn.on("connect", () => conn.write(JSON.stringify({ token, method, params, workspace: workspace?.id }) + "\n"));
+    conn.on("connect", () => conn.write(JSON.stringify({ token, method, params, workspace: workspace?.id, opencodeSession }) + "\n"));
     conn.on("data", (chunk) => (buffer += chunk));
     conn.on("error", (error) => {
       clearTimeout(timer);
@@ -350,7 +356,7 @@ async function untilTool(token, id, settle = 12, seconds = 180) {
   const until = Date.now() + seconds * 1000;
   while (Date.now() < until) {
     const now = await row(id);
-    if (now.status === "working" && cliIn(await cwdOf(now))) {
+    if (now.status === "working" && cliIn(await cwdOf(now), now.provider)) {
       await sleep(settle * 1000);
       const later = await row(id);
       assert(later.status === "working", `${id} ended its turn before it could be caught mid-turn: ${later.status}`);
@@ -387,14 +393,72 @@ function tokensInTree() {
   return tokens;
 }
 
+/**
+ * Who a child's MCP calls are from. Claude, Codex and Cursor run a process of
+ * their own with the session's CREW_TOKEN in its environment, so it is the
+ * token that appeared in crewd's tree since `before`. opencode runs every
+ * session on one server whose MCP server holds one host token (also in the
+ * tree) and says which opencode session calls, so it is that token and the id
+ * of the session that appeared on the server since `before`.
+ */
+async function childCaller(provider, before, since) {
+  for (let tries = 0; tries < 120; tries++) {
+    if (provider === "opencode") {
+      const host = [...tokensInTree()][0];
+      // The server keeps its sessions across runs, and may only start with
+      // this child, so the child is the session made since it was asked for.
+      const made = (await opencodeSessions()).filter((item) => item.time?.created >= since).sort((a, b) => b.time.created - a.time.created);
+      if (host && made.length) return { token: host, opencodeSession: made[0].id };
+    } else {
+      const token = [...tokensInTree()].find((t) => !before.has(t));
+      if (token) return token;
+    }
+    await sleep(250);
+  }
+  return null;
+}
+
+/** The sessions on crewd's opencode server (none when it is not up). */
+async function opencodeSessions() {
+  const pid = cliIn("", "opencode");
+  if (!pid) return [];
+  const env = execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)]).toString();
+  const password = env.match(/OPENCODE_SERVER_PASSWORD=(\S+)/)?.[1];
+  const lsof = execFileSync("lsof", ["-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-P", "-Fn"]).toString();
+  const port = lsof.match(/:(\d+)$/m)?.[1];
+  if (!password || !port) return [];
+  const reply = await fetch(`http://127.0.0.1:${port}/api/session`, {
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(repo) },
+  });
+  const body = await reply.json();
+  const items = Array.isArray(body) ? body : (body.items ?? body.data ?? []);
+  assert(reply.ok, `opencode session list: ${JSON.stringify(body).slice(0, 300)}`);
+  return items;
+}
+
 /** The folder a session's CLI runs in, as /proc shows it. */
 async function cwdOf(session) {
   return execFileSync("realpath", [session.worktree ?? repo]).toString().trim();
 }
 
-/** The process group of the CLI crewd runs for a session working in `cwd`. */
-function cliIn(cwd) {
+/**
+ * The process group of the CLI crewd runs for a session working in `cwd`. For
+ * opencode it is the one shared `opencode serve` (it runs in no session's
+ * folder), and killing it ends every turn running on it.
+ */
+function cliIn(cwd, provider) {
   const crewd = daemon.pid;
+  if (provider === "opencode") {
+    try {
+      for (const pid of execFileSync("pgrep", ["-P", String(crewd)]).toString().split("\n").filter(Boolean)) {
+        const command = execFileSync("ps", ["-o", "command=", "-p", pid]).toString();
+        if (/opencode/.test(command) && /\bserve\b/.test(command)) return Number(pid);
+      }
+    } catch {
+      // none
+    }
+    return null;
+  }
   if (!existsSync("/proc")) {
     // macOS: crewd's children, and the folder each one runs in, from lsof.
     let pids = [];
@@ -637,14 +701,14 @@ const scenarios = {
   },
 
   // A message steered into a running turn (Claude over stream-json, Codex
-  // with turn/steer); queued, and saying so, where the CLI cannot take one
-  // mid-turn (opencode, Cursor's ACP).
+  // with turn/steer, opencode 2.x with delivery: steer); queued, and saying so,
+  // where the CLI cannot take one mid-turn (Cursor's ACP).
   async s(provider) {
     const shell = await terminal(`s-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 20` in the foreground and wait for it to finish, then reply with the word ALPHA.");
     await untilTool(shell.token, id);
     const steer = await tool(shell.token, "send_message", { to: id, text: "When you reply, add the word BRAVO right after ALPHA.", steer: true });
-    if (provider !== "claude" && provider !== "codex") {
+    if (provider === "cursor") {
       assert(steer.ok && steer.value.delivery === "queued" && /Not steered/.test(steer.value.note), `steer was not queued: ${steer.text}`);
       await waitEvent(shell.token, id);
       return "n/a: it takes nothing mid-turn, so the steer is queued and says so";
@@ -869,18 +933,15 @@ const scenarios = {
     // A model will not copy a credential to disk on a peer's say-so, so the
     // child's token is read from its CLI's environment instead.
     const before = tokensInTree();
+    const since = Date.now() - 2000;
     const id = await start(shell.token, provider, "Reply with the word DONE.");
-    let childToken = null;
-    for (let tries = 0; tries < 120 && !childToken; tries++) {
-      childToken = [...tokensInTree()].find((token) => !before.has(token)) ?? null;
-      if (!childToken) await sleep(250);
-    }
+    const childToken = await childCaller(provider, before, since);
     await waitEvent(shell.token, id);
-    assert(childToken, "the child's CLI has no CREW_TOKEN in its environment");
+    assert(childToken, "could not tell who the child's MCP calls are from");
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
     assert(names.includes("send_message") && names.includes("list_peers"), `a child is listed: ${names}`);
-    const call = await tool(childToken, "delegate", { provider: "claude", prompt: "x" });
+    const call = await tool(childToken, "delegate", { provider, model: MODELS[provider], prompt: "x" });
     assert(!call.ok && /yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.
     const more = [];
@@ -909,7 +970,7 @@ const scenarios = {
     const shell = await terminal(`i-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 60`, then reply with the word DONE.", { worktree: "new" });
     await untilTool(shell.token, id);
-    const pid = cliIn(await cwdOf(await row(id)));
+    const pid = cliIn(await cwdOf(await row(id)), provider);
     assert(pid, "no CLI process for the session");
     process.kill(-pid, "SIGKILL");
     const out = await waitEvent(shell.token, id, 120);
