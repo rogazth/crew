@@ -361,6 +361,32 @@ async function untilTool(token, id, settle = 12, seconds = 180) {
   throw new Error(`${id} never got going`);
 }
 
+/** The CREW_TOKEN of every process under this daemon. */
+function tokensInTree() {
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid="]).toString().trim().split("\n").map((l) => l.trim().split(/\s+/).map(Number));
+  const under = new Set([daemon.pid]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [pid, ppid] of rows) {
+      if (under.has(ppid) && !under.has(pid)) {
+        under.add(pid);
+        grew = true;
+      }
+    }
+  }
+  const tokens = new Set();
+  for (const pid of under) {
+    try {
+      const env = execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)]).toString();
+      const token = env.match(/CREW_TOKEN=(\S+)/)?.[1];
+      if (token) tokens.add(token);
+    } catch {
+      // gone
+    }
+  }
+  return tokens;
+}
+
 /** The folder a session's CLI runs in, as /proc shows it. */
 async function cwdOf(session) {
   return execFileSync("realpath", [session.worktree ?? repo]).toString().trim();
@@ -537,7 +563,7 @@ const scenarios = {
     const out = await must(shell.token, "delegate", {
       provider, model: MODELS[provider], prompt: "Run the shell command `sleep 25`, then reply with the word DONE.", wait: true, timeout_s: 5,
     });
-    assert(out.status === "running" && /read_session/.test(out.note), `the first wait answered ${JSON.stringify(out)}`);
+    assert(out.status === "running" && /wake you/.test(out.note), `the first wait answered ${JSON.stringify(out)}`);
     const first = await waitEvent(shell.token, out.id, 600);
     assert(/DONE/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
     return "running after 5 s, then reported";
@@ -552,12 +578,18 @@ const scenarios = {
     const queued = await must(shell.token, "send_message", { to: id, text: "What code word did I give you at the start? Reply with the code word only." });
     assert(queued.delivery === "queued", `the busy session took it at once: ${JSON.stringify(queued)}`);
     const first = await waitEvent(shell.token, id);
-    assert(/READY/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
-    const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
-    assert(second.sessions[0].report.includes(code), `the queued turn reported ${second.sessions[0].report}`);
+    // The message waits for the next turn, or the CLI takes it between steps of
+    // the running one, which then ends on the answer. Either way the code word
+    // comes back before the session is idle.
+    if (!first.sessions[0].report.includes(code)) {
+      assert(/READY/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
+      const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
+      assert(second.sessions[0].report.includes(code), `the queued turn reported ${second.sessions[0].report}`);
+    }
     await untilStatus(id, ["idle"]);
     const idle = await must(shell.token, "send_message", { to: id, text: "Say the code word once more, all in lowercase, and nothing else." });
-    assert(idle.delivery === "started", `the idle session did not start a turn: ${JSON.stringify(idle)}`);
+    // An idle subagent reads it in a moment, batched with any letter close behind it.
+    assert(idle.delivery === "started" || (idle.delivery === "queued" && /in a moment/.test(idle.note)), `the idle session did not start a turn: ${JSON.stringify(idle)}`);
     const third = await waitEvent(shell.token, id);
     assert(third.sessions[0].report.includes(code.toLowerCase()), `turn 3 reported ${third.sessions[0].report}`);
     return `queued, then remembered ${code} across turns`;
@@ -681,7 +713,12 @@ const scenarios = {
     assert(done.sessions[0].event === "turn", `after allowing: ${JSON.stringify(done)}`);
     assert(existsSync(target("approved.txt")), "the allowed command did not run");
     rmSync(target("approved.txt"), { force: true });
-    await waitEvent(shell.token, id);
+    // The queued message is the next turn, started on its own when this one
+    // ends: it may already be over by the time the first wait returns.
+    if (!/\bOK\b/.test(done.sessions[0].report)) {
+      const last = await waitEvent(shell.token, id, 120, done.cursors[id]);
+      assert(/\bOK\b/.test(last.sessions[0].report), `the queued message reported ${last.sessions[0].report}`);
+    }
     return "waiting_for_user; message queued; allowed by the user";
   },
 
@@ -829,11 +866,17 @@ const scenarios = {
   // The limits: depth, the cap, autonomy, ownership.
   async h(provider) {
     const shell = await terminal(`h-${provider}`);
-    const file = join(dataDir, `child-token-${provider}`);
-    const id = await start(shell.token, provider, `Run exactly this shell command and nothing else: printf %s "$CREW_TOKEN" > ${file} — then reply DONE.`);
+    // A model will not copy a credential to disk on a peer's say-so, so the
+    // child's token is read from its CLI's environment instead.
+    const before = tokensInTree();
+    const id = await start(shell.token, provider, "Reply with the word DONE.");
+    let childToken = null;
+    for (let tries = 0; tries < 120 && !childToken; tries++) {
+      childToken = [...tokensInTree()].find((token) => !before.has(token)) ?? null;
+      if (!childToken) await sleep(250);
+    }
     await waitEvent(shell.token, id);
-    assert(existsSync(file), "the child never wrote its token");
-    const childToken = readFileSync(file, "utf8").trim();
+    assert(childToken, "the child's CLI has no CREW_TOKEN in its environment");
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
     assert(names.includes("send_message") && names.includes("list_peers"), `a child is listed: ${names}`);
@@ -849,10 +892,11 @@ const scenarios = {
     await setAutonomy(careful, "ask");
     const full = await tool(careful.token, "delegate", { provider, model: MODELS[provider], prompt: "x", autonomy: "full" });
     assert(!full.ok && /cannot have full/.test(full.text), `an ask parent made a full child: ${full.text}`);
-    // Nobody else drives it.
+    // Anyone in the workspace reads it (plan decision 24); nobody else drives it.
     const stranger = await terminal(`h-stranger-${provider}`);
+    const peek = await tool(stranger.token, "read_session", { session: id });
+    assert(peek.ok, `read_session as a stranger: ${peek.text}`);
     for (const [name, args] of [
-      ["read_session", { session: id }],
       ["send_message", { to: id, text: "hi" }],
       ["stop_session", { session: id }],
     ]) {
@@ -861,7 +905,7 @@ const scenarios = {
     }
     await waitAll(shell.token, more);
     for (const other of [id, ...more]) await must(shell.token, "stop_session", { session: other });
-    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger refused ×3`;
+    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger reads, cannot write or stop`;
   },
 
   // The CLI dies mid-turn: an error.
