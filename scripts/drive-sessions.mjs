@@ -896,16 +896,12 @@ const scenarios = {
     const stranger = await terminal(`h-stranger-${provider}`);
     const peek = await tool(stranger.token, "read_session", { session: id });
     assert(peek.ok, `read_session as a stranger: ${peek.text}`);
-    for (const [name, args] of [
-      ["send_message", { to: id, text: "hi" }],
-      ["stop_session", { session: id }],
-    ]) {
-      const out = await tool(stranger.token, name, args);
-      assert(!out.ok && /not by you/.test(out.text), `${name} as a stranger: ${out.text}`);
-    }
+    // It may write to it too (decision 11), but only its launcher stops it.
+    const stop = await tool(stranger.token, "stop_session", { session: id });
+    assert(!stop.ok && /not by you/.test(stop.text), `stop_session as a stranger: ${stop.text}`);
     await waitAll(shell.token, more);
     for (const other of [id, ...more]) await must(shell.token, "stop_session", { session: other });
-    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger reads, cannot write or stop`;
+    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger reads, cannot stop`;
   },
 
   // The CLI dies mid-turn: an error.
