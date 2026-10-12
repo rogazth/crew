@@ -159,12 +159,11 @@ of what was measured against the real CLIs on 2026-10-02:
   `providers:default`. A pick in Home no longer changes it (2026-10-06).
 - Switching provider in the chat (2026-10-06): offered while the session has no
   conversation (no blocks in its history, nothing queued, no turn running).
-  `session_switch_provider` checks the CLI's own history, ends the running
-  CLI, clears `provider_session_id`, renames a placeholder name (`claude 2` →
-  `codex`), forgets the live state and repoints the history reader; the
-  window starts the new provider's CLI from the row. Hooks from the old CLI
-  that arrive after (its SessionEnd) are ignored until the new one starts.
-  Only the chat offers it; the terminal view keeps its CLI.
+  `session_switch_provider` checks that nothing was said (Crew's transcript, or a
+  bound provider conversation), lets go of the running CLI, clears
+  `provider_session_id` and renames a placeholder name (`claude 2` →
+  `codex`); the next turn starts the new provider's CLI from the row.
+  (The terminal view this once said keeps its CLI has been removed.)
 - A fresh install's access is **Full access**. A stored default from before
   this change that has no access reads as Full too; Settings' global *Bypass
   permissions* still forces Full on every session.

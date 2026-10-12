@@ -1,5 +1,7 @@
 # Session chat — a chat view over the live CLI
 
+> **Superseded.** The chat over the CLI's PTY went in `2026-10-07-chat-over-protocol.md`, and the terminal view it sat beside was removed on 2026-10-12: every session is a chat over the provider's protocol. Read this for why the chat looks as it does, not for how sessions run.
+
 **Status:** planned 2026-09-28, being built (see §9). The plan stands on its own: a
 fresh session can carry it out without the thread it was decided in. Each phase
 ends with the app working and tests green, and gets a line in §9.

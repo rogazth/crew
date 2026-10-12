@@ -43,7 +43,9 @@ test("claude resolves to the fake, and a new session launches it in the workspac
     message: "the new session reaches crewd",
   });
   await sendInChat(crew, "hello");
-  const launch = await waitFor(async () => (await crew.claudeLaunches()).at(-1), { message: "the fake claude starts" });
+  const launch = await waitFor(async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(session.id)), {
+    message: "the fake claude starts",
+  });
   assert.equal(launch.cwd, workspace.path);
   assert.equal(launch.argv[launch.argv.indexOf("--session-id") + 1], session.id);
 });

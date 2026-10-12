@@ -24,20 +24,25 @@ the bottom as each decision lands.
 
 ## Decisions
 
-### One writer, two views
+### One writer, one view
 
-1. **The chat view is driven by Crew through the provider's protocol; the
-   terminal view runs the real CLI.** A session is one or the other.
-2. **The view is fixed when the session is created** (decided 2026-10-09):
-   the "New sessions open in" setting picks it, and nothing switches it
-   later. A handoff would kill the background commands the driver's process
-   holds and needs a catch-up per provider; the toggle goes instead.
-   Migration 30 moves existing Claude, Codex and opencode terminals to the
-   chat when the old global setting was the chat.
-3. **Per provider.** Claude, Codex and opencode could switch both ways (one
-   session store for headless and interactive, verified 2026-10-07); Cursor
-   could not. With decision 2 that no longer matters: every provider is
-   either a chat or a terminal from the start, as Cursor already was.
+1. **Every provider session is a chat, driven by Crew through the provider's
+   protocol.** There is no terminal view: Crew never runs a provider CLI in a
+   PTY for a session. (Decided 2026-10-07 as two views; the terminal view was
+   removed on 2026-10-12, when the app had become practically all chat UI.)
+2. **There is no view to choose.** The "New sessions open in" setting and
+   `sessions.view` are gone, and with them the window's terminal for a session.
+   A shell tab, a Crew process and a login the chat opens (`claude mcp login`)
+   are PTYs that run a shell or a command, not a session. Migration 38 moves
+   every session that was in the terminal view into the chat: Claude, Codex
+   and opencode resume the conversation they had over the protocol (their
+   provider id is kept), and a Cursor one starts a new conversation with a note,
+   since a chat made by `cursor-agent create-chat` cannot be loaded over ACP.
+   (Migration 30, the earlier move of a setting's worth of sessions, stands
+   as it was.)
+3. **Per provider.** Claude, Codex, opencode and Cursor are each driven over
+   their own protocol from the first message: stream-json, `codex app-server`,
+   `opencode serve` and ACP.
 
 ### Process lifetime
 
@@ -91,9 +96,7 @@ the bottom as each decision lands.
      `reply` → `decision` and `command` → `name`). Crew pins the range it
      was tested on and says so when the installed version is newer.
    - **2.x migrates `opencode.db` once, on its first start.** 1.x sessions
-     come along; anything 1.x writes afterwards does not. The terminal view
-     opens a session with `opencode -s <id> --server <crew's server>`, so
-     the TUI and the chat share one process and its interrupt.
+     come along; anything 1.x writes afterwards does not.
 
 ### Commands and skills
 
@@ -225,10 +228,14 @@ the bottom as each decision lands.
 
 ### What stays
 
-26. **Reading the provider's own history stays** for the terminal view. In
-    the chat, the driver's events are the live source, so replies stream
-    word by word.
-27. **`src/lib/ptySend.ts` stays for the terminal view only.**
+26. **Reading the provider's own history went with the terminal view.** In the
+    chat, the driver's events are the live source, so replies stream word by
+    word, and Crew's transcript is the history. `session_history`, the hooks
+    Crew passed to a CLI in a PTY and `src/lib/ptySend.ts` are gone.
+27. **A session that was a terminal view has no transcript in Crew** (its
+    conversation lived in the provider's files), so its chat opens empty and
+    its next message resumes the provider's conversation. That is the cost of
+    removing the reader; it is not imported.
 
 ### Context meter
 
@@ -346,10 +353,8 @@ A Crew subagent opens over the chat, with its own composer.
 
 ## Effect on the orchestration plan
 
-- Its decisions 15–20 (PTY delivery) go. A letter to a session in the chat
-  view is a steer or a queued turn through `turns.rs`, as for a subagent
-  today. A letter to a session in the terminal view waits in its mailbox:
-  the terminal view is the user at the keyboard.
+- Its decisions 15–20 (PTY delivery) go. A letter to a session is a steer or
+  a queued turn through `turns.rs`, as for a subagent today.
 - A letter steers into a running turn only where steering does not interrupt
   a tool; otherwise it is the next turn (t3code's rule).
 - Its decision 14 (resume on message) is a turn on the resume id.
@@ -381,7 +386,7 @@ A Crew subagent opens over the chat, with its own composer.
 Settled 2026-10-08: a built-in command away from the start of the message is
 text (decision 11). Cursor plugin MCP servers that need OAuth stay out: Crew
 does not hold provider tokens (decision 20); MCP status says so and points to
-the terminal view.
+a shell tab.
 
 ## Order of work
 
@@ -389,8 +394,8 @@ the terminal view.
    Small and on their own.
 2. Decisions 4–7: the live process for Claude and Codex; subagents use it.
    Decision 16 with it, before the fast toggle drives a chat.
-3. Decisions 1–3 and 26–27: the chat view on the driver, its view fixed at
-   creation.
+3. Decisions 1–3 and 26–27: every session a chat on the driver (the terminal
+   view removed 2026-10-12).
 4. Decisions 10–15: the `/` menu, autocomplete anywhere, dispatch per
    provider.
 5. Decision 9 (opencode 2.x), Cursor as chat-only, and decision 17.
@@ -404,10 +409,10 @@ the terminal view.
 
 | # | Decision | Status |
 |---|---|---|
-| 1–3 | One writer, two views, fixed at creation | done |
+| 1–3 | One writer, one view: the terminal view is removed | done (migration 38) |
 | 4–7 | Live process per session | done for Claude, Codex and opencode subagents and chat sessions (opencode on one shared server), and Cursor on one ACP process |
 | 8 | Setting sources by kind | done |
-| 9 | opencode on `serve` | done (2.x only; the terminal view opens `opencode --server <url> --session <id>`; checked live on 2.0.26) |
+| 9 | opencode on `serve` | done (2.x only; checked live on 2.0.26) |
 | 10–11 | `/` menu from the provider, anywhere in the message | done for Claude, Codex, Cursor and opencode (`GET /command`, `GET /skill`) |
 | 12–14 | Dispatch per provider | done for Claude, Codex, Cursor and opencode (`session.command`, `compact`) |
 | 15 | Reload and Restart session | done |
@@ -416,7 +421,7 @@ the terminal view.
 | 18–21 | MCP: native config, status, sign-in, Cursor HTTP | done for Claude, Codex, Cursor and opencode (status from `GET /api/mcp` and `mcp.status.changed`; sign-in is opencode's OAuth attempt, its page opened in the browser; reconnect is `experimental/mcp/{name}/connect`; checked live on 2.0.26 with an OAuth stand-in server) |
 | 22 | Cursor stays on ACP | done (no change) |
 | 23–25 | `--disable-codebase-ref`, group kill on reap, startup sweep | done |
-| 26–27 | History reading and `ptySend.ts` | done (chat over the PTY removed) |
+| 26–27 | History reading and `ptySend.ts` | gone with the terminal view |
 | 28–29 | Context meter | Claude, Codex and opencode (`session.step.ended` over the model's window) emit it, and Cursor reads it from its session store; shown under the composer |
 | 30–32 | Enter never interrupts; steer or queue | done |
 | 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | done |

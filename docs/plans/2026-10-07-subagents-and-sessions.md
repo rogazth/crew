@@ -22,7 +22,7 @@ sessions, sometimes hours after they last worked.
   "Crew has no turns to put a message in". Once handed over, nothing reaches it.
 - An orchestrator that is itself a terminal cannot be woken: its children's
   reports and questions wait in a mailbox nobody reads. The MCP instructions
-  tell it so ("nothing wakes you").
+  tell it so ("nothing wakes you"). (Solved: every session is a chat.)
 - A child idle for `IDLE_MINUTES` is reaped, and a caller has at most
   `LIVE_CAP` (4) live children. A decision that comes an hour later has nobody
   to go to.
@@ -131,9 +131,9 @@ tool description.
     where steering does not interrupt a tool; otherwise it is the next turn.
     This is what wakes an orchestrator: its subagents' reports, questions and
     approvals arrive this way.
-16. **A session in the terminal view takes no letters.** They wait in its
-    mailbox, where the user sees them. The terminal view is the user at the
-    keyboard, and it never becomes a chat (chat-over-protocol decision 2).
+16. **(Dropped 2026-10-12.)** A session in the terminal view took no letters,
+    and they waited in its mailbox for the user. The terminal view is gone:
+    every session takes letters as a turn (decision 15).
 17. **Letters that arrive close together go as one turn.** Reports from
     several subagents become one turn, not one interruption each. A letter
     waits 2 s for the next, and no letter waits more than 10 s from the first.
@@ -186,7 +186,7 @@ PTY.
 
 ### Prompts
 
-26. **The orchestration section of the session and terminal prompts is
+26. **The orchestration section of the session prompts is
     rewritten around the two tools.** When to `delegate` and when to
     `start_session`; that a session is woken by its subagents' reports, so
     it ends its turn instead of polling; and how to coordinate independent
@@ -228,7 +228,8 @@ orca and grok-bot: the batching window (17), the most entries of
 | 11–12 | Reach by autonomy; who answers and decides | done |
 | 13 | Envelope names the sender | done |
 | 14 | Resume on message | done |
-| 15–18 | Delivery | done |
+| 15, 17, 18 | Delivery | done |
+| 16 | A session in the terminal view takes no letters | dropped with the terminal view (2026-10-12) |
 | 21 | `interrupt_session` | done |
 | 22 | `update_session` | done |
 | 23 | Cascading stop | done |
