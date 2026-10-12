@@ -38,11 +38,26 @@ after(async () => {
 
 async function openPage(url: string): Promise<string> {
   const before = await stripTabIds(crew);
-  await crew.window.getByRole("button", { name: /^New tab/ }).click();
-  const field = crew.window.getByRole("combobox", { name: "Open a tab" }).or(crew.window.getByLabel("Open a tab"));
-  await field.first().fill(url);
-  await crew.window.keyboard.press("Enter");
-  await waitFor(async () => (await stripTabIds(crew)).length > before.length, { message: "a browser tab opens" });
+  const field = crew.window.getByRole("combobox", { name: "Open a tab" }).or(crew.window.getByLabel("Open a tab")).first();
+  // The launcher closes by itself if the previous page's load takes focus just
+  // as it opens, so the whole attempt is made again when no tab comes of it.
+  await waitFor(
+    async () => {
+      try {
+        await crew.window.getByRole("button", { name: /^New tab/ }).click({ timeout: 2000 });
+        await field.fill(url, { timeout: 2000 });
+        await crew.window.keyboard.press("Enter");
+      } catch {
+        await crew.window.keyboard.press("Escape").catch(() => {});
+        return false;
+      }
+      return waitFor(async () => (await stripTabIds(crew)).length > before.length, { timeout: 3000 }).then(
+        () => true,
+        () => false,
+      );
+    },
+    { message: "a browser tab opens", timeout: 30_000 },
+  );
   return (await stripTabIds(crew)).find((tab) => !before.includes(tab))!;
 }
 
