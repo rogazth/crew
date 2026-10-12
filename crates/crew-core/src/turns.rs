@@ -1035,6 +1035,11 @@ impl TurnHost {
             .ok_or_else(|| "Session not found".to_string())?;
         let drive = driven(&session);
         if !matches!(drive, Some(Driven::Child | Driven::User)) || params.hidden == Some(true) || params.from_bot.is_some() {
+            // A bot the user writes to is theirs again too: its count starts
+            // over (plan decision 27).
+            if drive == Some(Driven::Bot) && params.hidden != Some(true) && params.from_bot.is_none() {
+                self.user_wrote(&session.id);
+            }
             return self.start(params);
         }
         if drive == Some(Driven::Child) && session.status == "exited" {
@@ -2514,19 +2519,9 @@ impl TurnHost {
         // A turn the user's letter started is the user writing: the count
         // starts over. One that only sessions' letters started is one more in
         // a row (plan decision 27).
-        if self.counts_turns(session_id) {
-            let count = if user_wrote(&letters) { 0 } else { session::auto_turns(&self.store, session_id) + 1 };
-            session::set_auto_turns(&self.store, session_id, count);
-        }
+        let count = if user_wrote(&letters) { 0 } else { session::auto_turns(&self.store, session_id) + 1 };
+        session::set_auto_turns(&self.store, session_id, count);
         true
-    }
-
-    /// Whether `session_id` can be paused: a bot answers whoever writes to it.
-    fn counts_turns(&self, session_id: &str) -> bool {
-        session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .is_some_and(|session| driven(&session).is_some_and(|drive| drive != Driven::Bot))
     }
 
     /// The user writes to a session: it is theirs again, however many turns

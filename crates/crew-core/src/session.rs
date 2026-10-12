@@ -76,8 +76,7 @@ pub struct Session {
     #[serde(default)]
     pub auto_turns: i64,
     /// Whether it has had [`PAUSE_AFTER`] of them: letters keep landing in
-    /// its mailbox but no longer wake it, until the user writes. A bot never
-    /// pauses.
+    /// its mailbox but no longer wake it, until the user writes.
     #[serde(default)]
     pub paused: bool,
 }
@@ -184,7 +183,6 @@ pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
 
 pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
     let provider: String = row.get(at + 4)?;
-    let kind_can_pause = row.get::<_, String>(at + 2)? != "bot";
     let model = or_default_model(&provider, row.get(at + 5)?);
     let effort = or_default_effort(&provider, row.get(at + 17)?);
     let service_tier = or_default_service_tier(&provider, row.get(at + 18)?);
@@ -215,7 +213,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
         view: row.get(at + 24)?,
         auto_turns: row.get(at + 25)?,
-        paused: kind_can_pause && row.get::<_, i64>(at + 25)? >= PAUSE_AFTER,
+        paused: row.get::<_, i64>(at + 25)? >= PAUSE_AFTER,
     })
 }
 

@@ -8591,13 +8591,36 @@ time.sleep(600)
         assert!(last.contains("carry on") && last.contains("one more") && last.contains("and a message"), "{last}");
     }
 
-    /// A bot answers whoever writes to it, whatever the count.
+    /// Decision 27 for a bot: twenty turns in a row that another's letters
+    /// started pause it, so two bots cannot answer each other for ever; the
+    /// user writing to it resumes it.
     #[test]
-    fn a_bot_is_never_paused() {
+    fn a_bot_pauses_after_twenty_automatic_turns_and_the_user_resumes_it() {
         let w = world();
         let bot = w.session("bot", "Planner", "full");
-        let id = bot.session_id().unwrap();
-        session::set_auto_turns(w.turns.store(), id, 50);
-        assert!(!w.row(id).paused);
+        let other = w.session("bot", "Other", "full");
+        let id = bot.session_id().unwrap().to_string();
+        let from = other.sender();
+        session::set_auto_turns(w.turns.store(), &id, session::PAUSE_AFTER - 1);
+        assert!(!w.row(&id).paused);
+        mailbox::enqueue(w.turns.store(), &id, &from, "nineteen and one").unwrap();
+        assert!(w.turns.wake(&id), "the letter started a turn");
+        w.settle(&id);
+        assert_eq!(session::auto_turns(w.turns.store(), &id), session::PAUSE_AFTER);
+        assert!(w.row(&id).paused, "the row says it is paused");
+        let launches = w.launches().len();
+        // Letters still land, and wake nothing.
+        mailbox::enqueue(w.turns.store(), &id, &from, "one more").unwrap();
+        assert!(!w.turns.wake(&id));
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(w.launches().len(), launches);
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &id).unwrap(), 1);
+        // The user writes: the count starts over, and the letter that waited
+        // goes in the turn that follows (one automatic turn again).
+        w.say(&w.row(&id), "carry on");
+        until("the letter that waited is read", || mailbox::waiting_count(w.turns.store(), &id).unwrap() == 0);
+        w.settle(&id);
+        assert!(!w.row(&id).paused);
+        assert!(session::auto_turns(w.turns.store(), &id) <= 1);
     }
 }

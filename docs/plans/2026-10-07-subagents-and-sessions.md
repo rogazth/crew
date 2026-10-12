@@ -149,12 +149,12 @@ PTY.
 
 ### Limits
 
-27. **A session pauses after 20 turns in a row that letters started.** Its
-    count goes up with each turn a letter (a message or a report) starts, and
-    back to 0 when the user writes to it. At 20, letters keep landing in its
-    mailbox but no longer wake it; the session shows "paused after 20
-    automatic turns" and the user resumes it by writing. Two sessions that
-    keep answering each other stop there. None of the references counts hops
+27. **A session or a bot pauses after 20 turns in a row that letters
+    started.** Its count goes up with each turn a letter (a message or a
+    report) starts, and back to 0 when the user writes to it. At 20, letters
+    keep landing in its mailbox but no longer wake it; its chat shows "paused
+    after 20 automatic turns" and the user resumes it by writing. Two sessions
+    or two bots that keep answering each other stop there. None of the references counts hops
     per message: monocode pauses a run after 20 automatic wakes of its lead,
     t3code stops a PR watch after 10 comment-only wakes in a row.
 28. **A subagent cannot delegate.** Depth 1, as Codex (`agents.max_depth`),
@@ -235,5 +235,5 @@ orca and grok-bot: the batching window (17), the most entries of
 | 24 | `read_session` on any session | done |
 | 25 | `list_peers` fields | done |
 | 26 | Prompts | step 1 done (two tools, the words, envelope); step 3 done (batch, `request_id`, interrupt, update, wider reads); wake-on-report text done with step 2 |
-| 27 | Pause after 20 automatic turns | done |
+| 27 | Pause after 20 automatic turns | done for sessions; done for bots |
 | 28 | Subagents cannot delegate | done |
