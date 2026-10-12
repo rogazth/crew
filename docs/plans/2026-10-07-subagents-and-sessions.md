@@ -170,12 +170,12 @@ PTY.
     `interrupt` control request, ACP `session/cancel`). An optional
     `text` is delivered as the next message right after, to stop and redirect
     in one call. Allowed for whoever may write to the session (decision 11).
-22. **`update_session` renames, archives or deletes.** `archive` ends the
-    session and hides it from the sidebar; its transcript stays. `delete`
-    removes the session and its transcript, never its worktree. Archive and
-    delete are allowed only on sessions the caller started (subagents or
-    `launched_by`) and for the user. Delete refuses a session whose worktree
-    has uncommitted changes.
+22. **`update_session` renames or deletes.** `delete` removes the session and
+    its transcript, never its worktree. It is allowed only on sessions the
+    caller started (subagents or `launched_by`) and for the user, and refuses
+    a session whose worktree has uncommitted changes. There is no archive:
+    it had no UI, and the user does not want it now. An `archive` action and
+    column were added by step 3 and removed again (migration 37).
 23. **`stop_session` cascades over subagents**, depth first. It does not touch
     independent sessions the stopped session launched.
 24. **`read_session` reads any session in the workspace.** Only the parent's

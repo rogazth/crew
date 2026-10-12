@@ -580,6 +580,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 37 {
+        let tx = conn.unchecked_transaction()?;
+        // Archiving a session is gone (only delete stays): the column 36 added goes.
+        if has_column(&tx, "sessions", "archived")? {
+            tx.execute_batch(crate::session::MIGRATION_V37)?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (37, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1620,5 +1632,38 @@ mod stamp_tests {
         assert_eq!(&out[4..5], "-");
         assert_eq!(&out[10..11], " ");
         assert_eq!(&out[13..14], ":");
+    }
+}
+
+#[cfg(test)]
+mod archived_column_tests {
+    use super::*;
+
+    /// A database that had migration 36 has the `archived` column; 37 takes it
+    /// out and the session rows survive it.
+    #[test]
+    fn a_v36_database_loses_the_archived_column_and_keeps_its_sessions() {
+        let dir = std::env::temp_dir().join(format!("crew-v37-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let id = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let session = crate::session::create(
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            )
+            .expect("session");
+            store
+                .with(|conn| {
+                    conn.execute_batch(crate::session::MIGRATION_V36)?;
+                    conn.execute_batch("DELETE FROM schema_migrations WHERE version >= 37;")
+                })
+                .expect("downgrade");
+            session.id
+        };
+        let store = Store::open(path).expect("reopen");
+        let has = store.with(|conn| has_column(conn, "sessions", "archived")).expect("column");
+        assert!(!has, "the column is gone");
+        assert!(crate::session::get(&store, id).expect("get").is_some());
     }
 }

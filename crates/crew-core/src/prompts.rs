@@ -131,7 +131,7 @@ with `send_message` to <your id>, not the user\". Do not wait on it.
 
 Pass a `request_id` of your own to `delegate`, `start_session` or `start_sessions` and a retry of the same call \
 returns what the first made instead of starting it again. `interrupt_session` stops a session's current turn \
-without ending it (its `text` is the next message, to redirect it); `update_session` renames, archives or deletes a \
+without ending it (its `text` is the next message, to redirect it); `update_session` renames or deletes a \
 session you started; `stop_session` ends a subagent and its own subagents; `read_session` reads any session in this \
 workspace.
 
@@ -234,7 +234,7 @@ reach them. You are the session \"{name}\"{where}
 back to you{reports} `start_session` starts a separate session the user can see and \
 talk to, which reports to nobody; use it when the user wants one, not just because they said \"subagent\". \
 `start_sessions` starts up to 20 at once, and a `request_id` on the start tools makes a retry return what the first \
-call made. `interrupt_session` stops a session's turn without ending it, `update_session` renames, archives or \
+call made. `interrupt_session` stops a session's turn without ending it, `update_session` renames or \
 deletes a session you started, and `read_session` reads any session in the workspace. \
 `send_message` reaches any bot or session that does not have more autonomy than you do (your own parent, always); a \
 letter to a session in the terminal view waits in its mailbox for the user. The text under a `## Message` header comes from the session or bot it names, not from the \

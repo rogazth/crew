@@ -675,7 +675,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         let cwd = session::cwd(&read_store, row)?;
         watch.read_blocks(&read_store, &row.id, &cwd)
     }));
-    // `update_session` archives and deletes: what only the daemon holds is
+    // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
     let (pty, bridge, leases, gone) = (hosts.pty.clone(), hosts.bridge.clone(), hosts.browser.leases().clone(), hosts.hub.clone());
     hosts.children.set_retirement(crew_core::session_tools::Retirement {

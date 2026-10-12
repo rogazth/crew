@@ -246,31 +246,17 @@ fn or_default_service_tier(provider: &str, tier: String) -> String {
     }
 }
 
-/// The column an archived session is marked in: it ends, and is hidden from
-/// every listing but its transcript is kept.
+/// Migration 36 added an `archived` column; archiving is gone, and migration 37
+/// takes the column out again where it is.
 pub const MIGRATION_V36: &str = "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;";
+pub const MIGRATION_V37: &str = "ALTER TABLE sessions DROP COLUMN archived;";
 
-/// Hide a session from the sidebar and from `list`; `get` still finds it.
-pub fn set_archived(store: &Store, id: &str) -> Result<(), String> {
-    store.with(|conn| conn.execute("UPDATE sessions SET archived = 1 WHERE id = ?1", params![id]))?;
-    Ok(())
-}
-
-pub fn is_archived(store: &Store, id: &str) -> Result<bool, String> {
-    store.with(|conn| {
-        conn.prepare_cached("SELECT archived FROM sessions WHERE id = ?1")?
-            .query_row(params![id], |row| row.get::<_, i64>(0))
-            .optional()
-            .map(|archived| archived == Some(1))
-    })
-}
-
-/// The sessions of a workspace the sidebar shows: archived ones are not.
+/// The sessions of a workspace the sidebar shows.
 pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SESSION_COLUMNS} FROM {SESSIONS}
-             WHERE s.workspace_id = ?1 AND s.archived = 0
+             WHERE s.workspace_id = ?1
              ORDER BY s.sort_order ASC, s.created_at ASC"
         ))?;
         let rows = stmt.query_map(params![workspace_id], |row| row_to_session(row, 0))?;

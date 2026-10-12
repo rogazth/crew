@@ -76,7 +76,7 @@ type Made = Arc<dyn Fn(&Session) + Send + Sync>;
 /// A terminal-view session's blocks as its CLI's own history has them; `None`
 /// where the history cannot be found.
 pub type HistoryReader = Arc<dyn Fn(&Session) -> Result<Option<Vec<Block>>, String> + Send + Sync>;
-/// The daemon's part of archiving or deleting a session: `release` lets go of
+/// The daemon's part of deleting a session: `release` lets go of
 /// what only it holds (the session's terminal, its token, its browser tabs);
 /// `gone` tells every window the sessions are no longer listed.
 pub struct Retirement {
@@ -104,7 +104,7 @@ pub struct SessionTools {
     /// Reads the history a provider's CLI keeps of a session in the terminal
     /// view, which the daemon knows where to find.
     history: OnceLock<HistoryReader>,
-    /// What the daemon does when a session is archived or deleted, beyond
+    /// What the daemon does when a session is deleted, beyond
     /// what the turn host knows.
     retirement: OnceLock<Retirement>,
 }
@@ -579,9 +579,6 @@ impl SessionTools {
         // An independent session that has exited takes the letter as a turn
         // on the conversation it left (plan decision 14).
         let resuming = target.status == "exited";
-        if resuming && session::is_archived(&self.store, &target.id)? {
-            return Err(format!("{} is archived: it has ended and is hidden, so a letter does not resume it.", target.name));
-        }
         let mut fell_back = None;
         // The letter a steer that did not go through left in the box.
         let mut released = None;
@@ -1594,10 +1591,10 @@ impl SessionTools {
         }
     }
 
-    /// `update_session`: rename, archive or delete.
+    /// `update_session`: rename or delete.
     fn update(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
         let id = text(args.get("session")).ok_or("session is required")?;
-        let action = text(args.get("action")).ok_or("action is required: rename, archive or delete")?;
+        let action = text(args.get("action")).ok_or("action is required: rename or delete")?;
         let row = self.visible(caller, &id)?;
         if row.kind == "bot" {
             return Err(format!(
@@ -1605,10 +1602,6 @@ impl SessionTools {
                 row.name
             ));
         }
-        let by = match caller {
-            Caller::User { .. } => "the user".to_string(),
-            _ => caller.label(),
-        };
         match action.as_str() {
             "rename" => {
                 let name = text(args.get("name")).ok_or("name is required to rename")?;
@@ -1621,20 +1614,16 @@ impl SessionTools {
                 self.store.session_changed(&row.id);
                 Ok(json!({ "session": row.id, "name": name.trim(), "note": "Renamed." }))
             }
-            "archive" | "delete" => {
+            "delete" => {
                 if !Self::started_by(caller, &row) {
                     return Err(format!(
-                        "{} ({}) was not started by you: only whoever started a session, or the user, can {action} it.",
+                        "{} ({}) was not started by you: only whoever started a session, or the user, can delete it.",
                         row.name, row.id
                     ));
                 }
-                if action == "archive" {
-                    self.archive(&by, &row)
-                } else {
-                    self.delete(&row)
-                }
+                self.delete(&row)
             }
-            other => Err(format!("action is rename, archive or delete, not \"{other}\"")),
+            other => Err(format!("action is rename or delete, not \"{other}\"")),
         }
     }
 
@@ -1653,40 +1642,6 @@ impl SessionTools {
         }
     }
 
-    /// End a session and hide it, its subagents with it. Its transcript stays,
-    /// and `read_session` still reads it.
-    fn archive(&self, by: &str, row: &Session) -> Result<Value, String> {
-        if session::is_archived(&self.store, &row.id)? {
-            return Err(format!("{} is already archived.", row.name));
-        }
-        let mut all = self.subagents_below(row)?;
-        all.push(row.clone());
-        let mut ids = Vec::new();
-        for one in &all {
-            if one.kind == "child" {
-                if one.status != "exited" {
-                    self.stop_one(by, one)?;
-                }
-                self.take_down(one);
-            } else {
-                self.take_down(one);
-                self.turns.transcripts().append_system(&one.id, &format!("Archived by {by}. The session has ended; its transcript stays here."));
-                self.turns.transcripts().set_status(&one.id, "exited", None);
-                self.turns.transcripts().flush(&one.id);
-            }
-            session::set_archived(&self.store, &one.id)?;
-            ids.push(one.id.clone());
-        }
-        if let Some(retirement) = self.retirement.get() {
-            (retirement.gone)(&ids);
-        }
-        Ok(json!({
-            "session": row.id,
-            "archived": ids,
-            "note": "Archived: it has ended and is gone from the sidebar. Its transcript is kept; read_session still reads it."
-        }))
-    }
-
     /// Remove a session and its transcript, its subagents with it, and never
     /// a worktree. Refused while a worktree any of them works in has
     /// uncommitted changes.
@@ -1702,7 +1657,7 @@ impl SessionTools {
             if let Some(dirty) = crate::worktree::list(folder).into_iter().find(|t| t.path == tree).map(|t| t.dirty).filter(|dirty| *dirty > 0) {
                 return Err(format!(
                     "{} works in {tree}, which has {dirty} uncommitted change{}: nothing was deleted. Commit or discard \
-                     them (or archive the session instead, which keeps it and its transcript), then delete.",
+                     them, then delete.",
                     one.name,
                     if dirty == 1 { "" } else { "s" }
                 ));
@@ -2082,16 +2037,15 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "update_session",
             description: concat!(
-                "Rename, archive or delete a session (a bot is the user's to rename or remove). action: rename (name is the new name; allowed for whoever started the session and whoever send_message reaches); ",
-                "archive (ends the session, its subagents with it, and hides it from the sidebar; its transcript is kept and read_session still reads it); ",
+                "Rename or delete a session (a bot is the user's to rename or remove). action: rename (name is the new name; allowed for whoever started the session and whoever send_message reaches); ",
                 "delete (removes the session, its subagents and their transcripts, and never a worktree; refused while a worktree they work in has uncommitted changes). ",
-                "Archive and delete are only for sessions you started (your subagents, or a session you launched with start_session); the user may do either to any."
+                "Delete is only for sessions you started (your subagents, or a session you launched with start_session); the user may delete any."
             ),
             schema: json!({
                 "type": "object",
                 "properties": {
                     "session": session_arg(),
-                    "action": { "type": "string", "enum": ["rename", "archive", "delete"] },
+                    "action": { "type": "string", "enum": ["rename", "delete"] },
                     "name": { "type": "string", "description": "With rename: the new name." }
                 },
                 "required": ["session", "action"]
@@ -2099,7 +2053,6 @@ pub fn catalog() -> Vec<Tool> {
             audience: Audience::EVERYONE,
             cli: vec![
                 cli("sessions", "rename").sets("action", "rename").rest(&["session", "name"]).eg("crew sessions rename 3f2a… Auth refactor"),
-                cli("sessions", "archive").sets("action", "archive").pos(&["session"]).eg("crew sessions archive 3f2a…"),
                 cli("sessions", "delete").sets("action", "delete").pos(&["session"]).eg("crew sessions delete 3f2a…"),
             ],
         },
@@ -8190,33 +8143,7 @@ time.sleep(600)
     }
 
     #[test]
-    fn archive_ends_a_subagent_hides_it_and_keeps_its_transcript() {
-        let w = world();
-        let (released, gone) = recorded(&w);
-        let shell = w.session("terminal", "shell", "full");
-        let stranger = w.session("terminal", "stranger", "full");
-        let id = w.start(&shell, "SLEEP 30");
-        until("the turn is up", || w.launches().len() == 1);
-        let out = w.call(&stranger, "update_session", json!({ "session": id, "action": "archive" }));
-        assert!(out.is_err_and(|e| e.contains("not started by you")));
-        let out = w.call(&shell, "update_session", json!({ "session": id, "action": "archive" })).expect("archive");
-        assert_eq!(out["archived"], json!([id]), "{out}");
-        assert_eq!(w.row(&id).status, "exited");
-        assert!(session::is_archived(w.turns.store(), &id).unwrap());
-        assert_eq!(*gone.lock().unwrap(), vec![id.clone()]);
-        assert!(released.lock().unwrap().contains(&id));
-        // Hidden from every listing, and from the sidebar's own.
-        assert!(w.peer(&shell, &id).is_null() && w.peer(&w.user(), &id).is_null());
-        assert!(session::list(w.turns.store(), w.workspace.clone()).unwrap().iter().all(|row| row.id != id));
-        // The transcript is kept and read_session still reads it.
-        let read = w.call(&shell, "read_session", json!({ "session": id })).expect("read");
-        assert!(read["text"].as_str().unwrap().contains("SLEEP 30"), "{read}");
-        let again = w.call(&shell, "update_session", json!({ "session": id, "action": "archive" }));
-        assert!(again.is_err_and(|e| e.contains("already archived")));
-    }
-
-    #[test]
-    fn archive_and_delete_are_for_the_starter_and_the_user() {
+    fn delete_is_for_the_starter_and_the_user() {
         let w = world();
         let (_, gone) = recorded(&w);
         let bot = w.session("bot", "Lead", "full");
@@ -8227,22 +8154,20 @@ time.sleep(600)
         w.settle(&launched);
         w.settle(&theirs);
         for (caller, id) in [(&other, &launched), (&bot, &chat.id)] {
-            for action in ["archive", "delete"] {
-                let out = w.call(caller, "update_session", json!({ "session": id, "action": action }));
-                assert!(out.is_err_and(|e| e.contains("not started by you")), "{action}");
-            }
+            let out = w.call(caller, "update_session", json!({ "session": id, "action": "delete" }));
+            assert!(out.is_err_and(|e| e.contains("not started by you")));
         }
-        // Launching is enough to archive and to delete.
-        let out = w.call(&bot, "update_session", json!({ "session": launched, "action": "archive" })).expect("archive");
-        assert_eq!(out["archived"], json!([launched]));
-        assert_eq!(w.row(&launched).status, "exited");
+        // Archiving is not an action any more.
+        let out = w.call(&bot, "update_session", json!({ "session": launched, "action": "archive" }));
+        assert!(out.is_err_and(|e| e.contains("rename or delete")));
+        // Launching is enough to delete.
         let out = w.call(&bot, "update_session", json!({ "session": theirs, "action": "delete" })).expect("delete");
         assert_eq!(out["deleted"], json!([theirs]));
         assert!(session::get(w.turns.store(), theirs.clone()).unwrap().is_none());
         assert!(w.blocks(&theirs).is_empty(), "the transcript outlived the session");
-        // The user may do either to any.
-        w.call(&w.user(), "update_session", json!({ "session": chat.id, "action": "archive" })).expect("user archive");
-        assert_eq!(*gone.lock().unwrap(), vec![launched, theirs, chat.id]);
+        // The user may delete any.
+        w.call(&w.user(), "update_session", json!({ "session": chat.id, "action": "delete" })).expect("user delete");
+        assert_eq!(*gone.lock().unwrap(), vec![theirs, chat.id]);
     }
 
     fn git(dir: &Path, args: &[&str]) {
@@ -8281,7 +8206,6 @@ time.sleep(600)
         assert!(out.is_err_and(|e| e.contains("1 uncommitted change") && e.contains("nothing was deleted")));
         assert!(session::get(w.turns.store(), row.id.clone()).unwrap().is_some());
         assert!(w.blocks(&row.id).iter().any(|block| block.text == "work on it"));
-        // Archiving is not refused: nothing is lost.
         std::fs::remove_file(std::path::Path::new(&tree).join("wip.txt")).unwrap();
 
         let out = w.call(&bot, "update_session", json!({ "session": row.id, "action": "delete" })).expect("delete");

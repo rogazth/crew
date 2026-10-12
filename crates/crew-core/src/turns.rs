@@ -2565,10 +2565,6 @@ impl TurnHost {
         let Some(drive) = driven(&session) else {
             return false;
         };
-        // An archived session has ended for good: letters do not wake it.
-        if session::is_archived(&self.store, session_id).unwrap_or(false) {
-            return false;
-        }
         if drive == Driven::Bot {
             return self.drain_mailbox(session_id);
         }
