@@ -75,8 +75,10 @@ export const PROVIDERS: ProviderDef[] = [
     models: [
       { id: "claude-fable-5-1", label: "Fable 5.1", note: "Toughest" },
       { id: "claude-opus-5-5", label: "Opus 5.5", note: "Most capable" },
+      { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "Balanced" },
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "Fastest" },
       { id: "claude-opus-5", label: "Opus 5" },
-      { id: "claude-sonnet-5", label: "Sonnet 5", note: "Balanced" },
+      { id: "claude-sonnet-5", label: "Sonnet 5" },
       { id: "claude-fable-5", label: "Fable 5" },
       { id: "claude-opus-4-8", label: "Opus 4.8" },
       { id: "claude-opus-4-7", label: "Opus 4.7" },
