@@ -714,8 +714,9 @@ impl TurnHost {
             if !live.active || live.settled {
                 return;
             }
-            // Its own message coming back is not the model at work.
-            if kind != "session.inbox.enqueued" {
+            // Its own message coming back, or the server making the session,
+            // is not the model at work.
+            if !matches!(kind, "session.inbox.enqueued" | "session.created") {
                 live.saw_output = true;
             }
             let ends = kind.starts_with("session.execution.");

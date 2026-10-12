@@ -4670,11 +4670,17 @@ mod mailbox_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let silent_and_watched = {
+        // Polled: under load the turn can take longer than any fixed pause to
+        // come up.
+        let watched = || {
             let map = world.host.lock();
             matches!(map.get(&coder.id), Some(Live::Opencode(live)) if live.active && !live.saw_output)
         };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !watched() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let silent_and_watched = watched();
         world.host.stop(&coder.id).expect("stop");
         settle(&world, &coder.id);
         assert!(silent_and_watched, "a provider with no output was not being watched");
