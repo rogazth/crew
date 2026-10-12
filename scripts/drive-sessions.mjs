@@ -10,10 +10,13 @@
 // scenario × provider table: pass, FAIL, or n/a with the reason. A provider
 // whose CLI is not installed is reported as such, never skipped quietly.
 //
-// The parent is a terminal session of this daemon: a shell in one of its PTYs
-// hands this script its token, so every call goes over the bridge exactly as
-// that terminal's CLI would make it. Scenario a puts a real Claude Code in that
-// terminal instead; b puts a real Claude bot in charge.
+// The parent is a session of this daemon (kind "terminal": a session of the
+// user's, not a bot, not a subagent). Crew gives a token only to the process it
+// starts for a session's chat, so the script asks that session, in one turn, to
+// write its own $CREW_TOKEN to a file, then makes every call over the bridge
+// exactly as that session's CLI would. That turn is a model call, once per
+// parent. Scenario a lets a real Claude session do the delegating itself; b
+// puts a real Claude bot in charge.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
@@ -36,8 +39,7 @@ const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boo
 const SCENARIOS = (process.env.SCENARIOS ?? "a,b,w,c,d,e,f,q,p,g,h,i,j,k,m,s").split(",").filter(Boolean);
 const KEEP = process.env.KEEP === "1";
 // The effort every Claude and Codex session of the run thinks at: the bots it
-// makes, the sessions `delegate` and `start_session` start, and the `claude -p`
-// of scenario a. Low, to keep a run cheap.
+// makes, the sessions `delegate` and `start_session` start, and the parents. Low, to keep a run cheap.
 const EFFORT = process.env.EFFORT ?? "low";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -185,29 +187,43 @@ function userToken() {
 
 let workspace;
 
-/** A terminal session whose shell writes its token to a file and sleeps. */
+/**
+ * A session of the user's (kind "terminal") that hands over its token. Crew
+ * mints a token when it starts the process of a session's chat and puts it in
+ * that process's environment (CREW_TOKEN), so the session is asked, in a turn
+ * of its own, to write it to a file. One model turn at the cheap default.
+ */
 async function terminal(name) {
   const row = await rpc("session_create", {
     workspaceId: workspace.id,
     kind: "terminal",
     name,
     provider: "claude",
-    model: "",
+    model: MODELS.claude,
     description: "",
     autonomy: "full",
   });
-  const file = join(dataDir, `token-${row.id}`);
-  await rpc("pty_spawn", {
-    id: row.id,
+  return { ...row, token: await handOverToken(row) };
+}
+
+/**
+ * The token of the process running `row`'s chat, read from a file the session
+ * writes in a turn. The token lasts as long as that process; a new process
+ * (after a daemon restart) gets a new one, so this is asked again then.
+ */
+async function handOverToken(row) {
+  const file = join(dataDir, `token-${row.id}-${nextId++}`);
+  await rpc("turn_start", {
+    sessionId: row.id,
     cwd: repo,
-    command: ["/bin/sh", "-c", `printf %s "$CREW_TOKEN" > '${file}'; exec sleep 100000`],
-    cols: 80,
-    rows: 24,
-    session: row.id,
+    text: `Run exactly this shell command and nothing else: printf %s "$CREW_TOKEN" > '${file}' - then reply DONE.`,
   });
-  for (let i = 0; i < 100 && !existsSync(file); i++) await sleep(50);
-  await sleep(100);
-  return { ...row, token: readFileSync(file, "utf8").trim() };
+  for (let i = 0; i < 2400 && !existsSync(file); i++) await sleep(50);
+  assert(existsSync(file), `${row.name} never wrote its token`);
+  await untilStatus(row.id, ["idle", "done"], 120);
+  const token = readFileSync(file, "utf8").trim();
+  assert(token, `${row.name} wrote an empty token`);
+  return token;
 }
 
 async function setAutonomy(row, autonomy) {
@@ -409,11 +425,11 @@ function askJob(provider, file) {
 }
 
 const scenarios = {
-  // The motivating case: a real Claude Code in a terminal hands a job to a
-  // session in a new worktree and waits for its report in the same call.
+  // The motivating case: a real Claude, as a session of the user's, hands a job
+  // to a session in a new worktree and waits for its report in the same call.
   async a(provider) {
     const shell = await rpc("session_create", {
-      workspaceId: workspace.id, kind: "terminal", name: `claude-a-${provider}`, provider: "claude", model: "", description: "", autonomy: "full",
+      workspaceId: workspace.id, kind: "terminal", name: `claude-a-${provider}`, provider: "claude", model: MODELS.claude, description: "", autonomy: "full",
     });
     const secret = word("OTTER");
     const out = join(dataDir, `a-${provider}.txt`);
@@ -424,16 +440,13 @@ const scenarios = {
       "2. If its status is not \"reported\", call read_session on its id every 30 seconds until the transcript shows the turn ended.",
       `3. Write the report it gave (the report field of delegate's answer, or its last message) into the file ${out}, then stop.`,
     ].join("\n");
-    await rpc("pty_spawn", {
-      id: shell.id, cwd: repo, cols: 120, rows: 40, session: shell.id,
-      command: ["claude", "-p", prompt, "--model", MODELS.claude, "--effort", EFFORT, "--dangerously-skip-permissions"],
-    });
+    await rpc("turn_start", { sessionId: shell.id, cwd: repo, text: prompt });
     const until = Date.now() + 15 * 60_000;
     while (!existsSync(out) && Date.now() < until) await sleep(2000);
-    assert(existsSync(out), "Claude Code never wrote the report down");
+    assert(existsSync(out), "Claude never wrote the report down");
     const sessions = await rpc("session_list", { workspaceId: workspace.id });
     const child = sessions.find((s) => s.kind === "child" && s.parentId === shell.id);
-    assert(child, "no child session with the terminal as its parent");
+    assert(child, "no child session with the session as its parent");
     assert(child.provider === provider, `the child runs ${child.provider}`);
     assert(child.worktree && child.worktree !== repo, `the child works in ${child.worktree}, not a new worktree`);
     const greeting = readFileSync(join(child.worktree, "greeting.txt"), "utf8");
@@ -830,7 +843,7 @@ const scenarios = {
     const more = [];
     for (let n = 0; n < 3; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
     const fifth = await tool(shell.token, "delegate", { provider, model: MODELS[provider], prompt: "Reply with OK." });
-    assert(!fifth.ok && /4 live sessions/.test(fifth.text), `a fifth started: ${fifth.text}`);
+    assert(!fifth.ok && /4 live subagents/.test(fifth.text), `a fifth started: ${fifth.text}`);
     // Autonomy never grows.
     const careful = await terminal(`h-ask-${provider}`);
     await setAutonomy(careful, "ask");
@@ -899,7 +912,7 @@ const scenarios = {
     const handed = await must(shell.token, "start_session", { worktree: branch, prompt: "Nothing to do; this is a test." });
     assert(handed.kind === "session" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
     const made = await row(handed.id);
-    assert(made.kind === "terminal" && made.view === "chat" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
+    assert(made.kind === "terminal" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
     const waited = await tool(shell.token, "start_session", { wait: true, prompt: "x" });
     assert(!waited.ok, `start_session took wait: ${waited.text}`);
     await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
@@ -913,17 +926,9 @@ const scenarios = {
   },
 };
 
-/** A terminal's process started again on the same session, as the window does after a restart. */
+/** A parent's chat process started again on the same session after a daemon restart: a new process, so a new token. */
 async function reopen(shell) {
-  const file = join(dataDir, `token-${shell.id}`);
-  rmSync(file, { force: true });
-  await rpc("pty_spawn", {
-    id: shell.id, cwd: repo, cols: 80, rows: 24, session: shell.id,
-    command: ["/bin/sh", "-c", `printf %s "$CREW_TOKEN" > '${file}'; exec sleep 100000`],
-  });
-  for (let i = 0; i < 100 && !existsSync(file); i++) await sleep(50);
-  await sleep(100);
-  return { ...shell, token: readFileSync(file, "utf8").trim() };
+  return { ...shell, token: await handOverToken(shell) };
 }
 
 // --- the run ----------------------------------------------------------------
