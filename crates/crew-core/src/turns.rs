@@ -765,6 +765,9 @@ pub struct TurnHost {
     /// at the head of the queue: the end of that stop hands the queue over
     /// instead of holding it.
     sending_now: Arc<Mutex<HashSet<String>>>,
+    /// Child turns out of `running` that have not yet written how they ended:
+    /// a waiter must not take that gap for a session with nothing to report.
+    settling: Arc<Mutex<HashSet<String>>>,
     /// Run once by the next Claude turn just before its message goes in: a
     /// test puts the CLI's own turn there, the race that is otherwise a
     /// matter of milliseconds.
@@ -810,6 +813,7 @@ impl TurnHost {
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
+            settling: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
             before_message: Arc::new(Mutex::new(None)),
         }
@@ -2373,6 +2377,11 @@ impl TurnHost {
         // Crew's now: it is watched as one nobody sent.
         let adopted = {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            // Marked before it leaves `running`, so a waiter that sees it gone
+            // from there sees this.
+            if driven(&row) == Some(Driven::Child) {
+                self.settling.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.clone());
+            }
             running.remove(&session_id);
             self.claim_unclaimed(&mut running, &session_id)
         };
@@ -2382,6 +2391,9 @@ impl TurnHost {
         // This turn settles first, so the status the adopted one sets is the
         // last; the queue waits for that one's end.
         self.settle_turn(&row, outcome, sent_now);
+        if self.settling.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id) {
+            self.signal.notify();
+        }
         if let Some(rx) = adopted {
             self.watch_adopted(&row, rx);
         }
@@ -2919,6 +2931,11 @@ impl TurnHost {
     /// Whether a session has a turn: from `start` until its outcome is in.
     pub fn is_running(&self, session_id: &str) -> bool {
         self.running.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
+    }
+
+    /// Whether a child's turn has ended but its event is not written yet.
+    pub fn is_settling(&self, session_id: &str) -> bool {
+        self.settling.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
     /// The prompt of a turn that carries on the provider's conversation, for a

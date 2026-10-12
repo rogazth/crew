@@ -1275,7 +1275,7 @@ impl SessionTools {
                 // or has claimed it and not started the turn.
                 let queued = matches!(row.status.as_str(), "idle" | "error")
                     && mailbox::undelivered_count(&self.store, &row.id)? > 0;
-                running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id) || queued;
+                running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id) || self.turns.is_settling(&row.id) || queued;
                 rows.push(row);
             }
             if !news.is_empty() {
@@ -7725,7 +7725,9 @@ time.sleep(600)
         let w = world();
         let shell = w.session("terminal", "shell", "full");
         let other = w.session("terminal", "other", "full");
-        let args = json!({ "provider": "opencode", "prompt": "job", "request_id": "job-1" });
+        // The first call's turn must still be running when the retry waits, or
+        // its report is already past and the wait has nothing new to return.
+        let args = json!({ "provider": "opencode", "prompt": "SLEEP 2", "request_id": "job-1" });
         let first = w.call(&shell, "delegate", args.clone()).expect("first");
         let again = w.call(&shell, "delegate", args.clone()).expect("retry");
         assert_eq!(first["id"], again["id"]);
