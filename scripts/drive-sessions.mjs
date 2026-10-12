@@ -367,10 +367,10 @@ async function untilTool(token, id, settle = 12, seconds = 180) {
   throw new Error(`${id} never got going`);
 }
 
-/** The CREW_TOKEN of every process under this daemon. */
-function tokensInTree() {
+/** The CREW_TOKEN of every process under `root` (this daemon by default). */
+function tokensInTree(root = daemon.pid) {
   const rows = execFileSync("ps", ["-axo", "pid=,ppid="]).toString().trim().split("\n").map((l) => l.trim().split(/\s+/).map(Number));
-  const under = new Set([daemon.pid]);
+  const under = new Set([root]);
   for (let grew = true; grew; ) {
     grew = false;
     for (const [pid, ppid] of rows) {
@@ -397,18 +397,19 @@ function tokensInTree() {
  * Who a child's MCP calls are from. Claude, Codex and Cursor run a process of
  * their own with the session's CREW_TOKEN in its environment, so it is the
  * token that appeared in crewd's tree since `before`. opencode runs every
- * session on one server whose MCP server holds one host token (also in the
- * tree) and says which opencode session calls, so it is that token and the id
- * of the session that appeared on the server since `before`.
+ * session on one server whose MCP server holds one host token (under that
+ * server in the tree) and says which opencode session calls, so it is that
+ * token and the opencode session Crew bound to the child `id`.
  */
-async function childCaller(provider, before, since) {
+async function childCaller(provider, before, id) {
   for (let tries = 0; tries < 120; tries++) {
     if (provider === "opencode") {
-      const host = [...tokensInTree()][0];
-      // The server keeps its sessions across runs, and may only start with
-      // this child, so the child is the session made since it was asked for.
-      const made = (await opencodeSessions()).filter((item) => item.time?.created >= since).sort((a, b) => b.time.created - a.time.created);
-      if (host && made.length) return { token: host, opencodeSession: made[0].id };
+      // The host token is the one under the shared server, not the parent's;
+      // the session it speaks for is the one Crew bound to the child.
+      const server = cliIn("", "opencode");
+      const host = server ? [...tokensInTree(server)][0] : null;
+      const bound = (await rpc("session_get", { id }))?.providerSessionId;
+      if (host && bound) return { token: host, opencodeSession: bound };
     } else {
       const token = [...tokensInTree()].find((t) => !before.has(t));
       if (token) return token;
@@ -416,24 +417,6 @@ async function childCaller(provider, before, since) {
     await sleep(250);
   }
   return null;
-}
-
-/** The sessions on crewd's opencode server (none when it is not up). */
-async function opencodeSessions() {
-  const pid = cliIn("", "opencode");
-  if (!pid) return [];
-  const env = execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)]).toString();
-  const password = env.match(/OPENCODE_SERVER_PASSWORD=(\S+)/)?.[1];
-  const lsof = execFileSync("lsof", ["-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-P", "-Fn"]).toString();
-  const port = lsof.match(/:(\d+)$/m)?.[1];
-  if (!password || !port) return [];
-  const reply = await fetch(`http://127.0.0.1:${port}/api/session`, {
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(repo) },
-  });
-  const body = await reply.json();
-  const items = Array.isArray(body) ? body : (body.items ?? body.data ?? []);
-  assert(reply.ok, `opencode session list: ${JSON.stringify(body).slice(0, 300)}`);
-  return items;
 }
 
 /** The folder a session's CLI runs in, as /proc shows it. */
@@ -933,9 +916,8 @@ const scenarios = {
     // A model will not copy a credential to disk on a peer's say-so, so the
     // child's token is read from its CLI's environment instead.
     const before = tokensInTree();
-    const since = Date.now() - 2000;
     const id = await start(shell.token, provider, "Reply with the word DONE.");
-    const childToken = await childCaller(provider, before, since);
+    const childToken = await childCaller(provider, before, id);
     await waitEvent(shell.token, id);
     assert(childToken, "could not tell who the child's MCP calls are from");
     const listed = await bridge(childToken, "tools/list");
