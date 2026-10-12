@@ -1565,7 +1565,7 @@ mod tests {
         let store = Store::open(dir.join("crew.sqlite3")).expect("open");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
         let session = crate::session::create(
-            &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
         )
         .expect("session");
         (store, session.id)

@@ -40,11 +40,6 @@ const DRAIN_ON_EXIT: Duration = Duration::from_secs(1);
 pub struct SpawnOptions {
     /// Set on the child after Crew's own terminal environment, so it wins.
     pub env: Vec<(String, String)>,
-    /// Runs once this process is reaped, whatever replaced it since. The
-    /// `exit` event is not that: a respawn on the same id takes the id over,
-    /// and the old process's exit is not announced. Also runs, at once, when
-    /// the spawn fails, so what it releases is never left held.
-    pub on_exit: Option<Box<dyn FnOnce() + Send>>,
     /// Supervised: the reader never waits for credit. Every byte reaches the
     /// sink and the ring, and a viewer that falls behind is sent a resync
     /// instead of holding the child back. A server nobody is looking at must
@@ -345,76 +340,6 @@ impl PtyHost {
         }
     }
 
-    /// Ends every terminal whose id `doomed` picks, as `kill` would each.
-    pub fn kill_where(&self, doomed: impl Fn(&str) -> bool) {
-        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
-        let ids: Vec<String> = self
-            .inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .filter(|id| doomed(id))
-            .cloned()
-            .collect();
-        let waits: Vec<_> = ids
-            .iter()
-            .filter_map(|id| self.remove(id))
-            .filter_map(|live| {
-                let wait = terminate(&live);
-                close_fd(live.master_fd);
-                wait
-            })
-            .collect();
-        for wait in waits {
-            let _ = wait.join();
-        }
-    }
-
-    /// Ends the terminals a Crew session runs in, wherever the window put them.
-    pub fn kill_session(&self, session: &str) {
-        self.kill_where(|id| session_of(id) == Some(session));
-    }
-
-    /// Whether a terminal of the session still runs, its tab open or not.
-    pub fn runs_session(&self, session: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .any(|id| session_of(id) == Some(session))
-    }
-
-    /// Like `spawn`, but a process still running under `id` is kept: it gets
-    /// the new size and its stream id comes back. `prepare` runs only when a
-    /// process is started, so what it mints (a token, a lease number) is never
-    /// made for one that is kept.
-    pub fn open<F>(
-        &self,
-        id: String,
-        cwd: String,
-        command: Vec<String>,
-        cols: u16,
-        rows: u16,
-        prepare: F,
-    ) -> Result<u32, String>
-    where
-        F: FnOnce(Vec<String>) -> Result<(Vec<String>, SpawnOptions), String>,
-    {
-        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(live) = self.get(&id).filter(|live| !live.exited.load(Ordering::Acquire)) {
-            let _ = resize_fd(live.master_fd, cols.max(2), rows.max(2));
-            return Ok(live.stream_id);
-        }
-        if let Some(prev) = self.remove(&id) {
-            let _ = terminate(&prev);
-            close_fd(prev.master_fd);
-        }
-        let (command, options) = prepare(command)?;
-        self.spawn_locked(id, cwd, command, cols, rows, options)
-    }
-
     /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
@@ -454,10 +379,9 @@ impl PtyHost {
         command: Vec<String>,
         cols: u16,
         rows: u16,
-        mut options: SpawnOptions,
+        options: SpawnOptions,
     ) -> Result<u32, String> {
-        let on_exit = options.on_exit.take();
-        let spawned = spawn_unix(
+        spawn_unix(
             self,
             id,
             cwd,
@@ -465,19 +389,9 @@ impl PtyHost {
             cols.max(2),
             rows.max(2),
             options.env,
-            on_exit,
             options.supervised,
             options.dark,
-        );
-        match spawned {
-            Ok(stream) => Ok(stream),
-            Err((error, on_exit)) => {
-                if let Some(on_exit) = on_exit {
-                    on_exit();
-                }
-                Err(error)
-            }
-        }
+        )
     }
 
     /// Sends `signal` to the child's whole process group, so a server's
@@ -670,13 +584,6 @@ fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
-/// The Crew session a terminal runs, for the hooks its CLI runs.
-pub const SESSION_ENV: &str = "CREW_SESSION_ID";
-
-type OnExit = Option<Box<dyn FnOnce() + Send>>;
-
-/// On failure the `on_exit` comes back unrun, for the caller to run: there is
-/// no process to wait for.
 #[allow(clippy::too_many_arguments)]
 fn spawn_unix(
     host: &PtyHost,
@@ -686,10 +593,9 @@ fn spawn_unix(
     cols: u16,
     rows: u16,
     env: Vec<(String, String)>,
-    on_exit: OnExit,
     sink: Option<Arc<dyn PtySink>>,
     dark: Option<bool>,
-) -> Result<u32, (String, OnExit)> {
+) -> Result<u32, String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
 
@@ -700,38 +606,29 @@ fn spawn_unix(
     };
     let (master, slave) = match open_pty(cols, rows) {
         Ok(pair) => pair,
-        Err(err) => return Err((err, on_exit)),
+        Err(err) => return Err(err),
     };
     let mut cmd = match pty_command(&program, &args, &workdir, slave, dark) {
         Ok(cmd) => cmd,
         Err(err) => {
             close_fd(master);
             close_fd(slave);
-            return Err((err, on_exit));
+            return Err(err);
         }
     };
     cmd.envs(env);
-
-    // Hooks passed on the command line are the same for every session (Codex
-    // asks the user to review any it has not seen), so they name their
-    // session from here.
-    if let Some(session) = session_of(&id) {
-        cmd.env(SESSION_ENV, session);
-    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
             close_fd(master);
             close_fd(slave);
-            return Err((format!("Failed to start {program}: {e}"), on_exit));
+            return Err(format!("Failed to start {program}: {e}"));
         }
     };
     close_fd(slave);
     let pid = child.id();
 
-    // The child is running from here on, so what `on_exit` releases is the
-    // wait thread's to release; a failure below leaves it to that thread.
     let dups = dup_fd(master).and_then(|reader| match dup_fd(master) {
         Ok(writer) => Ok((reader, writer)),
         Err(err) => {
@@ -748,11 +645,8 @@ fn spawn_unix(
             close_fd(master);
             thread::spawn(move || {
                 let _ = child.wait();
-                if let Some(on_exit) = on_exit {
-                    on_exit();
-                }
             });
-            return Err((err, None));
+            return Err(err);
         }
     };
     let reader = unsafe { File::from_raw_fd(reader) };
@@ -812,9 +706,6 @@ fn spawn_unix(
         }
         live.exited.store(true, Ordering::Release);
         live.credit.notify_all();
-        if let Some(on_exit) = on_exit {
-            on_exit();
-        }
         // A respawn reuses the id; a stale wait thread must not evict the new
         // PTY from the host or paint its exit onto it.
         if wait_host.remove_if_pid(&id, pid).is_some() {
@@ -936,11 +827,6 @@ fn default_shell() -> (String, Vec<String>) {
 
 fn apply_path(cmd: &mut std::process::Command) {
     cmd.env("PATH", crate::shell_path::joined());
-}
-
-/// The Crew session a terminal runs: its id is `<workspace>/session:<id>`.
-pub fn session_of(id: &str) -> Option<&str> {
-    id.rsplit_once("/session:").map(|(_, session)| session)
 }
 
 /// The child was started with setsid(), so its pid is also its process group.
@@ -1277,25 +1163,12 @@ mod tests {
     }
 
     #[test]
-    fn open_keeps_a_live_process() {
-        let host = PtyHost::new();
-        let id = "session:reuse".to_string();
-        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
-        let first = host.open(id.clone(), "/".into(), command.clone(), 80, 24, |c| Ok((c, SpawnOptions::default()))).expect("first open");
-        let pid = host.get(&id).expect("live").pid;
-        let second = host.open(id.clone(), "/".into(), command, 100, 30, |c| Ok((c, SpawnOptions::default()))).expect("second open");
-        assert_eq!(first, second, "open replaced the stream");
-        assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
-        host.kill(&id);
-    }
-
-    #[test]
     fn attach_past_the_ring_has_the_child_redraw_at_its_own_size() {
         let host = PtyHost::new();
         let id = "session:redraw".to_string();
         let script = "trap 'printf W' WINCH; while :; do sleep 0.02; done";
         let command = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
-        host.open(id.clone(), "/".into(), command, 80, 24, |c| Ok((c, SpawnOptions::default()))).expect("open");
+        host.spawn(id.clone(), "/".into(), command, 80, 24, None).expect("spawn");
         let live = host.get(&id).expect("live");
         let winches = || live.state.lock().unwrap_or_else(|e| e.into_inner()).ring.buf.iter().filter(|b| **b == b'W').count();
 
@@ -1581,22 +1454,6 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
         assert!(emitted(&host, "t") - held <= 2 * READ_CHUNK as u64, "drained with no credit after the attach");
         host.kill("t");
-    }
-
-    #[test]
-    fn kill_session_ends_that_sessions_terminals_and_no_other() {
-        let host = PtyHost::new();
-        let sleep = || vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
-        for id in ["ws/session:a", "ws@/wt/session:a", "ws/session:ab", "ws/stub:terminal:x"] {
-            host.spawn(id.into(), "/".into(), sleep(), 80, 24, None).expect("spawn");
-        }
-        assert!(host.runs_session("a"));
-        host.kill_session("a");
-        assert!(!host.runs_session("a"));
-        assert!(!host.is_live("ws/session:a") && !host.is_live("ws@/wt/session:a"));
-        assert!(host.runs_session("ab"), "a session whose id starts the same was taken too");
-        assert!(host.is_live("ws/stub:terminal:x"));
-        host.kill_all();
     }
 
     #[test]

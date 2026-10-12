@@ -192,17 +192,6 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
-    /// The terminal session this process runs. The daemon completes the argv
-    /// and the environment so the CLI reaches Crew's tools: the client cannot,
-    /// because in remote mode the bridge's socket and binary are not its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub session: Option<String>,
-    /// Keep a live process under this id instead of replacing it: a window
-    /// opening again finds the agent it left running.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub reuse: Option<bool>,
     /// Whether the window paints the terminal dark. It becomes COLORFGBG, which
     /// CLIs fall back to when their OSC 11 query outlives a remote round trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,14 +229,6 @@ pub struct PtyAck {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct PtyKill {
-    pub id: String,
-}
-
-/// The window let go of a terminal it watched; the process runs on.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct PtyDetach {
     pub id: String,
 }
 
@@ -397,10 +378,6 @@ pub struct SessionCreate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub worktree: Option<String>,
-    /// Which view owns its conversation; absent is the terminal.
-    #[serde(default)]
-    #[ts(optional, type = "\"chat\" | \"terminal\"")]
-    pub view: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -442,24 +419,6 @@ pub struct IdStatus {
 pub struct IdBlocks {
     pub id: String,
     pub blocks_json: String,
-}
-
-/// Look for the provider session a terminal started in `cwd` since `since`.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct ProviderDiscover {
-    pub id: String,
-    pub cwd: String,
-    #[ts(type = "number")]
-    pub since: i64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct IdProvider {
-    pub id: String,
-    pub provider_session_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -634,20 +593,10 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_event: Option<SessionLastEvent>,
-    /// Which view owns its conversation: `chat` (Crew's chat, driving its
-    /// CLI turn by turn) or `terminal` (the CLI's own screen). A bot and a
-    /// child are always `terminal`, where it means nothing.
-    #[serde(default = "terminal_view")]
-    #[ts(type = "\"chat\" | \"terminal\"")]
-    pub view: String,
     /// Whether letters no longer wake it: 20 turns in a row were started by
     /// letters, and the user's next message resumes it.
     #[serde(default)]
     pub paused: bool,
-}
-
-fn terminal_view() -> String {
-    "terminal".into()
 }
 
 /// A session's last event, as a chip reads it. With the status: `working`

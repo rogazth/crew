@@ -6,9 +6,8 @@
 //! persistent identity Crew keeps; a session is one provider CLI and can be
 //! thrown away. A subagent is a session `delegate` starts for the session that
 //! started it: it is that session's child, and each turn its parent starts
-//! ends with a final message, its report, which wakes a bot parent or a parent
-//! in the chat view; a parent in the terminal view (which cannot be woken)
-//! reads it, or waits for it with `wait: true`.
+//! ends with a final message, its report, which wakes a bot parent or a session parent;
+//! a session may also read it, or wait for it with `wait: true`.
 //! An independent session is one `start_session` starts: a top-level chat
 //! session that is the user's, reports to nobody and records who launched it.
 //!
@@ -73,9 +72,6 @@ enum Start {
 }
 
 type Made = Arc<dyn Fn(&Session) + Send + Sync>;
-/// A terminal-view session's blocks as its CLI's own history has them; `None`
-/// where the history cannot be found.
-pub type HistoryReader = Arc<dyn Fn(&Session) -> Result<Option<Vec<Block>>, String> + Send + Sync>;
 /// The daemon's part of deleting a session: `release` lets go of
 /// what only it holds (the session's terminal, its token, its browser tabs);
 /// `gone` tells every window the sessions are no longer listed.
@@ -101,9 +97,6 @@ pub struct SessionTools {
     /// Start requests being made right now, by caller and `request_id`, so a
     /// retry that overlaps its first call does not start everything twice.
     in_flight: Mutex<HashSet<String>>,
-    /// Reads the history a provider's CLI keeps of a session in the terminal
-    /// view, which the daemon knows where to find.
-    history: OnceLock<HistoryReader>,
     /// What the daemon does when a session is deleted, beyond
     /// what the turn host knows.
     retirement: OnceLock<Retirement>,
@@ -134,7 +127,6 @@ impl SessionTools {
             make_worktree,
             processes: None,
             in_flight: Mutex::new(HashSet::new()),
-            history: OnceLock::new(),
             retirement: OnceLock::new(),
         }
     }
@@ -144,12 +136,6 @@ impl SessionTools {
     pub fn with_processes(mut self, processes: crate::process::ProcessHost) -> Self {
         self.processes = Some(processes);
         self
-    }
-
-    /// With a way to read a terminal-view session's own history, so
-    /// `read_session` can read it.
-    pub fn set_history_reader(&self, reader: HistoryReader) {
-        let _ = self.history.set(reader);
     }
 
     /// With what the daemon does to retire a session (see [`Retirement`]).
@@ -233,29 +219,9 @@ impl SessionTools {
             .ok_or_else(|| format!("No session {id} in this workspace. list_peers has who is here."))
     }
 
-    /// What a session said and did, as the blocks `read_session` numbers. A
-    /// session in the terminal view has no transcript of Crew's: its CLI keeps
-    /// its own history, which is read where the provider files it, if it can
-    /// be found.
+    /// What a session said and did, as the blocks `read_session` numbers.
     fn blocks_of(&self, row: &Session) -> Result<Vec<Block>, String> {
-        if !(row.kind == "terminal" && row.view != "chat") {
-            return Ok(self.turns.transcripts().since(&row.id, 0).0);
-        }
-        let cannot = |why: &str| {
-            format!(
-                "{} ({}) runs in the terminal view, where its CLI keeps the conversation and Crew keeps none, and {why}. \
-                 There is nothing to read: ask the user what it did.",
-                row.name, row.id
-            )
-        };
-        let Some(read) = self.history.get() else {
-            return Err(cannot("this Crew has no way to read its CLI's own history"));
-        };
-        match read(row) {
-            Ok(Some(blocks)) if !blocks.is_empty() => Ok(blocks),
-            Ok(_) => Err(cannot(&format!("{} has not written a history for it yet, or Crew cannot find it", row.provider))),
-            Err(error) => Err(cannot(&format!("its history could not be read ({error})"))),
-        }
+        Ok(self.turns.transcripts().since(&row.id, 0).0)
     }
 
     /// Whether the caller is the one a session reports to, whose `seen` it is.
@@ -355,16 +321,14 @@ impl SessionTools {
     /// a subagent has exited (subagents are disposable: start another with
     /// `delegate`), and not from a caller with less autonomy than the target
     /// has: a session that has to ask could otherwise hand work to one that
-    /// does not. The user is exempt. A session in the terminal view is the
-    /// user at the keyboard of its CLI and has no turn to put a letter in.
+    /// does not. The user is exempt.
     fn may_write(&self, caller: &Caller, target: &Session) -> Result<(), String> {
         self.reach(caller, target, false)
     }
 
     /// Whether `caller` may send `target` a letter: as `may_write`, except
-    /// that a letter to a session in the terminal view waits in its mailbox
-    /// for the user (plan decision 16), one to an independent session that
-    /// has exited resumes it (14), and a subagent may always write to the
+    /// that a letter to an independent session that has exited resumes it
+    /// (plan decision 14), and a subagent may always write to the
     /// session that started it, since its reports reach that parent anyway.
     fn may_send(&self, caller: &Caller, target: &Session) -> Result<(), String> {
         self.reach(caller, target, true)
@@ -377,12 +341,6 @@ impl SessionTools {
                  save_routine with a once schedule."
                     .into(),
             );
-        }
-        if target.kind == "terminal" && target.view != "chat" && !letter {
-            return Err(format!(
-                "{} ({}) is in the terminal view: the user drives its CLI, and Crew has no turns to put a message in.",
-                target.name, target.id
-            ));
         }
         if target.status == "exited" && (target.kind == "child" || !letter) {
             return Err(if target.kind == "child" {
@@ -413,23 +371,9 @@ impl SessionTools {
         Ok(())
     }
 
-    /// Whether a subagent's report starts a turn of `caller`'s: a bot's, or a
-    /// session's in the chat view. A session in the terminal view reads them.
+    /// Whether a subagent's report starts a turn of `caller`'s: a bot's or a session's.
     fn woken_by_reports(caller: &Caller) -> bool {
-        match caller {
-            Caller::Bot(_) => true,
-            Caller::Terminal(me) => me.view == "chat",
-            _ => false,
-        }
-    }
-
-    /// Whether a letter to `caller` is read: a bot, a subagent and a session
-    /// in the chat view have turns; a terminal-view session does not.
-    fn hears(caller: &Caller) -> bool {
-        match caller {
-            Caller::Terminal(me) => me.view == "chat",
-            _ => true,
-        }
+        matches!(caller, Caller::Bot(_) | Caller::Terminal(_))
     }
 
     /// Who `to` is: a bot or a session in this workspace, by id. A name is
@@ -475,12 +419,7 @@ impl SessionTools {
                 _ => true,
             })
             .map(|row| {
-                let kind = match (row.kind.as_str(), row.view.as_str()) {
-                    ("bot", _) => "bot",
-                    ("terminal", "chat") => "session",
-                    ("terminal", _) => "terminal",
-                    _ => "session",
-                };
+                let kind = if row.kind == "bot" { "bot" } else { "session" };
                 let mut out = json!({
                     "id": row.id,
                     "name": row.name,
@@ -559,23 +498,6 @@ impl SessionTools {
         let Some(body) = body else {
             return Err(format!("{} is not waiting on a question, so there is nothing for answers to answer: send text.", target.name));
         };
-        // The user is at the keyboard of its CLI: no turn of Crew's can take
-        // the letter, so it waits in the mailbox, where the user sees it.
-        if target.kind == "terminal" && target.view != "chat" {
-            let letter = mailbox::enqueue(&self.store, &target.id, &caller.sender(), &body)?;
-            return Ok(json!({
-                "to": target.name,
-                "id": target.id,
-                "letter_id": letter.id,
-                "delivery": "waiting_for_user",
-                "waiting": mailbox::waiting_count(&self.store, &target.id)?,
-                "note": format!(
-                    "{} is in the terminal view, where the user drives its CLI and Crew cannot start a turn. The \
-                     letter waits in its mailbox for the user to see; do not expect a reply from it.",
-                    target.name
-                )
-            }));
-        }
         // An independent session that has exited takes the letter as a turn
         // on the conversation it left (plan decision 14).
         let resuming = target.status == "exited";
@@ -648,9 +570,6 @@ impl SessionTools {
             note = format!("Not steered ({why}), so it was queued as a message. {note}");
         }
         match caller {
-            Caller::Terminal(_) if !Self::hears(caller) => {
-                note.push_str(" It cannot write back to you: your CLI takes no letters, so read what it did with the user.")
-            }
             Caller::User { .. } => note.push_str(" Its reply will be in its chat."),
             _ => {}
         }
@@ -877,7 +796,7 @@ impl SessionTools {
         };
         let name = row.name.clone();
         let waited = if how == Start::Launch {
-            let hears = Self::hears(caller) && caller.session().is_some();
+            let hears = caller.session().is_some();
             json!({
                 "status": "starting",
                 "note": format!(
@@ -1156,7 +1075,7 @@ impl SessionTools {
         Ok(out)
     }
 
-    /// The row `start_session` makes: a top-level session in the chat view,
+    /// The row `start_session` makes: a top-level session,
     /// fixed at creation, that is the user's. It is nobody's child, so it is
     /// never reaped and counts against no one's cap, and it records who
     /// launched it, which grants nothing.
@@ -1181,7 +1100,6 @@ impl SessionTools {
             String::new(),
             autonomy.to_string(),
             worktree.clone(),
-            Some("chat".into()),
         )
         .map_err(|error| match worktree {
             Some(tree) => format!("The worktree is at {tree}, but its session could not be made: {error}"),
@@ -1904,7 +1822,7 @@ pub fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_peers",
-            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session in the chat; terminal, a session in the terminal view, whose letters wait in its mailbox for the user), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
+            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session of the user's), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
             schema: json!({ "type": "object", "properties": {} }),
             audience: Audience::EVERYONE,
             cli: vec![crate::tools::top("peers").about("The bots and sessions here: status, who started them, and whether you can write to them.").eg("crew peers\n  crew peers --json | jq '.[] | select(.kind == \"bot\") | .id'")],
@@ -1912,7 +1830,7 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "send_message",
             description: concat!(
-                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A letter to a session in the terminal view waits in its mailbox for the user; one to an independent session that has exited resumes it (the result says resumed); a subagent may always write to the session that started it. ",
+                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A letter to an independent session that has exited resumes it (the result says resumed); a subagent may always write to the session that started it. ",
                 "It arrives as a turn, in an envelope naming you: your name and id, and that a model wrote it. Idle, the reader starts on it now; busy, it waits until the current turn ends. ",
                 "steer: true puts it into the running turn instead, to correct its course, where the CLI can take that (Claude and Codex); anywhere else it is queued. ",
                 "To a subagent that is waiting on a question, it answers the question, from anyone who may write to it: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
@@ -1937,7 +1855,7 @@ pub fn catalog() -> Vec<Tool> {
             name: "delegate",
             description: concat!(
                 "Hand one job to a subagent: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
-                "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session in the chat is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. Nothing wakes a session in the terminal view, which reads reports with read_session or waits for one. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
+                "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
                 "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. A subagent cannot delegate. ",
                 "request_id makes the call safe to retry: the same id from you returns the subagent the first call made. Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
@@ -1995,7 +1913,7 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "read_session",
-            description: "Read any session or bot in this workspace as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, so another session reading it never swallows a report. A session in the terminal view keeps no transcript in Crew: its CLI's own history is read where the provider files it, and if that cannot be found the call says so and there is nothing to read. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
+            description: "Read any session or bot in this workspace as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, so another session reading it never swallows a report. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -2021,7 +1939,7 @@ pub fn catalog() -> Vec<Tool> {
             description: concat!(
                 "Stop what a session is doing right now without ending it, as Esc does in its chat: the current turn stops and the session stays, ready for its next message. It works through the provider's own protocol, so what the CLI was in the middle of is cancelled cleanly. ",
                 "text, if given, is delivered as its next message right after, so one call stops and redirects (without it, send_message gives it the next thing). ",
-                "Allowed for whoever send_message reaches: any bot or session in this workspace but yourself, an exited subagent and a session in the terminal view, and none that runs with more autonomy than you have. A session that is not working has nothing to interrupt; text is still delivered. stop_session is the one that ends a subagent."
+                "Allowed for whoever send_message reaches: any bot or session in this workspace but yourself, an exited subagent, and none that runs with more autonomy than you have. A session that is not working has nothing to interrupt; text is still delivered. stop_session is the one that ends a subagent."
             ),
             schema: json!({
                 "type": "object",
@@ -2500,9 +2418,13 @@ while True:
                 "opencode/nemotron-3.5-lightning-free".into(),
                 String::new(),
                 autonomy.into(),
-                None,
             )
             .expect("session");
+            // A session of the user's that letters never wake (it has had its 20
+            // automatic turns), so a test parent holds still while its subagents report.
+            if kind == "terminal" {
+                session::set_auto_turns(self.turns.store(), &row.id, session::PAUSE_AFTER);
+            }
             Caller::from_session(row)
         }
 
@@ -2936,7 +2858,6 @@ while True:
             "sonnet".into(),
             String::new(),
             "full".into(),
-            None,
         )
         .expect("bot");
         for text in ["one", "two"] {
@@ -3217,7 +3138,7 @@ time.sleep(600)
         let heard = hear_commands(&w);
         w.turns.override_binary("claude", fake_menu_claude(&w.dir));
         let make = |name: &str| {
-            session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), name.into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+            session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), name.into(), "claude".into(), String::new(), String::new(), "ask".into())
                 .expect("session")
                 .id
         };
@@ -3249,7 +3170,7 @@ time.sleep(600)
     fn a_claude_that_cannot_be_asked_leaves_the_menu_to_crews_actions() {
         let w = world();
         w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "claude".into(), String::new(), String::new(), "ask".into())
             .expect("session")
             .id;
         let menu = w.turns.commands_list(&id).expect("menu");
@@ -3499,7 +3420,7 @@ time.sleep(600)
     #[test]
     fn cursor_does_not_report_its_servers() {
         let w = world();
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "cursor".into(), String::new(), String::new(), "ask".into(), None)
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "cursor".into(), String::new(), String::new(), "ask".into())
             .expect("session")
             .id;
         assert_eq!(w.turns.mcp_list(&id).expect("list"), crew_protocol::McpStatus { servers: Vec::new(), reported: false });
@@ -3529,7 +3450,7 @@ time.sleep(600)
     fn a_reload_with_no_claude_process_reads_the_folder_again_past_a_fresh_menu() {
         let w = world();
         w.turns.override_binary("claude", fake_menu_claude(&w.dir));
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "one".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "one".into(), "claude".into(), String::new(), String::new(), "ask".into())
             .expect("session")
             .id;
         w.turns.commands_list(&id).expect("menu");
@@ -3550,7 +3471,7 @@ time.sleep(600)
     fn a_reload_of_a_bot_or_a_cli_with_no_listing_starts_nothing_and_says_when_it_reads() {
         let w = world();
         w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
-        let bot = session::create(w.turns.store(), w.workspace.clone(), "bot".into(), "helper".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+        let bot = session::create(w.turns.store(), w.workspace.clone(), "bot".into(), "helper".into(), "claude".into(), String::new(), String::new(), "ask".into())
             .expect("bot")
             .id;
         let menu = w.turns.commands_reload(&bot).expect("reload");
@@ -3558,7 +3479,7 @@ time.sleep(600)
         assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
 
         for (provider, head) in [("cursor", "Cursor reads")] {
-            let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), provider.into(), String::new(), String::new(), "ask".into(), None)
+            let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), provider.into(), String::new(), String::new(), "ask".into())
                 .expect("session")
                 .id;
             w.turns.commands_reload(&id).expect("reload");
@@ -4024,7 +3945,6 @@ time.sleep(600)
             "gpt-5.6-luna".into(),
             String::new(),
             "full".into(),
-            None,
         )
         .expect("bot");
         for text in ["one", "two"] {
@@ -5149,7 +5069,7 @@ time.sleep(600)
         let out = w.call(&kid, "start_session", json!({ "provider": "claude", "prompt": "a separate job", "name": "Spin-off" })).expect("start_session is open");
         let made = out["id"].as_str().unwrap().to_string();
         let row = w.row(&made);
-        assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", "chat", None, Some(id.as_str())));
+        assert_eq!((row.kind.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", None, Some(id.as_str())));
         w.settle(&made);
     }
 
@@ -5487,7 +5407,6 @@ time.sleep(600)
         let to = bot.session_id().unwrap().to_string();
         let sent = w.call(&shell, "send_message", json!({ "to": to, "text": "the branch is green" })).expect("send");
         assert_eq!(sent["delivery"], "started", "{sent}");
-        assert!(sent["note"].as_str().unwrap().contains("cannot write back to you"), "{sent}");
         w.heard(&to, shell.session_id().unwrap());
         w.settle(&to);
         let prompt = prompts(&w).into_iter().find(|p| p.contains("the branch is green")).expect("the bot never read it");
@@ -5523,7 +5442,7 @@ time.sleep(600)
 
     /// Who may write to whom (decision 11): any bot or session but itself and
     /// an exited subagent, none that has more autonomy than the caller; the
-    /// user may write to any. A session in the terminal view takes no letters.
+    /// user may write to any.
     #[test]
     fn who_may_write_to_whom() {
         let w = world();
@@ -5541,12 +5460,6 @@ time.sleep(600)
             assert!(out.as_ref().is_err_and(|e| e.contains(why)), "{to}: {out:?}");
         };
         refused(&bot, bot.session_id().unwrap(), "That is you");
-        // A session in the terminal view takes the letter into its mailbox,
-        // where the user sees it (decision 16).
-        let waits = w.call(&bot, "send_message", json!({ "to": shell.session_id().unwrap(), "text": "hi" })).expect("accepted");
-        assert_eq!((waits["delivery"].clone(), waits["waiting"].clone()), (json!("waiting_for_user"), json!(1)), "{waits}");
-        assert!(waits["note"].as_str().unwrap().contains("waits in its mailbox"), "{waits}");
-        assert_eq!(mailbox::waiting_count(w.turns.store(), shell.session_id().unwrap()).unwrap(), 1);
         refused(&bot, "Planner", "addressed by id");
         refused(&bot, "Nobody", "list_peers has the ids");
         let missing = w.call(&shell, "send_message", json!({ "to": child }));
@@ -5593,8 +5506,8 @@ time.sleep(600)
         assert_eq!(w.peer(&other, &top)["write"], json!(true));
         assert_eq!(w.peer(&careful, &child)["write"], json!(false));
         assert_eq!(w.peer(&careful, ask_peer.session_id().unwrap())["write"], json!(true));
-        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(true), "its letters wait for the user");
-        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["kind"], "terminal");
+        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(true));
+        assert_eq!(w.peer(&bot, shell.session_id().unwrap())["kind"], "session");
         assert_eq!((w.peer(&bot, &chat.id)["kind"].clone(), w.peer(&bot, &chat.id)["write"].clone()), (json!("session"), json!(true)));
         assert!(w.peer(&bot, bot.session_id().unwrap()).is_null(), "a caller is not its own peer");
         // An exited subagent takes nothing, and only its parent still lists it.
@@ -5658,7 +5571,7 @@ time.sleep(600)
     }
 
     /// A wait that runs out leaves the child working; its report wakes the
-    /// bot when it comes. A terminal is told to read it instead.
+    /// bot when it comes.
     #[test]
     fn a_wait_that_runs_out_leaves_the_child_running_and_the_report_wakes_the_bot() {
         let w = world();
@@ -5673,13 +5586,8 @@ time.sleep(600)
         w.settle(&me);
         let woke = prompts(&w).into_iter().find(|p| p.contains("## Report from session")).expect("never woken");
         assert!(woke.contains("report: SLEEP 2"), "{woke}");
-
-        let shell = w.session("terminal", "shell", "full");
-        let out = w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
-        assert_eq!(out["status"], "running", "{out}");
-        assert!(out["note"].as_str().unwrap().contains("read_session"), "{out}");
-        w.settle(out["id"].as_str().unwrap());
         // A separate session reports to nobody, so there is nothing to wait for.
+        let shell = w.session("terminal", "shell", "full");
         let refused = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "wait": true }));
         assert!(refused.is_err_and(|e| e.contains("nothing to wait for")));
         let refused = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "timeout_s": 5 }));
@@ -5918,7 +5826,7 @@ time.sleep(600)
         assert!(out["note"].as_str().unwrap().contains("reports to nobody"), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         let row = w.row(&id);
-        assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref()), ("terminal", "chat", None));
+        assert_eq!((row.kind.as_str(), row.parent_id.as_deref()), ("terminal", None));
         assert_eq!(row.launched_by.as_deref(), Some(me.as_str()));
         assert!(row.worktree.as_deref().is_some_and(|tree| tree.contains("crew-auth-refactor-")), "{row:?}");
         assert_eq!(out["worktree"], json!(row.worktree));
@@ -6243,10 +6151,10 @@ time.sleep(600)
         assert_eq!(steer.state, "delivered");
     }
 
-    // ---- The user's own session: a terminal in the chat view, driven by Crew ----
+    // ---- The user's own session: a session of the user's, driven by Crew ----
 
     impl World {
-        /// A top-level session in the chat view, which Crew drives.
+        /// A top-level session, which Crew drives.
         fn user_session(&self, provider: &str, model: &str, autonomy: &str) -> Session {
             session::create(
                 self.turns.store(),
@@ -6257,7 +6165,6 @@ time.sleep(600)
                 model.into(),
                 String::new(),
                 autonomy.into(),
-                Some("chat".into()),
             )
             .expect("user session")
         }
@@ -6286,8 +6193,8 @@ time.sleep(600)
     }
 
     /// The user's session is their CLI on Crew's protocol: it keeps one process
-    /// across their messages, on the conversation the terminal view used (Crew's
-    /// own id), and the status it ends on is the one a session they watch has.
+    /// across their messages, on the conversation Crew's own id names, and the
+    /// status it ends on is the one a session they watch has.
     #[test]
     fn a_users_session_runs_its_turns_on_one_claude_process() {
         let w = world();
@@ -6334,41 +6241,6 @@ time.sleep(600)
         assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
         assert_eq!(after_flag(user, "--permission-prompt-tool"), Some("stdio".to_string()), "{argv:?}");
         assert!(subagent["argv"].to_string().contains("--append-system-prompt"), "{subagent}");
-    }
-
-    /// The terminal view is the user at the keyboard of the CLI: no turn of
-    /// Crew's runs beside it, from the window or from the box.
-    #[test]
-    fn a_session_in_the_terminal_view_is_not_driven() {
-        let w = world();
-        let at_the_keyboard = w.session("terminal", "kb", "full").session_id().map(str::to_string).unwrap();
-        let row = w.row(&at_the_keyboard);
-        assert_eq!(row.view, "terminal");
-
-        let refused = w
-            .turns
-            .start_by_user(TurnStart {
-                session_id: row.id.clone(),
-                cwd: w.dir.to_string_lossy().into_owned(),
-                text: "hello".into(),
-                files: None,
-                mentions: None,
-                hidden: None,
-                from_bot: None,
-                sent_at: None,
-                nonce: None,
-                letter_id: None,
-                mode: None,
-                command: None,
-                skills: None,
-            })
-            .expect_err("a turn ran in the terminal view");
-        assert!(refused.contains("terminal view"), "{refused}");
-        mailbox::enqueue(w.turns.store(), &row.id, &mailbox::user(), "waiting").expect("enqueue");
-        w.turns.deliver_waiting();
-        assert!(!w.turns.is_running(&row.id));
-        assert_eq!(mailbox::waiting_count(w.turns.store(), &row.id).unwrap(), 1);
-        assert!(w.launches().is_empty());
     }
 
     /// Claude refuses a new session under an id it holds, so a conversation
@@ -7619,11 +7491,6 @@ time.sleep(600)
         let after = w.live_window(&mine.id);
         assert!(after.used >= reading.used, "{reading:?} then {after:?}");
 
-        // The terminal view attaches to this server on the session it has.
-        let attach = w.turns.opencode_terminal(&w.row(&mine.id), &w.dir.to_string_lossy()).expect("terminal");
-        assert_eq!(attach.session, bound);
-        assert!(attach.url.starts_with("http://127.0.0.1:") && !attach.password.is_empty(), "{}", attach.url);
-
         // `/compact` goes to the server's compaction, and ends as a turn does.
         w.type_with(&mine, "/compact", Some("compact"), &[], None, None);
         until_long("the compaction ended", Duration::from_secs(240), || idle(&w));
@@ -7791,7 +7658,7 @@ time.sleep(600)
             let id = results[index]["id"].as_str().unwrap().to_string();
             let row = w.row(&id);
             // Each is a separate session of the user's, launched by the caller.
-            assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref()), ("terminal", "chat", None));
+            assert_eq!((row.kind.as_str(), row.parent_id.as_deref()), ("terminal", None));
             assert_eq!(row.launched_by.as_deref(), shell.session_id());
             assert!(w.made.lock().unwrap().contains(&id));
             w.settle(&id);
@@ -7955,7 +7822,6 @@ time.sleep(600)
     fn interrupt_session_is_for_whoever_may_write() {
         let w = world();
         let careful = w.session("bot", "Careful", "ask");
-        let shell = w.session("terminal", "shell", "full");
         let top = w.start(&w.user(), "SLEEP 30");
         let chat = w.user_session("opencode", MODEL, "full");
         let refused = |caller: &Caller, to: &str, why: &str| {
@@ -7966,8 +7832,6 @@ time.sleep(600)
         refused(&careful, &chat.id, "allowed more than it is");
         refused(&careful, careful.session_id().unwrap(), "That is you");
         refused(&careful, "nobody", "list_peers has the ids");
-        // A session in the terminal view takes nothing.
-        refused(&w.user(), shell.session_id().unwrap(), "terminal view");
         // The user is exempt from the autonomy rule.
         w.call(&w.user(), "interrupt_session", json!({ "session": top })).expect("user");
         w.settle(&top);
@@ -8046,39 +7910,9 @@ time.sleep(600)
         // Another workspace's session is not in reach.
         std::fs::create_dir_all(w.dir.join("else")).unwrap();
         let elsewhere = crate::workspace::create(store, "other".into(), w.dir.join("else").to_string_lossy().into()).unwrap();
-        let foreign = session::create(store, elsewhere.id, "terminal".into(), "far".into(), "opencode".into(), MODEL.into(), String::new(), "full".into(), Some("chat".into())).unwrap();
+        let foreign = session::create(store, elsewhere.id, "terminal".into(), "far".into(), "opencode".into(), MODEL.into(), String::new(), "full".into()).unwrap();
         let out = w.call(&parent, "read_session", json!({ "session": foreign.id }));
         assert!(out.is_err_and(|e| e.contains("No session")));
-    }
-
-    #[test]
-    fn a_terminal_view_session_is_read_from_its_providers_history_or_said_unreadable() {
-        let w = world();
-        let reader = w.session("terminal", "reader", "full");
-        let shell = w.session("terminal", "shell", "full");
-        let shell_id = shell.session_id().unwrap().to_string();
-        // No way to find the history: said plainly, with nothing invented.
-        let out = w.call(&reader, "read_session", json!({ "session": shell_id }));
-        assert!(out.as_ref().is_err_and(|e| e.contains("terminal view") && e.contains("nothing to read")), "{out:?}");
-        let found = Arc::new(Mutex::new(true));
-        let asked = found.clone();
-        w.tools.set_history_reader(Arc::new(move |row: &Session| {
-            if !*asked.lock().unwrap() {
-                return Ok(None);
-            }
-            let block = |id: &str, role: &str, text: &str| {
-                serde_json::from_value::<Block>(json!({ "id": id, "role": role, "text": text })).unwrap()
-            };
-            Ok(Some(vec![block("1", "user", &format!("hello {}", row.name)), block("2", "assistant", "hi, fixing the build")]))
-        }));
-        let read = w.call(&reader, "read_session", json!({ "session": shell_id })).expect("read");
-        let text = read["text"].as_str().unwrap();
-        assert!(text.contains("hello shell") && text.contains("fixing the build"), "{read}");
-        assert_eq!(read["cursor"], 2);
-        // Reading it moves nobody's seen, and a history not found is said so.
-        *found.lock().unwrap() = false;
-        let out = w.call(&reader, "read_session", json!({ "session": shell_id }));
-        assert!(out.is_err_and(|e| e.contains("cannot find it")));
     }
 
     /// Decision 25: `type` and `launched_by`, and `write` by the reach rule.
@@ -8195,7 +8029,7 @@ time.sleep(600)
         let bot = w.session("bot", "Lead", "full");
         let row = session::create_in_worktree(
             w.turns.store(), w.workspace.clone(), "terminal".into(), "Feature".into(), "opencode".into(), MODEL.into(),
-            String::new(), "full".into(), Some(tree.clone()), Some("chat".into()),
+            String::new(), "full".into(), Some(tree.clone()),
         )
         .unwrap();
         session::set_launched_by(w.turns.store(), &row.id, bot.session_id().unwrap()).unwrap();
@@ -8363,21 +8197,6 @@ time.sleep(600)
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the reports ran on the turn that was running");
     }
 
-    /// Decision 16: a letter to a session in the terminal view waits in its
-    /// mailbox, and no wake starts anything.
-    #[test]
-    fn a_letter_to_a_terminal_view_session_waits_for_the_user() {
-        let w = world();
-        let shell = w.session("terminal", "shell", "full");
-        let bot = w.session("bot", "Planner", "full");
-        let out = w.call(&bot, "send_message", json!({ "to": shell.session_id().unwrap(), "text": "look at this" })).expect("send");
-        assert_eq!(out["delivery"], "waiting_for_user", "{out}");
-        assert!(out["note"].as_str().unwrap().contains("waits in its mailbox"), "{out}");
-        assert!(!w.turns.wake(shell.session_id().unwrap()));
-        assert_eq!(mailbox::waiting_count(w.turns.store(), shell.session_id().unwrap()).unwrap(), 1);
-        assert!(w.launches().is_empty());
-    }
-
     /// Decision 18: a letter handed to a turn stays undelivered until the
     /// provider says it read it; a daemon that stops first hands it over again.
     #[test]
@@ -8426,7 +8245,6 @@ time.sleep(600)
             String::new(),
             String::new(),
             "full".into(),
-            Some("chat".into()),
         )
         .unwrap();
         let from = from_of(&w, &mine.id);

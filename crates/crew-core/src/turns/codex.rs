@@ -2037,7 +2037,7 @@ mod catalog_tests {
 
     /// A Codex session of `kind` in a new folder, not started. Returns its id
     /// and the folder.
-    pub(super) fn codex_session(host: &TurnHost, kind: &str, view: Option<&str>) -> (String, String) {
+    pub(super) fn codex_session(host: &TurnHost, kind: &str) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-codex-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
         let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
@@ -2052,7 +2052,6 @@ mod catalog_tests {
             "gpt-5.6-luna".into(),
             String::new(),
             "full".into(),
-            view.map(str::to_string),
         )
         .expect("session")
         .id;
@@ -2065,20 +2064,18 @@ mod catalog_tests {
     /// fake's log and the folder.
     fn started_full(
         kind: &str,
-        view: Option<&str>,
         text: &str,
         command: Option<&str>,
         skills: Option<Vec<String>>,
         known: Vec<CommandEntry>,
     ) -> (TurnHost, String, std::path::PathBuf, String) {
-        started_prepared(kind, view, text, command, skills, known, |_| {})
+        started_prepared(kind, text, command, skills, known, |_| {})
     }
 
     /// The same, after `prepare` has had the fake's log path to set up what
     /// the fake reads when it starts (a file beside the log).
     fn started_prepared(
         kind: &str,
-        view: Option<&str>,
         text: &str,
         command: Option<&str>,
         skills: Option<Vec<String>>,
@@ -2087,7 +2084,7 @@ mod catalog_tests {
     ) -> (TurnHost, String, std::path::PathBuf, String) {
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Lines(host.clone())));
-        let (session, cwd) = codex_session(&host, kind, view);
+        let (session, cwd) = codex_session(&host, kind);
         let (fake, log) = crate::turns::fake_codex(std::path::Path::new(&cwd));
         prepare(&log);
         host.override_binary("codex", fake);
@@ -2113,12 +2110,12 @@ mod catalog_tests {
         (host, session, log, cwd)
     }
 
-    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
-        started_full(kind, view, text, None, None, Vec::new())
+    fn started_as(kind: &str, text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+        started_full(kind, text, None, None, Vec::new())
     }
 
     pub(super) fn started(text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
-        started_as("terminal", Some("chat"), text)
+        started_as("terminal", text)
     }
 
     /// The same, for a message that opens with a command or invokes skills.
@@ -2128,7 +2125,7 @@ mod catalog_tests {
         skills: Option<Vec<String>>,
         known: Vec<CommandEntry>,
     ) -> (TurnHost, String, std::path::PathBuf, String) {
-        started_full("terminal", Some("chat"), text, command, skills, known)
+        started_full("terminal", text, command, skills, known)
     }
 
     fn skill_entry(name: &str, path: &str) -> CommandEntry {
@@ -2327,7 +2324,7 @@ mod catalog_tests {
     /// whatever skills its folder has.
     #[test]
     fn a_bots_codex_process_keeps_nothing_in_the_catalog() {
-        let (host, session, log, cwd) = started_as("bot", None, "hello");
+        let (host, session, log, cwd) = started_as("bot", "hello");
         wait_for(|| sent(&log, "skills/list").len() == 1);
         wait_for(|| !host.is_running(&session));
         // The answer is read on the thread that asked, after the turn may have ended.
@@ -2342,7 +2339,7 @@ mod catalog_tests {
     #[test]
     fn a_codex_session_with_no_catalog_lists_crew_actions_alone() {
         let host = TurnHost::test_new();
-        let (session, cwd) = codex_session(&host, "terminal", Some("chat"));
+        let (session, cwd) = codex_session(&host, "terminal");
         let entries = host.commands_list(&session).expect("menu").entries;
         assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
         assert!(!host.commands().holds("codex", &cwd));
@@ -2352,7 +2349,7 @@ mod catalog_tests {
     /// whose skills cannot be read still lists them, and no skills.
     #[test]
     fn a_folder_whose_skills_codex_cannot_read_still_lists_its_commands() {
-        let (host, session, log, cwd) = started_prepared("terminal", Some("chat"), "hello", None, None, Vec::new(), |log| {
+        let (host, session, log, cwd) = started_prepared("terminal", "hello", None, None, Vec::new(), |log| {
             std::fs::write(format!("{}.no-skills", log.display()), "").expect("flag");
         });
         wait_for(|| host.commands().holds("codex", &cwd));
@@ -2384,7 +2381,7 @@ mod catalog_tests {
     #[test]
     fn a_reload_with_no_codex_process_leaves_it_to_the_next_message() {
         let host = TurnHost::test_new();
-        let (session, _) = codex_session(&host, "terminal", Some("chat"));
+        let (session, _) = codex_session(&host, "terminal");
         host.commands_reload(&session).expect("reload");
         assert!(said(&host, &session).contains("Codex reads its skills and servers when its thread opens"), "{}", said(&host, &session));
     }
@@ -2509,7 +2506,7 @@ mod child_tests {
     #[test]
     fn what_a_thread_nobody_named_says_waits_for_its_call_and_is_never_the_parents() {
         let host = TurnHost::test_new();
-        let (session, _) = codex_session(&host, "terminal", Some("chat"));
+        let (session, _) = codex_session(&host, "terminal");
         host.test_install_codex(&session);
         if let Some(Live::Codex(live)) = host.lock().get_mut(&session) {
             live.thread_id = Some("t1".into());
@@ -2534,7 +2531,7 @@ mod child_tests {
     #[test]
     fn codex_settling_an_agents_request_closes_its_card() {
         let host = TurnHost::test_new();
-        let (session, _) = codex_session(&host, "terminal", Some("chat"));
+        let (session, _) = codex_session(&host, "terminal");
         host.test_install_codex(&session);
         let (tx, rx) = mpsc::channel();
         if let Some(Live::Codex(live)) = host.lock().get_mut(&session) {

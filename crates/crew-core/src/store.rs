@@ -592,6 +592,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 38 {
+        let tx = conn.unchecked_transaction()?;
+        // Every provider session is a chat: the view column goes (see the constant).
+        if has_column(&tx, "sessions", "view")? {
+            tx.execute_batch(crate::session::MIGRATION_V38)?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (38, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -861,7 +873,6 @@ mod migration_tests {
                 "m".into(),
                 "".into(),
                 "ask".into(),
-                None,
             )
             .expect("session");
             // Back to a v16 database: no column, no version row for it or anything after.
@@ -908,13 +919,11 @@ mod split_tests {
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
                 "You keep the roadmap.".into(), "full".into(),
-                None,
             )
             .expect("bot");
             let terminal = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Refactor".into(), "codex".into(), "".into(),
                 "".into(), "ask".into(),
-                None,
             )
             .expect("terminal");
             let blocks = vec![crate::blocks::new_block(crew_protocol::BlockRole::User, "what did we decide?")];
@@ -979,7 +988,6 @@ mod split_tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let bot = crate::session::create(
             &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
-            None,
         )
         .expect("bot");
         crate::session::update(
@@ -1015,7 +1023,6 @@ mod split_tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
             &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "full".into(),
-            None,
         )
         .expect("terminal");
         let child = crate::session::create_child(
@@ -1049,12 +1056,10 @@ mod rename_tests {
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
                 "You keep the roadmap.".into(), "full".into(),
-                None,
             )
             .expect("bot");
             let terminal = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
-                None,
             )
             .expect("terminal");
             let child = crate::session::create_child(
@@ -1182,12 +1187,10 @@ mod lifecycle_tests {
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
-                None,
             )
             .expect("bot");
             let shell = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
-                None,
             )
             .expect("terminal");
             let child = crate::session::create_child(
@@ -1298,7 +1301,7 @@ mod acp_tests {
                 let row = if kind == "child" {
                     crate::session::create_child(&store, ws.id.clone(), format!("{provider}: x"), provider.into(), "m".into(), "full".into(), None, None)
                 } else {
-                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into(), None)
+                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into())
                 }
                 .expect("session");
                 if let Some(bound) = bound {
@@ -1330,7 +1333,8 @@ mod acp_tests {
         assert_eq!(noted(&ids[0]).as_deref(), Some("chat-1"));
         assert_eq!((bound(&ids[1]), noted(&ids[1])), (None, None));
         assert_eq!((bound(&ids[2]).as_deref(), noted(&ids[2])), (Some("chat-2"), None), "a bot never resumed");
-        assert_eq!((bound(&ids[3]).as_deref(), noted(&ids[3])), (Some("chat-3"), None), "a terminal runs the TUI");
+        // A terminal kept its chat until migration 38, which moves it into the chat.
+        assert_eq!((bound(&ids[3]), noted(&ids[3]).as_deref()), (None, Some("chat-3")));
         assert_eq!((bound(&ids[4]).as_deref(), noted(&ids[4])), (Some("thread-1"), None));
 
         // Opening again changes nothing: a child bound over ACP since keeps it.
@@ -1400,132 +1404,84 @@ mod view_tests {
         dir
     }
 
-    /// Back to v29: the columns migration 30 adds are dropped, and its row too.
-    fn downgrade_to_29(store: &Store) {
-        store
-            .with(|conn| {
-                conn.execute_batch(
-                    "ALTER TABLE sessions DROP COLUMN view;
-                     ALTER TABLE mailbox DROP COLUMN files_json;
-                     ALTER TABLE mailbox DROP COLUMN queue_order;
-                     DELETE FROM schema_migrations WHERE version >= 30;",
-                )
-            })
-            .expect("downgrade");
-    }
-
-    /// A new database has the view and the queue columns, and their defaults:
-    /// a terminal session is in the terminal view, and a letter has no files
-    /// and no place in the user's order.
+    /// A new database has no view column (every session is a chat), and the
+    /// queue columns migration 30 added.
     #[test]
-    fn a_fresh_database_has_the_view_and_queue_columns_with_their_defaults() {
-        let dir = temp_dir("v30-fresh");
+    fn a_fresh_database_has_no_view_column_and_keeps_the_queue_columns() {
+        let dir = temp_dir("v38-fresh");
         let store = Store::open(dir.join("crew.sqlite3")).expect("open");
-        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
-        let terminal = crate::session::create(
-            &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(), None,
-        )
-        .expect("terminal");
-
-        let view: String = store
-            .with(|conn| conn.query_row("SELECT view FROM sessions WHERE id = ?1", params![terminal.id], |row| row.get(0)))
-            .unwrap();
-        assert_eq!(view, "terminal");
-        let (default, not_null): (Option<String>, i64) = store
+        assert!(!store.with(|conn| has_column(conn, "sessions", "view")).unwrap());
+        let mailbox: Vec<String> = store
             .with(|conn| {
-                conn.query_row("SELECT dflt_value, \"notnull\" FROM pragma_table_info('sessions') WHERE name = 'view'", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-            })
-            .unwrap();
-        assert_eq!((default.as_deref(), not_null), (Some("'terminal'"), 1));
-        let mailbox: Vec<(String, i64)> = store
-            .with(|conn| {
-                conn.prepare("SELECT name, \"notnull\" FROM pragma_table_info('mailbox') WHERE name IN ('files_json', 'queue_order') ORDER BY name")?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                conn.prepare("SELECT name FROM pragma_table_info('mailbox') WHERE name IN ('files_json', 'queue_order') ORDER BY name")?
+                    .query_map([], |row| row.get(0))?
                     .collect()
             })
             .unwrap();
-        assert_eq!(mailbox, [("files_json".to_string(), 0), ("queue_order".to_string(), 0)]);
+        assert_eq!(mailbox, ["files_json", "queue_order"]);
     }
 
-    /// A v29 database whose chat setting is `chat`. Migration 30 moves the
-    /// terminals Crew reads (Claude, Codex, opencode) into the chat, and
-    /// leaves Cursor's terminal, the bot and the child as they were. Opening
-    /// again changes nothing, even after the user moved one back.
+    /// A v37 database with sessions in the terminal view. Migration 38 drops
+    /// the column and the setting. Claude, Codex and opencode sessions keep the
+    /// conversation they were in (the chat resumes it); a Cursor terminal's
+    /// chat cannot be loaded over ACP, so it is marked like a child's was in
+    /// migration 27 and starts anew; a Cursor session already in the chat is
+    /// untouched.
     #[test]
-    fn a_v29_database_with_the_chat_setting_moves_its_readable_terminals_into_the_chat() {
-        let dir = temp_dir("v30-chat");
+    fn a_v37_database_moves_its_terminal_view_sessions_into_the_chat() {
+        let dir = temp_dir("v38");
         let path = dir.join("crew.sqlite3");
         let ids = {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
-            let terminal = |provider: &str| {
-                crate::session::create(
-                    &store, ws.id.clone(), "terminal".into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into(), None,
+            let make = |provider: &str, bound: &str, view: &str| {
+                let id = crate::session::create(
+                    &store, ws.id.clone(), "terminal".into(), provider.into(), provider.into(), "m".into(), "".into(), "full".into(),
                 )
-                .expect("terminal")
-                .id
+                .expect("session")
+                .id;
+                store
+                    .with(|conn| {
+                        conn.execute("UPDATE sessions SET provider_session_id = ?2, view = ?3 WHERE id = ?1", params![id, bound, view])
+                    })
+                    .expect("set");
+                id
             };
+            store
+                .with(|conn| {
+                    conn.execute_batch("ALTER TABLE sessions ADD COLUMN view TEXT NOT NULL DEFAULT 'terminal';")
+                })
+                .expect("view column");
             let ids = [
-                terminal("claude"),
-                terminal("codex"),
-                terminal("opencode"),
-                terminal("cursor"),
-                crate::session::create(
-                    &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
-                )
-                .expect("bot")
-                .id,
-                crate::session::create_child(&store, ws.id.clone(), "claude: x".into(), "claude".into(), "m".into(), "full".into(), None, None)
-                    .expect("child")
-                    .id,
+                make("claude", "claude-1", "terminal"),
+                make("codex", "rollout-1", "terminal"),
+                make("opencode", "ses_1", "terminal"),
+                make("cursor", "cli-chat", "terminal"),
+                make("cursor", "acp-chat", "chat"),
             ];
             set(&store, "sessions:view".into(), "chat".into()).expect("setting");
-            downgrade_to_29(&store);
+            store.with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version >= 38;")).expect("downgrade");
             ids
         };
 
         let store = Store::open(path.clone()).expect("reopen");
-        let version: i64 = store
-            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
-            .unwrap();
-        assert!(version >= 30, "{version}");
-        let views: Vec<String> = ids
+        assert!(!store.with(|conn| has_column(conn, "sessions", "view")).unwrap());
+        let bound: Vec<Option<String>> = ids
             .iter()
-            .map(|id| crate::session::get(&store, id.clone()).unwrap().expect("row").view)
+            .map(|id| crate::session::get(&store, id.clone()).unwrap().expect("row").provider_session_id)
             .collect();
-        assert_eq!(views, ["chat", "chat", "chat", "terminal", "terminal", "terminal"]);
-
-        // The user moves one back to its own screen: opening again keeps it.
-        store
-            .with(|conn| conn.execute("UPDATE sessions SET view = 'terminal' WHERE id = ?1", params![ids[0]]))
-            .expect("set");
+        assert_eq!(
+            bound,
+            [Some("claude-1".into()), Some("rollout-1".into()), Some("ses_1".into()), None, Some("acp-chat".into())]
+        );
+        assert_eq!(get(&store, format!("{CURSOR_ACP_NOTE}{}", ids[3])).unwrap().as_deref(), Some("cli-chat"));
+        assert_eq!(get(&store, format!("{CURSOR_ACP_NOTE}{}", ids[4])).unwrap(), None);
+        assert_eq!(get(&store, "sessions:view".into()).unwrap(), None);
+        // Opening again changes nothing.
         drop(store);
         let store = Store::open(path).expect("third open");
-        let view = crate::session::get(&store, ids[0].clone()).unwrap().expect("row").view;
-        assert_eq!(view, "terminal");
-    }
-
-    /// Without the chat setting, no terminal moves, whichever provider it runs.
-    #[test]
-    fn a_v29_database_without_the_chat_setting_keeps_every_terminal_in_the_terminal() {
-        let dir = temp_dir("v30-terminal");
-        let path = dir.join("crew.sqlite3");
-        let claude = {
-            let store = Store::open(path.clone()).expect("open");
-            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
-            let claude = crate::session::create(
-                &store, ws.id.clone(), "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
-            )
-            .expect("terminal");
-            downgrade_to_29(&store);
-            claude.id
-        };
-
-        let store = Store::open(path).expect("reopen");
-        let view = crate::session::get(&store, claude).unwrap().expect("row").view;
-        assert_eq!(view, "terminal");
+        let again = crate::session::get(&store, ids[0].clone()).unwrap().expect("row");
+        assert_eq!(again.provider_session_id.as_deref(), Some("claude-1"));
     }
 }
 
@@ -1550,7 +1506,7 @@ mod background_entries_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
             )
             .expect("session");
             store
@@ -1601,7 +1557,7 @@ mod background_entries_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
             )
             .expect("session");
             crate::mailbox::enqueue(&store, &session.id, &crate::mailbox::user(), "before").expect("enqueue");
@@ -1650,7 +1606,7 @@ mod archived_column_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
             )
             .expect("session");
             store

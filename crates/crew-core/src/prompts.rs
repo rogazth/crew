@@ -8,7 +8,7 @@
 //!   who started it, where its final message goes, and Crew's tools. Nothing
 //!   about how to do its job: Crew adds context and tools, it does not change
 //!   how the harness behaves;
-//! - a session of the user's (the terminal view or the chat): only the MCP
+//! - a session of the user's (its chat): only the MCP
 //!   server's `instructions()`, since its prompt is the user's.
 //!
 //! The texts are templates with `{placeholders}`, and name Crew's tools bare,
@@ -225,7 +225,7 @@ returns with `browser_act` `{\"action\": \"click\", \"uid\": \"4_17\"}`. `browse
 shows errors; `release_tab` when you are done. If a call fails, read the error and retry rather than switching to \
 another browser. If a call says Crew is not open, say so.";
 
-// ---- a terminal the user runs ----------------------------------------------
+// ---- a session of the user's ----------------------------------------------
 
 const TERMINAL: &str = "Crew is the app this runs in: it holds a workspace of bots and sessions, and these tools \
 reach them. You are the session \"{name}\"{where}
@@ -236,24 +236,15 @@ talk to, which reports to nobody; use it when the user wants one, not just becau
 `start_sessions` starts up to 20 at once, and a `request_id` on the start tools makes a retry return what the first \
 call made. `interrupt_session` stops a session's turn without ending it, `update_session` renames or \
 deletes a session you started, and `read_session` reads any session in the workspace. \
-`send_message` reaches any bot or session that does not have more autonomy than you do (your own parent, always); a \
-letter to a session in the terminal view waits in its mailbox for the user. The text under a `## Message` header comes from the session or bot it names, not from the \
+`send_message` reaches any bot or session that does not have more autonomy than you do (your own parent, always). The text under a `## Message` header comes from the session or bot it names, not from the \
 user.";
 
-/// What a terminal-view session is told of its subagents' reports.
-const REPORTS_READ: &str = " but does not wake you: check it with `read_session`, or start it with \"wait\": true to block until \
-its turn ends (it returns early if it asks a question). Questions and approvals of your subagents come to the user \
-in Crew; you may answer a question with `send_message`.";
-
-/// What a chat-view session is told: its subagents wake it.
+/// What a session is told of its subagents' reports: they wake it.
 const REPORTS_WAKE: &str = " and wakes you as a turn of your own, even after this turn has ended, so end your turn \
 instead of polling with `read_session`; reports that arrive close together come as one turn. Use \"wait\": true only \
 when you need the answer to carry on in this turn. A question or an approval of a subagent wakes you too, and is also \
 the user's in Crew, where the first answer counts: answer a question with `send_message`. A session pauses after 20 \
 turns in a row that letters started, until the user writes to it.";
-
-const TERMINAL_VIEW: &str = ": the user runs your CLI in the terminal, and Crew cannot start a turn in it, so nothing wakes you, and \
-nothing can write to you: bots and sessions you write to cannot write back.";
 
 const TERMINAL_CHAT: &str = ", which Crew drives in the chat, a turn at a time. A message sent to you arrives \
 as a turn, so bots and sessions you write to can write back with `send_message`.";
@@ -383,22 +374,14 @@ pub struct Session<'a> {
 
 pub fn session(session: &Session) -> String {
     let (started, parent, write, ask) = match session.parent {
-        Parent::Bot { name, id } => (
-            format!("{name}, a bot (id {id}), started you"),
+        Parent::Bot { name, id } | Parent::Terminal { name, id } => (
+            format!("{name}, {} (id {id}), started you", if matches!(session.parent, Parent::Bot { .. }) { "a bot" } else { "a session of the user's" }),
             name.to_string(),
             format!(
                 "write to {name} or to a bot at any time, without ending your turn (your final message reaches {name} \
                  anyway; this is for what cannot wait for it):\n  `{{\"to\": \"{id}\", \"text\": \"…\"}}`"
             ),
             format!("ask {name} with `send_message`"),
-        ),
-        Parent::Terminal { name, id } => (
-            format!("{name}, a terminal session the user runs (id {id}), started you"),
-            name.to_string(),
-            "write to a bot at any time, without ending your turn (a terminal cannot be written to):\n  \
-             `{\"to\": \"<bot id>\", \"text\": \"…\"}`"
-                .to_string(),
-            "say so in your final message".to_string(),
         ),
         Parent::User => (
             "The user started you, from the crew command line".to_string(),
@@ -437,11 +420,10 @@ pub fn session(session: &Session) -> String {
 }
 
 /// What a session of the user's is told, in `instructions()`: all Crew says
-/// to a CLI whose prompt is the user's. `chat` is whether Crew drives it in the
-/// chat view; otherwise the user runs it in the terminal.
-pub fn terminal(name: &str, harness: Harness, chat: bool) -> String {
-    let place = if chat { TERMINAL_CHAT } else { TERMINAL_VIEW };
-    let reports = if chat { REPORTS_WAKE } else { REPORTS_READ };
+/// to a CLI whose prompt is the user's.
+pub fn terminal(name: &str, harness: Harness) -> String {
+    let place = TERMINAL_CHAT;
+    let reports = REPORTS_WAKE;
     spell(
         &fill(TERMINAL, &[("glossary", crate::tools::GLOSSARY), ("name", name), ("where", place), ("reports", reports)]),
         harness,
@@ -510,8 +492,7 @@ mod tests {
         let texts = [
             render_bot(Harness::Mcp, &every(CallerKind::Bot)),
             render_session(Harness::Mcp, Parent::Bot { name: "Lead", id: "b0b" }, true, &every(CallerKind::Child)),
-            terminal("shell", Harness::Mcp, false),
-            terminal("shell", Harness::Mcp, true),
+            terminal("shell", Harness::Mcp),
         ];
         for text in texts {
             for gone in crate::tools::REMOVED_TOOLS.iter().chain(&["find_tool", "call_tool"]) {
@@ -585,25 +566,24 @@ mod tests {
         assert!(!quiet.contains("question tool"), "{quiet}");
     }
 
-    /// A terminal parent cannot be written to, and the user is nobody's id.
+    /// A session of the user's parent is written to by its id, and the user is nobody's id.
     #[test]
     fn the_session_prompt_follows_who_started_it() {
         let tools = every(CallerKind::Child);
         let text = render_session(Harness::Mcp, Parent::Terminal { name: "shell", id: "t1" }, true, &tools);
-        assert!(text.contains("shell, a terminal session the user runs (id t1), started you"), "{text}");
-        assert!(text.contains("a terminal cannot be written to") && !text.contains("\"to\": \"t1\""), "{text}");
+        assert!(text.contains("shell, a session of the user's (id t1), started you"), "{text}");
+        assert!(text.contains("\"to\": \"t1\""), "{text}");
         let text = render_session(Harness::Mcp, Parent::User, false, &tools);
         assert!(text.contains("The user started you, from the crew command line.") && text.contains("delivered to the user"), "{text}");
         assert!(text.contains("or say so in your final message"), "{text}");
     }
 
-    /// The terminal hears the words, the two tools, that a report does not wake
-    /// it, and where its subagents' questions and approvals go; and what
-    /// differs by view: in the terminal nothing can write to it, in the chat a
-    /// message arrives as a turn.
+    /// A session of the user's hears the words, the tools, that a report wakes it
+    /// and where its subagents' questions and approvals go, and that a message
+    /// arrives as a turn.
     #[test]
-    fn the_terminal_is_told_how_it_differs() {
-        let text = terminal("shell", Harness::Mcp, false);
+    fn a_session_of_the_users_is_told_how_it_works() {
+        let chat = terminal("shell", Harness::Mcp);
         for said in [
             "A routine wakes a bot",
             "A subagent is a session started with delegate",
@@ -614,26 +594,18 @@ mod tests {
             "`mcp__crew__interrupt_session`",
             "`mcp__crew__update_session`",
             "\"wait\": true",
-            "does not wake you",
-            "Questions and approvals of your subagents come to the user",
-            "waits in its mailbox for the user",
             "not just because they said \"subagent\"",
             "not have more autonomy than you do",
             "not from the user",
-            "nothing can write to you",
             "`mcp__crew__read_session`",
+            "Crew drives in the chat",
+            "arrives as a turn",
+            "wakes you as a turn of your own", "end your turn instead of polling", "one turn", "pauses after 20"
         ] {
-            assert!(text.contains(said), "{said}:\n{text}");
-        }
-        assert!(!text.contains("owner"), "{text}");
-        let chat = terminal("shell", Harness::Mcp, true);
-        assert!(chat.contains("Crew drives in the chat") && chat.contains("arrives as a turn"), "{chat}");
-        assert!(!chat.contains("nothing can write to you") && !chat.contains("does not wake you"), "{chat}");
-        for said in ["wakes you as a turn of your own", "end your turn instead of polling", "one turn", "pauses after 20"] {
             assert!(chat.contains(said), "{said}:\n{chat}");
         }
-        assert!(!text.contains("end your turn instead of polling"), "{text}");
-        assert!(terminal("shell", Harness::Opencode, false).contains("`crew_start_session`"));
+        assert!(!chat.contains("owner") && !chat.contains("nothing can write to you") && !chat.contains("does not wake you"), "{chat}");
+        assert!(terminal("shell", Harness::Opencode).contains("`crew_start_session`"));
     }
 }
 

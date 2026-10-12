@@ -1447,7 +1447,7 @@ mod tests {
 
     /// A Cursor session of `kind` in a new folder, not started. Returns its id
     /// and the folder.
-    fn cursor_session(host: &TurnHost, kind: &str, view: Option<&str>) -> (String, String) {
+    fn cursor_session(host: &TurnHost, kind: &str) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-cursor-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
         let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
@@ -1462,7 +1462,6 @@ mod tests {
             "composer-2.5".into(),
             String::new(),
             "full".into(),
-            view.map(str::to_string),
         )
         .expect("session")
         .id;
@@ -1471,10 +1470,10 @@ mod tests {
 
     /// A session of `kind` on the fake `cursor-agent acp`, started with `text`.
     /// Returns the host, the session's id and the folder.
-    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, String) {
+    fn started_as(kind: &str, text: &str) -> (TurnHost, String, String) {
         let host = host_without_plugins();
         host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
-        let (session, cwd) = cursor_session(&host, kind, view);
+        let (session, cwd) = cursor_session(&host, kind);
         let (fake, _log) = crate::turns::fake_cursor(std::path::Path::new(&cwd));
         host.override_binary("cursor-agent", fake);
         host.start(crew_protocol::TurnStart {
@@ -1497,7 +1496,7 @@ mod tests {
     }
 
     fn started(text: &str) -> (TurnHost, String, String) {
-        started_as("terminal", Some("chat"), text)
+        started_as("terminal", text)
     }
 
     fn acp_command(name: &str) -> crew_protocol::CommandEntry {
@@ -1586,7 +1585,7 @@ mod tests {
     /// whatever commands Cursor announced.
     #[test]
     fn a_bots_cursor_process_keeps_nothing_in_the_catalog() {
-        let (host, session, cwd) = started_as("bot", None, "hello");
+        let (host, session, cwd) = started_as("bot", "hello");
         for _ in 0..400 {
             if !host.is_running(&session) {
                 break;
@@ -1603,7 +1602,7 @@ mod tests {
     #[test]
     fn a_cursor_session_with_no_catalog_lists_crew_actions_alone() {
         let host = TurnHost::test_new();
-        let (session, cwd) = cursor_session(&host, "terminal", Some("chat"));
+        let (session, cwd) = cursor_session(&host, "terminal");
         let entries = host.commands_list(&session).expect("menu").entries;
         assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
         assert!(!host.commands().holds("cursor", &cwd));
@@ -1619,10 +1618,10 @@ mod tests {
     }
 
     impl Kept {
-        fn new(kind: &str, view: Option<&str>) -> Self {
+        fn new(kind: &str) -> Self {
             let host = TurnHost::test_new();
             host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
-            let (session, cwd) = cursor_session(&host, kind, view);
+            let (session, cwd) = cursor_session(&host, kind);
             let (fake, log) = fake_cursor(std::path::Path::new(&cwd));
             host.override_binary("cursor-agent", fake);
             let name = log.file_name().unwrap().to_string_lossy().into_owned();
@@ -1632,7 +1631,7 @@ mod tests {
         }
 
         fn child() -> Self {
-            Self::new("terminal", Some("chat"))
+            Self::new("terminal")
         }
 
         /// Sends `text` and waits for the turn to end.
@@ -1866,7 +1865,7 @@ mod tests {
     /// A bot's turn is on a clean process and session of its own, as before.
     #[test]
     fn a_bots_turns_each_launch_a_process() {
-        let k = Kept::new("bot", None);
+        let k = Kept::new("bot");
         k.say("one");
         assert!(k.host.idle_since(&k.session).is_none());
         assert!(!k.host.test_agents().running().contains(&k.session));

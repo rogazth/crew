@@ -656,7 +656,6 @@ mod tests {
                 "".into(),
                 "".into(),
                 autonomy.into(),
-                None,
             )
             .unwrap();
             Caller::from_session(session)
@@ -911,7 +910,6 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(tree.clone()),
-            None,
         )
         .unwrap();
         let careful = Caller::from_session(session);

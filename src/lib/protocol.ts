@@ -427,11 +427,6 @@ export type HistoryList = { text?: string,
  */
 before?: number, limit: number, };
 
-/**
- * How far crewd got reading a session's history.
- */
-export type HistoryState = "pending" | "ready" | "error";
-
 export type HistorySuggest = { text: string, limit: number, };
 
 export type HistoryTitle = { url: string, title: string, };
@@ -443,8 +438,6 @@ export type Id = { id: string, };
 export type IdBlocks = { id: string, blocksJson: string, };
 
 export type IdName = { id: string, name: string, };
-
-export type IdProvider = { id: string, providerSessionId: string, };
 
 export type IdStatus = { id: string, status: string, };
 
@@ -824,21 +817,11 @@ export type ProcessUpdate = { workspaceId: string, id: string, name?: string, co
 
 export type ProjectFile = { name: string, path: string, relative: string, };
 
-/**
- * Look for the provider session a terminal started in `cwd` since `since`.
- */
-export type ProviderDiscover = { id: string, cwd: string, since: number, };
-
 export type PtyAck = { id: string, processed: number, };
 
 export type PtyAttach = { id: string, from: number, };
 
 export type PtyAttached = { start: number, emitted: number, };
-
-/**
- * The window let go of a terminal it watched; the process runs on.
- */
-export type PtyDetach = { id: string, };
 
 export type PtyError = { id: string, error: string, };
 
@@ -851,17 +834,6 @@ export type PtyResize = { id: string, cols: number, rows: number, };
 export type PtyResync = { id: string, };
 
 export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
-/**
- * The terminal session this process runs. The daemon completes the argv
- * and the environment so the CLI reaches Crew's tools: the client cannot,
- * because in remote mode the bridge's socket and binary are not its own.
- */
-session?: string, 
-/**
- * Keep a live process under this id instead of replacing it: a window
- * opening again finds the agent it left running.
- */
-reuse?: boolean, 
 /**
  * Whether the window paints the terminal dark. It becomes COLORFGBG, which
  * CLIs fall back to when their OSC 11 query outlives a remote round trip.
@@ -982,33 +954,10 @@ userSeen: number,
  */
 lastEvent?: SessionLastEvent, 
 /**
- * Which view owns its conversation: `chat` (Crew's chat, driving its
- * CLI turn by turn) or `terminal` (the CLI's own screen). A bot and a
- * child are always `terminal`, where it means nothing.
- */
-view: "chat" | "terminal", 
-/**
  * Whether letters no longer wake it: 20 turns in a row were started by
  * letters, and the user's next message resumes it.
  */
 paused: boolean, };
-
-/**
- * A permission prompt or a question form on the CLI's screen.
- */
-export type SessionAsk = { 
-/**
- * New for every ask, so an answer is never taken for the next one's.
- */
-id: number, tool: string, input: Record<string, unknown>, 
-/**
- * The form's questions; empty for a permission.
- */
-questions: Array<Question>, 
-/**
- * The prompt offers "don't ask again" as its second option.
- */
-always: boolean, };
 
 export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, 
 /**
@@ -1022,11 +971,7 @@ serviceTier?: string, description: string, autonomy: string,
 /**
  * The git worktree the session runs in; absent means the workspace folder.
  */
-worktree?: string | null, 
-/**
- * Which view owns its conversation; absent is the terminal.
- */
-view?: "chat" | "terminal", };
+worktree?: string | null, };
 
 export type SessionCreated = { session: Session, 
 /**
@@ -1034,39 +979,6 @@ export type SessionCreated = { session: Session,
  * on the task it was handed.
  */
 open: boolean, };
-
-/**
- * New or changed blocks at the end of a session's history, while a chat reads it.
- */
-export type SessionHistoryAppended = { sessionId: string, 
-/**
- * Every block from this index on is replaced by `blocks`.
- */
-from: number, blocks: Array<Block>, 
-/**
- * The history was read again from scratch (another file, or it shrank): reload the window.
- */
-reset: boolean, state: HistoryState, };
-
-export type SessionHistoryRequest = { id: string, 
-/**
- * Where the session runs; the CLI files its history under it.
- */
-cwd: string, 
-/**
- * A page of the blocks before this index; the newest page when absent.
- */
-before?: number, };
-
-export type SessionHistoryWindow = { blocks: Array<Block>, 
-/**
- * The index of `blocks[0]`; indices go below zero as earlier pages load.
- */
-start: number, 
-/**
- * Older blocks exist before `start`.
- */
-more: boolean, state: HistoryState, error?: string, };
 
 export type SessionId = { sessionId: string, };
 
@@ -1087,51 +999,6 @@ kind: "report" | "stopped" | "question" | "approval" | "failed" | "exited", at: 
 cursor: number, };
 
 export type SessionLine = { sessionId: string, line: string, };
-
-/**
- * What a session's CLI is doing, as its hooks told crewd. Pushed as
- * `session-live` whenever it changes.
- */
-export type SessionLive = { sessionId: string, 
-/**
- * The CLI's SessionStart hook ran: it is up and reads keys.
- */
-started: boolean, 
-/**
- * A turn is running: from the prompt being submitted until it stops.
- */
-working: boolean, 
-/**
- * The last turn stopped with work it started still running in the
- * background (a shell, a subagent): the CLI takes it up again on its own
- * when that work reports back, so the session is not done. Missing from
- * a crewd that predates it.
- */
-background: boolean, 
-/**
- * What the last turn left running, as its Stop hook named it: read-only,
- * since only the CLI in the terminal can stop it.
- */
-backgroundTasks: Array<BackgroundCommand>, 
-/**
- * Something the CLI stopped to ask; answered by keys in its terminal.
- */
-ask?: SessionAsk, 
-/**
- * The conversation the CLI is in now, and the file it writes it to.
- */
-providerSessionId?: string, updatedAt: number, };
-
-/**
- * The chat answered ask `ask_id` with keys.
- */
-export type SessionLiveAnswered = { id: string, askId: number, };
-
-/**
- * The session's CLI is another one now: what was heard from the last one is
- * gone, and anything older than `at` was about that one.
- */
-export type SessionLiveReset = { sessionId: string, at: number, };
 
 /**
  * The user has read a session up to `cursor`; absent, up to its last event.
@@ -1160,11 +1027,7 @@ export type SessionStatusEvent = { sessionId: string, status: string, providerSe
 /**
  * A session nobody has talked to yet moves to another provider's CLI.
  */
-export type SessionSwitchProvider = { id: string, 
-/**
- * Where the session runs: Claude files its history under it.
- */
-cwd: string, provider: string, model: string, effort: string, 
+export type SessionSwitchProvider = { id: string, provider: string, model: string, effort: string, 
 /**
  * Codex's service tier; empty is the CLI's own.
  */

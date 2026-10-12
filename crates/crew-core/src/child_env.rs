@@ -1,4 +1,4 @@
-//! What a terminal or an agent must not inherit from whoever started crewd.
+//! What a shell or an agent must not inherit from whoever started crewd.
 //!
 //! crewd may run inside another Crew's terminal or agent: a dev build started
 //! from the installed app, a worktree's app from the main checkout's. That
@@ -11,13 +11,8 @@
 use std::ffi::OsStr;
 use std::process::Command;
 
-use crate::provider_session::CLAUDE_BIND_ENV;
-
 pub(crate) fn inherited_from_parent(key: &str) -> bool {
-    // crewd sets the bind folder to its own before any child starts.
-    (key.starts_with("CREW_") && key != CLAUDE_BIND_ENV)
-        || key == "CLAUDECODE"
-        || key.starts_with("CLAUDE_CODE_")
+    key.starts_with("CREW_") || key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_")
 }
 
 /// Unsets those variables on `cmd`, except the ones it sets itself: an agent's
@@ -43,7 +38,7 @@ mod tests {
         for key in ["CREW_SOCKET", "CREW_TOKEN", "CREW_USER_DATA", "CREW_PORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"] {
             assert!(inherited_from_parent(key), "{key}");
         }
-        for key in [CLAUDE_BIND_ENV, "PATH", "HOME", "CLAUDE_CONFIG_DIR"] {
+        for key in ["PATH", "HOME", "CLAUDE_CONFIG_DIR"] {
             assert!(!inherited_from_parent(key), "{key}");
         }
     }

@@ -488,7 +488,6 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("session")
         .id
@@ -827,7 +826,6 @@ mod review_tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("session")
         .id
@@ -1089,7 +1087,6 @@ mod plan_tests {
                 "m".into(),
                 "".into(),
                 "ask".into(),
-                None,
             )
             .expect("session")
             .id;
@@ -1239,7 +1236,6 @@ mod drop_column_review {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("session")
         .id

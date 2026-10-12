@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::claude_title;
-use crate::provider_session::{self, ClaudeBinds, ClaudeDirs};
+use crate::provider_session::{self, ClaudeDirs};
 use crate::store::{now_millis, set_order, Store};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -66,11 +66,6 @@ pub struct Session {
     /// Its event at `cursor`: the last one it had.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<LastEvent>,
-    /// Which view owns the conversation of a terminal session: `chat` (Crew
-    /// drives it turn by turn) or `terminal` (its CLI's own screen). Bots and
-    /// children are always `terminal`, where it means nothing.
-    #[serde(default = "default_view")]
-    pub view: String,
     /// Turns in a row that letters started (plan decision 27); the user
     /// writing sets it back to 0.
     #[serde(default)]
@@ -107,14 +102,6 @@ pub fn set_auto_turns(store: &Store, session_id: &str, count: i64) {
 /// Whether letters no longer wake `session_id`.
 pub fn paused(store: &Store, session_id: &str) -> bool {
     auto_turns(store, session_id) >= PAUSE_AFTER
-}
-
-/// A session's view when none was stated: its CLI's own screen.
-pub const DEFAULT_VIEW: &str = "terminal";
-pub const VIEWS: [&str; 2] = ["chat", DEFAULT_VIEW];
-
-fn default_view() -> String {
-    DEFAULT_VIEW.into()
 }
 
 /// A session's last event as a chip reads it (see [`LastEvent::kind`]).
@@ -173,10 +160,9 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    (SELECT json_object('kind', e.kind, 'outcome', e.outcome,
                                                        'asks', json_extract(e.request, '$.kind'), 'at', e.at)
                                       FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor),
-                                   s.view,
                                    COALESCE((SELECT CAST(value AS INTEGER) FROM app_state
                                               WHERE key = 'auto_turns:' || s.id), 0)";
-pub const SESSION_COLUMN_COUNT: usize = 26;
+pub const SESSION_COLUMN_COUNT: usize = 25;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
@@ -211,9 +197,8 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         parent_name: row.get(at + 21)?,
         user_seen: row.get(at + 22)?,
         last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
-        view: row.get(at + 24)?,
-        auto_turns: row.get(at + 25)?,
-        paused: row.get::<_, i64>(at + 25)? >= PAUSE_AFTER,
+        auto_turns: row.get(at + 24)?,
+        paused: row.get::<_, i64>(at + 24)? >= PAUSE_AFTER,
     })
 }
 
@@ -250,6 +235,24 @@ fn or_default_service_tier(provider: &str, tier: String) -> String {
 /// takes the column out again where it is.
 pub const MIGRATION_V36: &str = "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;";
 pub const MIGRATION_V37: &str = "ALTER TABLE sessions DROP COLUMN archived;";
+
+/// Migration 38: every provider session is a chat, so `sessions.view` goes. A
+/// terminal-view session of Claude, Codex or opencode carries on the same
+/// conversation over the provider's protocol (its id is Crew's own, or the one
+/// its CLI named), so it needs no change. A Cursor terminal's chat was made by
+/// `cursor-agent create-chat`, which ACP cannot load: it is marked as a child
+/// Cursor chat was in migration 27, so its next message opens a new
+/// conversation and says so.
+pub const MIGRATION_V38: &str = "
+    INSERT OR REPLACE INTO app_state (key, value)
+    SELECT 'cursor:acp-note:' || id, provider_session_id FROM sessions
+     WHERE kind = 'terminal' AND view = 'terminal' AND provider = 'cursor'
+       AND COALESCE(provider_session_id, '') <> '';
+    UPDATE sessions SET provider_session_id = NULL
+     WHERE kind = 'terminal' AND view = 'terminal' AND provider = 'cursor'
+       AND provider_session_id IS NOT NULL;
+    DELETE FROM app_state WHERE key = 'sessions:view';
+    ALTER TABLE sessions DROP COLUMN view;";
 
 /// The sessions of a workspace the sidebar shows.
 pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String> {
@@ -336,9 +339,8 @@ pub fn create(
     model: String,
     description: String,
     autonomy: String,
-    view: Option<String>,
 ) -> Result<Session, String> {
-    create_in_worktree(store, workspace_id, kind, name, provider, model, description, autonomy, None, view)
+    create_in_worktree(store, workspace_id, kind, name, provider, model, description, autonomy, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -352,23 +354,11 @@ pub fn create_in_worktree(
     description: String,
     autonomy: String,
     worktree: Option<String>,
-    view: Option<String>,
 ) -> Result<Session, String> {
     if kind != "bot" && kind != "terminal" {
         return Err(format!("Unknown session kind: {kind}"));
     }
-    let view = view_or_default(view)?;
-    insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None, view)
-}
-
-/// A view a caller asked for, or the default when it asked for none. Any
-/// other word is refused rather than stored: the window reads it as a view.
-fn view_or_default(view: Option<String>) -> Result<String, String> {
-    match view.filter(|view| !view.is_empty()) {
-        None => Ok(DEFAULT_VIEW.into()),
-        Some(view) if VIEWS.contains(&view.as_str()) => Ok(view),
-        Some(view) => Err(format!("Unknown session view: {view}")),
-    }
+    insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None)
 }
 
 /// A session started for `parent` (a session id; `None` is the user): a
@@ -385,7 +375,7 @@ pub fn create_child(
     worktree: Option<String>,
     parent: Option<String>,
 ) -> Result<Session, String> {
-    insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent, DEFAULT_VIEW.into())
+    insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent)
 }
 
 /// Record that `by` launched the session.
@@ -410,7 +400,6 @@ fn insert(
     autonomy: String,
     worktree: Option<String>,
     parent: Option<String>,
-    view: String,
 ) -> Result<Session, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -445,7 +434,6 @@ fn insert(
         parent_name: None,
         user_seen: 0,
         last_event: None,
-        view,
     };
 
     store.with(|conn| {
@@ -471,8 +459,8 @@ fn insert(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
                 notifications, created_at, updated_at, sort_order, autonomy, worktree,
-                status, bot_id, parent_id, view)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                status, bot_id, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 session.id,
                 session.workspace_id,
@@ -489,8 +477,7 @@ fn insert(
                 session.worktree,
                 session.status,
                 session.bot_id,
-                session.parent_id,
-                session.view
+                session.parent_id
             ],
         )?;
         tx.commit()
@@ -751,18 +738,6 @@ pub fn set_provider_session(
     Ok(())
 }
 
-/// Provider sessions some Crew session other than `except` is bound to.
-pub fn claimed_provider_sessions(store: &Store, except: &str) -> Result<Vec<String>, String> {
-    store.with(|conn| {
-        conn.prepare_cached(
-            "SELECT provider_session_id FROM sessions
-             WHERE provider_session_id IS NOT NULL AND id != ?1",
-        )?
-        .query_map(params![except], |row| row.get(0))?
-        .collect()
-    })
-}
-
 /// The runtime owns this; the UI only renders whatever the last writer left.
 pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
     const KNOWN: [&str; 8] = ["starting", "idle", "working", "background", "needs-input", "done", "error", "exited"];
@@ -804,8 +779,6 @@ pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
 }
 
 /// A terminal nobody named and nothing was said in: dropping it loses nothing.
-/// Callers follow Claude's `/clear`s first (`follow_claude`), so what is judged
-/// is the conversation the CLI is in now.
 pub fn is_disposable(store: &Store, id: String) -> Result<bool, String> {
     is_disposable_in(store, id, &ClaudeDirs::from_env())
 }
@@ -815,11 +788,18 @@ fn is_disposable_in(store: &Store, id: String, dirs: &ClaudeDirs) -> Result<bool
     let Ok(cwd) = cwd(store, &session) else {
         return Ok(false);
     };
-    let claimed = claimed_provider_sessions(store, &session.id)?;
-    Ok(disposable(&session, &cwd, &claimed, dirs.home.as_deref()) && !has_transcript(store, &session.id)?)
+    Ok(disposable(&session, &cwd, dirs.home.as_deref()) && !has_transcript(store, &session.id)? && !awaits_cursor_note(store, &session.id)?)
 }
 
-/// Whether Crew keeps anything said in the session. The chat view's
+/// Whether anything was said in the session: Crew kept it, or its provider
+/// holds a conversation bound to it. A session for which neither is true can
+/// still move to another provider.
+pub fn has_conversation(store: &Store, id: &str) -> Result<bool, String> {
+    let bound = get(store, id.to_string())?.ok_or("Session not found")?.provider_session_id.is_some();
+    Ok(bound || has_transcript(store, id)?)
+}
+
+/// Whether Crew keeps anything said in the session. A session's
 /// conversation is in Crew's transcript as well as in the provider's own
 /// store, which not every provider's can be read for (a Cursor chat made over
 /// ACP shows as empty there).
@@ -827,23 +807,20 @@ fn has_transcript(store: &Store, id: &str) -> Result<bool, String> {
     Ok(store.with(|conn| crate::messages::count(conn, id))? > 0)
 }
 
+/// Whether the session is one a Cursor terminal became (migration 37): its old
+/// chat could not come along, and the row stays for the user to read and delete.
+fn awaits_cursor_note(store: &Store, id: &str) -> Result<bool, String> {
+    Ok(crate::store::get(store, format!("{}{id}", crate::store::CURSOR_ACP_NOTE))?.is_some())
+}
+
 /// Deletes the disposable terminals no tab holds: the ones closed before the
 /// window checked, or left behind by a crash. A tab restored on launch still
-/// needs its row, so those wait for the tab to close. Every Claude terminal
-/// first catches up with the `/clear`s its CLI made while nobody looked.
+/// needs its row, so those wait for the tab to close.
 pub fn sweep_disposable(store: &Store) -> Result<usize, String> {
     sweep_disposable_in(store, &ClaudeDirs::from_env())
 }
 
 fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String> {
-    let claude: Vec<String> = store.with(|conn| {
-        conn.prepare("SELECT id FROM sessions WHERE kind = 'terminal' AND provider = 'claude'")?
-            .query_map([], |row| row.get(0))?
-            .collect()
-    })?;
-    for id in claude {
-        follow_claude_in(store, id, dirs)?;
-    }
     let (terminals, tabs) = store.with(|conn| {
         let terminals = conn
             .prepare(&format!(
@@ -866,10 +843,10 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
     let open: Vec<String> = tabs.iter().flat_map(|raw| tab_sessions(raw)).collect();
     let mut swept = 0;
     for (session, cwd) in terminals {
-        let claimed = claimed_provider_sessions(store, &session.id)?;
         if !open.contains(&session.id)
-            && disposable(&session, &cwd, &claimed, dirs.home.as_deref())
+            && disposable(&session, &cwd, dirs.home.as_deref())
             && !has_transcript(store, &session.id)?
+            && !awaits_cursor_note(store, &session.id)?
         {
             delete(store, session.id)?;
             swept += 1;
@@ -924,7 +901,7 @@ pub fn stale(store: &Store, before: i64) -> Result<Vec<String>, String> {
 
 /// What was said counts wherever it was kept: where the session works now, and
 /// the worktree it worked in before that folder went away.
-fn disposable(session: &Session, cwd: &str, claimed: &[String], home: Option<&Path>) -> bool {
+fn disposable(session: &Session, cwd: &str, home: Option<&Path>) -> bool {
     session.kind == "terminal"
         && is_derived_name(&session.name, &session.provider)
         && folders(session, cwd).into_iter().all(|folder| {
@@ -933,7 +910,6 @@ fn disposable(session: &Session, cwd: &str, claimed: &[String], home: Option<&Pa
                 &session.provider,
                 &session.id,
                 session.provider_session_id.as_deref(),
-                orphaned(session, claimed),
                 folder,
             )
         })
@@ -944,196 +920,11 @@ fn folders<'a>(session: &'a Session, cwd: &'a str) -> Vec<&'a str> {
     [Some(cwd), gone].into_iter().flatten().collect()
 }
 
-/// A `/clear` from before Crew split conversations off left the first one under
-/// Crew's id, held by no session; it still belongs to this one.
-fn orphaned<'a>(session: &'a Session, claimed: &[String]) -> Option<&'a str> {
-    let moved = session.provider_session_id.as_deref().is_some_and(|bound| bound != session.id);
-    (moved && !claimed.contains(&session.id)).then_some(session.id.as_str())
-}
-
-/// What following Claude changed: the session's row after it, and the
-/// sessions that now hold the conversations it left.
-#[derive(Debug)]
-pub struct Followed {
-    pub session: Session,
-    pub split: Vec<Session>,
-}
-
-/// Catches a Claude terminal up with the conversations its CLI started since
-/// the last look (`/clear`, mostly). Each one it left with something said in it
-/// becomes a session of its own, named and faced as the terminal was, so it can
-/// be opened and resumed; the terminal goes on in the newest one, named afresh
-/// for the provider to title. `None` when the CLI is where the row says.
-pub fn follow_claude(store: &Store, id: String) -> Result<Option<Followed>, String> {
-    follow_claude_in(store, id, &ClaudeDirs::from_env())
-}
-
-fn follow_claude_in(store: &Store, id: String, dirs: &ClaudeDirs) -> Result<Option<Followed>, String> {
-    let Some(binds) = dirs.binds.as_deref().map(|dir| ClaudeBinds::read(dir, &id)) else {
-        return Ok(None);
-    };
-    let Some(row) = get(store, id)? else { return Ok(None) };
-    if row.kind != "terminal" || row.provider != "claude" {
-        return Ok(None);
-    }
-    let ids = binds.ids();
-    let was = claude_session(&row).to_string();
-    if ids.iter().all(|next| *next == was) {
-        binds.consume();
-        return Ok(None);
-    }
-    let cwd = cwd(store, &row)?;
-    let spoke_at = |conversation: &str| {
-        let home = dirs.home.as_deref()?;
-        folders(&row, &cwd)
-            .into_iter()
-            .filter_map(|folder| provider_session::claude_spoke_at(home, folder, conversation))
-            .max()
-    };
-    let mut taken: Vec<String> = list(store, row.workspace_id.clone())?
-        .into_iter()
-        .filter(|s| s.kind == "terminal" && s.id != row.id)
-        .map(|s| s.name)
-        .collect();
-    let mut live = row.clone();
-    let mut title = provider_title_of(store, &row.id)?;
-    let mut split: Vec<(Session, Option<String>, i64)> = Vec::new();
-    let mut current = was;
-    let now = now_millis();
-    for next in ids {
-        if next == current {
-            continue;
-        }
-        if let Some(at) = spoke_at(&current) {
-            let made = split.len() as i64;
-            split.push((
-                Session {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    provider_session_id: Some(current.clone()),
-                    status: "idle".into(),
-                    created_at: now + made,
-                    updated_at: at,
-                    ..live.clone()
-                },
-                title.take(),
-                at,
-            ));
-            taken.push(live.name.clone());
-            live.name = derived_name(&taken, &live.provider);
-        }
-        current = next;
-    }
-    live.provider_session_id = Some(current.clone());
-    live.updated_at = now;
-    // Unread goes with the turn that finished last, wherever that turn is now.
-    if row.status == "done" {
-        let latest = split.iter().enumerate().max_by_key(|(_, (_, _, at))| *at);
-        if let Some((at, (_, _, when))) = latest {
-            if spoke_at(&current).is_none_or(|live_at| live_at < *when) {
-                split[at].0.status = "done".into();
-                live.status = "idle".into();
-            }
-        }
-    }
-    store.with(|conn| {
-        let tx = conn.unchecked_transaction()?;
-        for (session, title, _) in &split {
-            tx.execute(
-                "INSERT INTO sessions
-                   (id, workspace_id, kind, name, provider, model, provider_session_id, description,
-                    notifications, status, created_at, updated_at, sort_order, autonomy, worktree,
-                    provider_title)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-                params![
-                    session.id,
-                    session.workspace_id,
-                    session.kind,
-                    session.name,
-                    session.provider,
-                    session.model,
-                    session.provider_session_id,
-                    session.description,
-                    session.notifications,
-                    session.status,
-                    session.created_at,
-                    session.updated_at,
-                    session.created_at,
-                    session.autonomy,
-                    session.worktree,
-                    title
-                ],
-            )?;
-        }
-        if split.is_empty() {
-            tx.execute(
-                "UPDATE sessions SET provider_session_id = ?2, updated_at = ?3 WHERE id = ?1",
-                params![live.id, live.provider_session_id, live.updated_at],
-            )?;
-        } else {
-            tx.execute(
-                "UPDATE sessions
-                 SET provider_session_id = ?2, name = ?3, provider_title = NULL, status = ?4, updated_at = ?5
-                 WHERE id = ?1",
-                params![live.id, live.provider_session_id, live.name, live.status, live.updated_at],
-            )?;
-            let faces = crate::store::read_state(&tx, FACES)?;
-            let ids: Vec<&str> = split.iter().map(|(session, _, _)| session.id.as_str()).collect();
-            if let Some(faces) = faces_for(faces.as_deref(), &live.id, &ids) {
-                crate::store::write_state(&tx, FACES, Some(&faces))?;
-            }
-        }
-        tx.commit()
-    })?;
-    binds.consume();
-    Ok(Some(Followed {
-        session: live,
-        split: split.into_iter().map(|(session, _, _)| session).collect(),
-    }))
-}
-
-/// Faces bots were given, by session id: `{ "<id>": { "style"?, "seed"? } }`.
-const FACES: &str = "bot:faces";
-
-/// The face each split-off session keeps: the one its terminal showed. With no
-/// face of its own, a terminal draws from its id, so the seed is written down.
-fn faces_for(raw: Option<&str>, from: &str, to: &[&str]) -> Option<String> {
-    let mut faces = raw
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .filter(|faces| faces.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let mut face = faces.get(from).filter(|face| face.is_object()).cloned().unwrap_or_else(|| serde_json::json!({}));
-    if face.get("seed").and_then(|seed| seed.as_str()).is_none_or(str::is_empty) {
-        face["seed"] = serde_json::Value::String(from.to_string());
-    }
-    let map = faces.as_object_mut()?;
-    for id in to {
-        map.insert(id.to_string(), face.clone());
-    }
-    serde_json::to_string(&faces).ok()
-}
-
-/// The conversation Claude keeps for a session: Crew's id until a `/clear`.
-fn claude_session(session: &Session) -> &str {
-    session.provider_session_id.as_deref().unwrap_or(&session.id)
-}
-
 fn provider_title_of(store: &Store, id: &str) -> Result<Option<String>, String> {
     store.with(|conn| {
         conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?
             .query_row(params![id], |row| row.get(0))
     })
-}
-
-/// Mirrors `nextSessionName` in the window: the first of claude, claude 2, …
-/// no other terminal of the workspace is called.
-fn derived_name(taken: &[String], base: &str) -> String {
-    if !taken.iter().any(|name| name == base) {
-        return base.to_string();
-    }
-    (2..)
-        .map(|n| format!("{base} {n}"))
-        .find(|name| !taken.contains(name))
-        .unwrap_or_else(|| base.to_string())
 }
 
 /// Mirrors `isDerivedSessionName` in the window: claude, claude 2, …
@@ -1185,7 +976,6 @@ mod tests {
             "m".into(),
             "".into(),
             autonomy.into(),
-            None,
         )
     }
 
@@ -1196,24 +986,6 @@ mod tests {
 
     fn name_of(store: &Store, id: &str) -> String {
         get(store, id.into()).expect("get").expect("row").name
-    }
-
-    #[test]
-    fn a_session_is_in_the_terminal_view_unless_it_asks_for_the_chat() {
-        let (store, workspace) = world();
-        let asked = create(
-            &store, workspace.clone(), "terminal".into(), "claude 1".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
-            Some("chat".into()),
-        )
-        .expect("chat");
-        let unasked = terminal(&store, &workspace, "claude 2", "claude");
-        assert_eq!((asked.view.as_str(), unasked.view.as_str()), ("chat", "terminal"));
-        assert_eq!(get(&store, asked.id.clone()).expect("get").expect("row").view, "chat");
-        let unknown = create(
-            &store, workspace, "terminal".into(), "claude 3".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
-            Some("pane".into()),
-        );
-        assert!(unknown.is_err(), "{unknown:?}");
     }
 
     #[test]
@@ -1245,13 +1017,13 @@ mod tests {
         set_options(&store, s.id.clone(), String::new(), String::new(), String::new(), "ask".into()).expect("options");
         let read = get(&store, s.id).expect("get").expect("row");
         assert_eq!((read.model.as_str(), read.effort.as_str(), read.service_tier.as_str()), ("claude-opus-5-5", "high", ""));
-        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into(), None)
+        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
             .expect("codex");
         assert_eq!(new.model, crate::tools::unnamed_model("codex"));
         assert_eq!(new.effort, crate::tools::unnamed_effort("codex"));
         assert_eq!(new.service_tier, crate::tools::unnamed_service_tier("codex"));
         assert!(!new.model.is_empty());
-        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into(), None)
+        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into())
             .expect("opencode");
         assert_eq!(open.model, crate::tools::unnamed_model("opencode"));
         assert!(!open.model.is_empty());
@@ -1269,7 +1041,6 @@ mod tests {
             "grok-4.7-xhigh".into(),
             String::new(),
             "ask".into(),
-            None,
         )
         .expect("named");
         assert_eq!(named.model, "grok-4.7-xhigh");
@@ -1282,7 +1053,6 @@ mod tests {
             String::new(),
             String::new(),
             "ask".into(),
-            None,
         )
         .expect("unnamed");
         assert_eq!(unnamed.model, crate::tools::unnamed_model("cursor"));
@@ -1326,7 +1096,6 @@ mod tests {
         let b = bot(&store, &workspace, "b", "ask").expect("b");
         set_provider_session(&store, a.id.clone(), "claude-1".into()).expect("bind");
         set_provider_session(&store, b.id.clone(), "claude-2".into()).expect("bind");
-        assert_eq!(claimed_provider_sessions(&store, &a.id).expect("claimed"), vec!["claude-2"]);
 
         let edit = |provider: &str| {
             update(&store, a.id.clone(), "a".into(), provider.into(), "".into(), "".into(), true, "ask".into())
@@ -1350,7 +1119,6 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         );
         assert!(wrong_kind.is_err_and(|e| e.contains("Unknown session kind")));
     }
@@ -1424,7 +1192,6 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("terminal")
     }
@@ -1524,7 +1291,7 @@ mod tests {
         }
     }
 
-    /// What was said in the chat view is in Crew's transcript, which the
+    /// What was said in a session is in Crew's transcript, which the
     /// provider's own store does not always show (Cursor's ACP chats).
     #[test]
     fn a_session_with_a_transcript_of_its_own_is_never_swept() {
@@ -1542,6 +1309,18 @@ mod tests {
         assert!(get(&store, chat.id).unwrap().is_some());
     }
 
+    /// A Cursor terminal that became a chat (migration 38) has no transcript yet
+    /// and no conversation bound, but the note it waits to write keeps its row.
+    #[test]
+    fn a_cursor_session_waiting_to_say_its_chat_did_not_come_along_is_never_swept() {
+        let (store, workspace) = world();
+        let waiting = terminal(&store, &workspace, "cursor", "cursor");
+        crate::store::set(&store, format!("{}{}", crate::store::CURSOR_ACP_NOTE, waiting.id), "old-chat".into()).unwrap();
+        assert!(!is_disposable(&store, waiting.id.clone()).unwrap());
+        assert_eq!(sweep_disposable(&store).unwrap(), 0);
+        assert!(get(&store, waiting.id).unwrap().is_some());
+    }
+
     fn branched(store: &Store, workspace: &str, tree: &str) -> Session {
         create_in_worktree(
             store,
@@ -1553,7 +1332,6 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(tree.into()),
-            None,
         )
         .expect("bot")
     }
@@ -1615,7 +1393,6 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(String::new()),
-            None,
         )
         .expect("terminal");
         assert_eq!(made.worktree, None);
@@ -1635,7 +1412,6 @@ mod tests {
                 "".into(),
                 "ask".into(),
                 worktree.map(Into::into),
-                None,
             )
             .expect("bot")
             .id
@@ -1650,203 +1426,6 @@ mod tests {
         let mut wanted = vec![a, b];
         wanted.sort();
         assert_eq!(found, wanted);
-    }
-
-    /// A Claude terminal in `world()`'s workspace, with Claude's folders of its own.
-    struct Claude {
-        store: Store,
-        workspace: String,
-        cwd: String,
-        dirs: ClaudeDirs,
-        clock: std::cell::Cell<u64>,
-    }
-
-    impl Claude {
-        fn new() -> Self {
-            let (store, workspace) = world();
-            let cwd = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
-            let dirs = ClaudeDirs { home: Some(a_folder().into()), binds: Some(a_folder().into()) };
-            Self { store, workspace, cwd, dirs, clock: std::cell::Cell::new(1_000) }
-        }
-
-        /// Something said in conversation `id`.
-        fn said(&self, id: &str) {
-            let home = self.dirs.home.as_deref().unwrap();
-            let slug = crate::claude_title::project_slug(&self.cwd);
-            let folder = home.join(".claude/projects").join(slug);
-            std::fs::create_dir_all(&folder).unwrap();
-            std::fs::write(folder.join(format!("{id}.jsonl")), "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
-        }
-
-        /// The SessionStart hook's record of `crew_id`'s CLI starting `conversation`,
-        /// a second after the one before.
-        fn started(&self, crew_id: &str, conversation: &str, file: Option<&str>) {
-            let at = self.clock.get() + 1;
-            self.clock.set(at);
-            let name = file.map(str::to_string).unwrap_or_else(|| format!("{crew_id}.{at}-1.start"));
-            let path = self.dirs.binds.as_deref().unwrap().join(name);
-            std::fs::write(&path, format!(r#"{{"session_id":"{conversation}","source":"clear"}}"#)).unwrap();
-            let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(at);
-            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
-        }
-
-        fn follow(&self, id: &str) -> Option<Followed> {
-            follow_claude_in(&self.store, id.into(), &self.dirs).expect("follow")
-        }
-
-        fn row(&self, id: &str) -> Session {
-            get(&self.store, id.into()).unwrap().expect("row")
-        }
-
-        fn holding(&self, conversation: &str) -> Vec<Session> {
-            list(&self.store, self.workspace.clone())
-                .unwrap()
-                .into_iter()
-                .filter(|s| s.provider_session_id.as_deref() == Some(conversation))
-                .collect()
-        }
-    }
-
-    #[test]
-    fn a_clear_after_a_turn_leaves_that_conversation_as_a_session_of_its_own() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        terminal(&claude.store, &claude.workspace, "claude 2", "claude");
-        adopt(&claude.store, &live.id, "Fix the login");
-        set_status(&claude.store, live.id.clone(), "done".into()).unwrap();
-        crate::store::set(&claude.store, FACES.into(), format!(r#"{{"{}":{{"style":"bottts"}}}}"#, live.id)).unwrap();
-        claude.said(&live.id);
-        claude.started(&live.id, &live.id, None);
-        assert!(claude.follow(&live.id).is_none(), "the CLI's first start moved nothing");
-        claude.started(&live.id, "b", None);
-
-        let followed = claude.follow(&live.id).expect("moved");
-        let [split] = followed.split.as_slice() else { panic!("{:?}", followed.split) };
-        let stored = claude.row(&split.id);
-        assert_eq!(stored.provider_session_id.as_deref(), Some(live.id.as_str()));
-        assert_eq!(
-            (stored.name.as_str(), stored.kind.as_str(), stored.status.as_str()),
-            ("Fix the login", "terminal", "done"),
-            "the old conversation keeps the name and the unread of its last turn"
-        );
-        assert_eq!((stored.workspace_id, stored.worktree, stored.model), (live.workspace_id.clone(), live.worktree.clone(), live.model.clone()));
-        assert_eq!(provider_title_of(&claude.store, &split.id).unwrap().as_deref(), Some("Fix the login"));
-
-        let now = claude.row(&live.id);
-        assert_eq!(now.provider_session_id.as_deref(), Some("b"));
-        // "claude 2" is another terminal's; the title freed the first one.
-        assert_eq!((now.name.as_str(), now.status.as_str()), ("claude", "idle"), "the terminal is named afresh");
-        assert_eq!(provider_title_of(&claude.store, &live.id).unwrap(), None);
-        assert_eq!(followed.session.name, "claude");
-
-        let faces: serde_json::Value =
-            serde_json::from_str(&crate::store::get(&claude.store, FACES.into()).unwrap().unwrap()).unwrap();
-        assert_eq!(faces[&split.id], serde_json::json!({ "style": "bottts", "seed": live.id }));
-        assert_eq!(faces[&live.id], serde_json::json!({ "style": "bottts" }));
-
-        // Read again: nothing left to follow, and the new title is the terminal's to adopt.
-        assert!(claude.follow(&live.id).is_none());
-        assert_eq!(adopt(&claude.store, &live.id, "Next thing").as_deref(), Some("Next thing"));
-    }
-
-    #[test]
-    fn a_clear_before_anything_was_said_moves_the_terminal_and_makes_nothing() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        claude.started(&live.id, &live.id, None);
-        claude.started(&live.id, "b", None);
-
-        let followed = claude.follow(&live.id).expect("moved");
-        assert!(followed.split.is_empty());
-        assert_eq!(list(&claude.store, claude.workspace.clone()).unwrap().len(), 1);
-        let now = claude.row(&live.id);
-        assert_eq!((now.provider_session_id.as_deref(), now.name.as_str()), (Some("b"), "claude"));
-        assert!(get_faces(&claude.store).is_none(), "a face was handed out for nothing");
-    }
-
-    fn get_faces(store: &Store) -> Option<String> {
-        crate::store::get(store, FACES.into()).unwrap()
-    }
-
-    #[test]
-    fn quick_clears_leave_every_conversation_with_turns_behind() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        // A (Crew's id) and B got a turn, C nothing yet; crewd looks only now.
-        claude.said(&live.id);
-        claude.started(&live.id, "b", None);
-        claude.said("b");
-        claude.started(&live.id, "c", None);
-
-        let followed = claude.follow(&live.id).expect("moved");
-        let names: Vec<(&str, Option<&str>)> =
-            followed.split.iter().map(|s| (s.name.as_str(), s.provider_session_id.as_deref())).collect();
-        assert_eq!(names, [("claude", Some(live.id.as_str())), ("claude 2", Some("b"))]);
-        for conversation in [live.id.as_str(), "b"] {
-            assert_eq!(claude.holding(conversation).len(), 1, "{conversation} is not held once");
-        }
-        let now = claude.row(&live.id);
-        assert_eq!((now.provider_session_id.as_deref(), now.name.as_str()), (Some("c"), "claude 3"));
-    }
-
-    #[test]
-    fn a_record_from_a_cli_older_than_per_start_records_still_moves_the_terminal() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        claude.said(&live.id);
-        claude.started(&live.id, "b", Some(&format!("{}.json", live.id)));
-
-        let followed = claude.follow(&live.id).expect("moved");
-        assert_eq!(followed.split.len(), 1);
-        assert_eq!(claude.row(&live.id).provider_session_id.as_deref(), Some("b"));
-        assert!(claude.follow(&live.id).is_none(), "the record kept behind moved it again");
-    }
-
-    #[test]
-    fn closing_right_after_quick_clears_keeps_each_conversation_and_drops_the_empty_terminal() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        claude.said(&live.id);
-        claude.started(&live.id, "b", None);
-        claude.said("b");
-        claude.started(&live.id, "c", None);
-
-        // The close asks before crewd ever looked; following comes first.
-        let followed = claude.follow(&live.id).expect("moved");
-        assert!(is_disposable_in(&claude.store, live.id.clone(), &claude.dirs).unwrap());
-        delete(&claude.store, live.id.clone()).unwrap();
-        for split in &followed.split {
-            assert!(!is_disposable_in(&claude.store, split.id.clone(), &claude.dirs).unwrap(), "{} would go", split.name);
-        }
-        // The startup sweep agrees, and follows first on its own.
-        assert_eq!(sweep_disposable_in(&claude.store, &claude.dirs).unwrap(), 0);
-        let kept: Vec<Option<String>> =
-            list(&claude.store, claude.workspace.clone()).unwrap().into_iter().map(|s| s.provider_session_id).collect();
-        assert_eq!(kept, [Some(live.id.clone()), Some("b".into())]);
-    }
-
-    #[test]
-    fn the_startup_sweep_follows_a_clear_nobody_read_before_it_judges() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        claude.said(&live.id);
-        claude.started(&live.id, "b", None);
-
-        assert_eq!(sweep_disposable_in(&claude.store, &claude.dirs).unwrap(), 1, "the empty terminal stays");
-        let left = list(&claude.store, claude.workspace.clone()).unwrap();
-        let [kept] = left.as_slice() else { panic!("{left:?}") };
-        assert_eq!(kept.provider_session_id.as_deref(), Some(live.id.as_str()));
-    }
-
-    /// A `/clear` from before Crew split conversations off moved the row and
-    /// left the first conversation under Crew's id with nobody holding it.
-    #[test]
-    fn a_conversation_left_before_splitting_existed_still_keeps_its_terminal() {
-        let claude = Claude::new();
-        let live = terminal(&claude.store, &claude.workspace, "claude", "claude");
-        claude.said(&live.id);
-        set_provider_session(&claude.store, live.id.clone(), "b".into()).unwrap();
-        assert!(!is_disposable_in(&claude.store, live.id, &claude.dirs).unwrap());
     }
 
     #[test]

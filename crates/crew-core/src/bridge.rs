@@ -67,17 +67,11 @@ pub trait ToolHost: Send + Sync {
     fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String>;
 }
 
-/// A token's lifetime is its process's, and the two kinds of process end
-/// differently: a bot's turn is replaced by the next turn, a terminal's
-/// process by nothing.
+/// A token's lifetime is its process's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lease {
     /// One per session, replaced when the next turn starts.
     Turn,
-    /// One per process, handed back when that process exits. A session can
-    /// have more than one: a respawn starts the new process before the old
-    /// one's exit is reaped.
-    Process,
     /// The user's, for as long as the daemon runs.
     User,
     /// One opencode server run's, until [`OpencodeHost::end_run`].
@@ -209,29 +203,6 @@ impl Bridge {
         });
         tokens.insert(token.clone(), Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Turn });
         token
-    }
-
-    /// A token for one process of a terminal session, that lives until
-    /// [`Bridge::revoke_token`] hands it back. It replaces nothing: the process
-    /// a respawn replaces may still be exiting, and its exit must take only
-    /// its own token with it.
-    pub fn mint_process(&self, session_id: &str) -> String {
-        let token = uuid::Uuid::new_v4().to_string();
-        self.tokens().insert(
-            token.clone(),
-            Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Process },
-        );
-        token
-    }
-
-    /// Hand one token back, for a process that has exited. The user's token
-    /// is not handed back this way; it goes with the daemon. Nor are the
-    /// opencode tokens, which go with their server run or their binding.
-    pub fn revoke_token(&self, token: &str) {
-        let mut tokens = self.tokens();
-        if tokens.get(token).is_some_and(|grant| matches!(grant.lease, Lease::Turn | Lease::Process)) {
-            tokens.remove(token);
-        }
     }
 
     /// Hand back every token a session holds, and every opencode binding it
@@ -518,37 +489,13 @@ mod tests {
         assert_eq!(bridge.whose(&second), session("a"));
     }
 
-    /// The respawn case: the new process is running before the old one's
-    /// exit is reaped, and that late exit must take only its own token.
-    #[test]
-    fn a_late_exit_hands_back_its_own_token_and_no_other() {
-        let bridge = bridge();
-        let old = bridge.mint_process("t");
-        let new = bridge.mint_process("t");
-        bridge.revoke_token(&old);
-        assert_eq!(bridge.whose(&old), None);
-        assert_eq!(bridge.whose(&new), session("t"));
-    }
-
-    #[test]
-    fn a_turn_does_not_retire_a_process_token() {
-        let bridge = bridge();
-        let process = bridge.mint_process("s");
-        bridge.mint("s");
-        assert_eq!(bridge.whose(&process), session("s"));
-    }
-
     #[test]
     fn a_deleted_session_loses_every_token_it_held() {
         let bridge = bridge();
         let turn = bridge.mint("s");
-        let one = bridge.mint_process("s");
-        let two = bridge.mint_process("s");
-        let other = bridge.mint_process("x");
+        let other = bridge.mint("x");
         bridge.revoke("s");
-        for token in [&turn, &one, &two] {
-            assert_eq!(bridge.whose(token), None);
-        }
+        assert_eq!(bridge.whose(&turn), None);
         assert_eq!(bridge.whose(&other), session("x"));
     }
 
@@ -557,7 +504,6 @@ mod tests {
         let bridge = bridge();
         let user = bridge.user_token();
         assert_eq!(bridge.whose(&user), Some(Bearer::User));
-        bridge.revoke_token(&user);
         bridge.revoke("anyone");
         assert_eq!(bridge.whose(&user), Some(Bearer::User));
     }
@@ -573,7 +519,6 @@ mod tests {
         assert_ne!(next.run_id, run.run_id);
         assert_ne!(next.host_token, run.host_token);
         // Nothing but the end of the run hands it back.
-        bridge.revoke_token(&run.host_token);
         bridge.revoke("anyone");
         assert_eq!(bridge.whose(&run.host_token), Some(Bearer::OpencodeHost(run.run_id)));
     }
@@ -589,8 +534,6 @@ mod tests {
         // A turn's token for the same session neither replaces it nor is replaced by it.
         let turn = bridge.mint("crew-a");
         assert_eq!(bridge.whose(&token), session("crew-a"));
-        bridge.revoke_token(&token);
-        assert_eq!(bridge.whose(&token), session("crew-a"), "only the binding hands it back");
         host.unbind(&run.run_id, "ses_1");
         assert_eq!(bridge.whose(&token), None);
         assert_eq!(host.session_for(&run.run_id, "ses_1"), None);
@@ -758,7 +701,6 @@ mod tests {
                 "".into(),
                 "".into(),
                 "ask".into(),
-                None,
             )
             .expect("session")
             .id

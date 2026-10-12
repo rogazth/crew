@@ -242,16 +242,11 @@ pub fn envelope(from: &BotRef, body: &str, at: Option<i64>, parent: Option<&str>
                 .to_string(),
         )
     } else {
-        let terminal = if kind == "terminal" {
-            " A session in the terminal view takes no letters: if that is where it is, nothing reaches it."
-        } else {
-            ""
-        };
         (
             format!("{} ({kind} {}), a model", from.name, from.id),
             format!(
                 "Reply with `send_message` to `{}` if you want to answer. No reply is needed: end your turn when you \
-                 have nothing to add.{terminal}",
+                 have nothing to add.",
                 from.id
             ),
         )
@@ -1226,7 +1221,6 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("session")
         .id
@@ -1264,16 +1258,14 @@ mod tests {
         assert!(!letter.contains("send_message"), "{letter}");
     }
 
-    /// Each kind of sender says who wrote it and what a reply can do: a
-    /// session in the terminal view takes no letters, the user is a person who
-    /// reads the chat, and a session's own parent reads its report. None
+    /// Each kind of sender says who wrote it and what a reply can do: the user
+    /// is a person who reads the chat, and a session's own parent reads its report. None
     /// needs an answer.
     #[test]
     fn the_envelope_says_how_to_answer_each_kind_of_sender() {
         let terminal = BotRef { id: "t1".into(), name: "shell".into(), kind: Some("terminal".into()) };
         let out = envelope(&terminal, "hi", None, None);
         assert!(out.starts_with("## Message\nFrom: shell (terminal t1), a model\nReply with `send_message` to `t1`"), "{out}");
-        assert!(out.contains("A session in the terminal view takes no letters"), "{out}");
         let user = BotRef { id: String::new(), name: "You".into(), kind: Some("user".into()) };
         let person = envelope(&user, "hi", None, None);
         assert!(person.contains("From: the user (a person") && !person.contains("a model"), "{person}");
@@ -1285,7 +1277,7 @@ mod tests {
         assert!(parent.contains("your report at the end of this turn reaches it") && !parent.contains("Reply with"), "{parent}");
         assert!(parent.contains("(bot p1), a model"), "{parent}");
         let shell = envelope(&terminal, "the job", None, Some("t1"));
-        assert!(shell.contains("your report at the end of this turn reaches it") && !shell.contains("takes no letters"), "{shell}");
+        assert!(shell.contains("your report at the end of this turn reaches it"), "{shell}");
     }
 
     /// A question lists each question with its options, and says how to answer.

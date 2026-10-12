@@ -416,7 +416,6 @@ mod tests {
                 "m".into(),
                 "".into(),
                 "full".into(),
-                None,
             )
             .expect("bot")
         }

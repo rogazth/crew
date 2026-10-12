@@ -25,40 +25,6 @@ pub const MCP_TOOL_TIMEOUT_SEC: u64 = 3900;
 /// `additionalContext`.
 pub const CONTEXT_KEY: &str = "crew";
 
-/// The `-c` overrides that start Crew's MCP server under codex, with the
-/// environment it needs to reach the bridge. For the TUI a user runs in a
-/// terminal: codex takes them on the root command.
-///
-/// Codex does not hand an MCP server the environment it was started with —
-/// its own servers declare `env` in config.toml for the same reason — and
-/// `crew --mcp` exits at once without CREW_SOCKET.
-pub fn codex_mcp_overrides(command: &str, mcp_args: &[String], env: &[(String, String)]) -> Vec<String> {
-    let mut args = vec![
-        "-c".to_string(),
-        format!(
-            "mcp_servers.crew.command={}",
-            serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
-        ),
-        "-c".to_string(),
-        format!(
-            "mcp_servers.crew.args={}",
-            serde_json::to_string(mcp_args).unwrap_or_else(|_| "[]".into())
-        ),
-    ];
-    if !env.is_empty() {
-        let pairs = env
-            .iter()
-            .map(|(key, value)| {
-                format!("{key}={}", serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()))
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        args.push("-c".into());
-        args.push(format!("mcp_servers.crew.env={{{pairs}}}"));
-    }
-    args
-}
-
 /// What a session's thread is opened with, fresh or resumed.
 pub struct CodexThread {
     pub cwd: String,

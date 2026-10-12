@@ -18,7 +18,7 @@ use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
 use crew_core::process_tools::ProcessTools;
 use crew_core::session_tools::SessionTools;
-use crew_core::pty::{self, PtyEvents, PtyHost, SpawnOptions};
+use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
@@ -30,8 +30,8 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
-    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyDetach, PtyKill, PtyResize, PtySpawn, PtyWrite,
+    self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names,
+    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionOptions, SessionUpdated, SessionUpdate, SessionsDeleted,
     SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -47,7 +47,6 @@ use tokio_tungstenite::tungstenite::Message;
 mod http;
 pub mod lock;
 pub mod machine;
-mod sessions;
 mod socks;
 
 pub struct Config {
@@ -72,8 +71,6 @@ struct Hosts {
     browser: BrowserTools,
     /// `daemon_shutdown`: the main thread stops the daemon as it would on a signal.
     exit: std_mpsc::Sender<()>,
-    /// Sessions' CLIs: what their hooks say, and their histories while a chat reads them.
-    sessions: sessions::SessionWatch,
     /// Sessions started with `start_session`: the tools, and the reaper of idle ones.
     children: Arc<SessionTools>,
     /// `crewd serve` only. Zero on the window's daemon.
@@ -201,8 +198,6 @@ struct Hub {
     quiet: Mutex<HashSet<u64>>,
     next: AtomicU64,
     runtime: Mutex<Option<tokio::runtime::Handle>>,
-    /// Told when a session's terminal ends: its CLI is not there to type into any more.
-    sessions: std::sync::OnceLock<sessions::SessionWatch>,
     /// Told when the last client watching a terminal goes.
     unwatch: std::sync::OnceLock<Box<dyn Fn(u32) + Send + Sync>>,
 }
@@ -215,7 +210,6 @@ impl Hub {
             quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
-            sessions: std::sync::OnceLock::new(),
             unwatch: std::sync::OnceLock::new(),
         }
     }
@@ -241,13 +235,6 @@ impl Hub {
             .entry(id)
             .or_default()
             .insert(stream_id);
-    }
-
-    /// The client let go of the stream: its frames stop reaching it.
-    fn unwatch_pty(&self, id: u64, stream_id: u32) {
-        if let Some(streams) = self.pty_attached.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
-            streams.remove(&stream_id);
-        }
     }
 
     fn unsubscribe(&self, id: u64) {
@@ -380,10 +367,6 @@ impl PtyEvents for Hub {
 
     fn exit(&self, id: &str, code: Option<i32>) {
         self.emit("pty-exit", proto::PtyExit { id: id.to_string(), code });
-        // A CLI that crashed ran no SessionEnd hook.
-        if let (Some(sessions), Some(session)) = (self.sessions.get(), pty::session_of(id)) {
-            sessions.exited(self, session);
-        }
     }
 
     fn resync(&self, id: &str) {
@@ -541,7 +524,6 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
             at: event.at,
             cursor: event.cursor,
         }),
-        view: row.view.clone(),
         paused: row.paused,
     }
 }
@@ -652,8 +634,6 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     config.processes.set_events(hub.clone());
-    let sessions = sessions::SessionWatch::start(config.store.clone(), hub.clone());
-    let _ = hub.sessions.set(sessions.clone());
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
@@ -664,23 +644,14 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         scheduler: scheduler.clone(),
         browser,
         exit: exit_tx,
-        sessions,
         children,
         socks_port: 0,
     };
-    // `read_session` on a session in the terminal view reads its CLI's own history.
-    let watch = hosts.sessions.clone();
-    let read_store = hosts.store.clone();
-    hosts.children.set_history_reader(Arc::new(move |row| {
-        let cwd = session::cwd(&read_store, row)?;
-        watch.read_blocks(&read_store, &row.id, &cwd)
-    }));
     // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
-    let (pty, bridge, leases, gone) = (hosts.pty.clone(), hosts.bridge.clone(), hosts.browser.leases().clone(), hosts.hub.clone());
+    let (bridge, leases, gone) = (hosts.bridge.clone(), hosts.browser.leases().clone(), hosts.hub.clone());
     hosts.children.set_retirement(crew_core::session_tools::Retirement {
         release: Arc::new(move |id| {
-            pty.kill_session(id);
             bridge.revoke(id);
             leases.release_all(id, app_state::now_millis());
         }),
@@ -978,7 +949,6 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
 
     hub.unsubscribe(client_id);
     hosts.browser.relay().client_gone(client_id);
-    hosts.sessions.drop_client(client_id);
     writer.abort();
 }
 
@@ -1103,20 +1073,6 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         attach_pty(hosts, hub, client_id, request.id, request.params).await;
         return None;
     }
-    // Its tab closed: this client stops getting the frames, and the process
-    // runs on without waiting for it to read them.
-    if request.method == "pty_detach" {
-        let result = parse::<PtyDetach>(request.params).map(|PtyDetach { id }| {
-            if let Some(stream_id) = hosts.pty.detach(&id) {
-                hub.unwatch_pty(client_id, stream_id);
-            }
-            Value::Null
-        });
-        return Some(encode(&match result {
-            Ok(value) => proto::ok(request.id, value),
-            Err(error) => proto::err(request.id, error),
-        }));
-    }
     // These speak for the connection itself, so they need to know which one it is.
     if request.method == "browser_host_register" {
         hub.hush(client_id);
@@ -1141,15 +1097,7 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
             Err(error) => proto::err(request.id, error),
         }));
     }
-    // A history is read for the windows that hold it open, so these know who asks.
-    let result = match request.method.as_str() {
-        "session_history_window" => history_window(hosts, client_id, request.params).await,
-        "session_history_close" => parse::<Id>(request.params).map(|Id { id }| {
-            hosts.sessions.close(client_id, &id);
-            Value::Null
-        }),
-        method => dispatch(hosts, method, request.params).await,
-    };
+    let result = dispatch(hosts, request.method.as_str(), request.params).await;
     Some(encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
@@ -1194,69 +1142,6 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
-async fn history_window(hosts: &Hosts, client_id: u64, params: Value) -> Result<Value, String> {
-    let proto::SessionHistoryRequest { id, cwd, before } = parse(params)?;
-    let sessions = hosts.sessions.clone();
-    let store = hosts.store.clone();
-    json(block(move || sessions.window(&store, client_id, &id, &cwd, before)).await?)
-}
-
-/// Providers that can hand out an id before the terminal starts get one now.
-fn bind_new_provider_session(store: &Store, id: String) -> Result<String, String> {
-    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
-    if let Some(bound) = row.provider_session_id {
-        return Ok(bound);
-    }
-    let created = match row.provider.as_str() {
-        "cursor" => provider_session::cursor_create_chat()?,
-        other => return Err(format!("{other} does not create sessions ahead of time")),
-    };
-    session::set_provider_session(store, id, created.clone())?;
-    Ok(created)
-}
-
-fn discover_provider_session(
-    store: &Store,
-    id: String,
-    cwd: &str,
-    since: i64,
-) -> Result<Option<String>, String> {
-    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
-    if row.provider_session_id.is_some() {
-        return Ok(row.provider_session_id);
-    }
-    let claimed = session::claimed_provider_sessions(store, &id)?;
-    let Some(found) = provider_session::discover(&row.provider, cwd, since, &claimed) else {
-        return Ok(None);
-    };
-    session::set_provider_session(store, id, found.clone())?;
-    Ok(Some(found))
-}
-
-/// The new id when Claude moved to another session since the last look. The
-/// conversations it left with turns in them are sessions now; every window
-/// hears of them, and of the renamed terminal.
-fn rebind_claude_session(store: &Store, hub: &Hub, id: String) -> Result<Option<String>, String> {
-    // The window asks, and the hook watcher follows every start: one at a time,
-    // or both would split the same conversation off.
-    static FOLLOWING: Mutex<()> = Mutex::new(());
-    let _one = FOLLOWING.lock().unwrap_or_else(|e| e.into_inner());
-    let before = session::get(store, id.clone())?.and_then(|row| row.provider_session_id);
-    let Some(followed) = session::follow_claude(store, id)? else {
-        return Ok(None);
-    };
-    announce(hub, &followed);
-    let now = followed.session.provider_session_id;
-    Ok(now.filter(|now| before.as_ref() != Some(now)))
-}
-
-fn announce(hub: &Hub, followed: &session::Followed) {
-    for split in &followed.split {
-        hub.emit("session-created", SessionCreated { session: proto_session(split), open: false });
-    }
-    hub.emit("session-updated", SessionUpdated { session: proto_session(&followed.session) });
-}
-
 async fn block<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -1265,93 +1150,8 @@ async fn block<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
-/// A terminal session's process, completed so its CLI reaches Crew's tools:
-/// a token of its own in the environment, and the provider's MCP flag.
-///
-/// The token lives as long as the process and is handed back by token when it
-/// is reaped, not by session: a respawn starts the new process before the old
-/// one's exit is seen, and that exit must not take the new token with it.
-fn terminal_launch(
-    store: &Store,
-    bridge: &Bridge,
-    leases: &Leases,
-    turns: &TurnHost,
-    session_id: &str,
-    mut command: Vec<String>,
-) -> Result<(Vec<String>, SpawnOptions), String> {
-    let row = session::get(store, session_id.to_string())?
-        .ok_or_else(|| format!("No session {session_id}"))?;
-    if row.kind != "terminal" {
-        return Err(format!("{} is not a terminal session", row.name));
-    }
-    // The chat view is Crew's: its CLI runs over the provider's protocol, and a
-    // second one on the same conversation in a PTY would write over it.
-    if row.view != "terminal" {
-        return Err(format!("{} is in the chat view: its CLI is not run in a terminal", row.name));
-    }
-    // The PTY searches the fixed folders first, so a bare `opencode` there would
-    // be the 1.x install. Resolved before anything is minted or claimed.
-    if row.provider == "opencode" && command.first().is_some_and(|binary| binary == "opencode") {
-        command[0] = crew_core::shell_path::resolve_opencode()?.to_string_lossy().into_owned();
-    }
-    // The TUI of opencode runs on Crew's server, opened on the session's
-    // opencode session before anything is minted or claimed.
-    let attach = if row.provider == "opencode" && command.first().is_some_and(|binary| binary.ends_with("opencode")) {
-        Some(turns.opencode_terminal(&row, &crew_core::session::cwd(store, &row)?)?)
-    } else {
-        None
-    };
-    let info = bridge.info()?;
-    let token = bridge.mint_process(session_id);
-    // The prompt a handoff (`start_session` with owner user) left it, taken
-    // by the first launch whose CLI can start on it; a shell leaves it in the
-    // box.
-    let letter = mailbox::claim(store, session_id)?;
-    let opening = letter.as_ref().map(|letter| mailbox::render(letter, None));
-    let launch = crew_core::terminal::launch(
-        &row.provider,
-        command,
-        opening.as_deref(),
-        &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token, opencode: attach.as_ref() },
-    );
-    // Handed over as the CLI's opening prompt, or back in the box for the
-    // next launch that can take one.
-    if let Some(letter) = letter {
-        if launch.prompted {
-            mailbox::delivered(store, &[letter.id])?;
-        } else {
-            mailbox::release(store, &letter.id)?;
-        }
-    }
-    let bridge = bridge.clone();
-    let leases = leases.clone();
-    let session = session_id.to_string();
-    // Its browser tabs are numbered for this process like its token, for the same reason.
-    let process = leases.begin_process(session_id);
-    Ok((
-        launch.argv,
-        SpawnOptions {
-            env: launch.env,
-            // The browser tabs it was driving go free with it, rather than at their TTL.
-            on_exit: Some(Box::new(move || {
-                bridge.revoke_token(&token);
-                leases.end_process(&session, process, app_state::now_millis());
-            })),
-            ..SpawnOptions::default()
-        },
-    ))
-}
-
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     let store = hosts.store.clone();
-    // Closing its tab left its terminal running; the session going takes it.
-    let host = hosts.pty.clone();
-    let session = id.clone();
-    block(move || {
-        host.kill_session(&session);
-        Ok(())
-    })
-    .await?;
     // A turn still running would write into a transcript that is gone.
     if hosts.turns.is_running(&id) {
         let turns = hosts.turns.clone();
@@ -1396,7 +1196,7 @@ async fn expire_sessions(hosts: &Hosts, days: u32) -> Result<Vec<String>, String
     let store = hosts.store.clone();
     let stale = block(move || session::stale(&store, stale_before(days))).await?;
     let mut gone = Vec::new();
-    for id in stale.into_iter().filter(|id| !hosts.pty.runs_session(id)) {
+    for id in stale.into_iter().filter(|id| !hosts.turns.is_running(id)) {
         delete_session(hosts, id.clone()).await?;
         gone.push(id);
     }
@@ -1413,29 +1213,11 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows, session, reuse, dark } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, dark } = parse(params)?;
             let host = hosts.pty.clone();
-            let store = hosts.store.clone();
-            let bridge = hosts.bridge.clone();
-            let leases = hosts.browser.leases().clone();
-            let turns = hosts.turns.clone();
             json(
-                block(move || {
-                    let prepare = move |command: Vec<String>| {
-                        let (command, options) = match session {
-                            Some(session) => terminal_launch(&store, &bridge, &leases, &turns, &session, command)?,
-                            None => (command, SpawnOptions::default()),
-                        };
-                        Ok((command, SpawnOptions { dark, ..options }))
-                    };
-                    if reuse == Some(true) {
-                        host.open(id, cwd, command, cols, rows, prepare)
-                    } else {
-                        let (command, options) = prepare(command)?;
-                        host.spawn_with(id, cwd, command, cols, rows, options)
-                    }
-                })
-                .await?,
+                block(move || host.spawn_with(id, cwd, command, cols, rows, SpawnOptions { dark, ..SpawnOptions::default() }))
+                    .await?,
             )
         }
         "pty_write" => {
@@ -1493,13 +1275,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
             let processes = hosts.processes.clone();
-            let pty = hosts.pty.clone();
+            let turns = hosts.turns.clone();
             block(move || {
                 // Its rows would go with the workspace, but not its processes,
-                // nor the terminals its closed tabs left running.
+                // nor the CLIs its sessions keep between turns.
                 processes.forget_workspace(&id);
                 for session in session::list(&store, id.clone())? {
-                    pty.kill_session(&session.id);
+                    turns.release(&session.id);
                 }
                 workspace::delete(&store, id)
             })
@@ -1546,7 +1328,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.description,
                     p.autonomy,
                     p.worktree,
-                    p.view,
                 )?;
                 let effort = p.effort.clone().unwrap_or_default();
                 let tier = p.service_tier.clone().unwrap_or_default();
@@ -1578,28 +1359,21 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             Ok(Value::Null)
         }
-        // A session nobody has talked to yet moves to another CLI: the old
-        // one ends here, and the window starts the new one.
+        // A session nobody has talked to yet moves to another CLI: the one
+        // it kept ends here, and its next turn starts the new one.
         "session_switch_provider" => {
             let p: proto::SessionSwitchProvider = parse(params)?;
             let store = hosts.store.clone();
-            let sessions = hosts.sessions.clone();
-            let host = hosts.pty.clone();
             let turns = hosts.turns.clone();
-            let id = p.id.clone();
             let row = block(move || {
-                if sessions.has_conversation(&store, &p.id, &p.cwd)? {
+                if session::has_conversation(&store, &p.id)? {
                     return Err("This session already has a conversation; start a new session for another provider".into());
                 }
-                host.kill_session(&p.id);
-                // A session in the chat view keeps a process of its own between turns.
                 turns.release(&p.id);
                 session::switch_provider(&store, p.id.clone(), p.provider, p.model, p.effort, p.service_tier, p.autonomy)?;
                 session::get(&store, p.id)
             })
             .await?;
-            let store = hosts.store.clone();
-            hosts.sessions.switched(&store, &hosts.hub, &id);
             if let Some(row) = row {
                 hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
             }
@@ -1634,35 +1408,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             delete_session(hosts, id).await?;
             Ok(Value::Null)
         }
-        // The session stays; the terminal it runs in, tab open or closed, ends.
-        "session_stop" => {
-            let Id { id } = parse(params)?;
-            let host = hosts.pty.clone();
-            block(move || {
-                host.kill_session(&id);
-                Ok(())
-            })
-            .await?;
-            Ok(Value::Null)
-        }
-        // The workspace's sessions whose terminal runs, its tab open or not.
-        "sessions_running" => {
-            let WorkspaceId { workspace_id } = parse(params)?;
-            let store = hosts.store.clone();
-            let host = hosts.pty.clone();
-            json(
-                block(move || {
-                    let rows = session::list(&store, workspace_id)?;
-                    Ok(rows.into_iter().map(|row| row.id).filter(|id| host.runs_session(id)).collect::<Vec<_>>())
-                })
-                .await?,
-            )
-        }
         "sessions_stale" => {
             let SessionsRetention { days } = parse(params)?;
             let store = hosts.store.clone();
             let stale = block(move || session::stale(&store, stale_before(days))).await?;
-            json(stale.iter().filter(|id| !hosts.pty.runs_session(id)).count())
+            json(stale.iter().filter(|id| !hosts.turns.is_running(id)).count())
         }
         "sessions_expire" => {
             let SessionsRetention { days } = parse(params)?;
@@ -1671,15 +1421,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_is_disposable" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            let hub = hosts.hub.clone();
-            json(block(move || {
-                // Judged on the conversation the CLI is in now, the ones it left split off first.
-                if let Some(followed) = session::follow_claude(&store, id.clone())? {
-                    announce(&hub, &followed);
-                }
-                session::is_disposable(&store, id)
-            })
-            .await?)
+            json(block(move || session::is_disposable(&store, id)).await?)
         }
         "session_reorder" => {
             let Ids { ids } = parse(params)?;
@@ -1691,36 +1433,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let IdStatus { id, status } = parse(params)?;
             let store = hosts.store.clone();
             block(move || session::set_status(&store, id, status)).await?;
-            Ok(Value::Null)
-        }
-        "session_provider_create" => {
-            let Id { id } = parse(params)?;
-            let store = hosts.store.clone();
-            json(block(move || bind_new_provider_session(&store, id)).await?)
-        }
-        "session_provider_discover" => {
-            let ProviderDiscover { id, cwd, since } = parse(params)?;
-            let store = hosts.store.clone();
-            json(block(move || discover_provider_session(&store, id, &cwd, since)).await?)
-        }
-        "session_claude_rebind" => {
-            let Id { id } = parse(params)?;
-            let store = hosts.store.clone();
-            let hub = hosts.hub.clone();
-            json(block(move || rebind_claude_session(&store, &hub, id)).await?)
-        }
-        "session_live_get" => {
-            let Id { id } = parse(params)?;
-            json(hosts.sessions.live(&id))
-        }
-        "session_live_stopped" => {
-            let Id { id } = parse(params)?;
-            hosts.sessions.stopped(&hosts.hub, &id);
-            Ok(Value::Null)
-        }
-        "session_live_answered" => {
-            let proto::SessionLiveAnswered { id, ask_id } = parse(params)?;
-            hosts.sessions.answered(&hosts.hub, &id, ask_id);
             Ok(Value::Null)
         }
         "session_sync_title" => {
@@ -2321,8 +2033,6 @@ mod tests {
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
-                session: None,
-                reuse: None,
                 dark: None,
             })
             .unwrap(),
@@ -2506,8 +2216,6 @@ mod tests {
                     command: vec!["/usr/bin/yes".into()],
                     cols: 80,
                     rows: 24,
-                    session: None,
-                    reuse: None,
                     dark: None,
                 })
                 .unwrap(),
@@ -2580,8 +2288,6 @@ mod tests {
             command: vec!["/usr/bin/yes".into()],
             cols: 80,
             rows: 24,
-            session: None,
-            reuse: None,
             dark: None,
         })
         .unwrap();
@@ -2623,8 +2329,6 @@ mod tests {
                     ],
                     cols: 80,
                     rows: 24,
-                    session: None,
-                    reuse: None,
                     dark: None,
                 })
                 .unwrap(),
@@ -2839,108 +2543,6 @@ mod tests {
                 "params": { "name": "list_peers", "arguments": {} }
             }),
         )
-    }
-
-    /// The whole of decision 1: a terminal session's process is handed a token
-    /// of its own, calls with it as that session, and the token goes when the
-    /// process does.
-    #[tokio::test]
-    async fn a_terminal_session_reaches_the_tools_until_its_process_exits() {
-        let dir = test_dir("terminal-bridge");
-        let (handle, bridge) = test_serve_bridged(&dir);
-        let mut ws = connect_authed(&handle).await;
-        let cwd = dir.to_string_lossy().into_owned();
-        let (_, bot, terminal) = seed_terminal(&mut ws, &cwd).await;
-        let token_file = dir.join(format!("token-{}", random_token()));
-        let done = dir.join(format!("done-{}", random_token()));
-        let script = format!(
-            "printf %s \"$CREW_TOKEN\" > '{0}.tmp' && mv '{0}.tmp' '{0}'; while [ ! -e '{1}' ]; do sleep 0.05; done",
-            token_file.display(),
-            done.display()
-        );
-        let spawned = rpc(
-            &mut ws,
-            4,
-            "pty_spawn",
-            serde_json::to_value(PtySpawn {
-                id: format!("pane-{}", random_token()),
-                cwd: cwd.clone(),
-                command: vec!["/bin/sh".into(), "-c".into(), script],
-                cols: 80,
-                rows: 24,
-                session: Some(terminal.clone()),
-                reuse: None,
-                dark: None,
-            })
-            .unwrap(),
-        )
-        .await;
-        assert!(spawned.ok, "{:?}", spawned.error);
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let token = loop {
-            if let Ok(token) = std::fs::read_to_string(&token_file) {
-                break token;
-            }
-            assert!(std::time::Instant::now() < deadline, "the process never saw a token");
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        };
-        assert!(!token.is_empty(), "CREW_TOKEN was empty");
-
-        let socket = bridge.info().expect("info").socket_path;
-        let reply = list_peers_as(&socket, &token);
-        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains(&bot), "reply: {reply}");
-        // Seen as a terminal: every tool it may call is listed, nothing to
-        // continue turns with, and no gateway.
-        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
-        let names = listed["result"]["tools"].to_string();
-        assert!(names.contains("send_message") && names.contains("start_session") && names.contains("read_logs"), "{names}");
-        assert!(!names.contains("update_description") && !names.contains("find_tool"), "{names}");
-        let catalog = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
-        let names = catalog["result"]["tools"].to_string();
-        assert!(names.contains("send_message") && !names.contains("update_description"), "{names}");
-
-        std::fs::write(&done, "").expect("done");
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            if list_peers_as(&socket, &token)["error"].as_str() == Some("Bad token") {
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline, "the token outlived its process");
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        handle.shutdown();
-    }
-
-    #[tokio::test]
-    async fn only_a_terminal_session_is_launched_with_a_token() {
-        let dir = test_dir("terminal-kind");
-        let (handle, _bridge) = test_serve_bridged(&dir);
-        let mut ws = connect_authed(&handle).await;
-        let cwd = dir.to_string_lossy().into_owned();
-        let (_, bot, _) = seed_terminal(&mut ws, &cwd).await;
-        for (id, session) in [(4, bot.as_str()), (5, "no-such-session")] {
-            let spawned = rpc(
-                &mut ws,
-                id,
-                "pty_spawn",
-                serde_json::to_value(PtySpawn {
-                    id: format!("pane-{}", random_token()),
-                    cwd: cwd.clone(),
-                    command: vec!["/bin/sh".into()],
-                    cols: 80,
-                    rows: 24,
-                    session: Some(session.to_string()),
-                    reuse: None,
-                    dark: None,
-                })
-                .unwrap(),
-            )
-            .await;
-            assert!(!spawned.ok, "{session} was launched as a terminal");
-        }
-        handle.shutdown();
     }
 
     /// A Claude that answers each message "hello", and takes a second and a
@@ -3316,58 +2918,6 @@ time.sleep(600)
             snap.blocks.iter().filter(|block| block.role == proto::BlockRole::User).map(|block| block.text.as_str()).collect();
         assert_eq!(said, ["SLEEP", "two, edited", "four"], "Send now puts its letter at the head");
         assert!(waiting_texts(&mut ws, req, &session.id).await.is_empty());
-        handle.shutdown();
-    }
-
-    /// A session in the chat view has its CLI run by Crew over the provider's
-    /// protocol: a second one in a PTY on the same conversation would write
-    /// over it. Only the terminal view launches.
-    #[tokio::test]
-    async fn a_session_in_the_chat_view_is_not_launched_in_a_terminal() {
-        let dir = test_dir("terminal-chat-view");
-        let (handle, _bridge) = test_serve_bridged(&dir);
-        let mut ws = connect_authed(&handle).await;
-        let cwd = dir.to_string_lossy().into_owned();
-        let (workspace, _, terminal) = seed_terminal(&mut ws, &cwd).await;
-        let chat: proto::Session = serde_json::from_value(
-            rpc(
-                &mut ws,
-                4,
-                "session_create",
-                serde_json::json!({
-                    "workspaceId": workspace,
-                    "kind": "terminal",
-                    "name": "chat",
-                    "provider": "claude",
-                    "model": "",
-                    "description": "",
-                    "autonomy": "ask",
-                    "view": "chat"
-                }),
-            )
-            .await
-            .result
-            .expect("session"),
-        )
-        .expect("session");
-        let spawn = |id: u32, session: &str| {
-            serde_json::to_value(PtySpawn {
-                id: format!("pane-{id}-{}", random_token()),
-                cwd: cwd.clone(),
-                command: vec!["/bin/sh".into()],
-                cols: 80,
-                rows: 24,
-                session: Some(session.to_string()),
-                reuse: None,
-                dark: None,
-            })
-            .unwrap()
-        };
-        let refused = rpc(&mut ws, 5, "pty_spawn", spawn(5, &chat.id)).await;
-        assert!(!refused.ok, "a chat-view session was launched in a terminal");
-        assert!(refused.error.as_deref().is_some_and(|error| error.contains("chat view")), "{:?}", refused.error);
-        let launched = rpc(&mut ws, 6, "pty_spawn", spawn(6, &terminal)).await;
-        assert!(launched.ok, "{:?}", launched.error);
         handle.shutdown();
     }
 
@@ -4237,32 +3787,12 @@ for line in sys.stdin:
             },
         )
         .await;
-        let workspace: proto::Workspace =
+        let _workspace: proto::Workspace =
             serde_json::from_value(wait_response(&mut ws, 1).await.result.expect("ws")).expect("workspace");
-        // A session a turn cannot run on: `TurnHost::start` refuses it outright,
+        // A session that does not exist: `TurnHost::start` refuses it outright,
         // which is the same shape of refusal as "Turn already running".
-        send_json(
-            &mut ws,
-            &Request {
-                id: 2,
-                method: "session_create".into(),
-                params: serde_json::json!({
-                    "workspaceId": workspace.id,
-                    "kind": "terminal",
-                    "name": "T",
-                    "provider": "claude",
-                    "model": "m",
-                    "description": "",
-                    "autonomy": "ask"
-                }),
-            },
-        )
-        .await;
-        let session: proto::Session =
-            serde_json::from_value(wait_response(&mut ws, 2).await.result.expect("session")).expect("session");
-
         let send = serde_json::json!({
-            "sessionId": session.id,
+            "sessionId": "no-such-session",
             "cwd": dir.to_string_lossy(),
             "text": "hi",
             "nonce": "n-1"
@@ -4305,8 +3835,6 @@ for line in sys.stdin:
                         command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
                         cols: 80,
                         rows: 24,
-                        session: None,
-                        reuse: None,
                         dark: None,
                     })
                     .unwrap(),
@@ -4350,73 +3878,6 @@ for line in sys.stdin:
         handle.shutdown();
     }
 
-    /// A terminal session's tab closing detaches its terminal: it runs on, and
-    /// stops only when asked to, or with its session or its workspace.
-    #[tokio::test]
-    async fn a_detached_session_terminal_runs_until_stopped_or_deleted() {
-        let dir = test_dir("detach");
-        let handle = test_serve(&dir);
-        let mut ws = connect_authed(&handle).await;
-        let workspace = rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_string_lossy() })).await;
-        let workspace: proto::Workspace = serde_json::from_value(workspace.result.expect("ws")).expect("workspace");
-        let (stopped, stopped_pty) = detached_session(&mut ws, 10, &workspace.id).await;
-        let (deleted, deleted_pty) = detached_session(&mut ws, 20, &workspace.id).await;
-        let (kept, kept_pty) = detached_session(&mut ws, 30, &workspace.id).await;
-        let mut all = vec![stopped.clone(), deleted.clone(), kept.clone()];
-        all.sort();
-        assert_eq!(running(&mut ws, 100, &workspace.id).await, all, "a detached terminal stopped running");
-
-        assert!(rpc(&mut ws, 101, "session_stop", serde_json::json!({ "id": stopped })).await.ok);
-        assert!(rpc(&mut ws, 102, "session_delete", serde_json::json!({ "id": deleted })).await.ok);
-        assert_eq!(running(&mut ws, 103, &workspace.id).await, vec![kept.clone()]);
-        for (id, pty) in [(104, &stopped_pty), (105, &deleted_pty)] {
-            let attach = rpc(&mut ws, id, "pty_attach", serde_json::json!({ "id": pty, "from": 0 })).await;
-            assert!(!attach.ok, "{pty} still runs");
-        }
-        assert!(rpc(&mut ws, 106, "session_get", serde_json::json!({ "id": stopped })).await.result.is_some_and(|row| !row.is_null()), "stop took the session");
-
-        // Reopened, the tab finds the same process.
-        attach_pty(&mut ws, 107, &kept_pty, 0).await;
-        assert!(rpc(&mut ws, 108, "workspace_delete", serde_json::json!({ "id": workspace.id })).await.ok);
-        let attach = rpc(&mut ws, 109, "pty_attach", serde_json::json!({ "id": kept_pty, "from": 0 })).await;
-        assert!(!attach.ok, "the workspace went, its terminal stayed");
-        handle.shutdown();
-    }
-
-    /// A terminal session whose terminal was spawned, watched, and let go: its tab closed.
-    async fn detached_session(ws: &mut Ws, id: u32, workspace: &str) -> (String, String) {
-        let created = rpc(
-            ws,
-            id,
-            "session_create",
-            serde_json::json!({
-                "workspaceId": workspace,
-                "kind": "terminal",
-                "name": "T",
-                "provider": "claude",
-                "model": "m",
-                "description": "",
-                "autonomy": "ask"
-            }),
-        )
-        .await;
-        let session: proto::Session = serde_json::from_value(created.result.expect("session")).expect("session");
-        let pty = format!("{workspace}/session:{}", session.id);
-        send_json(ws, &spawn_req(id + 1, &pty)).await;
-        assert!(wait_response(ws, id + 1).await.ok);
-        attach_pty(ws, id + 2, &pty, 0).await;
-        let detached = rpc(ws, id + 3, "pty_detach", serde_json::json!({ "id": pty })).await;
-        assert!(detached.ok, "{}", detached.error.unwrap_or_default());
-        (session.id, pty)
-    }
-
-    async fn running(ws: &mut Ws, id: u32, workspace: &str) -> Vec<String> {
-        let listed = rpc(ws, id, "sessions_running", serde_json::json!({ "workspaceId": workspace })).await;
-        let mut ids: Vec<String> = serde_json::from_value(listed.result.expect("running")).expect("ids");
-        ids.sort();
-        ids
-    }
-
     async fn rpc(ws: &mut Ws, id: u32, method: &str, params: Value) -> proto::Response {
         send_json(ws, &Request { id, method: method.into(), params }).await;
         wait_response(ws, id).await
@@ -4444,7 +3905,7 @@ for line in sys.stdin:
             let store = Store::open(dir.join("crew.sqlite3")).expect("store");
             let made = workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
             let session = session::create(
-                &store, made.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+                &store, made.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
             )
             .expect("session");
             for (position, (id, state)) in [("done", "completed"), ("was-running", "running")].into_iter().enumerate() {

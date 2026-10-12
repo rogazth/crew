@@ -55,16 +55,11 @@ pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
 /// The `--mcp-config` value that starts Crew's MCP server. Claude merges it
 /// with the user's own servers unless `--strict-mcp-config` is also passed.
 ///
-/// `always_load` keeps Crew's tools in the prompt, never deferred behind
-/// Claude Code's own tool search (plan §7e.8): for the bots and sessions Crew
-/// drives. A terminal is the user's, and left to their settings. Read off
-/// Claude Code 2.1.289: `alwaysLoad` is a boolean beside `command` in the
-/// stdio server schema.
-pub fn claude_mcp_config(command: &str, args: &[String], always_load: bool) -> String {
-    let mut server = json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS });
-    if always_load {
-        server["alwaysLoad"] = json!(true);
-    }
+/// `alwaysLoad` keeps Crew's tools in the prompt, never deferred behind Claude
+/// Code's own tool search (plan §7e.8). Read off Claude Code 2.1.289: it is a
+/// boolean beside `command` in the stdio server schema.
+pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
+    let server = json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS, "alwaysLoad": true });
     json!({ "mcpServers": { "crew": server } }).to_string()
 }
 
@@ -1525,7 +1520,7 @@ mod tests {
             asks_questions: false,
             system_prompt: None,
             autonomy: Autonomy::Ask,
-            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], true)),
+            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()])),
             user_settings: false,
             fast: false,
         });
@@ -1536,8 +1531,6 @@ mod tests {
         let mcp: Value = serde_json::from_str(&args[at + 1]).expect("json");
         assert_eq!(mcp["mcpServers"]["crew"]["timeout"], 3_900_000, "{mcp}");
         assert_eq!(mcp["mcpServers"]["crew"]["alwaysLoad"], true, "{mcp}");
-        let terminal: Value = serde_json::from_str(&claude_mcp_config("/app/crewd", &["--mcp".into()], false)).expect("json");
-        assert!(terminal["mcpServers"]["crew"].get("alwaysLoad").is_none(), "{terminal}");
     }
 
     /// A bot keeps to the workspace's settings, so `~/.claude` cannot inject a

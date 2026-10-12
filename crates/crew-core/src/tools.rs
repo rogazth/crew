@@ -626,7 +626,7 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
     // A terminal's prompt is the user's: this is all Crew tells it (plan §7.3).
     if let Caller::Terminal(session) = caller {
         let harness = crate::prompts::Harness::for_provider(&session.provider);
-        return format!("{}{notes}", crate::prompts::terminal(&session.name, harness, session.view == "chat"));
+        return format!("{}{notes}", crate::prompts::terminal(&session.name, harness));
     }
     let who = match caller {
         Caller::Bot(_) => String::new(),
@@ -954,13 +954,11 @@ fn create_bot(
         description,
         autonomy.clone(),
         me.worktree.clone(),
-        None,
     )?;
     on_created(&session);
     transcripts.append_system(&session.id, &format!("Created by {}", me.name));
     // The creator's own chat, so the roster growing is something the user reads
-    // where they are, not something they find in the sidebar. A terminal
-    // session's chat is its screen, which Crew does not write on.
+    // where they are, not something they find in the sidebar.
     if matches!(caller, Caller::Bot(_)) {
         transcripts.append_system(&me.id, &format!("Created bot {name} ({})", session.id));
     }
@@ -1261,7 +1259,6 @@ mod tests {
             "claude-opus-5".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("bot")
     }
@@ -1295,7 +1292,6 @@ mod tests {
             parent_name: None,
             user_seen: 0,
             last_event: None,
-            view: crate::session::DEFAULT_VIEW.into(),
         })
     }
 
@@ -1495,7 +1491,6 @@ mod tests {
             "".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("bot")
     }
@@ -1540,7 +1535,6 @@ mod tests {
             "gpt-5.6-luna".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("bot");
 
@@ -1637,7 +1631,6 @@ mod tests {
             "".into(),
             "ask".into(),
             Some("/wt/feat".into()),
-            None,
         )
         .expect("coder");
 
@@ -1720,7 +1713,6 @@ mod tests {
             "".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("terminal")
     }
@@ -2017,7 +2009,7 @@ mod tests {
         let bot = instructions(&toolbox, &someone("bot"));
         assert!(bot.starts_with("Crew is the app this runs in") && bot.contains(GLOSSARY), "{bot}");
         let shell = instructions(&toolbox, &someone("terminal"));
-        assert!(shell.contains("cannot write back"), "{shell}");
+        assert!(shell.contains("which Crew drives in the chat") && !shell.contains("cannot write back"), "{shell}");
         for text in [&bot, &shell] {
             for gone in ["find_tool", "call_tool", "not listed"] {
                 assert!(!text.contains(gone), "{gone}: {text}");

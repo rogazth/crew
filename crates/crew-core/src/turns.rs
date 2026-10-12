@@ -45,7 +45,6 @@ mod opencode;
 mod opencode_server;
 use codex::CodexLive;
 use cursor::CursorLive;
-pub use opencode::OpencodeAttach;
 use opencode::OpencodeLive;
 #[cfg(test)]
 pub(crate) use opencode::fake_opencode_server;
@@ -166,7 +165,7 @@ enum Driven {
     /// A subagent: it carries on the provider's own conversation, under a
     /// persona that says who started it.
     Child,
-    /// A top-level session in the chat view: the user's own CLI, run by Crew
+    /// A top-level session of the user's: their own CLI, run by Crew
     /// over the provider's protocol. It carries on the provider's own
     /// conversation and is told nothing their CLI would not be.
     User,
@@ -180,15 +179,13 @@ impl Driven {
     }
 }
 
-/// How Crew drives `session`, if it does. A terminal in the terminal view is
-/// the user at the keyboard of its CLI, and no turn of ours may run beside it.
-/// The one place that says which sessions are driven; the checks that mean
+/// How Crew drives `session`, if it does. The one place that says which sessions are driven; the checks that mean
 /// "carries the provider's conversation" or "is the user's own" ask it.
 fn driven(session: &crate::session::Session) -> Option<Driven> {
-    match (session.kind.as_str(), session.view.as_str()) {
-        ("bot", _) => Some(Driven::Bot),
-        ("child", _) => Some(Driven::Child),
-        ("terminal", "chat") => Some(Driven::User),
+    match session.kind.as_str() {
+        "bot" => Some(Driven::Bot),
+        "child" => Some(Driven::Child),
+        "terminal" => Some(Driven::User),
         _ => None,
     }
 }
@@ -1174,7 +1171,7 @@ impl TurnHost {
     pub fn interrupt_with(&self, session_id: &str, letter_id: &str) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or_else(|| "Session not found".to_string())?;
         if driven(&session).is_none() {
-            return Err(format!("{} runs in the terminal view and takes no letters.", session.name));
+            return Err(format!("{} is not a session Crew drives.", session.name));
         }
         mailbox::reorder(&self.store, session_id, &[letter_id.to_string()])?;
         Ok(self.stop_and_hand_over(session_id, letter_id))
@@ -1227,10 +1224,7 @@ impl TurnHost {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
         let Some(drive) = driven(&session) else {
-            return Err(format!(
-                "{} runs its CLI in the terminal view. Crew drives only a session in the chat view.",
-                session.name
-            ));
+            return Err(format!("{} is not a session Crew drives.", session.name));
         };
         let carries = drive.carries_conversation();
         if drive == Driven::Child && session.status == "exited" {
@@ -2544,16 +2538,14 @@ impl TurnHost {
     }
 
     /// Hand over what a letter that has just been dropped in left waiting.
-    /// A subagent, a session in the chat view and a bot take it as a turn;
+    /// A subagent, a session and a bot take it as a turn;
     /// see [`TurnHost::wake`].
     pub fn deliver_to(&self, target: &crate::session::Session) -> bool {
         self.wake(&target.id)
     }
 
     /// A letter has landed in `session_id`'s box: start the turn it asks for,
-    /// or steer it into the one that runs. A session in the terminal view has
-    /// no turns, and the letter waits where the user sees it (decision 16). A
-    /// session that has had [`session::PAUSE_AFTER`] automatic turns in a row
+    /// or steer it into the one that runs. A session that has had [`session::PAUSE_AFTER`] automatic turns in a row
     /// is not woken (27). Letters from sessions wait for the next to come
     /// close behind them (17); a question, an approval and anything the user
     /// wrote do not. Returns whether a turn started.
@@ -2792,8 +2784,7 @@ impl TurnHost {
             .parent_id
             .as_deref()
             .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
-        // A bot, or a session in the chat view, has turns a report can wake. A
-        // parent in the terminal view reads them with `read_session`.
+        // A bot or a session has turns a report can wake.
         if driven(&parent).is_none() {
             return None;
         }
@@ -3344,8 +3335,7 @@ impl TurnHost {
         self.detach(session_id);
         // A session that carries on its own conversation does; a bot starts a
         // clean one. The user's session names it by Crew's id until the CLI
-        // moves on from it: the terminal view did too, so the history the CLI
-        // wrote there and the driver share one conversation.
+        // moves on from it.
         let claude_session_id = match driven(session) {
             Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
             _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -3457,7 +3447,7 @@ impl TurnHost {
             asks_questions: carries_conversation(session),
             system_prompt: persona,
             autonomy,
-            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, true)),
+            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
             user_settings: session.kind != "bot",
             // A tier carried over from another provider must not ask an
             // account that cannot use fast mode for it.
@@ -3848,7 +3838,7 @@ impl TurnHost {
                 // says it as a synthetic assistant message instead, which
                 // draws as any reply; this is the SDK's own line for it.
                 let output = string_field(Some(&rec), "content")
-                    .and_then(|content| crate::session_history::claude::local_command_output(&content));
+                    .and_then(|content| crate::command_output::local_command_output(&content));
                 if let Some(message) = output {
                     events.push(HarnessEvent::SessionNote { message });
                 }
@@ -4566,7 +4556,6 @@ mod mailbox_tests {
             "m".into(),
             "".into(),
             "full".into(),
-            None,
         )
         .expect("bot")
     }
@@ -4703,34 +4692,6 @@ mod mailbox_tests {
         assert!(!launched["argv"].to_string().contains(token), "{}", launched["argv"]);
     }
 
-    /// A terminal session's TUI attaches to the shared server on one opencode
-    /// session, made once and held by the row; the server's own token never
-    /// goes with it.
-    #[test]
-    fn a_terminal_attaches_to_the_shared_server_on_the_session_its_row_holds() {
-        let world = world();
-        let ws = workspace(&world);
-        let row = crate::session::create(
-            world.host.test_store(),
-            ws,
-            "terminal".into(),
-            "mine".into(),
-            "opencode".into(),
-            "m".into(),
-            "".into(),
-            "full".into(),
-            None,
-        )
-        .expect("session");
-        let cwd = world.dir.to_string_lossy().into_owned();
-        let first = world.host.opencode_terminal(&row, &cwd).expect("attach");
-        assert!(first.url.starts_with("http://127.0.0.1:") && !first.password.is_empty(), "{}", first.url);
-        let held = crate::session::get(world.host.test_store(), row.id.clone()).unwrap().unwrap();
-        assert_eq!(held.provider_session_id.as_deref(), Some(first.session.as_str()));
-        let again = world.host.opencode_terminal(&held, &cwd).expect("attach again");
-        assert_eq!((again.session, again.url), (first.session, first.url), "one session, one server");
-    }
-
     #[test]
     fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
         let world = world();
@@ -4812,7 +4773,6 @@ mod mailbox_tests {
             "m".into(),
             "".into(),
             "ask".into(),
-            None,
         )
         .expect("bot");
         let allowed_all = || {
@@ -4925,7 +4885,7 @@ mod mailbox_tests {
         let dir = std::env::temp_dir().join(format!("sheet-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("dir");
         let ws = crate::workspace::create(store, "sheet".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
-        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into(), None)
+        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
             .expect("bot");
         let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
             .expect("child");
