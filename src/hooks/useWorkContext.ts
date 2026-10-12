@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as api from "../lib/api";
 import { client } from "../lib/client";
-import { markHanded } from "../lib/handedSessions";
 import type { SessionCreated } from "../lib/protocol";
 import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
@@ -145,15 +144,14 @@ export function useWorkContext(
   });
 
   // A session handed to the user (`start_session`) joins its
-  // worktree's strip behind whatever is on screen, and its CLI starts on the
-  // prompt out of sight: the window stays where it was.
+  // worktree's strip behind whatever is on screen, and works on its prompt out of
+  // sight: the window stays where it was.
   useEffect(() => {
     const unsubscribe = client.on("session-created", (payload) => {
       const { session, open } = payload as SessionCreated;
       const { tabs, everywhere, scope } = latest.current;
       const of = everywhere.workspaces.find((ws) => ws.id === session.workspaceId);
       if (!open || !of) return;
-      markHanded(session.id);
       tabs.adopt(contextId(of, session.worktree ?? of.path, scope), {
         id: sessionTabId(session.id),
         kind: "session",

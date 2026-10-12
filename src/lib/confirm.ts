@@ -33,15 +33,6 @@ export function closePrompt(count: number, unsaved: string[]): Prompt | null {
   return { title: `Close ${count} tabs?`, description: unsavedCost(unsaved), action: "Close" };
 }
 
-/** What stopping a terminal session asks while its CLI is at work; `label` says how ("is still working"). */
-export function stopPrompt(name: string, label: string): Prompt {
-  return {
-    title: `Stop "${name}"?`,
-    description: `It ${label}. Stopping ends its process; the session stays in the sidebar.`,
-    action: "Stop",
-  };
-}
-
 /** How many of a session's running entries a prompt names before it counts the rest. */
 const NAMED_RUNNING = 4;
 

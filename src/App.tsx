@@ -37,9 +37,7 @@ import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
-import { markStopped, useRunningSessions } from "./lib/runningSessions";
-import { isTerminalTab, sessionPtyId, tabFile } from "./lib/tabs";
-import type { Session } from "./lib/types";
+import { isTerminalTab, tabFile } from "./lib/tabs";
 import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
@@ -144,24 +142,8 @@ export function App() {
     rereadWorktrees: worktrees.reread,
   });
 
-  // A closed tab leaves its CLI running; Stop is what ends it. Its tabs go with
-  // it: the session stays in the sidebar, and opening it starts the CLI again.
   const workspaceIds = useMemo(() => workspaces.workspaces.map((workspace) => workspace.id), [workspaces.workspaces]);
-  const runningSessions = useRunningSessions(workspaceIds);
   useEffect(() => watchProcesses(workspaceIds), [workspaceIds]);
-  const { askStop } = confirms;
-  const { closeForSession } = tabs;
-  const stopSession = useCallback(
-    (session: Session) =>
-      askStop(session, () => {
-        closeForSession(session.id);
-        markStopped(session.id);
-        // A crewd from before Stop knows the terminal by its id alone.
-        void api.stopSession(session.id).catch(() => api.killPty(sessionPtyId(session.workspaceId, session.id)));
-      }),
-    [askStop, closeForSession],
-  );
-
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [dialog, setDialog] = useState<"new-worktree" | "shortcuts" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -318,7 +300,7 @@ export function App() {
     openCommands,
     startAllCommands: startableIn(processes.processes ?? [], here.worktree).length > 0 ? () => void processes.startAll(here.worktree) : null,
     stopAllCommands: commandCounts.live > 0 ? () => void processes.stopAll() : null,
-    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
+    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active) ? null : (delta) => void zoomApp(delta),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
@@ -393,8 +375,6 @@ export function App() {
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
-            runningSessions,
-            onStop: stopSession,
             onReorder: reorder,
             home: isHome
               ? {
@@ -445,8 +425,6 @@ export function App() {
             onCloseMany={nav.closeTabs}
             onReopen={tabs.reopen}
             onEditSession={sheet.editBot}
-            runningSessions={runningSessions}
-            onStopSession={stopSession}
             onReorder={tabs.reorder}
             onPin={tabs.pin}
             onUnpin={tabs.unpin}
@@ -488,7 +466,6 @@ export function App() {
               cwd={treePath}
               hasWorkspace={active !== null}
               onCreateWorkspace={envs.openWorkspace}
-              onStatus={setStatus}
               onOpenFile={nav.openFile}
               onOpenFileInBrowser={nav.openFileInBrowser}
               onOpenSession={nav.openSessionById}

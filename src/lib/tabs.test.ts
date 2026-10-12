@@ -347,23 +347,19 @@ describe("parseTabs", () => {
 });
 
 describe("what a tab is", () => {
-  const sessions = [bot("a", "Planner"), terminal("t"), { ...terminal("c"), view: "chat" } as Session];
+  const sessions = [bot("a", "Planner"), terminal("t")];
 
-  it("knows a bot tab from a terminal one", () => {
+  it("counts every session tab as a chat, and none as a terminal", () => {
     expect(isTurnTab(sessionTab("a"), sessions)).toBe(true);
-    expect(isTurnTab(sessionTab("t"), sessions)).toBe(false);
-    expect(isTerminalTab(sessionTab("t"), sessions)).toBe(true);
-  });
-
-  it("counts a terminal session in the chat view as a chat, not a terminal", () => {
-    expect(isTurnTab(sessionTab("c"), sessions)).toBe(true);
-    expect(isTerminalTab(sessionTab("c"), sessions)).toBe(false);
-    expect(isTerminalTab(sessionTab("a"), sessions)).toBe(false);
+    expect(isTurnTab(sessionTab("t"), sessions)).toBe(true);
+    expect(isTurnTab(sessionTab("ghost"), sessions)).toBe(false);
+    expect(isTerminalTab(sessionTab("t"))).toBe(false);
+    expect(isTerminalTab(sessionTab("a"))).toBe(false);
   });
 
   it("counts the terminal stub as a terminal", () => {
     const stub: Tab = { id: "stub:terminal", kind: "stub", stub: "terminal", title: "Terminal" };
-    expect(isTerminalTab(stub, sessions)).toBe(true);
+    expect(isTerminalTab(stub)).toBe(true);
     expect(isTurnTab(stub, sessions)).toBe(false);
   });
 
@@ -384,7 +380,7 @@ describe("a sign-in terminal", () => {
   it("is a terminal in the worktree it was asked from, titled after its server", () => {
     const tab = newSignInTab("/w/feature", signIn);
     expect(tab).toMatchObject({ kind: "stub", stub: "terminal", title: "Sign in to sentry", worktree: "/w/feature", signIn });
-    expect(isTerminalTab(tab, [])).toBe(true);
+    expect(isTerminalTab(tab)).toBe(true);
     expect(newSignInTab(null, signIn).id).not.toBe(tab.id);
   });
 

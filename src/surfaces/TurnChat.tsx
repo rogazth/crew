@@ -142,9 +142,9 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
         autonomy: next.access,
       };
       if (next.provider === session.provider) void setSessionOptions(session.id, options).catch(() => {});
-      else if (fresh) void switchSessionProvider(session.id, cwd, { provider: next.provider, ...options }).catch(() => {});
+      else if (fresh) void switchSessionProvider(session.id, { provider: next.provider, ...options }).catch(() => {});
     },
-    [cwd, fresh, session.id, session.provider],
+    [fresh, session.id, session.provider],
   );
 
   const submit = useCallback(

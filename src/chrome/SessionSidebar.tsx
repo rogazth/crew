@@ -11,7 +11,6 @@ import {
   OPEN,
   RENAME,
   SEPARATOR,
-  STOP,
   menuFromEvent,
   tidy,
   type MenuAction,
@@ -71,8 +70,6 @@ export type SessionSidebarProps = {
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
   /** Terminal sessions whose CLI runs, tab open or not: those offer Stop. */
-  runningSessions: ReadonlyMap<string, string>;
-  onStop: (session: Session) => void;
   onReorder: (ids: string[]) => void;
   /** The way to the workspace's commands, kept under the list whatever it scrolls to. */
   commands?: ReactNode;
@@ -100,8 +97,8 @@ const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "
 /** A finished turn or a failure nobody has looked at. */
 const unread = (session: Session) => session.status === "done" || session.status === "error";
 
-/** What a right-click on one session offers, loudest last. `running`: its CLI is up, to stop. */
-function sessionActions(session: Session, running: boolean): MenuEntry[] {
+/** What a right-click on one session offers, loudest last. */
+function sessionActions(session: Session): MenuEntry[] {
   if (session.kind === "terminal" || session.kind === "child")
     return tidy([
       OPEN,
@@ -109,7 +106,6 @@ function sessionActions(session: Session, running: boolean): MenuEntry[] {
       ...(unread(session) ? [MARK_READ] : []),
       COPY_NAME,
       SEPARATOR,
-      ...(running ? [STOP] : []),
       DELETE,
     ]);
   return tidy([
@@ -479,7 +475,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           actions={
             selected.size > 1 && selected.has(menu.session.id)
               ? [{ ...DELETE, label: `Delete ${selected.size} Items` }]
-              : sessionActions(menu.session, props.runningSessions.has(menu.session.id))
+              : sessionActions(menu.session)
           }
           onPick={(id) => {
             const session = menu.session;
@@ -493,7 +489,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
             if (id === "notifications") props.onToggleNotifications(session);
             if (id === "mark-read") props.onMarkRead(session);
             if (id === "copy-name") void navigator.clipboard.writeText(session.name);
-            if (id === "stop") props.onStop(session);
             if (id === "delete") removeFrom(session);
           }}
           onClose={() => setMenu(null)}

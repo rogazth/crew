@@ -1,6 +1,5 @@
 import { client } from "./client";
-import type { BackgroundCommand, BackgroundList, SessionLive } from "./protocol";
-import { sessionSurface } from "./sessionView";
+import type { BackgroundCommand, BackgroundList } from "./protocol";
 import { elapsed } from "./time";
 import type { Session } from "./types";
 
@@ -77,16 +76,6 @@ export function turnTray(list: BackgroundList | null): BackgroundCommand[] {
 }
 
 /**
- * What a terminal's tray lists: what its last Stop hook said was still
- * running, read-only. A new turn hides it (U3): that Stop is the turn
- * before's, and the next one says what is left.
- */
-export function terminalTray(live: SessionLive | null): BackgroundCommand[] {
-  if (!live || live.working) return [];
-  return live.backgroundTasks ?? [];
-}
-
-/**
  * The count on a session's tab: only once its turn is over (or answered and
  * waiting on them), with commands still running. While it works, the spinner
  * already says so.
@@ -96,18 +85,8 @@ export function tabCount(list: BackgroundList | null, working: boolean): number 
   return list.commands.filter(isRunning).length;
 }
 
-/** A terminal's: what its last Stop hook named, once that turn is over. */
-export function terminalCount(live: SessionLive | null): number {
-  return terminalTray(live).filter(isRunning).length;
-}
-
-/** The count on a session's tab, from whichever list its view keeps. */
-export function tabBackgroundCount(
-  session: Pick<Session, "kind" | "view" | "status">,
-  list: BackgroundList | null,
-  live: SessionLive | null,
-): number {
-  if (sessionSurface(session) === "terminal") return terminalCount(live);
+/** The count on a session's tab, from its list. */
+export function tabBackgroundCount(session: Pick<Session, "status">, list: BackgroundList | null): number {
   return tabCount(list, session.status === "working" || session.status === "needs-input" || session.status === "starting");
 }
 

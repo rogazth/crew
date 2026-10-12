@@ -11,9 +11,8 @@ type Props = {
 };
 
 /**
- * Open tabs of chats Crew runs turn by turn (a bot's, a child's, a session
- * created in the chat view) stay mounted,
- * across workspaces too, so a switch keeps the draft and the scroll position.
+ * Open tabs of chats Crew runs turn by turn (a bot's, a child's, a session's)
+ * stay mounted, across workspaces too, so a switch keeps the draft and the scroll position.
  * The turn itself lives in the runtime, which is why closing one costs nothing.
  */
 export function TurnChats({ panes, sessions }: Props) {

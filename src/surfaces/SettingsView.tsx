@@ -12,14 +12,12 @@ import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useListedModels } from "../hooks/useListedModels";
-import { useSessionView } from "../hooks/useSessionView";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
 import { BOT_AVATARS } from "../lib/botAvatar";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
 import { COLOR_MODES } from "../lib/colorMode";
-import { SESSION_VIEWS } from "../lib/sessionView";
 import { describeCli, type CliResult, type CliStatus } from "../lib/cli";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
@@ -168,7 +166,6 @@ const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 function Appearance() {
   const avatar = useBotAvatar();
   const color = useColorMode();
-  const sessions = useSessionView();
   return (
     <>
       {color.available && (
@@ -184,20 +181,6 @@ function Appearance() {
           </SettingsRow>
         </SettingsSection>
       )}
-      <SettingsSection title="Sessions">
-        <SettingsRow
-          label="New sessions open in"
-          description="Chat has Crew drive the session's CLI and show the conversation in its own chat; Terminal runs the CLI on its own screen. It applies to new sessions: each keeps the view it was created with."
-        >
-          <Select
-            label="New sessions open in"
-            className="w-40"
-            value={sessions.view}
-            onChange={sessions.update}
-            options={SESSION_VIEWS.map((item) => ({ value: item.id, label: item.label }))}
-          />
-        </SettingsRow>
-      </SettingsSection>
       <SettingsSection title="Bots">
         <SettingsRow label="Avatar style" description="Every bot gets its own face in this style, drawn from its id.">
           <div className="flex items-center gap-3">

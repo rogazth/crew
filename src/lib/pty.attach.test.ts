@@ -61,30 +61,4 @@ describe("pty", () => {
     ]);
     off();
   });
-
-  // A daemon that restarted (an update, the kernel killing it for memory) took
-  // the process along and never said so: without this the pane keeps its last
-  // frame and the keys go nowhere.
-  it("tells a view its process is gone when the daemon comes back without it", async () => {
-    const lost = vi.fn();
-    const off = pty.subscribePty("gone", () => {}, () => {}, undefined, lost);
-    await pty.attachPty("gone", 3);
-    request.mockImplementation((method: string) =>
-      method === "pty_attach" ? Promise.reject(new Error("Terminal is not running")) : Promise.resolve(null),
-    );
-    for (const hook of reconnects) hook();
-    await vi.waitFor(() => expect(lost).toHaveBeenCalledTimes(1));
-    off();
-  });
-
-  it("does not take a link that drops again for a lost process", async () => {
-    const lost = vi.fn();
-    const off = pty.subscribePty("flaky", () => {}, () => {}, undefined, lost);
-    await pty.attachPty("flaky", 4);
-    request.mockImplementation(() => Promise.reject(new Error("That machine is offline")));
-    for (const hook of reconnects) hook();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(lost).not.toHaveBeenCalled();
-    off();
-  });
 });

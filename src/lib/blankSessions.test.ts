@@ -50,11 +50,10 @@ describe("stillBlank", () => {
     expect([...kept]).toEqual(["c"]);
   });
 
-  it("lets go of a chat-view session Crew's transcript holds words of, though it rests", () => {
-    const said = (id: string) => id === "a" || id === "b";
-    const kept = stillBlank(new Set(["a", "b", "c"]), [row("a", { view: "chat" }), row("b"), row("c", { view: "chat" })], said);
-    // b is a terminal's: its words are in its CLI's own history, not Crew's.
-    expect([...kept]).toEqual(["b", "c"]);
+  it("lets go of a session Crew's transcript holds words of, though it rests", () => {
+    const said = (id: string) => id === "a";
+    const kept = stillBlank(new Set(["a", "b"]), [row("a"), row("b")], said);
+    expect([...kept]).toEqual(["b"]);
   });
 
   it("holds one the list has not caught up with", () => {

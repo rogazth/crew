@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closePrompt, restartPrompt, settle, stopPrompt, unsavedCost } from "./confirm";
+import { closePrompt, restartPrompt, settle, unsavedCost } from "./confirm";
 
 describe("settle", () => {
   it("is done when the action resolves to nothing", async () => {
@@ -45,16 +45,6 @@ describe("closePrompt", () => {
       action: "Close",
     });
     expect(closePrompt(4, ["a.ts"])?.description).toBe('"a.ts" has unsaved changes, which are lost.');
-  });
-});
-
-describe("stopPrompt", () => {
-  it("names the terminal and what it is doing, and keeps the session", () => {
-    expect(stopPrompt("dev server", "is still working")).toEqual({
-      title: 'Stop "dev server"?',
-      description: "It is still working. Stopping ends its process; the session stays in the sidebar.",
-      action: "Stop",
-    });
   });
 });
 

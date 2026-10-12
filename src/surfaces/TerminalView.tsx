@@ -21,7 +21,7 @@ import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
 import { gridStep } from "../lib/terminalStart";
-import { osc777Message, oscClipboardText } from "../lib/terminalClipboard";
+import { oscClipboardText } from "../lib/terminalClipboard";
 import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
 import { DARK_SCHEME, palette } from "../lib/terminalTheme";
 import { FindBar } from "../chrome/FindBar";
@@ -32,44 +32,13 @@ type Props = {
   cwd: string;
   /** Empty spawns the login shell. */
   command: string[];
-  /** The terminal session `command` runs, so the daemon can hand it Crew's tools. Not the shell it falls back to. */
-  session?: string | undefined;
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
   shellOnExit?: boolean | undefined;
-  /**
-   * Unmounting lets go of the process instead of ending it: a session's CLI
-   * runs on with its tab closed, and the next mount on this id attaches to it.
-   * The shell that replaced an exited CLI holds nothing, and ends all the same.
-   */
-  detach?: boolean | undefined;
-  /**
-   * The daemon came back without the process and never said it ended: it
-   * restarted, and took it along. Left out, that reads as an exit.
-   */
-  onLost?: (() => void) | undefined;
-  /** The process asked for attention: a bell, or an OSC notification. */
-  /** A bell, or an OSC 9 / 777 notification with what it says. */
-  onBell?: ((message?: string) => void) | undefined;
-  /** Output arrived. Throttled, so it reads as "this session is busy". */
-  onActivity?: (() => void) | undefined;
-  /** The process retitled its terminal. */
-  onTitle?: ((title: string) => void) | undefined;
-  /** The user sent something: a key, a paste, a click, a focus change. */
-  onInput?: (() => void) | undefined;
-  /** The grid changed size, which makes a TUI repaint. */
-  onResize?: (() => void) | undefined;
   onOpenPath?: ((path: string) => void) | undefined;
-  /**
-   * Starts the process out of sight, at xterm's own grid, before the pane is
-   * shown: a session handed work, and one the user already opened and left
-   * while its CLI was still coming up.
-   */
-  eager?: boolean | undefined;
 };
 
-const ACTIVITY_INTERVAL = 400;
 const ACK_FLUSH_MS = 4;
 /** Frames the proposed grid may keep changing before it is applied anyway. */
 const MAX_STABILITY_FRAMES = 8;
@@ -80,19 +49,10 @@ export function TerminalView({
   id,
   cwd,
   command,
-  session,
   active,
   shellOnExit,
-  detach = false,
   onExit,
-  onLost,
-  onBell,
-  onActivity,
-  onTitle,
-  onInput,
-  onResize,
   onOpenPath,
-  eager = false,
 }: Props) {
   const paneRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -104,10 +64,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit, detach, eager });
+  const latest = useRef({ onExit, onOpenPath, command, shellOnExit });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit, detach, eager };
+    latest.current = { onExit, onOpenPath, command, shellOnExit };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -165,22 +125,12 @@ export function TerminalView({
      * sight, a pane already revealed starts at xterm's own grid; a dead pane
      * must not resize back to life.
      */
-    let gate = { started: false, revealed: latest.current.eager };
+    let gate = { started: false, revealed: false };
     let shellFallback = false;
     let lastCols = 0;
     let lastRows = 0;
-    let lastActivity = 0;
     let processed = 0;
     let ackTimer = 0;
-    // A fresh attach repaints what the process printed before this view: a
-    // reopened tab replays the last turn's spinning title, its bells. That
-    // already happened; reported again, it reads as the CLI working now.
-    /** The stream offset just past the last byte received. */
-    let received = 0;
-    /** Where the ring's repaint ends; the bytes before it are history. */
-    let replayEnd = 0;
-    /** xterm is parsing the repaint: its titles and bells are not news. */
-    let replaying = false;
     // xterm keeps the kitty flags private, so they are mirrored off the output stream.
     let kittyFlags = 0;
 
@@ -204,7 +154,6 @@ export function TerminalView({
           else term.scrollToBottom();
           return false;
         case "input":
-          latest.current.onInput?.();
           if (spawned) void api.writePty(id, action.data);
           event.preventDefault();
           return false;
@@ -259,35 +208,14 @@ export function TerminalView({
     const unsubscribe = subscribePty(
       id,
       (bytes) => {
-        const history = received < replayEnd;
-        received += bytes.length;
-        const caughtUp = received >= replayEnd;
         term.write(bytes, () => {
           processed += bytes.length;
-          if (caughtUp) replaying = false;
           if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
         });
-        if (history) return;
-        const now = Date.now();
-        if (now - lastActivity < ACTIVITY_INTERVAL) return;
-        lastActivity = now;
-        latest.current.onActivity?.();
       },
       exited,
-      (start, end, fresh) => {
+      (start) => {
         processed = start;
-        received = start;
-        replayEnd = fresh ? end : start;
-        // Queued behind what xterm has yet to parse, so the flag covers the repaint alone.
-        if (replayEnd > start) term.write(new Uint8Array(0), () => (replaying = true));
-      },
-      () => {
-        if (closed) return;
-        const lost = latest.current.onLost;
-        if (!lost) return exited(null);
-        spawned = false;
-        term.writeln(`\r\n\x1b[2m[crewd restarted, and this process went with it]\x1b[0m`);
-        lost();
       },
     );
 
@@ -295,17 +223,10 @@ export function TerminalView({
       void api.writePty(id, oscColorReply(code, hex));
       return true;
     };
-    const ring = (message?: string) => {
-      if (!replaying) latest.current.onBell?.(message);
-      return true;
-    };
     const osc = [
       term.parser.registerOscHandler(10, (d) => isOscColorQuery(d) && reply(10, colors.foreground)),
       term.parser.registerOscHandler(11, (d) => isOscColorQuery(d) && reply(11, colors.background)),
       term.parser.registerOscHandler(12, (d) => isOscColorQuery(d) && reply(12, colors.cursor)),
-      // OSC 9 is a notification unless it opens with `4;`, which is progress.
-      term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring(d)),
-      term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring(osc777Message(d))),
       // What tmux or a TUI copies from its own mouse selection lands on the Mac's clipboard.
       term.parser.registerOscHandler(52, (d) => {
         const text = oscClipboardText(d);
@@ -330,25 +251,16 @@ export function TerminalView({
         return false;
       }),
     ];
-    const bell = term.onBell(() => {
-      if (!replaying) latest.current.onBell?.();
-    });
-    const title = term.onTitleChange((next) => {
-      if (!replaying) latest.current.onTitle?.(next);
-    });
     const links = term.registerLinkProvider(
       filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
     );
     const input = term.onData((data) => {
-      latest.current.onInput?.();
       if (spawned) void api.writePty(id, data);
     });
 
-    // The first spawn reuses a process the daemon still runs under this id, so
-    // a window opening again (an update, a relaunch) finds the agent it left.
-    const spawn = (command: string[], session?: string, reuse = false) => {
+    const spawn = (command: string[]) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows, { ...(session === undefined ? {} : { session }), reuse, dark: isDark() }).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, command, term.cols, term.rows, { dark: isDark() }).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });
@@ -368,13 +280,12 @@ export function TerminalView({
         gate = { ...gate, started: true };
         lastCols = cols;
         lastRows = rows;
-        spawn(latest.current.command, latest.current.session, true);
+        spawn(latest.current.command);
         return;
       }
       if (cols === lastCols && rows === lastRows) return;
       lastCols = cols;
       lastRows = rows;
-      latest.current.onResize?.();
       void api.resizePty(id, cols, rows);
     };
     fitRef.current = applySize;
@@ -393,7 +304,7 @@ export function TerminalView({
     const begin = () => {
       lastCols = term.cols;
       lastRows = term.rows;
-      spawn(latest.current.command, latest.current.session, true);
+      spawn(latest.current.command);
     };
     const schedule = () => {
       if (raf) return;
@@ -453,15 +364,12 @@ export function TerminalView({
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste, true);
       input.dispose();
-      bell.dispose();
-      title.dispose();
       links.dispose();
       detachSearch();
       for (const handler of osc) handler.dispose();
       for (const handler of csi) handler.dispose();
       unsubscribe();
-      if (gate.started && latest.current.detach && !shellFallback) void api.detachPty(id).catch(() => {});
-      else if (gate.started) void api.killPty(id);
+      if (gate.started) void api.killPty(id);
       term.dispose();
       ligaturesRef.current = null;
       termRef.current = null;

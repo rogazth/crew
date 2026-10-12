@@ -1,6 +1,5 @@
 import { fileView } from "./browser/files";
 import { STUB_KINDS } from "./types";
-import { sessionSurface } from "./sessionView";
 import type { Session, StubKind, Tab } from "./types";
 
 export const sessionTabId = (sessionId: string) => `session:${sessionId}`;
@@ -382,19 +381,15 @@ function isTab(value: unknown): value is Tab {
 export function isTurnTab(tab: Tab | null, sessions: Session[]): boolean {
   if (!tab || tab.kind !== "session") return false;
   const session = sessions.find((row) => row.id === tab.sessionId);
-  return session !== undefined && sessionSurface(session) === "turns";
+  return session !== undefined;
 }
 
 /**
- * Which tab the terminal commands aim at: one whose terminal is on screen. A
- * session in the chat view has none: Crew drives its CLI without a terminal.
+ * Which tab the terminal commands aim at: a shell on screen. A session has no
+ * terminal: Crew drives its CLI over the provider's protocol.
  */
-export function isTerminalTab(tab: Tab | null, sessions: Session[]): boolean {
-  if (!tab) return false;
-  if (tab.kind === "stub") return tab.stub === "terminal";
-  if (tab.kind !== "session") return false;
-  const session = sessions.find((row) => row.id === tab.sessionId);
-  return session !== undefined && sessionSurface(session) === "terminal";
+export function isTerminalTab(tab: Tab | null): boolean {
+  return tab?.kind === "stub" && tab.stub === "terminal";
 }
 
 /** A path the terminal linked is absolute; a file tab labels itself with the short form. */
@@ -431,13 +426,6 @@ export type TabRegistry = Record<string, TabState>;
  * keyed by this, not by the tab.
  */
 export const paneId = (workspaceId: string, tabId: string) => `${workspaceId}/${tabId}`;
-
-/**
- * A terminal session's pty, whichever strip its tab is in: a tab reopened, or
- * moved by a regroup, finds the process it left running. crewd reads the
- * session back off it.
- */
-export const sessionPtyId = (workspaceId: string, sessionId: string) => `${workspaceId}/session:${sessionId}`;
 
 export type Pane = { id: string; workspaceId: string; tab: Tab; visible: boolean };
 

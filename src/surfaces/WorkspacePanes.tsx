@@ -8,7 +8,7 @@ import { Terminals } from './Terminals';
 import type { Confirm } from '../chrome/ConfirmDialog';
 import type { Process } from '../lib/processes';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
-import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
+import type { ProjectFile, Session, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
 
 /**
@@ -29,7 +29,6 @@ type Props = {
   cwd: string | null;
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
-  onStatus: (id: string, status: SessionStatus) => void;
   onOpenFile: (file: ProjectFile) => void;
   /** An HTML or SVG file rendered in a page tab. */
   onOpenFileInBrowser: (file: { path: string; relative: string }) => void;
@@ -61,7 +60,6 @@ export function WorkspacePanes({
   cwd,
   hasWorkspace,
   onCreateWorkspace,
-  onStatus,
   onOpenFile,
   onOpenFileInBrowser,
   onOpenSession,
@@ -140,15 +138,7 @@ export function WorkspacePanes({
           renderCommands={renderCommands}
         />
       </DiffsPool>
-      <ChatContext value={chat}>
-        {/* A session's chat is drawn inside its terminal's pane. */}
-        <Terminals
-          panes={mounted}
-          sessions={sessions}
-          onStatus={onStatus}
-          onOpenFile={onOpenFile}
-        />
-      </ChatContext>
+      <Terminals panes={mounted} onOpenFile={onOpenFile} />
       <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
         <TurnChats panes={mounted} sessions={sessions} />

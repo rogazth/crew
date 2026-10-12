@@ -38,7 +38,6 @@ import {
   PIN_TAB,
   REOPEN_TAB,
   SEPARATOR,
-  STOP,
   UNPIN_TAB,
   menuFromEvent,
   tidy,
@@ -75,9 +74,6 @@ type Props = {
   onCloseMany: (ids: string[]) => void;
   onReopen: () => void;
   onEditSession: (session: Session) => void;
-  /** Terminal sessions whose CLI runs: their tabs offer Stop. */
-  runningSessions: ReadonlyMap<string, string>;
-  onStopSession: (session: Session) => void;
   onReorder: (ids: string[]) => void;
   onPin: (id: string) => void;
   onUnpin: (id: string) => void;
@@ -122,10 +118,8 @@ function tabActions(
   sessions: Session[],
   activeId: string | null,
   groups: TabGroups | null,
-  running: ReadonlyMap<string, string>,
 ): MenuEntry[] {
   const session = tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
-  const stoppable = session?.kind === "terminal" && running.has(session.id);
   const place = !tab.pinned && groups ? groups.placeOf(tab) : null;
   const places = new Set(groups ? tabs.flatMap((t) => (t.pinned ? [] : [groups.placeOf(t)])) : []);
   const folded = new Set(groups?.collapsed);
@@ -145,7 +139,6 @@ function tabActions(
         ]
       : []),
     SEPARATOR,
-    ...(stoppable ? [STOP] : []),
     CLOSE_TAB,
     { ...CLOSE_OTHERS, disabled: othersOf(tab, tabs).length === 0 },
     { ...CLOSE_RIGHT, disabled: rightOf(tab, tabs).length === 0 },
@@ -175,8 +168,6 @@ export function TabBar({
   onCloseMany,
   onReopen,
   onEditSession,
-  runningSessions,
-  onStopSession,
   onReorder,
   onPin,
   onUnpin,
@@ -373,7 +364,7 @@ export function TabBar({
           key={menu.tab.id}
           point={menu.point}
           title={tabTitle(menu.tab, sessions)}
-          actions={tabActions(menu.tab, tabs, sessions, activeId, groups, runningSessions)}
+          actions={tabActions(menu.tab, tabs, sessions, activeId, groups)}
           onPick={(id) => {
             const tab = menu.tab;
             setMenu(null);
@@ -388,10 +379,9 @@ export function TabBar({
             if (id === "copy-path" && tab.kind === "file") void navigator.clipboard.writeText(tab.path);
             if (id === "copy-url" && tab.kind === "browser") void navigator.clipboard.writeText(tab.url);
             if (id === "reopen") onReopen();
-            if ((id === "edit" || id === "stop") && tab.kind === "session") {
+            if (id === "edit" && tab.kind === "session") {
               const session = sessions.find((s) => s.id === tab.sessionId);
-              if (session && id === "edit") onEditSession(session);
-              if (session && id === "stop") onStopSession(session);
+              if (session) onEditSession(session);
             }
           }}
           onClose={() => setMenu(null)}

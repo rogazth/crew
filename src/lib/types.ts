@@ -11,16 +11,10 @@ export type Workspace = {
 
 /**
  * What runs in a session. A bot is a persistent identity whose turns run in
- * its session; a terminal is a CLI the user drives; a child is a CLI another
+ * its session; a terminal is a session of the user's, a CLI Crew drives turn by turn; a child is a CLI another
  * session started with `start_session`, driven by Crew turn by turn.
  */
 export type SessionKind = "bot" | "terminal" | "child";
-
-/**
- * Which view owns a terminal session's conversation, fixed when it is created:
- * its CLI's own screen, or Crew's chat, which drives the CLI turn by turn.
- */
-export type SessionView = "chat" | "terminal";
 
 /** Written by whatever runs the session: the terminal, or the daemon's turns. A child adds starting and exited. */
 export type SessionStatus = "starting" | "idle" | "working" | "background" | "needs-input" | "done" | "error" | "exited";
@@ -44,8 +38,6 @@ export type Session = {
   /** Codex's service tier; empty is the CLI's own. Cursor's fast mode is part of the model id. */
   serviceTier?: string;
   providerSessionId: string | null;
-  /** Absent is the terminal. A bot and a child are always driven, whatever this says. */
-  view?: SessionView;
   /** The git worktree it runs in; null is the workspace folder itself. */
   worktree: string | null;
   description: string;

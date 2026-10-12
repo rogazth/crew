@@ -1,18 +1,8 @@
 import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { closePrompt, stopPrompt, unsavedCost } from "../lib/confirm";
-import { isBusy } from "../lib/terminalBusy";
-import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
+import { closePrompt, unsavedCost } from "../lib/confirm";
+import type { Session, Workspace, Worktree } from "../lib/types";
 import { commandsCost, isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
-
-const RUNNING: Record<string, string> = {
-  working: "is still working",
-  "needs-input": "is waiting on you",
-};
-
-export function runningLabel(status: SessionStatus): string | null {
-  return RUNNING[status] ?? null;
-}
 
 type Deps = {
   /** A deleted session must lose its tabs before the row goes. */
@@ -106,24 +96,12 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
 
   /**
    * A session's tab closes without a word, whatever runs in it: a bot's
-   * turn belongs to the daemon, and a terminal session's CLI runs on in crewd
-   * until it is stopped. `unsaved` names the files whose edits the close
+   * turn belongs to the daemon. `unsaved` names the files whose edits the close
    * loses; confirming is what discards them.
    */
   const askCloseTabs = useCallback((unsaved: string[], count: number, onConfirm: () => void) => {
     const prompt = closePrompt(count, unsaved);
     if (prompt) setConfirm({ ...prompt, onConfirm });
-    else onConfirm();
-  }, []);
-
-  /**
-   * Stopping a terminal session ends its CLI. The status cannot say whether
-   * that loses work — a watched tab reads idle whatever it runs — so this asks
-   * the terminal itself, and asks first only while it is at work.
-   */
-  const askStop = useCallback((session: Session, onConfirm: () => void) => {
-    const label = runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null);
-    if (label) setConfirm({ ...stopPrompt(session.name, label), onConfirm });
     else onConfirm();
   }, []);
 
@@ -133,7 +111,6 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     confirm,
     ask: setConfirm,
     askCloseTabs,
-    askStop,
     askSession,
     askSessions,
     askWorkspace,

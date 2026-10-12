@@ -5,11 +5,9 @@ import {
   stateLabel,
   tabBackgroundCount,
   tabCount,
-  terminalCount,
-  terminalTray,
   turnTray,
 } from "./background";
-import type { BackgroundCommand, BackgroundList, SessionLive } from "./protocol";
+import type { BackgroundCommand, BackgroundList } from "./protocol";
 
 const NOW = 1_000_000;
 
@@ -21,23 +19,10 @@ function list(commands: BackgroundCommand[], extra: Partial<BackgroundList> = {}
   return { sessionId: "s1", commands, live: true, waiting: false, hidden: [], ...extra };
 }
 
-function live(extra: Partial<SessionLive> = {}): SessionLive {
-  return { sessionId: "t1", started: true, working: false, background: true, backgroundTasks: [], updatedAt: 1, ...extra };
-}
-
 describe("the tray", () => {
   it("lists a driven turn's commands, the daemon having cleared the last turn's", () => {
     expect(turnTray(null)).toEqual([]);
     expect(turnTray(list([command("a")]))).toHaveLength(1);
-  });
-
-  it("shows a terminal's commands only once its turn is over, and hides them when the next starts", () => {
-    const tasks = [command("a")];
-    expect(terminalTray(live({ backgroundTasks: tasks }))).toEqual(tasks);
-    expect(terminalTray(live({ backgroundTasks: tasks, working: true }))).toEqual([]);
-    expect(terminalTray(null)).toEqual([]);
-    // A crewd from before the tray sends no list.
-    expect(terminalTray({ ...live(), backgroundTasks: undefined as unknown as BackgroundCommand[] })).toEqual([]);
   });
 
   it("says each command's state the way its row reads", () => {
@@ -72,14 +57,10 @@ describe("the tab's count", () => {
     expect(tabCount(list([command("a", { state: "stopped" })]), false)).toBe(0);
   });
 
-  it("reads a terminal's from its hooks and a driven session's from its list", () => {
-    expect(terminalCount(live({ backgroundTasks: [command("a")] }))).toBe(1);
-    expect(terminalCount(live({ backgroundTasks: [command("a")], working: true }))).toBe(0);
-    const tasks = live({ backgroundTasks: [command("a"), command("b")] });
-    expect(tabBackgroundCount({ kind: "terminal", status: "idle" }, null, tasks)).toBe(2);
-    expect(tabBackgroundCount({ kind: "child", status: "working" }, list([command("a")], { waiting: true }), null)).toBe(1);
-    expect(tabBackgroundCount({ kind: "terminal", view: "chat", status: "idle" }, list([command("a")]), tasks)).toBe(1);
-    expect(tabBackgroundCount({ kind: "bot", status: "working" }, list([command("a")]), null)).toBe(0);
-    expect(tabBackgroundCount({ kind: "bot", status: "done" }, list([command("a")]), tasks)).toBe(1);
+  it("reads a session's count from its list", () => {
+    expect(tabBackgroundCount({ status: "working" }, list([command("a")], { waiting: true }))).toBe(1);
+    expect(tabBackgroundCount({ status: "working" }, list([command("a")]))).toBe(0);
+    expect(tabBackgroundCount({ status: "done" }, list([command("a")]))).toBe(1);
+    expect(tabBackgroundCount({ status: "idle" }, null)).toBe(0);
   });
 });

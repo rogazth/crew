@@ -12,9 +12,9 @@ export function isDerivedName(name: string, base: string): boolean {
 /**
  * Of the sessions this window opened blank, the ones still blank: here,
  * nothing said in them, none started from them, and the name still Crew's.
- * One that leaves never comes back, so a turn that ends idle keeps it. In the
- * chat view what was said is Crew's own transcript, which `said` reads: a
- * turn stopped as it began leaves the status at rest, and the words behind.
+ * One that leaves never comes back, so a turn that ends idle keeps it. What was
+ * said is in Crew's own transcript, which `said` reads: a turn stopped as it
+ * began leaves the status at rest, and the words behind.
  */
 export function stillBlank(
   blank: ReadonlySet<string>,
@@ -31,7 +31,7 @@ export function stillBlank(
       parents.has(session.id) ||
       !UNSPOKEN.has(session.status) ||
       !isDerivedName(session.name, session.provider) ||
-      (session.view === "chat" && said(session.id));
+      said(session.id);
     if (spoke) kept.delete(session.id);
   }
   return kept.size === blank.size ? blank : kept;

@@ -7,7 +7,7 @@ import { applyUpdated, droppedOnReload, mergeReloaded } from '../lib/sessionList
 import { reloadBotFaces } from './useBotFaces';
 import { useWorkspaceLink } from './useEnvLinks';
 import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
-import type { Autonomy, Session, SessionKind, SessionStatus, SessionView } from '../lib/types';
+import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
 
 type CreateInput = {
   name: string;
@@ -21,8 +21,6 @@ type CreateInput = {
   autonomy: Autonomy;
   /** The worktree it runs in; left out, the workspace folder. */
   worktree?: string | null;
-  /** Where a terminal session's conversation lives, for good. Left out, the terminal. */
-  view?: SessionView;
 };
 
 type Registry = Record<string, Session[]>;

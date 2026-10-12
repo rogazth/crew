@@ -9,8 +9,7 @@ import {
 import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
 import { showToast, toastManager } from "./toasts";
-import type { SessionAsk } from "./protocol";
-import type { Session, SessionStatus } from "./types";
+import type { Session } from "./types";
 
 /** What a notification is news of; each kind has its own switch in Settings. `test` is the button there. */
 export type NotificationSource = NotificationKind | "test";
@@ -159,33 +158,6 @@ export function announceSession(session: Announced, source: NotificationSource, 
     body,
     session: { id: session.id, workspaceId: session.workspaceId, notifications: session.notifications },
   });
-}
-
-/** What a terminal session's status is news of, read off its process: there is no reply to quote. */
-const TERMINAL_NEWS: Partial<Record<SessionStatus, [NotificationSource, string]>> = {
-  "needs-input": ["needs-input", "Needs your input"],
-  done: ["done", "Finished"],
-  error: ["error", "Exited with an error"],
-};
-
-/**
- * Only a turn that ran is finished: a CLI that was idle and goes (its daemon
- * restarted, the user quit it) ends `done` too, and that is no news.
- */
-export function announceStatus(session: Announced, status: SessionStatus, prev: SessionStatus): void {
-  if (status === prev) return;
-  if (status === "done" && prev !== "working" && prev !== "needs-input") return;
-  const news = TERMINAL_NEWS[status];
-  if (news) announceSession(session, news[0], news[1]);
-}
-
-/** What a CLI's hooks say it stopped on: a question form, or a permission prompt for a tool. */
-export function askNews(ask: SessionAsk): [NotificationSource, string] {
-  const question = ask.questions[0]?.question;
-  if (question) return ["needs-input", `Asks: ${question}`];
-  const input = ask.input;
-  const what = [input.command, input.file_path, input.path, input.url].find((value) => typeof value === "string" && value);
-  return ["approval", what ? `Wants to run ${ask.tool}: ${String(what)}` : `Wants to use ${ask.tool}`];
 }
 
 /** Forgets what went out, for tests. */

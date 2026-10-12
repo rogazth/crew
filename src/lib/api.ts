@@ -35,7 +35,7 @@ import type {
   TurnSendNow,
   TurnStarted,
 } from "./protocol";
-import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, SessionView, Workspace, Worktree } from "./types";
+import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -95,8 +95,6 @@ export const createSession = (
     description: string;
     autonomy: Autonomy;
     worktree?: string | null;
-    /** Where a terminal session's conversation lives, for good. Left out, the terminal. */
-    view?: SessionView;
   },
 ): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
 
@@ -106,12 +104,11 @@ export const setSessionOptions = (
   input: { model: string; effort: string; serviceTier: string; autonomy: Autonomy },
 ): Promise<void> => client.request("session_set_options", { id, ...input });
 
-/** A session nobody has talked to yet moves to another provider's CLI; the daemon ends the one running. */
+/** A session nobody has talked to yet moves to another provider's CLI; the daemon lets go of the one it kept. */
 export const switchSessionProvider = (
   id: string,
-  cwd: string,
   input: { provider: string; model: string; effort: string; serviceTier: string; autonomy: Autonomy },
-): Promise<void> => client.request("session_switch_provider", { id, cwd, ...input });
+): Promise<void> => client.request("session_switch_provider", { id, ...input });
 
 export const updateSession = (
   id: string,
@@ -136,9 +133,6 @@ export const staleSessions = (days: number): Promise<number> => client.request("
 
 /** Deletes them; every window hears `sessions-deleted`. */
 export const expireSessions = (days: number): Promise<string[]> => client.request("sessions_expire", { days });
-
-/** Ends the terminal the session runs in, its tab open or closed; the session stays. */
-export const stopSession = (id: string): Promise<void> => client.request("session_stop", { id });
 
 /** An unnamed terminal nothing was said in: closing its tab can delete it. */
 export const isSessionDisposable = (id: string): Promise<boolean> =>
@@ -336,7 +330,6 @@ export const pathExists = (path: string): Promise<boolean> => client.request("pa
 /** True only for a file: a directory, or nothing at all, is false. */
 export const pathIsFile = (path: string): Promise<boolean> => client.request("path_is_file", { path });
 
-/** The name Claude Code gave the session behind this transcript, if it named it. */
 /** The provider's new title for the session, once adopted as its name. */
 export const syncSessionTitle = (id: string): Promise<string | null> =>
   client.request("session_sync_title", { id });
@@ -348,21 +341,6 @@ export const installedBinaries = (names: string[]): Promise<string[]> =>
 /** The models the provider's CLI lists for this account; empty when it lists none. */
 export const listedModels = (provider: string): Promise<ListedModel[]> =>
   client.request("agent_models", { provider });
-
-/** cursor-agent: a chat created and bound before the terminal starts. */
-export const createProviderSession = (id: string): Promise<string> =>
-  client.request("session_provider_create", { id });
-
-/** codex, opencode: the session they started in `cwd` since `since`, bound once found. */
-/**
- * Claude's new session id when `/clear` moved it since the last look. The
- * conversations it left with turns in them arrive as new sessions.
- */
-export const rebindClaudeSession = (id: string): Promise<string | null> =>
-  client.request("session_claude_rebind", { id });
-
-export const discoverProviderSession = (id: string, cwd: string, since: number): Promise<string | null> =>
-  client.request("session_provider_discover", { id, cwd, since });
 
 export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
   client.request("read_file_base64", { path });
@@ -497,4 +475,4 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 
-export { ackPty, attachPty, detachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";
+export { ackPty, attachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";
