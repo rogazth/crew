@@ -10,7 +10,7 @@ import {
   goToWorktree,
   launchCrew,
   MOD,
-  newTerminal,
+  newSession,
   newWorktree,
   pressChord,
   stripTabIds,
@@ -65,11 +65,11 @@ test("P1: a pinned tab keeps to the left, and a worktree's tabs fold into a chip
   await allTogether(crew);
   await newWorktree(crew, "feat/alpha");
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
-  const a1 = await newTerminal(crew, workspace.id);
-  const a2 = await newTerminal(crew, workspace.id);
+  const a1 = await newSession(crew, workspace.id);
+  const a2 = await newSession(crew, workspace.id);
   await goToWorktree(crew, "main");
-  const m1 = await newTerminal(crew, workspace.id);
-  const m2 = await newTerminal(crew, workspace.id);
+  const m1 = await newSession(crew, workspace.id);
+  const m2 = await newSession(crew, workspace.id);
   await shot(crew, "1-start");
 
   // Pinned: out of the scrolling strip, first, and saved so.

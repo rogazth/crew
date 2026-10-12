@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, symlink, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
@@ -702,37 +702,40 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   await input.waitFor({ state: "detached" });
 }
 
-/** ⌘N: a terminal session where the window is, once crewd has it and its CLI reads keys. */
-export async function newTerminal(crew: Crew, workspaceId: string): Promise<Session> {
+/** ⌘N: a session where the window is, once crewd has it and its chat is on screen. */
+export async function newSession(crew: Crew, workspaceId: string): Promise<Session> {
   const known = new Set((await sessions(crew, workspaceId)).map((session) => session.id));
   await pressChord(crew, `${MOD}+n`);
   const session = await waitFor(
     async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
     { message: "the new session reaches crewd" },
   );
-  await waitFor(async () => (await claudeStarts(crew, session.id)).length > 0, {
-    message: "the session's CLI starts",
-  });
+  await composerOf(crew, session).waitFor();
   return session;
 }
 
-export type ClaudeStart = { session_id: string; source?: string };
+/** ⌘T ↵: a shell in the tab on screen. */
+export async function openShell(crew: Crew): Promise<void> {
+  await pressChord(crew, `${MOD}+t`);
+  await crew.window.getByLabel("Open a tab").waitFor();
+  await crew.window.keyboard.press("Enter");
+}
 
 /**
- * What a session's CLI told its SessionStart hook: the records crewd has not
- * read yet (`<id>.<n>.start`) and the newest one it has (kept as `<id>.json`).
- * The fake claude writes it once it reads keys.
+ * The message box of the chat on screen, or of `session`'s once its tab is.
+ * Tabs that are not on screen stay mounted, hidden.
  */
-export async function claudeStarts(crew: Crew, sessionId: string): Promise<ClaudeStart[]> {
-  const dir = path.join(crew.userData, "claude-bind");
-  const names = (await readdir(dir).catch(() => [] as string[])).filter(
-    (name) => name === `${sessionId}.json` || (name.startsWith(`${sessionId}.`) && name.endsWith(".start")),
-  );
-  const records = await Promise.all(
-    // crewd moves a record it read over `<id>.json`: gone between the listing and the read, it is there.
-    names.map((name) => readFile(path.join(dir, name), "utf8").then((text) => JSON.parse(text) as ClaudeStart, () => null)),
-  );
-  return records.filter((record) => record !== null);
+export function composerOf(crew: Crew, session?: Session): Locator {
+  const named = session ? `[placeholder*="Ask ${session.name} anything"]` : "";
+  return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
+}
+
+/** Types `text` in the chat on screen and sends it. */
+export async function sendInChat(crew: Crew, text: string): Promise<void> {
+  const field = composerOf(crew);
+  await field.fill(text);
+  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await field.press("Enter");
 }
 
 /** A session's row in the sidebar panel, by the name it shows. */

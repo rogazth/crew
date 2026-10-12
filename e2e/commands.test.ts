@@ -9,7 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Process } from "../src/lib/protocol.ts";
-import { currentWorktree, launchCrew, MOD, newTerminal, newWorktree, pressChord, typeInTerminal, waitFor, worktreeHeader } from "./harness.ts";
+import { currentWorktree, launchCrew, MOD, newSession, newWorktree, pressChord, sendInChat, waitFor, worktreeHeader } from "./harness.ts";
 
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
@@ -32,7 +32,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   // A session in a worktree starts it, on a port of its own, as an agent would.
   await newWorktree(crew, "feat/web");
   await worktreeHeader(crew, "feat/web").and(currentWorktree(crew)).waitFor();
-  const shell = await newTerminal(crew, workspace.id);
+  const shell = await newSession(crew, workspace.id);
   assert.equal(shell.worktree, tree);
   const script = path.join(tree, ".crew-start.sh");
   const out = path.join(tree, ".crew-start.out");
@@ -45,7 +45,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
       `mv '${out}.part' '${out}'`,
     ].join("\n"),
   );
-  await typeInTerminal(crew, `!sh '${script}'`);
+  await sendInChat(crew, `!sh '${script}'`);
   const said = await waitFor(() => readFile(out, "utf8").catch(() => null), { timeout: 60_000, message: "the start script ends" });
   assert.match(said, /port=4011/, said);
 

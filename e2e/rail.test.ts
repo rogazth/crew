@@ -12,12 +12,13 @@ import {
   launchCrew,
   lightIn,
   MOD,
-  newTerminal,
+  newSession,
+  openShell,
+  sendInChat,
   pressChord,
   sessionRow,
   sessions,
   storedStatus,
-  typeInTerminal,
   waitFor,
   type Crew,
 } from "./harness.ts";
@@ -109,7 +110,7 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   await shows(gamma);
   await pressChord(crew, `${MOD}+1`);
   await shows(alpha);
-  await newTerminal(crew, alpha.id);
+  await openShell(crew);
   await pressChord(crew, `${MOD}+2`);
   await shows(beta);
 
@@ -168,7 +169,7 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   assert.equal(await crew.git(alpha.path, "status", "--porcelain"), "", "nothing in the folder changed");
 });
 
-test("R2: a workspace out of sight shows on its mark what its claude terminal did", async (t) => {
+test("R2: a workspace out of sight shows on its mark what its claude session did", async (t) => {
   const crew = await launchCrew({ repos: ["front", "back"] });
   t.after(() => crew.close());
   const [front, back] = crew.workspaces;
@@ -193,8 +194,8 @@ test("R2: a workspace out of sight shows on its mark what its claude terminal di
   };
 
   await pressChord(crew, `${MOD}+2`);
-  const session = await newTerminal(crew, back.id);
-  await typeInTerminal(crew, "work 4");
+  const session = await newSession(crew, back.id);
+  await sendInChat(crew, "work 4");
   await waitFor(async () => (await storedStatus(crew, session.id)) === "working", { message: "the turn starts" });
   await pressChord(crew, `${MOD}+1`);
   await sessionRow(crew, session.name).waitFor({ state: "detached" });
@@ -203,10 +204,7 @@ test("R2: a workspace out of sight shows on its mark what its claude terminal di
   // The turn ends out of sight: the mark says there is something unread in back.
   await agree(session, "Unread", "done");
 
-  // Looking at back reads it; then its CLI asks for a permission after the window left.
+  // Looking at back reads it.
   await pressChord(crew, `${MOD}+2`);
   await waitFor(async () => (await storedStatus(crew, session.id)) === "idle", { message: "looking at back reads it" });
-  await typeInTerminal(crew, "after 2 ask");
-  await pressChord(crew, `${MOD}+1`);
-  await agree(session, "Needs input", "needs-input");
 });

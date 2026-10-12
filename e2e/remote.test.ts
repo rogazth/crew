@@ -1,6 +1,6 @@
 // A workspace on another machine: a second crewd (`crewd serve` on loopback)
 // stands in for a Linux box on the tailnet. ⌘O picks it and a folder on it,
-// the rail badges the workspace, a terminal runs there, and the machine going
+// the rail badges the workspace, a session runs there, and the machine going
 // away and coming back is told on the rail without touching this Mac's
 // workspace. Settings › Environments lists it, and its menu closes on a click
 // outside. Hovering a mark says which machine the workspace is on and whether it
@@ -11,7 +11,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Locator } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, sendInChat, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
 
 function mark(crew: Crew, name: string): Locator {
   return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
@@ -38,7 +38,7 @@ async function peekOf(crew: Crew, name: string): Promise<{ machine: string; text
   return { machine, text };
 }
 
-test("a workspace on another machine opens from ⌘O, runs a terminal there, and rides out the machine going away", async () => {
+test("a workspace on another machine opens from ⌘O, runs a session there, and rides out the machine going away", async () => {
   const crew = await launchCrew();
   let remote: RemoteDaemon | null = null;
   try {
@@ -71,18 +71,18 @@ test("a workspace on another machine opens from ⌘O, runs a terminal there, and
     await waitFor(async () => (await badge(crew, "api")) === "online", { message: "the rail badges the workspace online" });
     const workspace = remoteList[0]!;
 
-    // A terminal in it runs on the machine: its CLI runs in the repo, and a command lands there.
+    // A session in it runs on the machine: its CLI runs in the repo, and a command lands there.
     await pressChord(crew, `${MOD}+n`);
     const session = await waitFor(
       async () => (await remoteRequest<Session[]>(remote!, "session_list", { workspaceId: workspace.id })).find((row) => row.kind === "terminal"),
-      { message: "the terminal is created on the machine" },
+      { message: "the session is created on the machine" },
     );
+    await sendInChat(crew, "!touch made-on-devbox");
     await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.cwd === api), {
       message: "the machine's crewd starts the CLI in the repo",
       timeout: 15_000,
     });
-    await typeInTerminal(crew, "!touch made-on-devbox");
-    await waitFor(() => existsSync(path.join(api, "made-on-devbox")), { message: "keys reach the remote terminal" });
+    await waitFor(() => existsSync(path.join(api, "made-on-devbox")), { message: "the message reaches the remote session" });
     assert.equal((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).length, 0);
     assert.ok(session.id);
 

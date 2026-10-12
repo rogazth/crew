@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { launchCrew, newTerminal, waitFor } from "./harness.ts";
+import { launchCrew, openShell, waitFor } from "./harness.ts";
 
 test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal is composing", async (t) => {
   const crew = await launchCrew({ repos: ["app", "lib", "web"] });
@@ -30,7 +30,7 @@ test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal 
   for (let i = 0; i < 6; i++) {
     const before = (await crew.request<string>("active_workspace_get")) as string;
     if (!withTerminal.has(before)) {
-      await newTerminal(crew, before);
+      await openShell(crew);
       withTerminal.add(before);
     }
     await waitFor(

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, sessions, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, sendInChat, sessions, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -31,7 +31,7 @@ test("opens the seeded workspace from dist/ on the sandbox's data", async () => 
   await rail.getByRole("button", { name: workspace.name, exact: true }).and(crew.window.locator('[aria-current="true"]')).waitFor();
 });
 
-test("claude resolves to the fake, and a new session launches it in the workspace", async () => {
+test("claude resolves to the fake, and a new session launches it in the workspace once it has a message", async () => {
   assert.deepEqual(await crew.request("agent_installed", { names: ["claude"] }), ["claude"]);
   const resolved = await crew.request<{ path: string }>("agent_resolve_claude");
   assert.equal(resolved.path, path.join(crew.home, ".local/bin/claude"));
@@ -42,6 +42,7 @@ test("claude resolves to the fake, and a new session launches it in the workspac
   const session = await waitFor(async () => (await sessions(crew, workspace.id)).find((s) => s.kind === "terminal"), {
     message: "the new session reaches crewd",
   });
+  await sendInChat(crew, "hello");
   const launch = await waitFor(async () => (await crew.claudeLaunches()).at(-1), { message: "the fake claude starts" });
   assert.equal(launch.cwd, workspace.path);
   assert.equal(launch.argv[launch.argv.indexOf("--session-id") + 1], session.id);

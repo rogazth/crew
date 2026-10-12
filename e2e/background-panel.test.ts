@@ -32,7 +32,6 @@ before(async () => {
     key: "providers:default",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
-  await crew.request("state_set", { key: "sessions:view", value: "chat" });
   await crew.reload();
   await installFakeOpencode(crew);
   await crew.request("process_create", { workspaceId: workspace.id, name: "web", command: "echo up; sleep 300" });

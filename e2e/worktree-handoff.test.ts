@@ -1,5 +1,5 @@
 // A session in the main checkout hands its work to a branch of its own:
-// `start_session` makes the worktree and a session in it, in the chat view and
+// `start_session` makes the worktree and a session in it,
 // launched by the caller, whose CLI Crew drives over the protocol with the
 // prompt as its first message (in an envelope naming the caller).
 // The caller stays where it was, and the window shows the new worktree and its
@@ -13,24 +13,28 @@ import {
   gitWorktrees,
   goToWorktree,
   launchCrew,
-  newTerminal,
+  newSession,
+  sendInChat,
   sessionRow,
   sessionTab,
   sessions,
-  typeInTerminal,
+  storedStatus,
   waitFor,
   worktreeHeader,
 } from "./harness.ts";
 
-test("a terminal in the main checkout hands its task to a new session on a worktree", async (t) => {
+test("a session in the main checkout hands its task to a new session on a worktree", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
   assert.ok(main);
-  const shell = await newTerminal(crew, main.id);
-
-  const launch = (await crew.claudeLaunches()).find((row) => row.argv.includes(shell.id));
-  assert.ok(launch, "the terminal's CLI started");
+  const shell = await newSession(crew, main.id);
+  // Its first message starts the CLI, which the next one then reaches over the protocol.
+  await sendInChat(crew, "hello");
+  const launch = await waitFor(async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(shell.id)), {
+    message: "the session's CLI starts",
+  });
+  await waitFor(async () => (await storedStatus(crew, shell.id)) === "idle", { message: "the first turn ends" });
   const config = JSON.parse(launch.argv[launch.argv.indexOf("--mcp-config") + 1] ?? "{}") as {
     mcpServers: { crew: { command: string } };
   };
@@ -38,7 +42,7 @@ test("a terminal in the main checkout hands its task to a new session on a workt
 
   const out = path.join(launch.cwd, `handoff-${Date.now().toString(36)}.txt`);
   const task = "Build the login form.";
-  await typeInTerminal(
+  await sendInChat(
     crew,
     `!'${crewCli}' sessions start --worktree feat/handoff --name feat/handoff --json -- '${task}' > '${out}' 2>&1`,
   );
@@ -57,7 +61,7 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   assert.equal(tree.branch, "refs/heads/feat/handoff");
   assert.ok(handed.worktree.startsWith(path.join(crew.home, ".crew/worktrees/")), handed.worktree);
 
-  // The session works in it; the terminal stays in the main checkout.
+  // The session works in it; the caller stays in the main checkout.
   const rows = await sessions(crew, main.id);
   const handedTo = rows.find((row: Session) => row.id === handed.id);
   assert.ok(handedTo, "crewd has the new session");
@@ -70,7 +74,6 @@ test("a terminal in the main checkout hands its task to a new session on a workt
   // The session is a chat: Crew drives its CLI over the protocol, so the task
   // is its first message, in an envelope naming who launched it, and not on
   // the command line.
-  assert.equal(handedTo.view, "chat");
   const started = await waitFor(
     async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(handedTo.id)),
     { timeout: 15_000, message: "the new session's CLI starts" },

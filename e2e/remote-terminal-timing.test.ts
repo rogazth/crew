@@ -1,5 +1,5 @@
 // How long a terminal on another machine takes to show its first bytes, in the
-// ways one opens: ⌘N in a remote workspace (cold and warm), on a slow link,
+// ways one opens: ⌘T in a remote workspace (cold and warm), on a slow link,
 // after the machine comes back, after a reload, and "Open terminal on
 // machine". Every RPC the window sends is traced so a slow open says which
 // call it waited on.
@@ -179,25 +179,21 @@ async function openOnMachine(crew: Crew, machine: string, dir: string, name: str
   await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`).waitFor();
 }
 
-/** ⌘N (a session running the CLI) or ⌘T ↵ (a plain shell tab), timed to the first byte from `dialPort`. */
-async function timedOpen(crew: Crew, dialPort: number, how: "session" | "shell", label: string, ready?: RegExp): Promise<number> {
+/** ⌘T ↵ (a shell tab), timed to the first byte from `dialPort`. */
+async function timedOpen(crew: Crew, dialPort: number, label: string, ready?: RegExp): Promise<number> {
   await trace(crew.window);
   await takeTrace(crew.window);
   const start = await now(crew.window);
-  if (how === "session") {
-    await pressChord(crew, `${MOD}+n`);
-  } else {
-    await pressChord(crew, `${MOD}+t`);
-    // Terminal is the launcher's first item, so ↵ on the empty query opens one.
-    await crew.window.getByLabel("Open a tab").waitFor();
-    await crew.window.keyboard.press("Enter");
-  }
+  await pressChord(crew, `${MOD}+t`);
+  // Terminal is the launcher's first item, so ↵ on the empty query opens one.
+  await crew.window.getByLabel("Open a tab").waitFor();
+  await crew.window.keyboard.press("Enter");
   const first = await firstFrame(crew, dialPort, start, label);
   return ready ? readyAt(crew, dialPort, start, ready, label) : first;
 }
 
 function newRemoteTerminal(crew: Crew, remote: RemoteDaemon, _workspace: Workspace, label: string): Promise<number> {
-  return timedOpen(crew, remote.dialPort, "session", label);
+  return timedOpen(crew, remote.dialPort, label);
 }
 
 function remoteWorkspace(remote: RemoteDaemon, path: string): Promise<Workspace> {
@@ -244,11 +240,11 @@ for (const latencyMs of [0, 60]) {
       await openOnMachine(crew, "devbox", api, "api");
       const workspace = await remoteWorkspace(remote, api);
 
-      const cold = await newRemoteTerminal(crew, remote, workspace, `⌘N cold, ${latencyMs}ms`);
+      const cold = await newRemoteTerminal(crew, remote, workspace, `⌘T cold, ${latencyMs}ms`);
       // Still alive once opened: a respawn racing its own kill left a dead pane.
-      await typeInTerminal(crew, "!touch alive-cold");
+      await typeInTerminal(crew, "touch alive-cold");
       await waitFor(() => existsSync(path.join(api, "alive-cold")), { message: "the first terminal takes keys" });
-      const warm = await newRemoteTerminal(crew, remote, workspace, `⌘N warm, ${latencyMs}ms`);
+      const warm = await newRemoteTerminal(crew, remote, workspace, `⌘T warm, ${latencyMs}ms`);
 
       // After a reload the open tabs come back and reattach.
       await crew.reload();
@@ -266,8 +262,8 @@ for (const latencyMs of [0, 60]) {
             .then((state) => state === "online"),
         { message: "the machine is back", timeout: 20_000 },
       );
-      const back = await newRemoteTerminal(crew, remote, workspace, `⌘N after reconnect, ${latencyMs}ms`);
-      const shell = await timedOpen(crew, remote.dialPort, "shell", `⌘T Terminal, ${latencyMs}ms`);
+      const back = await newRemoteTerminal(crew, remote, workspace, `⌘T after reconnect, ${latencyMs}ms`);
+      const shell = await timedOpen(crew, remote.dialPort, `⌘T Terminal, ${latencyMs}ms`);
       await typeInTerminal(crew, "touch alive-shell");
       await waitFor(() => existsSync(path.join(api, "alive-shell")), { message: "the shell takes keys" });
 
@@ -331,12 +327,9 @@ test("a terminal on a real machine shows its first bytes quickly", { skip: !real
     await openOnMachine(crew, "real", dir, dir.split("/").pop()!);
     created = (await rpcAt(host!, direct, "workspace_list")).find((row) => row.path === dir) ?? null;
     const times: Record<string, number> = {};
-    // A bash prompt ends in "$ "; Claude Code draws its input hint, or asks to trust the folder first.
+    // A bash prompt ends in "$ ".
     const shellReady = /\$ $/;
-    const claudeReady = /for shortcuts|trust this folder|Do you trust|Try "/;
-    times.shell = await timedOpen(crew, dialPort, "shell", "real ⌘T Terminal", shellReady);
-    times.session = await timedOpen(crew, dialPort, "session", "real ⌘N", claudeReady);
-    times.sessionAgain = await timedOpen(crew, dialPort, "session", "real ⌘N again", claudeReady);
+    times.shell = await timedOpen(crew, dialPort, "real ⌘T Terminal", shellReady);
     await crew.reload();
     times.reload = await firstFrame(crew, dialPort, 0, "real reload");
     console.log(JSON.stringify(times));
@@ -382,29 +375,19 @@ test("a new terminal on another machine shows its output once", { skip: !process
         });
       };
     });
-    const known = new Set((await rpc<Session[]>(remote, "session_list", { workspaceId: workspace.id })).map((row) => row.id));
-    await timedOpen(crew, remote.dialPort, "shell", "⌘T Terminal, dev");
-    await pressChord(crew, `${MOD}+n`);
-    const session = await waitFor(
-      async () => (await rpc<Session[]>(remote!, "session_list", { workspaceId: workspace.id })).find((row) => !known.has(row.id)),
-      { message: "the session is created" },
-    );
+    await timedOpen(crew, remote.dialPort, "⌘T Terminal, dev");
     // Let both settle: every late answer and replay has landed.
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const shown = await crew.window.evaluate(() => (window as unknown as { __shown: Record<number, number> }).__shown);
-    for (const pane of [`${workspace.id}/stub:terminal`, `${workspace.id}/session:${session.id}`]) {
+    for (const pane of [`${workspace.id}/stub:terminal`]) {
       const attached = await rpc<{ start: number; emitted: number }>(remote, "pty_attach", { id: pane, from: Number.MAX_SAFE_INTEGER });
       const streams = Object.entries(shown).filter(([, bytes]) => bytes > 0);
       console.log(`${pane.split("/").pop()}: printed ${attached.emitted} bytes; panes were handed ${JSON.stringify(shown)}`);
       assert.ok(streams.length <= 2, `one stream per pane, got ${streams.length}`);
     }
     const total = Object.values(shown).reduce((sum, bytes) => sum + bytes, 0);
-    const printed = await Promise.all(
-      [`${workspace.id}/stub:terminal`, `${workspace.id}/session:${session.id}`].map((pane) =>
-        rpc<{ emitted: number }>(remote!, "pty_attach", { id: pane, from: Number.MAX_SAFE_INTEGER }).then((row) => row.emitted),
-      ),
-    );
-    assert.equal(total, printed[0]! + printed[1]!, "each byte a terminal printed is shown once");
+    const printed = await rpc<{ emitted: number }>(remote!, "pty_attach", { id: `${workspace.id}/stub:terminal`, from: Number.MAX_SAFE_INTEGER });
+    assert.equal(total, printed.emitted, "each byte a terminal printed is shown once");
   } finally {
     await remote?.stop();
     await crew.close();

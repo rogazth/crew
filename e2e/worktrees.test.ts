@@ -7,13 +7,13 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
-  claudeStarts,
   gitWorktrees as listWorktrees,
   launchCrew,
   MOD,
   WORKTREE_MOD,
   returnToWindow,
   sessions,
+  sendInChat,
   waitFor,
   worktreeHeader as header,
   type Crew,
@@ -56,23 +56,17 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   const header = worktreeHeader("feat/login");
   await header.and(page.locator('[aria-current="true"]')).waitFor();
 
-  // ⌘N: a terminal session in the worktree, its CLI started there.
+  // ⌘N: a session in the worktree; a message makes its CLI run a command there.
   await page.keyboard.press(`${MOD}+n`);
   const session = await waitFor(
     async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal"),
     { message: "the new session reaches crewd" },
   );
   assert.equal(session.worktree, tree);
-  // The fake claude drops the SessionStart record once it reads keys.
-  await waitFor(async () => (await claudeStarts(crew, session.id)).length > 0, {
-    message: "the terminal's CLI starts",
-  });
-  await page.locator(".xterm-helper-textarea:focus").waitFor({ state: "attached" });
-  await page.keyboard.type("!pwd > here.txt");
-  await page.keyboard.press("Enter");
+  await sendInChat(crew, "!pwd > here.txt");
   const written = path.join(tree, "here.txt");
   const pwd = await waitFor(async () => (await readFile(written, "utf8")).trim(), {
-    message: "the terminal's pwd lands in the worktree",
+    message: "the session's pwd lands in the worktree",
   });
   assert.equal(pwd, tree);
 

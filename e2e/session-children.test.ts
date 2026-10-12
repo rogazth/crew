@@ -1,42 +1,42 @@
 // Plan 2026-10-05 (UI decision 1): a session started with start_session lives
 // in whoever started it — a chip in its parent's bar, not a sidebar row — and
-// opens as Crew's chat. The terminal's CLI starts it
-// from its own shell with `crew sessions delegate`, with the terminal's token, so
-// the parent is the terminal; the fake opencode 2.x (e2e/bin/opencode) answers.
+// opens as Crew's chat. The session's CLI starts it
+// from its own shell with `crew sessions delegate`, with the session's token, so
+// the parent is the session; the fake opencode 2.x (e2e/bin/opencode) answers.
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newTerminal, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CREW = path.join(ROOT, "target/debug/crew");
 
 const sessions = (crew: Crew, workspaceId: string) => crew.request<Session[]>("session_list", { workspaceId });
 
-test("a session a terminal started is a chip in its parent and opens as a chat", async (t) => {
+test("a session a session started is a chip in its parent and opens as a chat", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
   assert.ok(main);
   await installFakeOpencode(crew);
 
-  const shell = await newTerminal(crew, main.id);
-  await typeInTerminal(crew, `!'${CREW}' sessions delegate --provider opencode --name "Lint pass" -- tidy the imports`);
+  const shell = await newSession(crew, main.id);
+  await sendInChat(crew, `!'${CREW}' sessions delegate --provider opencode --name "Lint pass" -- tidy the imports`);
 
   const child = await waitFor(
     async () => (await sessions(crew, main.id)).find((row) => row.kind === "child"),
     { timeout: 20_000, message: "the child reaches crewd" },
   );
-  assert.equal(child.parentId, shell.id, "the terminal is its parent");
+  assert.equal(child.parentId, shell.id, "the session is its parent");
   assert.equal(child.name, "Lint pass");
   await waitFor(async () => (await sessions(crew, main.id)).find((row) => row.id === child.id)?.status === "idle", {
     timeout: 20_000,
     message: "its first turn ends",
   });
 
-  // A chip in the terminal's bar, and no row of its own in the sidebar.
+  // A chip in the parent's bar, and no row of its own in the sidebar.
   const chip = crew.window.getByRole("button", { name: /Lint pass/ }).first();
   await chip.waitFor({ timeout: 10_000 });
   const rows = await crew.window.evaluate(() =>

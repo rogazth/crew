@@ -4,15 +4,13 @@
 // opens a Crew page on it, which the local server sees load, and nothing goes
 // out; Ctrl+Shift+click (⌘⇧ on macOS) still sends it out.
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
 import { test } from "node:test";
 import {
   externalOpens,
   holdsFor,
   launchCrew,
   MOD,
-  newTerminal,
+  openShell,
   pressChord,
   savedStrip,
   servePages,
@@ -28,28 +26,14 @@ function screen(crew: Crew) {
   return crew.window.locator(".xterm-screen").filter({ visible: true });
 }
 
-/** Whether the fake claude has answered with `url` in some transcript under the sandbox's ~/.claude. */
-async function answered(crew: Crew, url: string): Promise<boolean> {
-  const projects = path.join(crew.home, ".claude/projects");
-  for (const dir of await readdir(projects).catch(() => [])) {
-    for (const file of await readdir(path.join(projects, dir))) {
-      if ((await readFile(path.join(projects, dir, file), "utf8")).includes(`"text":${JSON.stringify(url)}`)) return true;
-    }
-  }
-  return false;
-}
-
 /**
- * Asks the fake claude for `url` and clicks it where it prints it, alone at
- * the top-left of a cleared screen, with `modifiers` held. The pointer goes
- * there once the transcript has the answer (the link before it was cleared
- * from the screen 300 ms earlier), and rests until xterm finds a link under
- * it and shows the hand.
+ * Has the shell print `url` alone at the top-left of a cleared screen, and
+ * clicks it with `modifiers` held. The pointer rests there until xterm finds a
+ * link under it and shows the hand.
  */
 async function clickLink(crew: Crew, url: string, modifiers: Modifier[] = []): Promise<void> {
   const page = crew.window;
-  await typeInTerminal(crew, `url ${url}`);
-  await waitFor(() => answered(crew, url), { message: `the CLI answers with ${url}` });
+  await typeInTerminal(crew, `clear; printf '%s\\n' '${url}'`);
   const box = await screen(crew).boundingBox();
   assert.ok(box, "a terminal is on screen");
   await waitFor(
@@ -80,7 +64,7 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
 
-  await newTerminal(crew, workspace.id);
+  await openShell(crew);
 
   // Off, the default: the click leaves the app.
   const first = `${server.origin}/first`;

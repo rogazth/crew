@@ -13,13 +13,13 @@ import {
   launchCrew,
   MOD,
   WORKTREE_MOD,
-  newTerminal,
+  newSession,
+  sendInChat,
   newWorktree,
   pressChord,
   savedStrip,
   storedStatus,
   stripTabIds,
-  typeInTerminal,
   waitFor,
   worktreeHeader,
   type Crew,
@@ -115,16 +115,16 @@ test("W4: per worktree, each strip and the worktree on screen come back after a 
   // Per worktree is what a fresh install runs: nothing stored says otherwise.
   assert.notEqual(await crew.request("state_get", { key: "tabs:scope" }), "all");
 
-  const m1 = await newTerminal(crew, workspace.id);
-  const m2 = await newTerminal(crew, workspace.id);
+  const m1 = await newSession(crew, workspace.id);
+  const m2 = await newSession(crew, workspace.id);
   await newWorktree(crew, "feat/a");
   await worktreeHeader(crew, "feat/a").and(currentWorktree(crew)).waitFor();
-  const a1 = await newTerminal(crew, workspace.id);
+  const a1 = await newSession(crew, workspace.id);
   const tree = a1.worktree;
   assert.ok(tree, "the session runs in the new worktree");
   assert.ok((await gitWorktrees(crew, workspace.path)).some((e) => e.path === tree && e.branch === "refs/heads/feat/a"));
   // A conversation in the worktree, which its relaunch has to pick up again.
-  await typeInTerminal(crew, "hello");
+  await sendInChat(crew, "hello");
   await waitFor(async () => (await storedStatus(crew, a1.id)) === "working", { message: "a1's turn starts" });
   await waitFor(async () => (await storedStatus(crew, a1.id)) === "idle", { message: "a1's turn ends" });
 
@@ -148,12 +148,13 @@ test("W4: per worktree, each strip and the worktree on screen come back after a 
   assert.equal(await crew.request("state_get", { key: `worktree:${workspace.id}` }), tree);
   await stripIs(crew, featStrip.ids, "the strip on screen is feat/a's");
 
-  // Counted before quitting: the relaunched window may start the terminal before restart() returns.
+  // Counted before quitting.
   const launchesBefore = (await crew.claudeLaunches()).length;
   crew = await crew.restart();
   await worktreeHeader(crew, "feat/a").and(currentWorktree(crew)).waitFor();
   await stripIs(crew, featStrip.ids, "feat/a comes back with its own strip");
-  // Its terminal is back at work where it was.
+  // A message to it starts its CLI again where it was.
+  await sendInChat(crew, "again");
   const resumed = await waitFor(
     async () => (await crew.claudeLaunches()).slice(launchesBefore).find((run) => run.argv.includes(a1.id)),
     { message: "feat/a's session starts again" },
@@ -173,10 +174,10 @@ test("W5: switching to All together joins the strips the worktrees had", async (
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
 
-  const m1 = await newTerminal(crew, workspace.id);
+  const m1 = await newSession(crew, workspace.id);
   await newWorktree(crew, "feat/b");
   await worktreeHeader(crew, "feat/b").and(currentWorktree(crew)).waitFor();
-  const b1 = await newTerminal(crew, workspace.id);
+  const b1 = await newSession(crew, workspace.id);
   assert.ok(b1.worktree);
 
   await setTabScope(crew, "All together", "all");
@@ -202,10 +203,10 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await setTabScope(crew, "All together", "all");
   await newWorktree(crew, "feat/alpha");
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
-  const a1 = await newTerminal(crew, workspace.id);
-  const a2 = await newTerminal(crew, workspace.id);
+  const a1 = await newSession(crew, workspace.id);
+  const a2 = await newSession(crew, workspace.id);
   await goToWorktree(crew, "main");
-  const m1 = await newTerminal(crew, workspace.id);
+  const m1 = await newSession(crew, workspace.id);
   assert.ok(a1.worktree && a1.worktree === a2.worktree, "a1 and a2 run in feat/alpha");
   assert.equal(m1.worktree, null, "m1 runs in the main checkout");
   const everyone = [a1, a2, m1];
@@ -252,11 +253,11 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await railMark(crew, "lib").and(crew.window.locator('[aria-current="true"]')).waitFor();
   await newWorktree(crew, "feat/beta");
   await worktreeHeader(crew, "feat/beta").and(currentWorktree(crew)).waitFor();
-  const b1 = await newTerminal(crew, lib.id);
-  const b2 = await newTerminal(crew, lib.id);
+  const b1 = await newSession(crew, lib.id);
+  const b2 = await newSession(crew, lib.id);
   await tabOf(crew, b1).click();
   await goToWorktree(crew, "main");
-  const l1 = await newTerminal(crew, lib.id);
+  const l1 = await newSession(crew, lib.id);
   await showing(crew, l1, "lib's main shows l1");
   const libStrip = await stripTabIds(crew);
   assert.ok(libStrip.indexOf(`session:${b2.id}`) > libStrip.indexOf(`session:${b1.id}`), "b2 is feat/beta's rightmost");
@@ -312,12 +313,12 @@ test("W5c: per worktree and from workspace to workspace, the tab last used there
   assert.notEqual(await crew.request("state_get", { key: "tabs:scope" }), "all");
 
   // Two tabs in each strip; the one used is the left one.
-  const m1 = await newTerminal(crew, app.id);
-  const m2 = await newTerminal(crew, app.id);
+  const m1 = await newSession(crew, app.id);
+  const m2 = await newSession(crew, app.id);
   await newWorktree(crew, "feat/alpha");
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
-  const a1 = await newTerminal(crew, app.id);
-  const a2 = await newTerminal(crew, app.id);
+  const a1 = await newSession(crew, app.id);
+  const a2 = await newSession(crew, app.id);
   await tabOf(crew, a1).click();
   await goToWorktree(crew, "main");
   await showing(crew, m2, "main shows the tab it had");

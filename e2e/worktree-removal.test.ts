@@ -11,7 +11,8 @@ import {
   currentWorktree,
   gitWorktrees,
   launchCrew,
-  newTerminal,
+  newSession,
+  sendInChat,
   newWorktree,
   returnToWindow,
   waitFor,
@@ -41,7 +42,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
   });
   const header = worktreeHeader(crew, "feat/late");
   await header.and(page.locator('[aria-current="true"]')).waitFor();
-  const session = await newTerminal(crew, workspace.id);
+  const session = await newSession(crew, workspace.id);
   assert.equal(session.worktree, tree);
   const tabId = await tabOf(crew, session);
 
@@ -92,8 +93,9 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
 
   await newWorktree(crew, "feat/gone");
   await worktreeHeader(crew, "feat/gone").and(currentWorktree(crew)).waitFor();
-  const session = await newTerminal(crew, workspace.id);
+  const session = await newSession(crew, workspace.id);
   assert.equal(session.worktree, tree);
+  await sendInChat(crew, "hello");
   const first = await waitFor(async () => (await crew.claudeLaunches()).find((run) => run.argv.includes(session.id)), {
     message: "the session's CLI is launched",
   });
@@ -117,7 +119,7 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
   return { crew, workspace, session, tabId };
 }
 
-/** Opening the stranded session from the sidebar shows it, and starts its CLI in a folder that exists. */
+/** Opening the stranded session from the sidebar shows it, and its next message starts its CLI in a folder that exists. */
 async function reopen({ crew, workspace, session, tabId }: Awaited<ReturnType<typeof strand>>) {
   const page = crew.window;
   const listed = page.locator("[data-sidebar-panel] button[data-session]").filter({ hasText: session.name });
@@ -137,9 +139,10 @@ async function reopen({ crew, workspace, session, tabId }: Awaited<ReturnType<ty
     .locator(`[data-tab-strip] [data-tab-id="${tabId}"][aria-selected="true"]`)
     .waitFor({ timeout: 5000 })
     .catch(() => assert.fail("opening the session from the sidebar puts no tab of it on screen"));
+  await sendInChat(crew, "hello again");
   const launched = await waitFor(
     async () => (await crew.claudeLaunches()).slice(before).find((run) => run.argv.includes(session.id)),
-    { message: "the tab on screen starts the session's CLI" },
+    { message: "a message to the session on screen starts its CLI" },
   );
   assert.equal(
     launched.cwd,

@@ -89,8 +89,6 @@ function child(id: string, name: string, provider: string, status: string, event
   };
 }
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
-// `?view=chat` draws terminal sessions as Crew's chat, the setting's other side.
-if (typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "chat") state.set("sessions:view", "chat");
 
 /**
  * The linked worktrees of each main checkout; the main one is derived on each
@@ -416,11 +414,6 @@ const commands: Record<string, (args: Row) => unknown> = {
   background_list: ({ sessionId }) => backgroundList(sessionId as string),
   background_output: ({ sessionId, id }) => backgroundOutput(sessionId as string, id as string),
   background_stop: ({ sessionId, id }) => backgroundStop(sessionId as string, id as string),
-  // A terminal's hooks: "claude 2" ended its turn with a dev server still up.
-  session_live_get: ({ id }) =>
-    id === "s4"
-      ? { sessionId: "s4", started: true, working: false, background: true, backgroundTasks: TERMINAL_TASKS, updatedAt: now }
-      : null,
   thread_pairs: ({ sessionId }) => threadPairs(sessionId as string),
   thread_messages: (args) => threadMessages(args),
   mailbox_pending: ({ sessionId }) =>
@@ -940,7 +933,6 @@ const background = new Map<string, Row>([
     },
   ],
 ]);
-const TERMINAL_TASKS = [{ id: "t-dev", command: "npm run dev -- --port 5174", description: "Start Vite", kind: "shell", startedAt: now - 3 * 60e3, state: "running" }];
 const outputs = new Map<string, string>([
   ["bg-dev", "\x1b[32m  VITE v7.1.0\x1b[0m  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: use --host to expose\n"],
   ["bg-test", " RUN  v3.2.7 /Users/me/Developer/experiments/crew\n\n ✓ auth/session.test.ts (12 tests) 31ms\n ✓ auth/middleware.test.ts (8 tests) 22ms\n\n Test Files  2 passed (2)\n      Tests  20 passed (20)\n\n Waiting for file changes...\n"],

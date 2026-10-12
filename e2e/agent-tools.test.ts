@@ -13,7 +13,7 @@ import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { BrowserLeases } from "../src/lib/protocol.ts";
-import { launchCrew, newTerminal, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CREW = path.join(ROOT, "target/debug/crew");
@@ -195,13 +195,14 @@ test("T2: the crew CLI, as the user, runs a process's whole life and lists the t
   assert.match(await crewCmd("tabs", "list"), /./);
 });
 
-test("T3: a terminal session drives the browser and processes with its own token, gated by its autonomy", async (t) => {
+test("T3: a session drives the browser and processes with its own token, gated by its autonomy", async (t) => {
   const base = await pages(t);
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const shell = await newTerminal(crew, workspace.id);
+  const shell = await newSession(crew, workspace.id);
+  const cwd = shell.worktree ?? workspace.path;
   const setAutonomy = (autonomy: "full" | "ask") =>
     crew.request("session_update", {
       id: shell.id,
@@ -213,20 +214,17 @@ test("T3: a terminal session drives the browser and processes with its own token
       autonomy,
     });
 
-  const launch = (await crew.claudeLaunches()).find((row) => row.argv.includes(shell.id));
-  assert.ok(launch, "the terminal's CLI started");
-
-  // One `!` runs a script in the session's shell, with the env the daemon gave it.
+  // One `!` message makes the fake CLI run a script with the env the daemon gave it, as a Bash tool would.
   let run = 0;
   const inSession = async (lines: string[]) => {
     run += 1;
-    const script = path.join(launch.cwd, `.crew-tools-${run}.sh`);
-    const out = path.join(launch.cwd, `.crew-tools-${run}.out`);
+    const script = path.join(cwd, `.crew-tools-${run}.sh`);
+    const out = path.join(cwd, `.crew-tools-${run}.out`);
     await writeFile(
       script,
       ["set +e", `exec > '${out}.part' 2>&1`, ...lines, `mv '${out}.part' '${out}'`].join("\n"),
     );
-    await typeInTerminal(crew, `!sh '${script}'`);
+    await sendInChat(crew, `!sh '${script}'`);
     return waitFor(() => readFile(out, "utf8").catch(() => null), { timeout: 60_000, message: `script ${run} ends` });
   };
 
@@ -279,13 +277,6 @@ test("T3: a terminal session drives the browser and processes with its own token
   assert.match(ask, /== input\n[\s\S]*autonomy[\s\S]*exit=1/, ask);
   assert.match(ask, /pending/i, ask);
   assert.match(ask, /== start\n[\s\S]*exit=1/, ask);
-
-  // The session's CLI exits: its token and its tabs go with it.
-  process.kill(launch.pid, "SIGTERM");
-  await waitFor(async () => (await crew.request<BrowserLeases>("browser_leases_list")).leases.length === 0, {
-    timeout: 15_000,
-    message: "the terminal's lease goes when its process exits",
-  });
 });
 
 test("T4: crew mcp speaks MCP on stdio and lists every tool, the browser's included", async (t) => {
