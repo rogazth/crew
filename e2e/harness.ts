@@ -22,6 +22,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ELECTRON: string = createRequire(import.meta.url)("electron");
 const FAKE_CLAUDE = path.join(ROOT, "e2e/bin/claude");
 const FAKE_CODEX = path.join(ROOT, "e2e/bin/codex");
+const FAKE_OPENCODE = path.join(ROOT, "e2e/bin/opencode");
 const run = promisify(execFile);
 
 export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
@@ -350,6 +351,19 @@ export async function installFakeCodex(crew: Crew): Promise<void> {
   const source = await readFile(FAKE_CODEX, "utf8");
   await writeFile(codex, source.replace(/^#!.*\n/, `#!${process.execPath}\n`));
   await chmod(codex, 0o755);
+}
+
+/**
+ * Puts the fake opencode 2.x (e2e/bin/opencode, an `opencode serve` that
+ * answers each turn "Done: <last line>") first on the sandbox's PATH, for the
+ * specs that start an opencode session.
+ */
+export async function installFakeOpencode(crew: Crew): Promise<void> {
+  const bin = path.join(crew.home, ".local/bin");
+  await mkdir(bin, { recursive: true });
+  const opencode = path.join(bin, "opencode");
+  await writeFile(opencode, await readFile(FAKE_OPENCODE, "utf8"));
+  await chmod(opencode, 0o755);
 }
 
 /** `afterExit` runs once the app's process is gone, before Playwright lets go of it. */

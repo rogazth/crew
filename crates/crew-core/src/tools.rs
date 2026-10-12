@@ -108,9 +108,21 @@ pub fn unnamed_model(provider: &str) -> String {
     }
 }
 
-/// A session's effort when the caller named none. Codex's is the one in its
-/// config; the rest use `default_effort`.
+/// The effort the environment asks Claude and Codex sessions to start at when
+/// none was picked: `CREW_DEFAULT_EFFORT` in the daemon's environment, which a
+/// test run sets to `low` so the sessions it starts stay cheap. Nothing else
+/// sets it.
+fn effort_from_env(provider: &str, value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_string();
+    (matches!(provider, "claude" | "codex") && !value.is_empty()).then_some(value)
+}
+
+/// A session's effort when the caller named none. `CREW_DEFAULT_EFFORT` wins;
+/// then Codex's is the one in its config, and the rest use `default_effort`.
 pub fn unnamed_effort(provider: &str) -> String {
+    if let Some(effort) = effort_from_env(provider, std::env::var("CREW_DEFAULT_EFFORT").ok()) {
+        return effort;
+    }
     if provider == "codex" {
         return crate::provider_session::codex_configured_effort();
     }
@@ -2011,5 +2023,23 @@ mod tests {
                 assert!(!text.contains(gone), "{gone}: {text}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod effort_env_tests {
+    use super::effort_from_env;
+
+    /// `CREW_DEFAULT_EFFORT` reaches the providers that take an effort, and
+    /// only when it says something.
+    #[test]
+    fn the_environments_effort_is_for_claude_and_codex_only() {
+        let low = || Some(" low ".to_string());
+        assert_eq!(effort_from_env("claude", low()).as_deref(), Some("low"));
+        assert_eq!(effort_from_env("codex", low()).as_deref(), Some("low"));
+        assert_eq!(effort_from_env("opencode", low()), None);
+        assert_eq!(effort_from_env("cursor", low()), None);
+        assert_eq!(effort_from_env("claude", Some(String::new())), None);
+        assert_eq!(effort_from_env("claude", None), None);
     }
 }

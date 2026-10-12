@@ -7,14 +7,14 @@
 // one, and clears what ended.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
-import { MOD, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -34,7 +34,7 @@ before(async () => {
   });
   await crew.request("state_set", { key: "sessions:view", value: "chat" });
   await crew.reload();
-  await installFakeOpencode();
+  await installFakeOpencode(crew);
   await crew.request("process_create", { workspaceId: workspace.id, name: "web", command: "echo up; sleep 300" });
 
   const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
@@ -51,26 +51,6 @@ before(async () => {
 after(async () => {
   await crew?.close();
 });
-
-/** An opencode that answers each turn with the last line it was handed, so a child reports at once. */
-async function installFakeOpencode(): Promise<void> {
-  const bin = path.join(crew.home, ".local/bin");
-  await mkdir(bin, { recursive: true });
-  const file = path.join(bin, "opencode");
-  await writeFile(
-    file,
-    `#!/usr/bin/env python3
-import json, sys, uuid
-prompt = sys.stdin.read()
-args = sys.argv[1:]
-sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
-last = prompt.strip().splitlines()[-1]
-print(json.dumps({"type": "text", "sessionID": sid, "part": {"id": "t1", "type": "text", "text": "Done: " + last}}), flush=True)
-print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "s1", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}}), flush=True)
-`,
-  );
-  await chmod(file, 0o755);
-}
 
 const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
 const said = (text: string | RegExp) => crew.window.getByText(text, typeof text === "string" ? { exact: true } : {});
@@ -104,7 +84,7 @@ const processes = (workspaceId: string) => crew.request<Process[]>("process_list
 
 test("what the session started is one line under the composer, and its sheet lists running work before what ended", async () => {
   const env = await sessionEnv();
-  await run(CREW, ["sessions", "start", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
+  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
   const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((row) => row.parentId === chat.id), {
     timeout: 20_000,
     message: "the child reaches crewd",

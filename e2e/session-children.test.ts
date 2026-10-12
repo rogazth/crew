@@ -2,37 +2,16 @@
 // in whoever started it — a chip in its parent's bar, not a sidebar row — and
 // opens as Crew's chat. The terminal's CLI starts it
 // from its own shell with `crew sessions delegate`, with the terminal's token, so
-// the parent is the terminal; a fake opencode in $HOME/.local/bin answers.
+// the parent is the terminal; the fake opencode 2.x (e2e/bin/opencode) answers.
 import assert from "node:assert/strict";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
-import { launchCrew, newTerminal, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newTerminal, typeInTerminal, waitFor, type Crew } from "./harness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CREW = path.join(ROOT, "target/debug/crew");
-
-/** An opencode that answers each turn with the last line it was handed. */
-async function installFakeOpencode(crew: Crew): Promise<void> {
-  const bin = path.join(crew.home, ".local/bin");
-  await mkdir(bin, { recursive: true });
-  const file = path.join(bin, "opencode");
-  await writeFile(
-    file,
-    `#!/usr/bin/env python3
-import json, sys, uuid
-prompt = sys.stdin.read()
-args = sys.argv[1:]
-sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
-last = prompt.strip().splitlines()[-1]
-print(json.dumps({"type": "text", "sessionID": sid, "part": {"id": "t1", "type": "text", "text": "Done: " + last}}), flush=True)
-print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "s1", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}}), flush=True)
-`,
-  );
-  await chmod(file, 0o755);
-}
 
 const sessions = (crew: Crew, workspaceId: string) => crew.request<Session[]>("session_list", { workspaceId });
 

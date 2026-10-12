@@ -23,8 +23,8 @@ import { join } from "node:path";
 const REPO = new URL("..", import.meta.url).pathname;
 const CREWD = join(REPO, "target/debug/crewd");
 const MODELS = {
-  claude: process.env.CLAUDE_MODEL ?? "claude-sonnet-4-5",
-  codex: process.env.CODEX_MODEL ?? "gpt-5.6-terra",
+  claude: process.env.CLAUDE_MODEL ?? "claude-haiku-5-5",
+  codex: process.env.CODEX_MODEL ?? "gpt-5.6-luna",
   opencode: process.env.OPENCODE_MODEL ?? "opencode/nemotron-3.5-lightning-free",
   cursor: process.env.CURSOR_MODEL ?? "auto",
 };
@@ -35,6 +35,10 @@ const ALL = ["claude", "codex", "opencode", "cursor"];
 const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boolean);
 const SCENARIOS = (process.env.SCENARIOS ?? "a,b,w,c,d,e,f,q,p,g,h,i,j,k,m,s").split(",").filter(Boolean);
 const KEEP = process.env.KEEP === "1";
+// The effort every Claude and Codex session of the run thinks at: the bots it
+// makes, the sessions `delegate` and `start_session` start, and the `claude -p`
+// of scenario a. Low, to keep a run cheap.
+const EFFORT = process.env.EFFORT ?? "low";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...args);
@@ -76,7 +80,9 @@ const events = [];
 async function startDaemon(env = {}) {
   daemon = spawn(CREWD, [`--data-dir=${dataDir}`], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, CREW_SOCKET: "", CREW_TOKEN: "", ...env },
+    // `delegate` and `start_session` take no effort, so a session that names
+    // none starts at what the daemon's environment says (`CREW_DEFAULT_EFFORT`).
+    env: { ...process.env, CREW_SOCKET: "", CREW_TOKEN: "", CREW_DEFAULT_EFFORT: EFFORT, ...env },
   });
   daemon.stderr.on("data", (chunk) => {
     if (process.env.VERBOSE) process.stderr.write(`[crewd] ${chunk}`);
@@ -420,7 +426,7 @@ const scenarios = {
     ].join("\n");
     await rpc("pty_spawn", {
       id: shell.id, cwd: repo, cols: 120, rows: 40, session: shell.id,
-      command: ["claude", "-p", prompt, "--model", MODELS.claude, "--dangerously-skip-permissions"],
+      command: ["claude", "-p", prompt, "--model", MODELS.claude, "--effort", EFFORT, "--dangerously-skip-permissions"],
     });
     const until = Date.now() + 15 * 60_000;
     while (!existsSync(out) && Date.now() < until) await sleep(2000);

@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+# A stand-in for opencode 2.x, installed by `installFakeOpencode` for the specs
+# that start an opencode session. Crew only drives `opencode serve` (chat over
+# the protocol, plan decision 9): this starts an HTTP server on a free port,
+# says `server listening on http://127.0.0.1:<port>`, and answers the calls
+# Crew makes with the shapes of 2.0.26: Basic auth `opencode:<password>`,
+# `/api/info`, `/api/session` and its prompt, one event stream at `/api/event`.
+#
+# A turn answers "Done: " and the last line of the message it was handed, as
+# one text and `session.execution.succeeded`, so a child reports at once. It
+# takes nothing else of the real one; `crates/crew-core/src/turns/opencode.rs`
+# has the fuller fake the Rust tests use.
+#
+# Every request is appended to $HOME/fake-opencode.log as {method, path, body}.
+import base64, json, os, queue, sys, threading, time, uuid
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import unquote, urlparse
+
+HOME = os.environ.get("HOME", os.path.expanduser("~"))
+LOG = os.path.join(HOME, "fake-opencode.log")
+PASSWORD = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
+lock = threading.RLock()
+subscribers = []
+sessions = {}
+
+
+def append(record):
+    with lock:
+        with open(LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+
+
+def now():
+    return int(time.time() * 1000)
+
+
+def hexid(prefix):
+    return prefix + uuid.uuid4().hex[:24]
+
+
+def emit(kind, data):
+    event = {"id": hexid("evt_"), "created": now(), "type": kind, "data": data}
+    with lock:
+        for q in list(subscribers):
+            q.put(event)
+
+
+def info(s):
+    out = {
+        "id": s["id"], "projectID": "global", "cost": 0,
+        "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+        "time": {"created": s["created"], "updated": now()}, "title": s["title"], "location": s["location"],
+    }
+    if s.get("idle"):
+        out["time"]["idle"] = s["idle"]
+    if s.get("outcome"):
+        out["outcome"] = s["outcome"]
+    if s.get("model"):
+        out["model"] = s["model"]
+    return out
+
+
+def tokens():
+    return {"input": 100, "output": 10, "reasoning": 2, "cache": {"read": 1000, "write": 0}}
+
+
+def run_turn(s, item):
+    sid = s["id"]
+    emit("session.execution.started", {"sessionID": sid})
+    emit("session.inbox.delivered", {"sessionID": sid, "inboxID": item["id"]})
+    msg = hexid("msg_")
+    emit("session.step.started", {"sessionID": sid, "assistantMessageID": msg})
+    text = item["text"].strip()
+    reply = "Done: " + (text.splitlines()[-1] if text else "")
+    half = len(reply) // 2
+    emit("session.text.started", {"sessionID": sid, "assistantMessageID": msg, "ordinal": 0})
+    for piece in (reply[:half], reply[half:]):
+        emit("session.text.delta", {"sessionID": sid, "assistantMessageID": msg, "ordinal": 0, "delta": piece})
+    emit("session.text.ended", {"sessionID": sid, "assistantMessageID": msg, "ordinal": 0, "text": reply})
+    emit("session.step.ended", {"sessionID": sid, "assistantMessageID": msg, "finish": "stop", "cost": 0, "tokens": tokens()})
+    emit("session.execution.succeeded", {"sessionID": sid})
+    with lock:
+        s["busy"] = False
+        s["outcome"] = "succeeded"
+        s["idle"] = now()
+
+
+def start(s, item):
+    with lock:
+        if s["busy"]:
+            s["waiting"].append(item)
+            return
+        s["busy"] = True
+    threading.Thread(target=run_turn, args=(s, item), daemon=True).start()
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, status, body=None):
+        raw = b"" if body is None else json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def handle_any(self, method):
+        path = urlparse(self.path).path
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"null") if length else None
+        directory = unquote(self.headers.get("x-opencode-directory") or "")
+        append({"method": method, "path": path, "body": body, "directory": directory or None})
+        if (self.headers.get("Authorization") or "") != "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode():
+            return self.reply(401, {"_tag": "Unauthorized"})
+        parts = [p for p in path.split("/") if p]
+        if path == "/api/event":
+            return self.events()
+        if path == "/api/info":
+            return self.reply(200, {"version": "2.0.26", "pid": os.getpid(), "urls": [], "capabilities": {}})
+        if path == "/api/experimental/migration/v1":
+            return self.reply(200, {"status": "completed"})
+        if path == "/api/session" and method == "POST":
+            b = body or {}
+            s = {"id": hexid("ses_"), "created": now(), "title": b.get("title", ""), "location": b.get("location"), "model": b.get("model"), "busy": False, "waiting": []}
+            sessions[s["id"]] = s
+            emit("session.created", {"sessionID": s["id"]})
+            return self.reply(200, {"data": info(s)})
+        if path in ("/api/command", "/api/skill"):
+            return self.reply(200, {"location": {"directory": directory}, "data": []})
+        if path == "/api/model":
+            return self.reply(200, {"location": {"directory": directory}, "data": [{"id": "nemotron-3.5-lightning-free", "modelID": "nemotron-3.5-lightning-free", "providerID": "opencode", "limit": {"context": 262144, "output": 32768}}]})
+        if path == "/api/mcp" and method == "GET":
+            return self.reply(200, {"location": {"directory": directory}, "data": [{"name": "crew", "status": {"status": "connected"}}]})
+        if path == "/api/location/reload":
+            return self.reply(204)
+        if len(parts) >= 3 and parts[:2] == ["api", "experimental"] and parts[2] == "session":
+            return self.reply(204)
+        if len(parts) >= 3 and parts[:2] == ["api", "session"]:
+            s = sessions.get(parts[2])
+            if not s:
+                return self.reply(404, {"_tag": "SessionNotFoundError", "message": "Session not found"})
+            rest = parts[3:]
+            if not rest:
+                if method == "GET":
+                    return self.reply(200, {"data": info(s)})
+                if method == "DELETE":
+                    sessions.pop(s["id"], None)
+                    emit("session.deleted", {"sessionID": s["id"]})
+                    return self.reply(204)
+                return self.reply(204)
+            if rest == ["model"]:
+                s["model"] = body["model"]
+                return self.reply(204)
+            if rest in (["environment"], ["interrupt"]):
+                return self.reply(204 if rest == ["environment"] else 200, None if rest == ["environment"] else {"interrupted": False})
+            if rest == ["prompt"]:
+                text = body.get("text", "")
+                item = {"id": hexid("msg_"), "text": text}
+                delivery = body.get("delivery") or "steer"
+                emit("session.inbox.enqueued", {"inboxID": item["id"], "sessionID": s["id"], "item": {"type": "user", "payload": {"text": text}, "delivery": delivery}})
+                start(s, item)
+                return self.reply(200, {"data": {"id": item["id"], "sessionID": s["id"], "type": "user", "payload": {"text": text}, "delivery": delivery}})
+        return self.reply(404, {"_tag": "NotFound"})
+
+    def events(self):
+        q = queue.Queue()
+        with lock:
+            subscribers.append(q)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            self.wfile.write(b'data: {"id":"evt_0","type":"server.connected","data":{}}\n\n')
+            self.wfile.flush()
+            while True:
+                try:
+                    self.wfile.write(("data: " + json.dumps(q.get(timeout=5)) + "\n\n").encode())
+                except queue.Empty:
+                    self.wfile.write(b": heartbeat\n\n")
+                self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            with lock:
+                if q in subscribers:
+                    subscribers.remove(q)
+
+    def do_GET(self): self.handle_any("GET")
+    def do_POST(self): self.handle_any("POST")
+    def do_PUT(self): self.handle_any("PUT")
+    def do_PATCH(self): self.handle_any("PATCH")
+    def do_DELETE(self): self.handle_any("DELETE")
+
+
+if "--version" in sys.argv[1:]:
+    print("opencode v2.0.26")
+    sys.exit(0)
+
+
+def watch_stdin():
+    # The daemon that started it is gone: so is it.
+    sys.stdin.read()
+    os._exit(0)
+
+
+threading.Thread(target=watch_stdin, daemon=True).start()
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+server.daemon_threads = True
+print("server listening on http://127.0.0.1:%d" % server.server_address[1], flush=True)
+server.serve_forever()
