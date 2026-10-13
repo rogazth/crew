@@ -167,7 +167,7 @@ export function WorkSegment({
           if (!open) setPicked(null);
           onOpenChange(!open);
         }}
-        className={`flex h-6 items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-hover hover:text-text ${running ? "text-text-muted" : "text-placeholder"}`}
+        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
       >
         {summary.attention > 0 && (
           <span className="flex items-center gap-1 text-warning">
