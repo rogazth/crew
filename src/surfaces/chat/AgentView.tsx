@@ -211,7 +211,7 @@ export function AgentView({
           label="Close"
           title={`Back to ${parent?.name ?? 'the session'}`}
           onClick={onClose}
-          className="pointer-events-auto size-9 rounded-full bg-surface shadow-float"
+          className="pointer-events-auto size-9 rounded-full! bg-surface shadow-float"
         />
       </header>
       <div className="relative z-0 flex min-h-0 flex-1 flex-col pt-14">
