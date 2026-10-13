@@ -984,6 +984,7 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
                 state: None,
                 activity: None,
                 steps: None,
+                thread: None,
             })
         }
         Some("image_view") => Some(ToolDetail::File {
@@ -1447,6 +1448,7 @@ mod protocol_tests {
                 state: None,
                 activity: None,
                 steps: None,
+                thread: None,
             })
         );
         assert!(spawned_threads(started.as_object().unwrap()).is_empty());

@@ -5043,6 +5043,55 @@ mod mailbox_tests {
         assert_eq!(said, ["report: SUBAGENT"], "the child's words are not the parent's answer");
     }
 
+    /// A second call that names the child a call already started continues
+    /// it: one entry, and each call keeps its own steps, report and state.
+    #[test]
+    fn a_second_opencode_call_continues_the_same_child_and_keeps_its_own_steps() {
+        use crew_protocol::{BackgroundState, BlockRole, SubagentState, ToolDetail};
+        let world = world();
+        let ws = workspace(&world);
+        let coder = bot(&world, &ws, "Coder");
+        turn(&world, &coder, "SUBAGENT RESUME");
+        let calls: Vec<(String, ToolDetail)> = blocks(&world, &coder.id)
+            .into_iter()
+            .filter_map(|block| block.tool.filter(|tool| tool.name == "subagent"))
+            .map(|tool| (tool.call_id, tool.detail.expect("detail")))
+            .collect();
+        assert_eq!(calls.len(), 2, "one row per call");
+        let list = world.host.background_list(&coder.id);
+        assert_eq!(list.commands.len(), 1, "one entry for the one child");
+        let row = &list.commands[0];
+        assert_eq!(row.state, BackgroundState::Completed);
+        assert_eq!(row.tool_call_id.as_deref(), Some(calls[0].0.as_str()));
+        let mut threads = Vec::new();
+        let mut seen = Vec::new();
+        for (_, detail) in &calls {
+            let ToolDetail::Agent { state, output, steps, thread, .. } = detail else {
+                panic!("not an agent row");
+            };
+            threads.push(thread.clone());
+            let steps = steps.clone().expect("steps");
+            let rows: Vec<(BlockRole, String)> = steps.iter().map(|step| (step.role.clone(), step.text.clone())).collect();
+            seen.push((state.clone(), output.clone(), rows));
+        }
+        assert_eq!(threads, [Some(row.id.clone()), Some(row.id.clone())], "both name the child");
+        assert_eq!(
+            seen,
+            [
+                (
+                    Some(SubagentState::Done),
+                    Some("pong".to_string()),
+                    vec![(BlockRole::Tool, "echo child".to_string()), (BlockRole::Assistant, "pong".to_string())]
+                ),
+                (
+                    Some(SubagentState::Done),
+                    Some("pong again".to_string()),
+                    vec![(BlockRole::Tool, "echo child".to_string()), (BlockRole::Assistant, "pong again".to_string())]
+                ),
+            ]
+        );
+    }
+
     /// Stop on the entry interrupts the child's own session; the parent's turn
     /// is not interrupted and ends when it says so.
     #[test]

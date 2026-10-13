@@ -370,6 +370,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>, end: &ToolEnd) -> Opt
             state: None,
             activity: None,
             steps: None,
+            thread: string_field(Some(input), "sessionID").or_else(|| meta_text("sessionID")),
         }),
         // Code the model ran against a server's tools (Code Mode): what it ran.
         "execute" => Some(ToolDetail::Command {

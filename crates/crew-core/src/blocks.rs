@@ -424,8 +424,8 @@ fn with_files(old: Option<Vec<AttachedFile>>, new: &[AttachedFile]) -> Option<Ve
 fn merged(old: Option<ToolDetail>, new: ToolDetail) -> ToolDetail {
     match (old, new) {
         (
-            Some(ToolDetail::Agent { output: old_output, background: old_background, state: old_state, activity: old_activity, steps: old_steps, .. }),
-            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps },
+            Some(ToolDetail::Agent { output: old_output, background: old_background, state: old_state, activity: old_activity, steps: old_steps, thread: old_thread, .. }),
+            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps, thread },
         ) => ToolDetail::Agent {
             description,
             agent_type,
@@ -435,6 +435,7 @@ fn merged(old: Option<ToolDetail>, new: ToolDetail) -> ToolDetail {
             state: state.or(old_state),
             activity: activity.or(old_activity),
             steps: steps.or(old_steps),
+            thread: thread.or(old_thread),
         },
         (_, new) => new,
     }

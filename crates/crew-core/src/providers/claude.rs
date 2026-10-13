@@ -1016,6 +1016,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             state: None,
             activity: None,
             steps: None,
+            thread: None,
         }),
         "exitplanmode" => Some(ToolDetail::Plan {
             text: raw(input, "plan")?.to_string(),
@@ -1069,6 +1070,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
                 state: None,
                 activity: None,
                 steps: None,
+                thread: None,
             })
         }
         Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp {
@@ -2270,6 +2272,7 @@ mod tests {
                 state: None,
                 activity: None,
                 steps: None,
+                thread: None,
             })
         );
         assert_eq!(tool_label("Task", input.as_object().unwrap()), "Find the parser");

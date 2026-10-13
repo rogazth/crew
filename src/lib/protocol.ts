@@ -1276,7 +1276,12 @@ activity?: string,
  * its calls and what it wrote between them. Filled by
  * `subagent.event`, never by the call's own updates.
  */
-steps?: Array<Block>, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
+steps?: Array<Block>, 
+/**
+ * The agent's own session, when the CLI names it (opencode): a call
+ * that continues one names the same session as the call before it.
+ */
+thread?: string, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 

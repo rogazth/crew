@@ -847,12 +847,19 @@ impl TurnHost {
                         return;
                     };
                     *known = input.clone();
+                    let name = name.clone();
                     events.push(HarnessEvent::ToolUpdated {
                         call_id: call.to_string(),
-                        title: Some(tool_label(name, &input)),
+                        title: Some(tool_label(&name, &input)),
                         status: None,
-                        detail: tool_detail(name, &input, &ToolEnd::default()),
+                        detail: tool_detail(&name, &input, &ToolEnd::default()),
                     });
+                    // A call that continues a subagent names its session up front.
+                    if matches!(name.as_str(), "task" | "subagent") {
+                        if let Some(child) = input.get("sessionID").and_then(Value::as_str) {
+                            link_child(live, None, call, child, &mut work);
+                        }
+                    }
                 }
                 "session.tool.progress" => {
                     // A task call names the child session it runs in.
@@ -1378,7 +1385,19 @@ fn link_child(live: &mut OpencodeLive, from: Option<&str>, call: &str, child: &s
     let (Some(top), Some(entry)) = (top, live.children.get_mut(child)) else {
         return;
     };
+    if entry.call.as_deref() == Some(top.as_str()) {
+        return;
+    }
+    // A call that names a child a call already named continues it: the same
+    // entry runs again, and from now on its steps, state and report are this
+    // call's. The first call keeps what it had.
     if entry.call.is_some() {
+        entry.call = Some(top.clone());
+        entry.text = None;
+        entry.current.clear();
+        entry.report = None;
+        work.board.push(ChildBoard::State(child.to_string(), BackgroundState::Running));
+        work.events.push(subagent_updated(&top, Some(SubagentState::Running), None, None));
         return;
     }
     entry.call = Some(top.clone());
@@ -1496,6 +1515,11 @@ fn child_note(live: &mut OpencodeLive, oc: &str, kind: &str, data: &Value, work:
                 return;
             };
             *known = input.clone();
+            if matches!(name.as_str(), "task" | "subagent") {
+                if let Some(sub) = input.get("sessionID").and_then(Value::as_str) {
+                    spawned = Some((id.to_string(), sub.to_string()));
+                }
+            }
             let title = tool_label(name, &input);
             work.board.push(ChildBoard::Activity(oc.to_string(), title.clone()));
             after.push(subagent_updated(&call, None, Some(title.clone()), None));
@@ -1703,44 +1727,52 @@ def run_turn(s, item):
         # names the child, the child's own execution on its own session id, and
         # the call's answer. `SLOW` keeps the child at work until it is
         # interrupted (its own session's interrupt) or the turn is.
-        call = hexid("call_")
-        inp = {"agent": "general", "description": "Reply with pong", "prompt": "Reply with the single word pong."}
-        emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
-        emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
-        csid = hexid("ses_")
-        cturn = {"interrupted": threading.Event(), "inbox": [], "hold": False}
-        sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": s["location"], "model": s.get("model"), "instructions": {}, "env": {}, "turns": 1, "busy": cturn, "held": []}
-        emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
-        emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
-        cmsg = hexid("msg_")
-        emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": "You are a subagent spawned by another session.\n" + inp["prompt"]}, "delivery": "steer"}})
-        emit("session.execution.started", {"sessionID": csid})
-        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
-        tool(csid, cmsg, "shell", {"command": "echo child"}, lambda c: "child\n")
-        emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens(2000)})
-        cmsg = hexid("msg_")
-        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
-        stopped = False
-        if "SLOW" in last:
+        csid = None
+        # `RESUME` goes on with the same child: a second call names its session.
+        for round in range(2 if "RESUME" in last else 1):
+          inp = {"agent": "general", "description": "Reply with pong" if round == 0 else "Reply with pong again", "prompt": "Reply with the single word pong." if round == 0 else "Again, reply with the single word pong."}
+          if csid: inp["sessionID"] = csid
+          call = hexid("call_")
+          emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
+          emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
+          if not csid:
+            csid = hexid("ses_")
+            cturn = {"interrupted": threading.Event(), "inbox": [], "hold": False}
+            sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": s["location"], "model": s.get("model"), "instructions": {}, "env": {}, "turns": 1, "busy": cturn, "held": []}
+            emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
+            emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
+          else:
+            sessions[csid]["busy"] = cturn
+          cmsg = hexid("msg_")
+          emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": "You are a subagent spawned by another session.\n" + inp["prompt"] if round == 0 else inp["prompt"]}, "delivery": "steer"}})
+          emit("session.execution.started", {"sessionID": csid})
+          emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+          tool(csid, cmsg, "shell", {"command": "echo child"}, lambda c: "child\n")
+          emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens(2000)})
+          cmsg = hexid("msg_")
+          emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+          stopped = False
+          if "SLOW" in last:
             while not (cturn["interrupted"].is_set() or turn["interrupted"].is_set()):
                 time.sleep(0.02)
             stopped = True
-        if stopped:
+          answer = "pong" if round == 0 else "pong again"
+          if stopped:
             emit("session.step.failed", {"sessionID": csid, "assistantMessageID": cmsg, "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": tokens(), "cost": 0})
             emit("session.execution.interrupted", {"sessionID": csid, "reason": "user"})
             outcome = "interrupted"
-        else:
+          else:
             emit("session.text.started", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0})
-            for piece in ("po", "ng"):
+            for piece in (answer[:2], answer[2:]):
                 emit("session.text.delta", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "delta": piece})
-            emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": "pong"})
+            emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": answer})
             emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "stop", "cost": 0, "tokens": tokens(3000)})
             emit("session.execution.succeeded", {"sessionID": csid})
             outcome = "completed"
-        finish(sessions[csid], "interrupted" if stopped else "succeeded")
-        body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else "pong")
-        emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
-        if turn["interrupted"].is_set():
+          finish(sessions[csid], "interrupted" if stopped else "succeeded")
+          body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else answer)
+          emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
+          if turn["interrupted"].is_set():
             return interrupted()
     if "MCP" in last:
         tool(sid, msg, "crew_list_peers", {}, lambda call: "[]")

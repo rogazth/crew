@@ -333,6 +333,11 @@ pub enum ToolDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         steps: Option<Vec<Block>>,
+        /// The agent's own session, when the CLI names it (opencode): a call
+        /// that continues one names the same session as the call before it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        thread: Option<String>,
     },
     /// A tool from an MCP server. `input` is the arguments as JSON.
     Mcp {
@@ -495,7 +500,7 @@ impl ToolDetail {
                     .map(|item| TodoItem { text: clip(&item.text, 512.min(limit)), status: item.status })
                     .collect(),
             },
-            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps } => {
+            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps, thread } => {
                 ToolDetail::Agent {
                     description,
                     agent_type,
@@ -505,6 +510,7 @@ impl ToolDetail {
                     state,
                     activity,
                     steps: steps.map(|steps| steps.into_iter().map(clipped_step).collect()),
+                    thread,
                 }
             }
             ToolDetail::Mcp { server, tool, input, output } => ToolDetail::Mcp {
