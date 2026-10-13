@@ -69,7 +69,7 @@ export type PanelSummary = {
   attention: number;
   /** What the status line says first: "scout asks", "2 waiting on you", "" when nothing waits. */
   attentionText: string;
-  /** The folded line: "2 agents · 1 session · 1 shell", "3 finished" when nothing runs, "" when empty. */
+  /** The folded line: "2 agents · 1 session · 1 shell", what runs or, when nothing does, what ran; "" when empty. */
   text: string;
 };
 
@@ -241,13 +241,16 @@ export function panelSummary(entries: readonly PanelEntry[]): PanelSummary {
         ? `${waiting.length} waiting on you`
         : `${waiting[0]!.title} ${waiting[0]!.attention === "approval" ? "needs approval" : "asks"}`;
 
+  // What runs, by kind; when nothing does, what there was, the same way.
+  const shown = running.length > 0 ? running : entries;
+  const all = (kind: PanelKind) => shown.filter((entry) => entry.kind === kind).length;
   const work: string[] = [];
-  if (agents > 0) work.push(plural(agents, "agent"));
-  if (sessions > 0) work.push(plural(sessions, "session"));
-  if (shells > 0) work.push(plural(shells, "shell"));
-  if (processes > 0) work.push(plural(processes, "process", "processes"));
+  if (all("subagent") > 0) work.push(plural(all("subagent"), "agent"));
+  if (all("session") > 0) work.push(plural(all("session"), "session"));
+  if (all("shell") > 0) work.push(plural(all("shell"), "shell"));
+  if (all("process") > 0) work.push(plural(all("process"), "process", "processes"));
 
-  const text = work.length > 0 ? work.join(" · ") : finished > 0 ? `${finished} finished` : "";
+  const text = work.join(" · ");
   return { running: { agents, sessions, shells, processes }, finished, attention: waiting.length, attentionText, text };
 }
 

@@ -206,7 +206,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
   await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
     message: "crewd stops the run",
   });
-  const finished = crew.window.getByRole("button", { name: "2 finished", exact: true });
+  const finished = crew.window.getByRole("button", { name: "1 agent · 1 process", exact: true });
   await rows().filter({ hasText: "Process · stopped" }).waitFor();
 
   // Enter on it leaves the chat for the command's own tab and closes the sheet.
@@ -218,7 +218,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
 });
 
 test("Clear finished empties the panel, and the line goes with it", async () => {
-  await crew.window.getByRole("button", { name: "2 finished", exact: true }).click();
+  await crew.window.getByRole("button", { name: "1 agent · 1 process", exact: true }).click();
   await sheet().getByRole("button", { name: "Clear finished" }).click();
   await sheet().waitFor({ state: "detached" });
   await crew.window.getByRole("button", { name: /finished$|process|agent|shell/ }).waitFor({ state: "detached" });

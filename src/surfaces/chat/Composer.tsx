@@ -412,13 +412,13 @@ export function Composer({
       </form>
       <div data-status-line data-session={session.id} className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
-        <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
         {queue && queue.items.some((message) => !message.steering) && (
           <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />
         )}
         {session.paused && <PausedSegment />}
         {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
+        <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
         <span className="truncate text-placeholder">
           {optionsPending ? (

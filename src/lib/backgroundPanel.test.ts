@@ -335,10 +335,10 @@ describe("panelSummary", () => {
     expect(panelSummary([])).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 0, attention: 0, attentionText: "", text: "" });
   });
 
-  it("says how many finished when nothing runs", () => {
+  it("says what ran, by kind, when nothing runs", () => {
     const summary = panelSummary([entry("subagent", "done"), entry("shell", "failed"), entry("process", "stopped")]);
 
-    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 3, attention: 0, attentionText: "", text: "3 finished" });
+    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 3, attention: 0, attentionText: "", text: "1 agent · 1 shell · 1 process" });
   });
 
   it("counts running work in the text, plural and singular", () => {
