@@ -3706,6 +3706,15 @@ impl TurnHost {
         let mut ask: Option<(bool, Option<u64>)> = None;
         // The background work's end, which no turn has to be running to hear.
         let mut unheld = false;
+        // The call that started a task the work list already has: a subagent
+        // this process did not see start, which a `SendMessage` resumes.
+        let mut origin = (rec.get("subtype").and_then(Value::as_str) == Some("task_started"))
+            .then(|| string_field(Some(&rec), "task_id"))
+            .flatten()
+            .and_then(|task| {
+                let call = self.background.read(session_id, |board| board.command(&task).and_then(|row| row.tool_call_id.clone()));
+                call.flatten().map(|call| (task, call))
+            });
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -3817,13 +3826,11 @@ impl TurnHost {
                 }
                 return;
             }
-            let tools = &live.tools_by_id;
-            if let Some(update) = live
-                .subagents
-                .task(&rec, |id| tools.get(id).map(|tool| (tool.name.clone(), tool.input.clone())))
-            {
-                events.push(update);
+            if let Some((task, call)) = origin.take() {
+                live.subagents.remember(&task, &call);
             }
+            let tools = &live.tools_by_id;
+            events.extend(live.subagents.task(&rec, |id| tools.get(id).map(|tool| (tool.name.clone(), tool.input.clone()))));
             let notice = live.subagents.notice(&rec);
             // What the board reads beside the task lines: a turn's result names
             // the windows of its models, and the answer to an Agent call what

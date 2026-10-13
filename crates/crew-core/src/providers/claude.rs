@@ -1038,6 +1038,11 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
     if name == SHARE_TOOL {
         return None;
     }
+    // A message that resumed a subagent answers `{"resumedAgentId": …}`: the
+    // row is that subagent's call by then, and its report comes later.
+    if name == "SendMessage" && content.contains("\"resumedAgentId\"") {
+        return None;
+    }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
     match tool_detail(name, input) {
         Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command {
@@ -1177,6 +1182,12 @@ pub struct Subagents {
     /// names only the call. Kept apart from the agent's own, which a new turn
     /// clears while a background subagent carries on.
     tools: HashMap<String, (String, Map<String, Value>)>,
+    /// Task ids, to the Agent call that first started the task. A subagent's
+    /// frames name that call for as long as it lives, a resumed one too.
+    origins: HashMap<String, String>,
+    /// The Agent call a subagent was started by, to the `SendMessage` call
+    /// that resumed it last: its frames from then on are that call's.
+    resumed: HashMap<String, String>,
 }
 
 pub fn is_subagent_tool(name: &str) -> bool {
@@ -1199,6 +1210,7 @@ impl Subagents {
     /// partial stream events), so a frame is a step.
     pub fn frame(&mut self, rec: &Map<String, Value>) -> Option<Vec<HarnessEvent>> {
         let parent = rec.get("parent_tool_use_id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
+        let parent = self.resumed.get(parent).map_or(parent, String::as_str).to_string();
         let mut steps = Vec::new();
         match string_field(Some(rec), "type").as_deref() {
             Some("assistant") => {
@@ -1241,9 +1253,15 @@ impl Subagents {
         Some(
             steps
                 .into_iter()
-                .map(|event| HarnessEvent::SubagentEvent { call_id: parent.to_string(), event: Box::new(event) })
+                .map(|event| HarnessEvent::SubagentEvent { call_id: parent.clone(), event: Box::new(event) })
                 .collect(),
         )
+    }
+
+    /// The Agent call that started a task this process did not see start,
+    /// as the work list remembers it: a `SendMessage` can resume it.
+    pub fn remember(&mut self, task: &str, call: &str) {
+        self.origins.entry(task.to_string()).or_insert_with(|| call.to_string());
     }
 
     /// A `task_*` system line about a subagent, as the state of its call.
@@ -1252,7 +1270,15 @@ impl Subagents {
         &mut self,
         rec: &Map<String, Value>,
         call: impl Fn(&str) -> Option<(String, Map<String, Value>)>,
-    ) -> Option<HarnessEvent> {
+    ) -> Vec<HarnessEvent> {
+        self.task_events(rec, call).unwrap_or_default()
+    }
+
+    fn task_events(
+        &mut self,
+        rec: &Map<String, Value>,
+        call: impl Fn(&str) -> Option<(String, Map<String, Value>)>,
+    ) -> Option<Vec<HarnessEvent>> {
         if string_field(Some(rec), "type").as_deref() != Some("system") {
             return None;
         }
@@ -1262,23 +1288,54 @@ impl Subagents {
         if subtype == "task_started" {
             let id = named.clone()?;
             let (name, input) = call(&id)?;
-            if !is_subagent_tool(&name) && string_field(Some(rec), "task_type").as_deref() != Some("local_agent") {
+            let agent = is_subagent_tool(&name);
+            if !agent && string_field(Some(rec), "task_type").as_deref() != Some("local_agent") {
                 return None;
             }
             let description = string_field(Some(rec), "description")
                 .or_else(|| string_field(Some(&input), "description"))
                 .unwrap_or_else(|| "Subagent".into());
-            self.calls.insert(id.clone(), description);
+            self.calls.insert(id.clone(), description.clone());
+            let mut events = Vec::new();
             if let Some(task) = task {
-                self.tasks.insert(task, id.clone());
+                self.tasks.insert(task.clone(), id.clone());
+                if agent {
+                    self.origins.entry(task.clone()).or_insert_with(|| id.clone());
+                }
+                // A `SendMessage` that resumes a subagent is a call to it as
+                // much as the one that started it: it shows what it was
+                // asked, gets the steps and the report, and names the task
+                // the first call started, so both read as one thread.
+                if !agent {
+                    if let Some(origin) = self.origins.get(&task).filter(|origin| **origin != id) {
+                        self.resumed.insert(origin.clone(), id.clone());
+                    }
+                    events.push(HarnessEvent::ToolUpdated {
+                        call_id: id.clone(),
+                        title: Some(description.clone()),
+                        status: None,
+                        detail: Some(ToolDetail::Agent {
+                            description,
+                            agent_type: string_field(Some(rec), "subagent_type"),
+                            prompt: raw(rec, "prompt").or_else(|| raw(&input, "message")).map(str::to_string),
+                            output: None,
+                            background: None,
+                            state: None,
+                            activity: None,
+                            steps: None,
+                            thread: Some(task),
+                        }),
+                    });
+                }
             }
-            return Some(HarnessEvent::SubagentUpdated {
+            events.push(HarnessEvent::SubagentUpdated {
                 call_id: id,
                 state: Some(SubagentState::Running),
                 activity: None,
                 output: None,
                 background: (rec.get("is_backgrounded") == Some(&Value::Bool(true))).then_some(true),
             });
+            return Some(events);
         }
         let id = named
             .filter(|id| self.calls.contains_key(id))
@@ -1290,7 +1347,7 @@ impl Subagents {
             output,
             background,
         };
-        match subtype.as_str() {
+        let event = match subtype.as_str() {
             "task_progress" => {
                 Some(update(None, string_field(Some(rec), "description").filter(|text| !text.is_empty()), None, None))
             }
@@ -1305,7 +1362,8 @@ impl Subagents {
                 Some(update(state, None, string_field(Some(rec), "summary"), None))
             }
             _ => None,
-        }
+        };
+        event.map(|event| vec![event])
     }
 
     /// The note for a subagent that reported back, as the CLI writes it in
@@ -1624,6 +1682,7 @@ mod tests {
     const FORWARDED: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-forwarded.jsonl");
     const STOPPED: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-stopped.jsonl");
     const BACKGROUND_USAGE: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-background-usage.jsonl");
+    const RESUMED: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-resumed.jsonl");
 
     /// Feeds a capture's lines to a live Claude session and folds what came
     /// out into blocks, as the transcript does.
@@ -1878,6 +1937,50 @@ mod tests {
         assert!(said.text.ends_with("more bytes") && said.text.starts_with("word word"), "{:?}", &said.text[said.text.len() - 40..]);
     }
 
+    /// A `SendMessage` that resumes a subagent is a call to it of its own: it
+    /// shows what it asked, takes the steps the subagent sends from then on
+    /// (they still name the Agent call) and its report, and names the task,
+    /// so the two read as one thread; the work-list entry runs again and ends.
+    #[test]
+    fn a_subagent_resumed_by_send_message_answers_on_the_call_that_resumed_it() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = RESUMED.lines().collect();
+        let blocks = replay(&host, &cap, &lines, Vec::new());
+        let calls: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| block.tool.clone())
+            .filter_map(|tool| match tool.detail {
+                Some(ToolDetail::Agent { prompt, output, state, steps, thread, .. }) => {
+                    let steps: Vec<String> = steps.unwrap_or_default().into_iter().map(|step| step.text).collect();
+                    Some((tool.name, prompt.unwrap_or_default(), output.unwrap_or_default(), state, steps, thread))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let (name, prompt, output, state, steps, _) = &calls[0];
+        assert_eq!(name, "Agent");
+        assert!(prompt.contains("Villa Nebulosa") && output.contains("Villa Nebulosa"), "{prompt} / {output}");
+        assert_eq!(*state, Some(SubagentState::Done));
+        assert!(steps.iter().all(|step| !step.contains("Cristalira")), "the first call keeps its own steps: {steps:?}");
+        let (name, prompt, output, state, steps, thread) = &calls[1];
+        assert_eq!(name, "SendMessage");
+        assert!(prompt.contains("Cristalira") && output.contains("Cristalira"), "{prompt} / {output}");
+        assert_eq!(*state, Some(SubagentState::Done));
+        assert!(steps.iter().any(|step| step.contains("Cristalira")), "{steps:?}");
+        assert_eq!(thread.as_deref(), Some("ab19f83e8d09a8136"));
+        let notes = said(&blocks, crew_protocol::BlockRole::System);
+        assert_eq!(notes.iter().filter(|note| note.contains("Describir ciudad inventada")).count(), 2, "{notes:?}");
+
+        let list = host.background_list("s");
+        assert_eq!(list.commands.len(), 1, "one entry for the one subagent");
+        let row = &list.commands[0];
+        assert_eq!(row.state, crew_protocol::BackgroundState::Completed);
+        assert_eq!(row.tool_call_id.as_deref(), Some("toolu_01UTo4zVnLqTho3DtcBXFNBw"));
+    }
+
     /// The lines of a subagent's task, as the call's state: a stop carries no
     /// usage and still ends it, and the Bash task the subagent itself runs
     /// names a call of its own, which is no subagent's.
@@ -1892,21 +1995,21 @@ mod tests {
         };
         let started = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "toolu_agent",
             "description": "Run 40-second sleep", "task_type": "local_agent", "is_backgrounded": false }));
-        let Some(HarnessEvent::SubagentUpdated { call_id, state, .. }) = subagents.task(&started, call) else {
+        let Some(HarnessEvent::SubagentUpdated { call_id, state, .. }) = subagents.task(&started, call).pop() else {
             panic!("a subagent starts");
         };
         assert_eq!((call_id.as_str(), state), ("toolu_agent", Some(SubagentState::Running)));
 
         let nested = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "b1", "owned_by_subagent": true,
             "tool_use_id": "toolu_bash", "description": "Sleep", "task_type": "local_bash", "parent_task_id": "a1" }));
-        assert!(subagents.task(&nested, |_| Some(("Bash".to_string(), Map::new()))).is_none());
+        assert!(subagents.task(&nested, |_| Some(("Bash".to_string(), Map::new()))).is_empty());
         let nested_end = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_bash",
             "status": "stopped", "summary": "Sleep" }));
-        assert!(subagents.task(&nested_end, call).is_none(), "its tool's task ends no subagent");
+        assert!(subagents.task(&nested_end, call).is_empty(), "its tool's task ends no subagent");
 
         let stopped = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "tool_use_id": "toolu_agent",
             "status": "stopped", "summary": "Run 40-second sleep" }));
-        let Some(HarnessEvent::SubagentUpdated { state, output, .. }) = subagents.task(&stopped, call) else {
+        let Some(HarnessEvent::SubagentUpdated { state, output, .. }) = subagents.task(&stopped, call).pop() else {
             panic!("a stop is an update");
         };
         assert_eq!((state, output.as_deref()), (Some(SubagentState::Stopped), Some("Run 40-second sleep")));

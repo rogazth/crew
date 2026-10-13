@@ -386,6 +386,17 @@ impl Board {
             if known.tool_call_id.is_none() {
                 known.tool_call_id = row.tool_call_id;
             }
+            // Started again once it ended: a subagent a `SendMessage` resumed.
+            // It is the same entry, running anew.
+            if known.state != BackgroundState::Running && row.state == BackgroundState::Running {
+                known.state = BackgroundState::Running;
+                known.started_at = row.started_at;
+                known.ended_at = None;
+                known.exit_code = None;
+                known.stop_note = None;
+                known.activity = None;
+                known.foreground = row.foreground;
+            }
             if known.description.is_none() && row.description.is_some() && row.command != known.command {
                 known.command = row.command;
                 known.description = row.description;
