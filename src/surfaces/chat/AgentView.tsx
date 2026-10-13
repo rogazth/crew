@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { SquareIcon, XIcon } from 'lucide-react';
-import { Button, IconButton } from '../../chrome/kit';
+import { IconButton } from '../../chrome/kit';
 import { useNow } from '../../hooks/useNow';
 import { KIND_LABEL, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
 import type { Block } from '../../lib/blocks';
@@ -212,7 +212,7 @@ export function AgentView({
       <header className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center gap-2 px-6" data-thread-header>
         <div
           title={[...meta, branch, tokens && tokensTitle(entry)].filter(Boolean).join(' · ')}
-          className="pointer-events-auto flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-surface pr-3 pl-3 shadow-float"
+          className={`pointer-events-auto flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-surface pl-3 shadow-float ${stoppable ? 'pr-1' : 'pr-3'}`}
         >
           <EntryIcon entry={entry} className="size-4 shrink-0" />
           <span className="min-w-0 truncate text-[13px] leading-5 font-medium">{name}</span>
@@ -223,10 +223,15 @@ export function AgentView({
             {elapsed}
           </span>
           {stoppable && (
-            <Button variant="ghost" keys="x" onClick={onStop} className="group/stop h-7 px-2 text-[12.5px] font-normal hover:text-danger">
+            <button
+              type="button"
+              title="Stop (x)"
+              onClick={onStop}
+              className="group/stop ml-1 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-text outline-none transition-colors hover:bg-danger/10 hover:text-danger focus-visible:ring-2 focus-visible:ring-focus/50"
+            >
               <SquareIcon className="size-2.5 fill-current text-icon group-hover/stop:text-danger" />
               Stop
-            </Button>
+            </button>
           )}
         </div>
         <IconButton
