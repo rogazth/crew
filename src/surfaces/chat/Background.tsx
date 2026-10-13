@@ -107,7 +107,7 @@ export function ShellOutput({ sessionId, command, live }: { sessionId: string; c
       }}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="mx-auto w-full max-w-[760px] px-6 pt-4 pb-10">
+      <div className="mx-auto w-full max-w-[840px] px-6 pt-4 pb-10">
         <p className="mb-2 px-1 text-[12px] text-text-muted">
           Started {clock(command.startedAt)} · {following ? 'following its output' : 'its last output'}
           {output?.truncated ? ' · only the end' : ''}

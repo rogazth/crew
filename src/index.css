@@ -167,6 +167,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
     user-select: text;
     cursor: auto;
     width: fit-content;
+    max-width: 100%;
     contain: paint;
   }
 

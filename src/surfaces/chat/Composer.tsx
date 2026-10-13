@@ -287,7 +287,7 @@ export function Composer({
   const sendLabel = !working ? "Send" : whileWorking === "steer" ? "Add to the running turn" : "Queue for the next turn";
 
   return (
-    <div className={`relative mx-auto w-full max-w-[760px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
+    <div className={`relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
       <form onSubmit={submit} className="crew-composer relative">
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />

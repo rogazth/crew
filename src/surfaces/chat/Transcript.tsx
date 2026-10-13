@@ -238,7 +238,7 @@ export function Transcript({
       onClickCapture={onClickCapture}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div ref={content} className="crew-prose mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
+      <div ref={content} className="crew-prose mx-auto w-full max-w-[840px] px-6 pt-8 pb-10">
         <div ref={sentinel} aria-hidden className="h-px" />
         {more && (
           <div className="mb-4 flex justify-center">

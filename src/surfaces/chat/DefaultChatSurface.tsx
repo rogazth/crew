@@ -119,7 +119,7 @@ const STARTERS = [
  */
 function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPick: (text: string) => void }) {
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col items-center gap-4 px-6 pb-6 text-center">
+    <div className="mx-auto flex w-full max-w-[840px] flex-col items-center gap-4 px-6 pb-6 text-center">
       {/* A session is its CLI, with no face of its own: the CLI's mark stands in. */}
       {session.kind === "bot" ? (
         <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-16" />

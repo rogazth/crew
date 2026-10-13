@@ -75,7 +75,7 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
         : `Read only · its report goes to ${parent}`;
   return (
     <div
-      className="mx-auto flex h-11 w-full max-w-[760px] shrink-0 items-center gap-2 px-6 text-[11.5px] text-placeholder"
+      className="mx-auto flex h-11 w-full max-w-[840px] shrink-0 items-center gap-2 px-6 text-[11.5px] text-placeholder"
       data-thread-footer
     >
       <span className="truncate">{why}</span>
@@ -177,7 +177,7 @@ export function AgentView({
 
   return (
     <div ref={root} className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id}>
-      <header className="mx-auto flex w-full max-w-[760px] shrink-0 flex-col gap-0.5 px-6 pt-5 pb-3" data-thread-header>
+      <header className="mx-auto flex w-full max-w-[840px] shrink-0 flex-col gap-0.5 px-6 pt-5 pb-3" data-thread-header>
         <div className="flex items-center gap-1">
           <nav aria-label="Thread" className="flex min-w-0 flex-1 items-center gap-1">
             {ancestors.map((crumb, index) => (
@@ -228,14 +228,14 @@ export function AgentView({
           )}
         </div>
       </header>
-      {error && <p className="mx-auto w-full max-w-[760px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
+      {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
       {chat ? (
         <div className="relative flex min-h-0 flex-1 flex-col">{chat}</div>
       ) : command && entry.kind === 'shell' ? (
         <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
       ) : (
         <div ref={scroller} className={`min-h-0 flex-1 overflow-y-auto ${FADE}`}>
-          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-1 px-6 pt-6 pb-10">
+          <div className="mx-auto flex w-full max-w-[840px] flex-col gap-1 px-6 pt-6 pb-10">
             {detail && view ? (
               <SubagentBody detail={detail} state={view.state} marked={null} />
             ) : (
