@@ -11,6 +11,10 @@
 # takes nothing else of the real one; `crates/crew-core/src/turns/opencode.rs`
 # has the fuller fake the Rust tests use.
 #
+# A turn whose last line holds ASKQUESTION raises a form (one question, two
+# options) and ASKAPPROVAL a permission ask before it answers; it goes on once
+# the reply arrives and says what it heard ("Done: <line> [answers: ...]").
+#
 # Every request is appended to $HOME/fake-opencode.log as {method, path, body}.
 import base64, json, os, queue, sys, threading, time, uuid
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -22,6 +26,7 @@ PASSWORD = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
 lock = threading.RLock()
 subscribers = []
 sessions = {}
+waits = {}
 
 
 def append(record):
@@ -64,6 +69,21 @@ def tokens():
     return {"input": 100, "output": 10, "reasoning": 2, "cache": {"read": 1000, "write": 0}}
 
 
+def wait_for(key):
+    ev = threading.Event()
+    waits[key] = {"ev": ev, "answer": None}
+    ev.wait(60)
+    return waits[key]["answer"]
+
+
+def tool(sid, msg, name, inp, run):
+    call = hexid("call_")
+    emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": name})
+    emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
+    result = run(call)
+    emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": result}], "metadata": {"truncated": False}, "executed": False})
+
+
 def run_turn(s, item):
     sid = s["id"]
     emit("session.execution.started", {"sessionID": sid})
@@ -71,7 +91,27 @@ def run_turn(s, item):
     msg = hexid("msg_")
     emit("session.step.started", {"sessionID": sid, "assistantMessageID": msg})
     text = item["text"].strip()
-    reply = "Done: " + (text.splitlines()[-1] if text else "")
+    last = text.splitlines()[-1] if text else ""
+    heard = []
+    if "ASKQUESTION" in last:
+        def question(call):
+            fid = hexid("frm_")
+            emit("form.created", {"form": {"id": fid, "sessionID": sid, "title": "Questions", "metadata": {"kind": "question", "tool": {"messageID": msg, "id": call}}, "fields": [{"key": "q0", "title": "Limit", "description": "Partial refunds over 90 days: allow them, or keep the 90-day limit?", "type": "string", "options": [{"value": "keep", "label": "Keep the 90-day limit"}, {"value": "allow", "label": "Allow them"}], "custom": True}]}})
+            got = wait_for(fid)
+            emit("form.replied" if got not in (None, "cancelled") else "form.cancelled", {"id": fid, "sessionID": sid, "answer": got})
+            heard.append(" [answers: %s]" % (json.dumps(got, sort_keys=True) if got not in (None, "cancelled") else "none"))
+            return "answered"
+        tool(sid, msg, "question", {"questions": [{"question": "Limit?"}]}, question)
+    if "ASKAPPROVAL" in last:
+        def ask(call):
+            pid = hexid("per_")
+            emit("permission.asked", {"id": pid, "sessionID": sid, "action": "shell", "resources": ["touch asked.txt"], "save": ["touch *"], "source": {"type": "tool", "messageID": msg, "id": call}})
+            got = wait_for(pid)
+            emit("permission.replied", {"sessionID": sid, "requestID": pid, "reply": got})
+            heard.append(" [decision: %s]" % got)
+            return "ran"
+        tool(sid, msg, "shell", {"command": "touch asked.txt"}, ask)
+    reply = "Done: " + last + "".join(heard)
     half = len(reply) // 2
     emit("session.text.started", {"sessionID": sid, "assistantMessageID": msg, "ordinal": 0})
     for piece in (reply[:half], reply[half:]):
@@ -151,6 +191,18 @@ class Handler(BaseHTTPRequestHandler):
                     sessions.pop(s["id"], None)
                     emit("session.deleted", {"sessionID": s["id"]})
                     return self.reply(204)
+                return self.reply(204)
+            if len(rest) == 3 and rest[0] == "permission" and rest[2] == "reply":
+                w = waits.get(rest[1])
+                if w:
+                    w["answer"] = body["decision"]
+                    w["ev"].set()
+                return self.reply(204)
+            if len(rest) >= 2 and rest[0] == "form":
+                w = waits.get(rest[1])
+                if w:
+                    w["answer"] = body["answer"] if method == "POST" else "cancelled"
+                    w["ev"].set()
                 return self.reply(204)
             if rest == ["model"]:
                 s["model"] = body["model"]

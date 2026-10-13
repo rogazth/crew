@@ -203,3 +203,25 @@ export function envelopeOf(kind: string | undefined): { word: string; tag?: stri
       return { word: "wrote" };
   }
 }
+
+/**
+ * The child's own card a question or approval letter is about: the newest one
+ * of that kind whose words the letter carries (the letter is made from the
+ * request's text, so an older letter never claims a newer request).
+ */
+export function askOf(blocks: readonly Block[], kind: "question" | "approval", letterText: string): Block | null {
+  for (let at = blocks.length - 1; at >= 0; at--) {
+    const block = blocks[at]!;
+    if (block.role !== kind) continue;
+    const words = kind === "question" ? (block.question?.questions.map((one) => one.question) ?? []) : [block.text];
+    if (words.some((word) => word && letterText.includes(word))) return block;
+  }
+  return null;
+}
+
+/** A question the parent's chat answers with one click: one single-choice question with a few options. */
+export function isQuickQuestion(block: Block): boolean {
+  const questions = block.question?.questions ?? [];
+  const only = questions[0];
+  return questions.length === 1 && !!only && !only.multiSelect && only.options.length > 0 && only.options.length <= 4;
+}

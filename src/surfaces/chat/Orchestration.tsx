@@ -13,6 +13,7 @@ import {
   MessageSquareIcon,
   MessagesSquareIcon,
   PencilIcon,
+  SquareTerminalIcon,
   SendIcon,
   Trash2Icon,
   UsersIcon,
@@ -22,7 +23,11 @@ import { lazy, memo, Suspense, useContext, useState, type ReactNode } from "reac
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import type { PanelEntry, PanelState } from "../../lib/backgroundPanel";
-import type { Block } from "../../lib/blocks";
+import { useOpenAsk } from "../../hooks/useOpenAsk";
+import { isOpen, type Block } from "../../lib/blocks";
+import { answer, respond } from "../../lib/turnRuntime";
+import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard } from "./QuestionCard";
 import { botLabel } from "../../lib/botNames";
 import { checkpointOf, resolveParty, USER } from "../../lib/letters";
 import {
@@ -32,6 +37,7 @@ import {
   firstLine,
   FOLD_LINES,
   foldsLongText,
+  isQuickQuestion,
   nativeName,
   nativeReport,
   sentOf,
@@ -89,7 +95,8 @@ export type Peer = { id?: string | undefined; name: string; provider?: string | 
 export function PeerMark({ peer, className }: { peer: Peer; className: string }) {
   if (peer.bot && peer.id) return <BotAvatar seed={peer.id} bare className={`${className} shrink-0`} />;
   if (peer.provider) return <ProviderIcon provider={peer.provider} className={`${className} shrink-0`} />;
-  return <BotIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
+  // A session whose CLI is not known (gone, or named only by a call): a neutral mark. Only a bot has a face.
+  return <SquareTerminalIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
 }
 
 /** A session or a bot as the chat's sessions know it: by id, else by name when the call named it by name only. */
@@ -442,18 +449,112 @@ export const ControlRow = memo(function ControlRow({ block, marked }: { block: B
   );
 });
 
+/** What a child's open request says once it is settled: how it ended, in the card's own words. */
+function settledOf(block: Block): string {
+  if (block.role === "approval") return block.approval?.decided === "deny" ? "Denied" : "Allowed";
+  return block.question?.dismissed ? "Dismissed" : "Answered";
+}
+
+/**
+ * The child's open question or approval, under the letter that carries it
+ * (orchestration plan, decision 25): a single choice as chips, a longer form as
+ * the question card, an approval as its card. Answered here or in the thread,
+ * the first answer counts and the rest disable.
+ */
+function ChildAsk({ child, ask, by, onBy }: { child: Session; ask: Block; by: boolean; onBy: () => void }) {
+  const { owner } = useLetterScope();
+  const open = isOpen(ask);
+  const who = owner?.name ?? "the parent";
+  if (open && ask.role === "approval") {
+    return (
+      <div className="mt-1 max-w-[560px]" data-ask="approval">
+        <ApprovalCard
+          block={ask}
+          onApprove={(requestId, decision) => {
+            onBy();
+            respond(child, requestId, decision);
+          }}
+        />
+        <span className="text-[11.5px] text-placeholder">You or {who} can decide · the first answer counts</span>
+      </div>
+    );
+  }
+  if (open && !isQuickQuestion(ask)) {
+    return (
+      <div className="mt-1 max-w-[560px]" data-ask="question">
+        <QuestionCard
+          block={ask}
+          onAnswer={(requestId, answers) => {
+            onBy();
+            answer(child, requestId, answers);
+          }}
+        />
+        <span className="text-[11.5px] text-placeholder">You or {who} can answer · the first answer counts</span>
+      </div>
+    );
+  }
+  const note = open ? `You or ${who} can answer` : `${settledOf(ask)}${by ? " by you" : ""} · the first answer counts`;
+  const question = ask.question?.questions[0];
+  const picked = ask.question?.answers?.[question?.question ?? ""];
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5" data-ask={ask.role} data-settled={open ? undefined : ""}>
+      {ask.role === "question"
+        ? question?.options.map((option) => (
+            <button
+              key={option.label}
+              type="button"
+              disabled={!open}
+              onClick={() => {
+                onBy();
+                answer(child, ask.question!.requestId, { [question.question]: option.label });
+              }}
+              className={`h-7 rounded-md px-2.5 text-[12.5px] ring-1 transition-colors ${
+                picked === option.label ? "bg-selected text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
+              }`}
+            >
+              {option.label}
+            </button>
+          ))
+        : null}
+      <span className="self-center text-[11.5px] text-placeholder">{note}</span>
+    </div>
+  );
+}
+
+/** Reads the child's thread, so it is only mounted while the child asks (and after, to show how it ended). */
+function WatchedLetter({ child, block, marked, by, onBy }: { child: Session; block: Block; marked: string | null; by: boolean; onBy: () => void }) {
+  const kind = block.letterKind === "approval" ? "approval" : "question";
+  const ask = useOpenAsk(child.id, kind, block.text);
+  return <LetterFrame block={block} marked={marked} child={child} ask={ask} by={by} onBy={onBy} />;
+}
+
 /**
  * A letter from another party (a session, a bot, a parent): its mark in a tile,
  * its name, what kind of letter it is, and the words under it. Not a bubble: the
- * bubble is the user's.
+ * bubble is the user's. A session's question or approval carries its open
+ * request under the words.
  */
 const LetterIn = memo(function LetterIn({ block, marked }: { block: Block; marked: string | null }) {
+  const { sessions } = useLetterScope();
+  const [watching, setWatching] = useState(false);
+  const [by, setBy] = useState(false);
+  const asks = block.letterKind === "question" || block.letterKind === "approval";
+  const child = asks && block.fromBot?.id ? sessions.find((row) => row.id === block.fromBot?.id && row.kind !== "bot") : undefined;
+  // Once it has asked it stays mounted: the answer is read from the same thread.
+  if (child?.status === "needs-input" && !watching) setWatching(true);
+  if (child && watching) return <WatchedLetter child={child} block={block} marked={marked} by={by} onBy={() => setBy(true)} />;
+  return <LetterFrame block={block} marked={marked} child={child} ask={null} by={by} onBy={() => setBy(true)} />;
+});
+
+function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; marked: string | null; child: Session | undefined; ask: Block | null; by: boolean; onBy: () => void }) {
   const from = block.fromBot;
   const peer = usePeer(from?.id, from?.name ?? "", undefined);
   const { openAgent } = useChatActions();
   if (!from) return null;
   const { word, tag } = envelopeOf(block.letterKind);
   const id = peer.id;
+  // A session's question names its tag only while its request is open.
+  const tagged = tag && (!child || (ask && isOpen(ask)));
   return (
     <div data-letter={block.letterId} className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
       <span className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-card">
@@ -473,13 +574,14 @@ const LetterIn = memo(function LetterIn({ block, marked }: { block: Block; marke
             <span className="font-medium text-text">{peer.name}</span>
           )}
           <span className="text-text-muted">{word}</span>
-          {tag ? <span className="text-placeholder">· {tag}</span> : null}
+          {tagged ? <span className="text-placeholder">· {tag}</span> : null}
         </div>
         <LongText text={block.text} />
+        {child && ask ? <ChildAsk child={child} ask={ask} by={by} onBy={onBy} /> : null}
       </div>
     </div>
   );
-});
+}
 
 /** The line a note leaves when the user writes to a child: its name opens that child's thread at the letter. */
 const WroteLine = memo(function WroteLine({ block, marked }: { block: Block; marked: string | null }) {

@@ -93,6 +93,9 @@ test("Crew calls draw as rows and cards: subagents, a report, sessions started, 
   // A message out: the text in a card, how it was delivered on the row.
   const message = row(/Message to refunds-api/);
   assert.match(flat(await message.innerText()), /Message to refunds-api · read mid-turn/);
+  // A session is never drawn with the bot's face, even when the chat does not know which CLI it runs.
+  assert.equal(await message.locator("svg.lucide-bot").count(), 0);
+  assert.equal(await crew.window.locator("[data-block] button svg.lucide-bot").count(), 0);
   assert.match(flat(await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").innerText()), /90-day limit/);
 
   // The control rows: one line each, a card only for the redirect.
@@ -165,4 +168,68 @@ test("a message to a child opens its thread at the letter, lit", async () => {
   await shoot("thread-at-letter");
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
+});
+
+/** A subagent that stops to ask, started from the chat's session. */
+async function askingChild(name: string, prompt: string) {
+  const env = await sessionEnv();
+  const known = new Set((await sessions(crew, chat.workspaceId)).map((one) => one.id));
+  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", name, "--", prompt], { env });
+  return waitFor(async () => (await sessions(crew, chat.workspaceId)).find((one) => one.parentId === chat.id && one.name === name && !known.has(one.id)), {
+    timeout: 20_000,
+    message: "the child reaches crewd",
+  });
+}
+
+test("a child's question is answered from the parent's chat: options on the letter, the first answer counts", async () => {
+  const child = await askingChild("refunds-api", "Check the refund limits ASKQUESTION");
+  const letter = crew.window.locator("[data-letter]").filter({ hasText: /Partial refunds over 90 days/ });
+  await letter.waitFor({ timeout: 30_000 });
+  assert.match(flat(await letter.innerText()), /refunds-api asks · waits on an answer/);
+  const keep = letter.getByRole("button", { name: "Keep the 90-day limit" });
+  await keep.waitFor();
+  assert.match(flat(await letter.innerText()), /You or .* can answer/);
+  assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
+  await letter.scrollIntoViewIfNeeded();
+  await shoot("answer-from-parent");
+
+  await keep.click();
+  await waitFor(async () => /Answered by you · the first answer counts/.test(flat(await letter.innerText())), { message: "the chips say who answered" });
+  assert.equal(await keep.isDisabled(), true);
+  assert.equal(await letter.getByRole("button", { name: "Allow them" }).isDisabled(), true);
+  assert.equal(await letter.getByText(/waits on an answer/).count(), 0, "the tag is gone once it is answered");
+  await crew.window.getByText(/Done: Check the refund limits ASKQUESTION \[answers: .*keep/).first().waitFor({ timeout: 30_000 });
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: child.id })).status !== "needs-input", { message: "the child's turn goes on" });
+  await shoot("answer-from-parent-answered");
+  await idle();
+});
+
+test("a child's approval is decided from the parent's chat when the parent could do it itself", async () => {
+  // Only a parent that runs with full autonomy gets the approval as a letter.
+  const now = await crew.request<Session>("session_get", { id: chat.id });
+  await crew.request("session_update", {
+    id: chat.id,
+    name: now.name,
+    provider: now.provider,
+    model: now.model ?? "",
+    description: now.description ?? "",
+    notifications: now.notifications,
+    autonomy: "full",
+  });
+  await idle();
+  const child = await askingChild("billing-ui", "Run the billing fixtures ASKAPPROVAL");
+  const letter = crew.window.locator("[data-letter]").filter({ hasText: /wants to use/i });
+  await letter.waitFor({ timeout: 30_000 });
+  assert.match(flat(await letter.innerText()), /billing-ui asks · waits on an answer/);
+  const allow = letter.getByRole("button", { name: /^Allow/ });
+  await allow.waitFor();
+  assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
+  await letter.scrollIntoViewIfNeeded();
+  await shoot("answer-from-parent-approval");
+
+  await allow.click();
+  await waitFor(async () => /Allowed by you · the first answer counts/.test(flat(await letter.innerText())), { message: "the card says who decided" });
+  await crew.window.getByText(/Done: Run the billing fixtures ASKAPPROVAL \[decision: once\]/).first().waitFor({ timeout: 30_000 });
+  await shoot("answer-from-parent-approval-decided");
+  await idle();
 });

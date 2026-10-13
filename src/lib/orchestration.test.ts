@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { agentMeta, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
+import { agentMeta, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -197,5 +197,30 @@ describe("messages", () => {
     expect(envelopeOf("message")).toEqual({ word: "wrote" });
     expect(envelopeOf("question")).toEqual({ word: "asks", tag: "waits on an answer" });
     expect(envelopeOf("started")).toEqual({ word: "started this session" });
+  });
+});
+
+describe("a child's open request, as its parent's letter carries it", () => {
+  const question = (text: string, options = ["Keep", "Allow"], multiSelect = false): Block => ({
+    id: text,
+    role: "question",
+    text,
+    question: { requestId: 1, questions: [{ question: text, header: "Q", multiSelect, options: options.map((label) => ({ label })) }] },
+  });
+  const approval = (title: string): Block => ({ id: title, role: "approval", text: title, approval: { requestId: 2, name: "shell" } });
+
+  it("finds the newest card whose words the letter carries", () => {
+    const blocks = [question("Allow partial refunds?"), question("Which color?"), approval("touch asked.txt")];
+    expect(askOf(blocks, "question", "## Question\n\n1. Allow partial refunds?")?.id).toBe("Allow partial refunds?");
+    expect(askOf(blocks, "approval", "It wants to use shell: touch asked.txt")?.id).toBe("touch asked.txt");
+    expect(askOf(blocks, "question", "1. Something else entirely")).toBeNull();
+    expect(askOf(blocks, "approval", "1. Allow partial refunds?")).toBeNull();
+  });
+
+  it("answers with one click only a single-choice question with a few options", () => {
+    expect(isQuickQuestion(question("a"))).toBe(true);
+    expect(isQuickQuestion(question("a", ["1", "2", "3", "4", "5"]))).toBe(false);
+    expect(isQuickQuestion(question("a", ["x"], true))).toBe(false);
+    expect(isQuickQuestion(question("a", []))).toBe(false);
   });
 });
