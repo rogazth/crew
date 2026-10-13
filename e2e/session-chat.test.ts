@@ -398,7 +398,10 @@ async function workingChat(seconds: number): Promise<{ session: Session; cwd: st
 /** Writes `text` in the chat's message box while it works: ↵ steers, ⌘↵ waits for the next turn. */
 async function sendWhileWorking(text: string, how: "steer" | "queue"): Promise<void> {
   const field = composer();
+  // One round button: Stop while the box is empty, Send as soon as there is text.
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor();
   await field.fill(text);
+  assert.equal(await crew.window.getByRole("button", { name: "Stop" }).count(), 0, "with text the button sends");
   // The send button is labelled for what ↵ does, which is to steer where the CLI takes a steer.
   await waitFor(() => crew.window.getByRole("button", { name: "Add to the running turn" }).isEnabled(), {
     message: `the composer can ${how}`,

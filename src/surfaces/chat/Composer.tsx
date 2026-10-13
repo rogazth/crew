@@ -11,7 +11,7 @@ import {
   type KeyboardEvent,
   type Ref,
 } from "react";
-import { ArrowUpIcon, ListOrderedIcon, PaperclipIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
 import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
 import type { Opener } from "../../chrome/ModelPicker";
 import { useCommands } from "../../hooks/useCommands";
@@ -285,6 +285,9 @@ export function Composer({
   };
 
   const sendLabel = !working ? "Send" : whileWorking === "steer" ? "Add to the running turn" : "Queue for the next turn";
+  // The one round button: Stop while a turn runs and there is nothing to send, Send as soon as there is.
+  const stopping = working && draft.trim().length === 0 && files.length === 0;
+  const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
 
   return (
     <div className={`relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
@@ -381,28 +384,29 @@ export function Composer({
                 hint="⇧Tab in the message box cycles them."
               />
             )}
-            {working && (
+            {stopping ? (
               <button
                 type="button"
                 onClick={onStop}
-                title="Stop the turn (esc)"
-                className="flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-text-muted ring-1 ring-hairline transition-colors duration-100 hover:bg-hover hover:text-text focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
+                aria-label="Stop"
+                title={escBack ? "Stop the turn" : "Stop the turn (esc)"}
+                className="flex size-[30px] shrink-0 items-center justify-center rounded-full crew-ink transition-colors duration-100 hover:bg-accent-hover focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
               >
-                <SquareIcon className="size-2.5 fill-current" />
-                Stop
+                <SquareIcon className="size-3 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label={sendLabel}
+                title={sendTitle}
+                className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
+                  canSend ? "crew-ink hover:bg-accent-hover" : "bg-card text-text-muted"
+                }`}
+              >
+                <ArrowUpIcon className="size-4" />
               </button>
             )}
-            <button
-              type="submit"
-              disabled={!canSend}
-              aria-label={sendLabel}
-              title={sendLabel}
-              className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
-                canSend ? "crew-ink hover:bg-accent-hover" : "bg-card text-text-muted"
-              }`}
-            >
-              {working && whileWorking === "queue" ? <ListOrderedIcon className="size-4" /> : <ArrowUpIcon className="size-4" />}
-            </button>
           </div>
         </div>
       </form>
