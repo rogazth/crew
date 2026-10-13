@@ -15,6 +15,13 @@
 # options) and ASKAPPROVAL a permission ask before it answers; it goes on once
 # the reply arrives and says what it heard ("Done: <line> [answers: ...]").
 #
+# A turn whose last line holds SUBAGENT runs a task call as 2.0.26 does (checked
+# live): the `subagent` call, the child's `session.created` with its `parentID`,
+# a `session.tool.progress` naming the child, the child's own execution on its
+# own session id (a shell step, then "pong"), and the call's answer
+# (`<subagent sessionID=.. state=..>`). SUBAGENT SLOW holds the child until its
+# own session's interrupt (the daemon's Stop on the entry), which ends only it.
+#
 # Every request is appended to $HOME/fake-opencode.log as {method, path, body}.
 import base64, json, os, queue, sys, threading, time, uuid
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -84,6 +91,43 @@ def tool(sid, msg, name, inp, run):
     emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": result}], "metadata": {"truncated": False}, "executed": False})
 
 
+def run_subagent(sid, msg, slow, interrupted):
+    call = hexid("call_")
+    inp = {"agent": "general", "description": "Reply with pong", "prompt": "Reply with the single word pong."}
+    emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
+    emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
+    csid = hexid("ses_")
+    sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": None, "model": None, "busy": True, "waiting": [], "interrupt": interrupted}
+    emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
+    emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
+    cmsg = hexid("msg_")
+    emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": "You are a subagent spawned by another session.\n" + inp["prompt"]}, "delivery": "steer"}})
+    emit("session.execution.started", {"sessionID": csid})
+    emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+    tool(csid, cmsg, "shell", {"command": "echo child"}, lambda c: "child\n")
+    emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens()})
+    cmsg = hexid("msg_")
+    emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+    stopped = False
+    if slow:
+        interrupted.wait(120)
+        stopped = True
+    if stopped:
+        emit("session.step.failed", {"sessionID": csid, "assistantMessageID": cmsg, "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": tokens(), "cost": 0})
+        emit("session.execution.interrupted", {"sessionID": csid, "reason": "user"})
+    else:
+        emit("session.text.started", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0})
+        for piece in ("po", "ng"):
+            emit("session.text.delta", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "delta": piece})
+        emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": "pong"})
+        emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "stop", "cost": 0, "tokens": tokens()})
+        emit("session.execution.succeeded", {"sessionID": csid})
+    outcome = "interrupted" if stopped else "completed"
+    sessions[csid]["busy"] = False
+    body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else "pong")
+    emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
+
+
 def run_turn(s, item):
     sid = s["id"]
     emit("session.execution.started", {"sessionID": sid})
@@ -93,6 +137,8 @@ def run_turn(s, item):
     text = item["text"].strip()
     last = text.splitlines()[-1] if text else ""
     heard = []
+    if "SUBAGENT" in last:
+        run_subagent(sid, msg, "SLOW" in last, threading.Event())
     if "ASKQUESTION" in last:
         def question(call):
             fid = hexid("frm_")
@@ -207,6 +253,9 @@ class Handler(BaseHTTPRequestHandler):
             if rest == ["model"]:
                 s["model"] = body["model"]
                 return self.reply(204)
+            if rest == ["interrupt"] and s.get("interrupt"):
+                s["interrupt"].set()
+                return self.reply(200, {"interrupted": True})
             if rest in (["environment"], ["interrupt"]):
                 return self.reply(204 if rest == ["environment"] else 200, None if rest == ["environment"] else {"interrupted": False})
             if rest == ["prompt"]:

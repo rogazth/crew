@@ -424,4 +424,4 @@ a shell tab.
 | 26–27 | History reading and `ptySend.ts` | gone with the terminal view |
 | 28–29 | Context meter | Claude, Codex and opencode (`session.step.ended` over the model's window) emit it, and Cursor reads it from its session store; shown under the composer |
 | 30–32 | Enter never interrupts; steer or queue | done |
-| 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | done |
+| 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | done for Claude, Codex and opencode (opencode: a `subagent`/`task` call names its child session in `session.tool.progress` `metadata.sessionID`, the child's `session.created` carries `parentID`; its events go to the call and to a board entry, Stop is `POST /api/session/{child}/interrupt?resume=false`, checked live on 2.0.26) |
