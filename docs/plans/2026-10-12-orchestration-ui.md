@@ -435,7 +435,7 @@ report, light and dark.
 | 10–16 | The thread, in place | done (step 3): `AgentView.tsx` replaces `EntryView`; stacked threads via `trail`; the sheet closes when it opens an entry, so it is not restored; `focus` scrolls to the letter without lighting it yet (step 6) |
 | 17 | No tab for a subagent | done (step 8): `routeAgent` (`agentRoute.ts`) sends an owned child to its top owner; `openSession` opens that tab and queues a request `TurnChat` takes to open the thread; a restored child tab becomes its parent's (`childTabToParent`); a launched session keeps its tab |
 | 18 | Conversations only between bots | done (step 4): the sheet group opens `Thread.tsx` in place under the thread header shape, no composer; a letter checkpoint to a non-bot pair still opens it until step 6 |
-| 19–21 | Subagents, reports, sessions started | protocol done (step 1); rows to do (step 5) |
+| 19–21 | Subagents, reports, sessions started | done (step 5): `Orchestration.tsx` (`ToolLine`, `Hang`, `PeerName`, `LongText`, `AgentLine`); native and Crew subagent calls share one row and card read from the work list (`WorkContext`, `PanelEntry.callId`); `SubagentRow` removed; a native report draws under its card only when the subagent is done; a start's note is dropped when its call row says it; no branch on cards yet; `Letter` is step 6 |
 | 22–24 | Messages and control rows | protocol done (step 1); rows to do (step 6) |
 | 25 | Answer a child from the parent | `letterKind` done (step 1); card to do (step 7) |
 | 26 | Removals | with each step |

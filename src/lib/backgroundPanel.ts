@@ -56,6 +56,8 @@ export type PanelEntry = {
   stopNote?: string;
   /** The CLI's mark: a native subagent wears its parent's. */
   provider?: string;
+  /** The tool call that started it, for a native subagent: where the transcript draws its card. */
+  callId?: string;
   source: PanelSource;
 };
 
@@ -122,6 +124,7 @@ function fromCommand(command: BackgroundCommand, live: boolean, provider: string
       activity: command.activity,
       // A native subagent is the parent's own CLI at work.
       provider: kind === "subagent" ? provider : undefined,
+      callId: command.toolCallId,
     }),
     stoppable: stoppableOf(command, live),
     ...present({ stopNote: command.stopNote }),

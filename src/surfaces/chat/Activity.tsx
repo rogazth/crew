@@ -1,5 +1,5 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { BotIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, lazy, memo, Suspense, useMemo, useState, type ReactNode } from "react";
 import { TypingDots } from "../../chrome/StatusDot";
 import {
@@ -16,7 +16,7 @@ import {
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
 import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block, type SubagentState } from "../../lib/blocks";
-import { agentDetail, shownSteps, subagentSuffix, subagentView, type AgentDetail, type SubagentView } from "../../lib/subagent";
+import { shownSteps, type AgentDetail } from "../../lib/subagent";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { groupRows } from "../../lib/transcriptRows";
 import { ApprovalCard } from "./ApprovalCard";
@@ -153,7 +153,6 @@ function StepRow({
     );
   }
   if (block.role === "reasoning") return <ReasoningRow block={block} marked={marked} />;
-  if (agentDetail(block)) return <SubagentRow block={block} marked={marked} />;
   return (
     <ToolRow
       block={block}
@@ -361,31 +360,6 @@ function ToolRow({
 }
 
 /**
- * The harness's own subagent, nested under its line: what it was asked, its
- * own steps as it takes them, and what it brought back. Folded, the line says
- * what it is on now and how many steps it took; opened, its steps are the
- * transcript's own rows. A background one keeps updating after the turn.
- */
-export const SubagentRow = memo(function SubagentRow({ block, marked }: { block: Block; marked: string | null }) {
-  const [open, setOpen] = useState(false);
-  const detail = agentDetail(block);
-  const view = subagentView(block);
-  if (!detail || !view) return null;
-  return (
-    <Collapsible.Root open={open} onOpenChange={setOpen}>
-      <Collapsible.Trigger data-block={block.id} className={`${ROW} w-full text-left${lit(block.id, marked)}`}>
-        <SubagentLine detail={detail} view={view} open={open} />
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="crew-phase-panel">
-        <div className="mt-1 ml-[9px] flex flex-col gap-1 border-l-[1.5px] border-border-strong py-0.5 pl-4">
-          <SubagentBody detail={detail} state={view.state} marked={marked} />
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  );
-});
-
-/**
  * What a subagent did, as its row opens it and as its page in the background
  * panel shows it: what it was asked, its steps, and what it brought back.
  */
@@ -444,49 +418,6 @@ function SubagentSteps({ steps, running, marked }: { steps: Block[]; running: bo
         return null;
       })}
     </div>
-  );
-}
-
-const SUBAGENT_TONE: Partial<Record<SubagentState, string>> = { running: "crew-shimmer", failed: "text-danger" };
-
-/**
- * A subagent's one line: dots while it runs, its mark (a cross when it
- * failed), what it was for, what it is on now, and how far it got.
- */
-function SubagentLine({ detail, view, open }: { detail: AgentDetail; view: SubagentView; open: boolean }) {
-  const failed = view.state === "failed";
-  const stopped = view.state === "stopped";
-  return (
-    <>
-      <span className="crew-node relative">
-        {view.state === "running" ? (
-          <TypingDots />
-        ) : (
-          <>
-            {createElement(failed ? XIcon : stopped ? CircleStopIcon : BotIcon, {
-              className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
-            })}
-            <ChevronRightIcon
-              className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-            />
-          </>
-        )}
-      </span>
-      <span
-        className={`min-w-0 shrink truncate ${SUBAGENT_TONE[view.state] ?? "text-text-muted transition-colors group-hover:text-text"}`}
-      >
-        {detail.description || "Subagent"}
-      </span>
-      {view.current ? (
-        <span className="min-w-0 flex-1 truncate text-[12px] text-placeholder" title={view.current}>
-          {view.current}
-        </span>
-      ) : null}
-      <span className={`ml-auto shrink-0 text-[11px] tabular-nums ${failed ? "text-danger" : "text-placeholder"}`}>
-        {subagentSuffix(detail, view.steps)}
-        {stopped ? " · stopped" : failed ? " · failed" : view.background && view.state === "running" ? " · background" : ""}
-      </span>
-    </>
   );
 }
 

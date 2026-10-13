@@ -8,7 +8,8 @@
  */
 import { type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, letterIdOf } from "./letters";
-import { isBackgroundSubagent } from "./subagent";
+import { isReportLetter, startedOf, startNoteTarget } from "./orchestration";
+import { agentDetail } from "./subagent";
 
 /** A gap this long between messages gets a date line, like a chat app. */
 const DATE_BREAK_MS = 30 * 60_000;
@@ -32,8 +33,12 @@ export type Row =
   | { kind: "queued"; id: string; blocks: Block[] }
   /** The call that sent a command to the background: a marker that opens its output. */
   | { kind: "background"; block: Block }
-  /** A subagent sent to the background: its own nested block, on the rail, still working after the turn. */
+  /** A native subagent's call (Claude `Task`/`Agent`, Codex's agent thread, opencode `task`): one row and one card, out of any fold. */
   | { kind: "subagent"; block: Block }
+  /** A Crew call that started something: `delegate`, `start_session`, `start_sessions`. */
+  | { kind: "started"; block: Block }
+  /** A Crew subagent's report letter, drawn where it arrived. */
+  | { kind: "report"; block: Block }
   /** Files the agent sent the user (`SendUserFile`): shown like a reply, never folded away. */
   | { kind: "shared"; block: Block };
 
@@ -45,12 +50,13 @@ export function speaker(row: Row): Speaker {
     row.kind === "footer" ||
     row.kind === "fold" ||
     row.kind === "subagent" ||
+    row.kind === "started" ||
     row.kind === "shared"
   ) {
     return "agent";
   }
   // A checkpoint is a mark in the run, whichever way the letter went.
-  if (row.kind === "date" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return "meta";
+  if (row.kind === "date" || row.kind === "letter" || row.kind === "report" || row.kind === "refused" || row.kind === "background") return "meta";
   if (row.kind === "queued") return "user";
   // A letter from a bot is a row in the run, not a side of the
   // conversation: it gets a note's room, not a change of speaker's.
@@ -78,7 +84,8 @@ export function isShared(block: Block): boolean {
 /**
  * `background` names the tool calls that left a command running in the
  * background: each is drawn as a marker of its own, out of the group around
- * it, so a folded turn still shows where it started.
+ * it, so a folded turn still shows where it started. A subagent call and a
+ * Crew call that started something are drawn the same way.
  */
 export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Row[] {
   const rows: Row[] = [];
@@ -86,6 +93,8 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
   let lastAt: number | undefined;
   /** A letter's checkpoint once: the call's row and the note it left share an id. */
   const letters = new Set<string>();
+  /** The ids a start row names: the note the start leaves says the same and is dropped. */
+  const started = new Set<string>();
   let queued: Block[] = [];
   const flushQueued = () => {
     if (queued.length === 0) return;
@@ -110,6 +119,20 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       continue;
     }
     flushQueued();
+    const start = startedOf(block);
+    if (start) {
+      flush();
+      rows.push({ kind: "started", block });
+      const letterId = letterIdOf(block);
+      if (letterId !== undefined) letters.add(letterId);
+      if (start.kind === "sessions") {
+        for (const target of start.targets) if (target.id) started.add(target.id);
+      } else if (start.target.id) started.add(start.target.id);
+      if (block.usage) rows.push(footerFor(block, block.usage));
+      continue;
+    }
+    const noted = startNoteTarget(block);
+    if (noted !== null && started.has(noted)) continue;
     const letter = isLetter(block) ? letterIdOf(block) : undefined;
     if (letter !== undefined && letters.has(letter)) continue;
     // A letter stands out of the group around it, so a fold can leave it on the rail.
@@ -122,7 +145,7 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
           rows.push({ kind: "date", id: `date-${block.id}`, at: block.at });
         }
       }
-      rows.push({ kind: letter !== undefined ? "letter" : "refused", block });
+      rows.push({ kind: isReportLetter(block) ? "report" : letter !== undefined ? "letter" : "refused", block });
       // A turn that ended on the send: its cost goes under it.
       if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
       if (block.at !== undefined && block.role !== "tool") lastAt = block.at;
@@ -134,7 +157,7 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       if (block.usage) rows.push(footerFor(block, block.usage));
       continue;
     }
-    if (isBackgroundSubagent(block, background)) {
+    if (agentDetail(block)) {
       flush();
       rows.push({ kind: "subagent", block });
       continue;
@@ -200,7 +223,7 @@ export function gapBefore(prev: Row | undefined, current: Row): string {
 
 
 function isUser(row: Row): boolean {
-  return (row.kind === "message" || row.kind === "letter") && row.block.role === "user";
+  return (row.kind === "message" || row.kind === "letter" || row.kind === "report") && row.block.role === "user";
 }
 
 function isReply(row: Row): boolean {
@@ -210,16 +233,21 @@ function isReply(row: Row): boolean {
 /** What opens a turn and stays above its fold: the question, or the note
  *  that says what woke the agent when nobody asked (a report, a routine). */
 function isOpening(row: Row): boolean {
-  return (row.kind === "message" || row.kind === "letter") && (row.block.role === "user" || row.block.role === "system");
+  return (
+    (row.kind === "message" || row.kind === "letter" || row.kind === "report") &&
+    (row.block.role === "user" || row.block.role === "system")
+  );
 }
 
 /** What stays on the rail when a turn folds: who wrote to whom, what was refused, what went to the background. */
 function staysOut(row: Row): boolean {
   return (
     row.kind === "letter" ||
+    row.kind === "report" ||
     row.kind === "refused" ||
     row.kind === "background" ||
     row.kind === "subagent" ||
+    row.kind === "started" ||
     row.kind === "shared"
   );
 }
@@ -229,9 +257,11 @@ export function rowBlocks(row: Row): Block[] {
   if (
     row.kind === "message" ||
     row.kind === "letter" ||
+    row.kind === "report" ||
     row.kind === "refused" ||
     row.kind === "background" ||
     row.kind === "subagent" ||
+    row.kind === "started" ||
     row.kind === "shared"
   ) {
     return [row.block];
@@ -297,7 +327,7 @@ function foldTurn(turn: Row[]): Row[] {
   const last = turn.at(-1);
   const footer = last?.kind === "footer" ? last : undefined;
   const first = turn[0];
-  const started = opening > 0 && (first?.kind === "message" || first?.kind === "letter") ? first.block.at : undefined;
+  const started = opening > 0 && (first?.kind === "message" || first?.kind === "letter" || first?.kind === "report") ? first.block.at : undefined;
   const ended = reply.kind === "message" ? reply.block.at : undefined;
   const durationMs =
     footer?.usage.durationMs ?? (started !== undefined && ended !== undefined ? ended - started : undefined);
@@ -315,9 +345,11 @@ function foldTurn(turn: Row[]): Row[] {
 function rowId(row: Row): string {
   return row.kind === "message" ||
     row.kind === "letter" ||
+    row.kind === "report" ||
     row.kind === "refused" ||
     row.kind === "background" ||
     row.kind === "subagent" ||
+    row.kind === "started" ||
     row.kind === "shared"
     ? row.block.id
     : row.id;

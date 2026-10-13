@@ -4,9 +4,10 @@ import { useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayLabel } from "../../lib/time";
 import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
-import { ActivityGroup, SubagentRow } from "./Activity";
+import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { CheckpointRow, QueuedGroup, RefusedRow } from "./Letters";
+import { ReportLetter, StartedRow, SubagentCall } from "./Orchestration";
 import { AssistantMessage, DateBreak, Note, SharedFiles, TurnFooter, UserMessage } from "./Message";
 
 type Props = {
@@ -85,7 +86,19 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
       case "subagent":
         return (
           <div key={row.block.id} className={className}>
-            <SubagentRow block={row.block} marked={focusId} />
+            <SubagentCall block={row.block} marked={focusId} />
+          </div>
+        );
+      case "started":
+        return (
+          <div key={row.block.id} className={className}>
+            <StartedRow block={row.block} marked={focusId} />
+          </div>
+        );
+      case "report":
+        return (
+          <div key={row.block.id} className={className}>
+            <ReportLetter block={row.block} marked={focusId} />
           </div>
         );
       case "shared":

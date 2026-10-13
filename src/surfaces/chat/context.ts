@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Party, ThreadRef } from "../../lib/letters";
+import type { PanelEntry } from "../../lib/backgroundPanel";
 import type { Process } from "../../lib/processes";
 import type { BackgroundCommand } from "../../lib/protocol";
 import type { Ask } from "../../lib/turnRuntime";
@@ -66,6 +67,12 @@ export const LetterContext = createContext<LetterScope>({ owner: null, sessions:
 export function useLetterScope(): LetterScope {
   return useContext(LetterContext);
 }
+
+/**
+ * The chat's work, the one list its status line and sheet read: the cards in
+ * the transcript for a subagent or a session started say what the sheet says.
+ */
+export const WorkContext = createContext<readonly PanelEntry[]>([]);
 
 /**
  * The background commands a chat's transcript marks, by the tool call that

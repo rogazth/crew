@@ -103,13 +103,3 @@ export function subagentSuffix(detail: AgentDetail, steps: number): string {
   if (steps === 0) return kind;
   return `${kind} · ${steps} ${steps === 1 ? "step" : "steps"}`;
 }
-
-/**
- * A subagent that outlives its turn stands on the rail, out of the turn's
- * fold: it keeps working after the turn that started it ended.
- */
-export function isBackgroundSubagent(block: Block, background?: ReadonlySet<string>): boolean {
-  const detail = agentDetail(block);
-  if (!detail) return false;
-  return detail.background === true || (block.tool !== undefined && background?.has(block.tool.callId) === true);
-}

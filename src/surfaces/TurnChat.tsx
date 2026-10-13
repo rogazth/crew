@@ -18,7 +18,7 @@ import { mentionedFiles } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, othersPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
-import { BackgroundContext, ChatContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
+import { BackgroundContext, WorkContext, ChatContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
@@ -337,6 +337,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         <ChatContext value={chatActions}>
         <LetterContext value={letterScope}>
           <BackgroundContext value={backgroundScope}>
+            <WorkContext value={panel.all}>
             {/* Under a thread the chat stays mounted, hidden and inert: its scroll, draft and open sheet come back as they were. */}
             <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen ? "invisible" : ""}`}>
             <DefaultChatSurface
@@ -371,6 +372,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
             </div>
             {agentView}
             {thread}
+            </WorkContext>
           </BackgroundContext>
         </LetterContext>
         </ChatContext>

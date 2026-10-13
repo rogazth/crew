@@ -192,18 +192,15 @@ describe("rows", () => {
     },
   });
 
-  it("fold a foreground subagent with the turn's work; its words are never the reply", () => {
+  it("keep a foreground subagent on the rail as its own row, out of the fold; its words are never the reply", () => {
     const rows = foldTurns(groupRows(turn(call())), false);
-    expect(kinds(rows)).toEqual(["message", "fold", "message"]);
-    expect((rows[2] as { block: Block }).block.text).toBe("Sent it off.");
+    expect(kinds(rows)).toEqual(["message", "fold", "subagent", "message"]);
+    expect((rows[3] as { block: Block }).block.text).toBe("Sent it off.");
   });
 
-  it("keep a background subagent on the rail, out of the fold, where it goes on working", () => {
+  it("keep a background subagent on the rail the same way, where it goes on working", () => {
     const rows = foldTurns(groupRows(turn(call({ background: true }))), false);
     expect(kinds(rows)).toEqual(["message", "fold", "subagent", "message"]);
-    // The tray knows it too: a call the tray holds is one, flagged or not.
-    const tray = foldTurns(groupRows(turn(call()), new Set(["a1"])), false);
-    expect(kinds(tray)).toEqual(["message", "fold", "subagent", "message"]);
   });
 });
 
