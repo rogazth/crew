@@ -91,6 +91,11 @@ export function nativeReport(block: Block): string | null {
   return text ? text : null;
 }
 
+/** A letter's words without the daemon's "It exited (why)." lead: the model reads it, the transcript does not. */
+export function exitedless(block: Block): string {
+  return block.letterKind === "report" ? block.text.replace(/^It exited \([^)\n]*\)\.\s*/, "") : block.text;
+}
+
 /** A report letter: what a Crew subagent's last turn sent its parent. */
 export function isReportLetter(block: Block): boolean {
   return block.role === "user" && block.fromBot !== undefined && block.letterId !== undefined && block.letterKind === "report";

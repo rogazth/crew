@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { agentMeta, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
+import { agentMeta, exitedless, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -222,5 +222,14 @@ describe("a child's open request, as its parent's letter carries it", () => {
     expect(isQuickQuestion(question("a", ["1", "2", "3", "4", "5"]))).toBe(false);
     expect(isQuickQuestion(question("a", ["x"], true))).toBe(false);
     expect(isQuickQuestion(question("a", []))).toBe(false);
+  });
+});
+
+describe("exitedless", () => {
+  it("drops the exit lead from a report only", () => {
+    const report = { id: "r", role: "user", text: "It exited (idle for 30 minutes).\n\nfound 4", letterKind: "report" } as Block;
+    expect(exitedless(report)).toBe("found 4");
+    const plain = { id: "p", role: "user", text: "It exited (x).", letterKind: "message" } as Block;
+    expect(exitedless(plain)).toBe("It exited (x).");
   });
 });

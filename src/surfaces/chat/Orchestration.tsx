@@ -38,6 +38,7 @@ import {
   FOLD_LINES,
   foldsLongText,
   isQuickQuestion,
+  exitedless,
   nativeName,
   nativeReport,
   sentOf,
@@ -56,16 +57,14 @@ const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markd
 
 const lit = (id: string, marked: string | null) => (id === marked ? " crew-found" : "");
 
-/** A one-line row: the node, a sentence, and the tool's own name as a muted aside. */
+/** A one-line row: the node and a sentence. */
 export function ToolLine({
   icon: Glyph,
-  aside,
   children,
   id,
   marked = null,
 }: {
   icon: LucideIcon;
-  aside?: ReactNode;
   children: ReactNode;
   id?: string;
   marked?: string | null;
@@ -79,7 +78,6 @@ export function ToolLine({
         <Glyph className="size-3.5" />
       </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {aside ? <span className="shrink-0 text-[11px] text-placeholder">{aside}</span> : null}
     </div>
   );
 }
@@ -124,13 +122,13 @@ export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
       {peer.name}
     </>
   );
-  if (!peer.id) return <span className="inline-flex items-center gap-1 align-[-3px] text-text">{body}</span>;
+  if (!peer.id) return <span className="inline-flex h-[18px] items-center gap-1 align-top text-text">{body}</span>;
   const id = peer.id;
   return (
     <button
       type="button"
       onClick={() => openAgent(id, focus ? { focus } : undefined)}
-      className="inline-flex items-center gap-1 rounded-chrome align-[-3px] text-text hover:underline"
+      className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top text-text hover:underline"
     >
       {body}
     </button>
@@ -174,9 +172,9 @@ export function AgentLine({
 }
 
 /** A long text, folded at seven lines with a way to read it all. */
-export function LongText({ text, lines = FOLD_LINES }: { text: string; lines?: number }) {
+export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: string; lines?: number; fold?: boolean }) {
   const [open, setOpen] = useState(false);
-  const folds = foldsLongText(text, lines);
+  const folds = fold && foldsLongText(text, lines);
   const total = text.split("\n").length;
   return (
     <div className="flex flex-col">
@@ -267,10 +265,10 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
   const report = state === "done" ? nativeReport(block) : null;
   return (
     <div className="flex flex-col gap-1.5">
-      <ToolLine icon={BotIcon} aside={block.tool?.name} id={block.id} marked={marked}>
+      <ToolLine icon={BotIcon} id={block.id} marked={marked}>
         Started a subagent{" "}
         {entry ? (
-          <button type="button" onClick={() => openAgent(entry.id)} className="inline-flex items-center gap-1 rounded-chrome align-[-3px] text-text hover:underline">
+          <button type="button" onClick={() => openAgent(entry.id)} className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top text-text hover:underline">
             <PeerMark peer={peer} className="size-3.5" />
             {peer.name}
           </button>
@@ -320,7 +318,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
     const { targets } = started;
     return (
       <div className="flex flex-col gap-1.5">
-        <ToolLine icon={MessagesSquareIcon} aside="start_sessions" id={block.id} marked={marked}>
+        <ToolLine icon={MessagesSquareIcon} id={block.id} marked={marked}>
           {startedSessionsSentence(targets)}
         </ToolLine>
         <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">They're yours: in the sidebar, and in Work while they run.</span>
@@ -361,7 +359,6 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
     <div className="flex flex-col gap-1.5">
       <ToolLine
         icon={subagent ? BotIcon : MessagesSquareIcon}
-        aside={subagent ? "delegate" : "start_session"}
         id={block.id}
         marked={marked}
       >
@@ -386,7 +383,7 @@ export const ReportLetter = memo(function ReportLetter({ block, marked }: { bloc
   if (!from || !block.letterId) return null;
   return (
     <div data-block={block.id} className={`rounded-xl${lit(block.id, marked)}`}>
-      <Report peer={peer} text={block.text} target={from.id} focus={block.letterId} />
+      <Report peer={peer} text={exitedless(block)} target={from.id} focus={block.letterId} />
     </div>
   );
 });
@@ -398,7 +395,7 @@ const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked:
   if (!sent) return null;
   return (
     <div data-letter={sent.letterId} className="flex flex-col gap-1.5">
-      <ToolLine icon={SendIcon} aside="send_message" id={block.id} marked={marked}>
+      <ToolLine icon={SendIcon} id={block.id} marked={marked}>
         {sent.handoff ? "Handed" : "Message to"} <PeerName peer={peer} {...(sent.letterId ? { focus: sent.letterId } : {})} />
         {sent.handoff ? " to you" : ""}
         {sent.delivery ? <span className="text-placeholder"> · {sent.delivery}</span> : null}
@@ -413,12 +410,12 @@ const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked:
 });
 
 const CONTROL_ICON = {
-  interrupt: [HandIcon, "interrupt_session"],
-  read: [EyeIcon, "read_session"],
-  list: [UsersIcon, "list_peers"],
-  stop: [CircleStopIcon, "stop_session"],
-  rename: [PencilIcon, "update_session"],
-  delete: [Trash2Icon, "update_session"],
+  interrupt: HandIcon,
+  read: EyeIcon,
+  list: UsersIcon,
+  stop: CircleStopIcon,
+  rename: PencilIcon,
+  delete: Trash2Icon,
 } as const;
 
 /** `interrupt_session`, `read_session`, `list_peers`, `stop_session`, `update_session`: one line, and a card only for text. */
@@ -427,10 +424,10 @@ export const ControlRow = memo(function ControlRow({ block, marked }: { block: B
   const target = control?.target;
   const peer = usePeer(target?.id, target?.name ?? "", target?.provider);
   if (!control) return null;
-  const [icon, aside] = CONTROL_ICON[control.icon];
+  const icon = CONTROL_ICON[control.icon];
   return (
     <div className="flex flex-col gap-1.5">
-      <ToolLine icon={icon} aside={aside} id={block.id} marked={marked}>
+      <ToolLine icon={icon} id={block.id} marked={marked}>
         {control.before}
         {target ? (
           <>
@@ -576,7 +573,7 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
           <span className="text-text-muted">{word}</span>
           {tagged ? <span className="text-placeholder">· {tag}</span> : null}
         </div>
-        <LongText text={block.text} />
+        <LongText text={exitedless(block)} fold={block.letterKind !== "started"} />
         {child && ask ? <ChildAsk child={child} ask={ask} by={by} onBy={onBy} /> : null}
       </div>
     </div>
