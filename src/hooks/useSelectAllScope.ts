@@ -24,9 +24,9 @@ export function useSelectAllScope() {
       event.preventDefault();
       const selection = window.getSelection();
       if (!selection) return;
-      selection.removeAllRanges();
-
+      // Looked up first: with nothing focused, the region is where the selection already is.
       const region = regionFor(event.target);
+      selection.removeAllRanges();
       if (!region) return;
       const range = document.createRange();
       range.selectNodeContents(region);
