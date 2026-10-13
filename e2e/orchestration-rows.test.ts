@@ -43,7 +43,8 @@ after(async () => {
 });
 
 const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
-const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+// innerText puts a break after an inline-flex name; the window draws "billing-ui's" as one word.
+const flat = (text: string) => text.replace(/\s+/g, " ").replace(/ 's\b/g, "'s").trim();
 
 async function send(text: string): Promise<void> {
   const field = composer();
