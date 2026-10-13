@@ -8,6 +8,7 @@ import { isWebUrl, sameDocument } from "../../lib/browser/url";
 import { openingSrc } from "../../lib/browser/opening";
 import { FILES_PARTITION, isFileUrl, previewRoot } from "../../lib/browser/files";
 import { createGuest, type Guest } from "../../lib/browser/webview";
+import { envOfPath } from "../../lib/client/registry";
 import { browserHost, filesHost } from "../../lib/host";
 import type { BrowserTabPatch } from "../../lib/tabs";
 import type { AddressBarHandle } from "./AddressBar";
@@ -78,7 +79,7 @@ const FILE_NOT_FOUND = -6;
 async function fileSource(file: { path: string; relative: string }): Promise<string | null> {
   const host = filesHost();
   if (!host) return null;
-  return host.url(previewRoot(file.path, file.relative), file.path).catch(() => null);
+  return host.url(previewRoot(file.path, file.relative), file.path, envOfPath(file.path)).catch(() => null);
 }
 
 /** A restored tab asks main to rebuild its stack; a new one just loads its URL. */

@@ -17,7 +17,7 @@ import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
-import { localPath } from "../../lib/localLink";
+import { isPathLike, localPath } from "../../lib/localLink";
 import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
@@ -27,9 +27,6 @@ import { useChatActions } from "./context";
 import { SiteIcon } from "./SiteIcon";
 
 type Props = { text: string; streaming?: boolean };
-
-/** `src/lib/tabs.ts`, `README.md`, `./x.css`: a path with an extension and no spaces. */
-const PATH_LIKE = /^(?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[a-z0-9]{1,8}$/i;
 
 function codeText(children: ReactNode): string {
   return typeof children === "string" ? children : Array.isArray(children) ? children.join("") : String(children ?? "");
@@ -41,7 +38,7 @@ type CodeProps = ComponentProps<"code"> & { node?: unknown; metastring?: string;
 function Code({ className, children, node: _node, metastring, ...rest }: CodeProps) {
   const text = codeText(children);
   if ("data-block" in rest) return <Fence code={text} className={className} meta={metastring} />;
-  if (PATH_LIKE.test(text) && extensionOf(text)) return <FileChip path={text} />;
+  if (isPathLike(text) && extensionOf(text)) return <FileChip path={text} />;
   return <code className="crew-inline-code">{children}</code>;
 }
 

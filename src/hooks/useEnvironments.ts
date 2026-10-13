@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { LOCAL, envOf, linkOf, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
 import type { MachineRoute } from "../lib/browser/machines";
-import { browserHost, filesHost, remotesHost } from "../lib/host";
+import { browserHost, remotesHost } from "../lib/host";
 import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, WAKE_ON } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
@@ -21,7 +21,7 @@ type Deps = {
 /**
  * Everything the window does because a workspace can live on another machine:
  * ⌘O's machine picker, the rail's badge, "Open terminal on machine", and
- * pointing each remote workspace's files and pages at the daemon that has them.
+ * routing each machine's pages to its localhost.
  */
 export function useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn }: Deps) {
   const links = useEnvStates();
@@ -86,26 +86,6 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
   useEffect(() => {
     setFocusEnv(active ? envOf(active.id) : LOCAL);
   }, [active]);
-
-  // A remote workspace's previews are served by its daemon.
-  const bound = useRef(new Map<string, string>());
-  useEffect(() => {
-    const files = filesHost();
-    const next = new Map<string, string>();
-    for (const workspace of workspaces.workspaces) {
-      const env = envOf(workspace.id);
-      if (env === LOCAL) continue;
-      next.set(workspace.id, `${env}|${workspace.path}`);
-      if (bound.current.get(workspace.id) === next.get(workspace.id)) continue;
-      void files?.bindRemote?.(workspace.path, env);
-    }
-    for (const [id, key] of bound.current) {
-      if (next.has(id)) continue;
-      const root = key.split("|")[1];
-      if (root) void files?.unbindRemote?.(root);
-    }
-    bound.current = next;
-  }, [links, workspaces.workspaces]);
 
   // Every page reaches each machine's localhost at its alias; main hears only when that changes.
   const routed = useRef("");

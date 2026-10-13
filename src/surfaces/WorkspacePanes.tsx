@@ -10,6 +10,8 @@ import type { Process } from '../lib/processes';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
+import { homeFor } from '../lib/client/registry';
+import { homePath, resolvePath } from '../lib/terminalPaths';
 
 /**
  * A pane with where it runs resolved to a directory: where its session runs,
@@ -106,7 +108,8 @@ export function WorkspacePanes({
     () => ({
       openPath: (path) => {
         if (!cwd) return;
-        const absolute = path.startsWith('/') ? path : `${cwd}/${path.replace(/^\.\//, '')}`;
+        // `~` is the home of the machine the chat runs on, which may not be this Mac.
+        const absolute = resolvePath(path, cwd, homeFor(cwd) ?? homePath());
         const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
         onOpenFile({ path: absolute, relative, name: relative.split('/').pop() ?? relative });
       },

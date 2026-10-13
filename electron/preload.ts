@@ -42,11 +42,9 @@ contextBridge.exposeInMainWorld("crewHost", {
   },
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   files: {
-    url: (root: string, path: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path),
+    url: (root: string, path: string, envId?: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path, envId),
     reveal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.reveal, path),
     openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
-    bindRemote: (root: string, envId: string) => ipcRenderer.invoke("files:bind-remote", root, envId),
-    unbindRemote: (root: string) => ipcRenderer.invoke("files:unbind-remote", root),
   },
   remotes: {
     tailnet: () => ipcRenderer.invoke("remotes:tailnet"),

@@ -82,13 +82,21 @@ export function envOfSession(sessionId: string): string {
   return envForPane(sessionId, { session: sessionEnv, workspace: workspaceEnv, process: processEnv }) ?? LOCAL;
 }
 
+/**
+ * The machine a file is on: the one whose workspace or worktree holds it, or
+ * else the one on screen, which is where a path outside them came from.
+ */
+export function envOfPath(path: string): string {
+  return envForPath(path, pathEnv) ?? focused;
+}
+
 export function isLocalPath(path: string): boolean {
   return (envForPath(path, pathEnv) ?? LOCAL) === LOCAL;
 }
 
 /** The remote daemon's home when `path` lives on one, for `~` in its terminal. */
 export function homeFor(path: string): string | null {
-  const env = envForPath(path, pathEnv);
+  const env = envOfPath(path);
   if (env && env !== LOCAL) return infos.get(env)?.home ?? null;
   return null;
 }

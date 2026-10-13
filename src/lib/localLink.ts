@@ -1,4 +1,4 @@
-/** `/abs/a.ts`, `./a.ts`, `src/a.ts`, `file:///abs/a.ts`: a link to a file, not the web. */
+/** `/abs/a.ts`, `~/a.ts`, `./a.ts`, `src/a.ts`, `file:///abs/a.ts`: a link to a file, not the web. */
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const RELATIVE = /^(?:\.{1,2}\/)?(?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[a-z0-9]{1,8}(?:[:#].*)?$/i;
 
@@ -14,7 +14,18 @@ export function localPath(href: string | undefined): string | null {
   let path = href;
   if (/^file:\/\//i.test(path)) path = decodeURIComponent(path.replace(/^file:\/\//i, ""));
   else if (SCHEME.test(path) || path.startsWith("#") || path.startsWith("//")) return null;
-  else if (!path.startsWith("/") && !RELATIVE.test(path)) return null;
+  else if (!path.startsWith("/") && !path.startsWith("~/") && !RELATIVE.test(path)) return null;
   path = path.replace(/#L\d+(?:-L?\d+)?$/i, "").replace(/(?::\d+){1,2}$/, "");
   return path || null;
+}
+
+/**
+ * `src/lib/tabs.ts`, `/tmp/out/shot.png`, `~/Downloads/x.pdf`: a path with an
+ * extension and no spaces, inside the workspace or anywhere else on its machine.
+ */
+const PATH_LIKE = /^(?:~\/|\/)?(?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[a-z0-9]{1,8}$/i;
+
+/** Whether inline code is a file's path, which the chat turns into a chip that opens it. */
+export function isPathLike(text: string): boolean {
+  return PATH_LIKE.test(text);
 }

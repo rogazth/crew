@@ -7,39 +7,22 @@ import { ipcMain, net, protocol, shell, type Session, type WebContents } from "e
 import { FILE_CHANNELS, FILE_SCHEME } from "../../src/lib/browser/files";
 import { servedPath, urlFor, within } from "./serve";
 
+/** A folder whose files live on another machine's `GET /fs`. */
+type RemoteRoot = { origin: string; token: string };
+
 /**
- * Each folder a preview was opened from, by the host its URLs carry. The host
- * is random per run, so no page can guess its way into another folder.
+ * Each folder a preview was opened from, by the host its URLs carry, with the
+ * machine that has it when that is not this Mac. The host is random per run,
+ * so no page can guess its way into another folder.
  */
-const roots = new Map<string, string>();
+const roots = new Map<string, { root: string; remote?: RemoteRoot }>();
 const hosts = new Map<string, string>();
 
-/** A workspace root whose files live on another machine's `GET /fs`. */
-type RemoteRoot = { origin: string; token: string };
-const remoteRoots = new Map<string, RemoteRoot>();
+/** How main reaches a machine's daemon, by its id; remotes.ts knows the tokens. */
+let resolveRemote: (envId: string) => Promise<RemoteRoot | null> = async () => null;
 
-export function bindRemoteRoot(root: string, remote: RemoteRoot): void {
-  remoteRoots.set(root, remote);
-  hostOf(root);
-}
-
-export function unbindRemoteRoot(root: string): void {
-  remoteRoots.delete(root);
-}
-
-function remoteFor(root: string): RemoteRoot | undefined {
-  const direct = remoteRoots.get(root);
-  if (direct) return direct;
-  let best: RemoteRoot | undefined;
-  let length = -1;
-  for (const [bound, remote] of remoteRoots) {
-    const prefix = bound.endsWith("/") ? bound : `${bound}/`;
-    if ((root === bound || root.startsWith(prefix)) && bound.length > length) {
-      best = remote;
-      length = bound.length;
-    }
-  }
-  return best;
+export function setRemoteResolver(resolve: (envId: string) => Promise<RemoteRoot | null>): void {
+  resolveRemote = resolve;
 }
 
 /** Before the app is ready: a standard, secure scheme gets relative URLs, fetch and storage like https. */
@@ -52,12 +35,14 @@ export function registerFileScheme(): void {
   ]);
 }
 
-function hostOf(root: string): string {
-  let host = hosts.get(root);
+/** The same folder on two machines is two roots, each with its own host. */
+function hostOf(root: string, remote?: RemoteRoot): string {
+  const key = remote ? `${remote.origin}|${root}` : root;
+  let host = hosts.get(key);
   if (!host) {
     host = randomBytes(8).toString("hex");
-    hosts.set(root, host);
-    roots.set(host, root);
+    hosts.set(key, host);
+    roots.set(host, remote ? { root, remote } : { root });
   }
   return host;
 }
@@ -66,20 +51,20 @@ function hostOf(root: string): string {
  * The URL a file previews at, its links resolving against `root`. A file in
  * a hidden folder, which the scheme never serves, gets its own folder as root.
  */
-function fileUrl(root: string, file: string): string | null {
+function fileUrl(root: string, file: string, remote?: RemoteRoot): string | null {
   if (!path.isAbsolute(root) || !path.isAbsolute(file)) return null;
   const relative = path.relative(root, file);
   const hidden = relative.split(path.sep).some((segment) => segment.startsWith("."));
   const base = hidden ? path.dirname(file) : root;
-  return urlFor(hostOf(base), base, file);
+  return urlFor(hostOf(base, remote), base, file);
 }
 
 /** The file a preview URL names, before symlinks are followed. */
 function fileOf(url: string): string | null {
   try {
     const parsed = new URL(url);
-    const root = parsed.protocol === `${FILE_SCHEME}:` ? roots.get(parsed.host) : undefined;
-    return root ? servedPath(root, parsed.pathname) : null;
+    const entry = parsed.protocol === `${FILE_SCHEME}:` ? roots.get(parsed.host) : undefined;
+    return entry && !entry.remote ? servedPath(entry.root, parsed.pathname) : null;
   } catch {
     return null;
   }
@@ -89,10 +74,9 @@ const notFound = () => new Response("Not found", { status: 404, headers: { "cont
 
 async function serve(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const root = roots.get(url.host);
+  const { root, remote } = roots.get(url.host) ?? {};
   const lexical = root ? servedPath(root, url.pathname) : null;
   if (!root || !lexical) return notFound();
-  const remote = remoteFor(root);
   if (remote) return proxyRemote(remote, root, url.pathname, request);
   try {
     let target = lexical;
@@ -144,10 +128,8 @@ function remoteFile(url: string): { remote: RemoteRoot; root: string; pathname: 
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== `${FILE_SCHEME}:`) return null;
-    const root = roots.get(parsed.host);
-    if (!root) return null;
-    const remote = remoteFor(root);
-    if (!remote || !servedPath(root, parsed.pathname)) return null;
+    const { root, remote } = roots.get(parsed.host) ?? {};
+    if (!root || !remote || !servedPath(root, parsed.pathname)) return null;
     return { remote, root, pathname: parsed.pathname };
   } catch {
     return null;
@@ -211,12 +193,19 @@ export function followFile(guest: WebContents): void {
   guest.once("destroyed", stop);
 }
 
+/** The renderer's name for this Mac (src/lib/client/route.ts). */
+const LOCAL_ENV = "local";
+
 const absolute = (value: unknown): value is string => typeof value === "string" && path.isAbsolute(value);
 
 export function registerFileIpc(): void {
-  ipcMain.handle(FILE_CHANNELS.url, (_event, root: unknown, file: unknown) =>
-    absolute(root) && absolute(file) ? fileUrl(root, file) : null,
-  );
+  // `envId` names the machine the file is on; this Mac when it is absent or "local".
+  ipcMain.handle(FILE_CHANNELS.url, async (_event, root: unknown, file: unknown, envId: unknown) => {
+    if (!absolute(root) || !absolute(file)) return null;
+    if (typeof envId !== "string" || !envId || envId === LOCAL_ENV) return fileUrl(root, file);
+    const remote = await resolveRemote(envId);
+    return remote ? fileUrl(root, file, remote) : null;
+  });
   ipcMain.handle(FILE_CHANNELS.reveal, (_event, file: unknown) => {
     if (absolute(file)) shell.showItemInFolder(file);
   });

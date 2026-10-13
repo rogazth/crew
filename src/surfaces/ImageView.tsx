@@ -4,6 +4,7 @@ import { useCommands } from "../hooks/useCommand";
 import { previewRoot } from "../lib/browser/files";
 import { commandKeys } from "../lib/commands";
 import { fitScale, GUTTER, MAX_SCALE, MIN_SCALE, stepScale, type Size } from "../lib/imageZoom";
+import { envOfPath } from "../lib/client/registry";
 import { filesHost } from "../lib/host";
 
 const HEADER_BUTTON =
@@ -30,7 +31,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
     if (!host) return;
     let gone = false;
     host
-      .url(previewRoot(path, relative), path)
+      .url(previewRoot(path, relative), path, envOfPath(path))
       .then((next) => {
         if (gone) return;
         if (next) setUrl(next);

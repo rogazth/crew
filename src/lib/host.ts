@@ -58,14 +58,11 @@ export type NotificationsHost = {
 
 /** Files shown as pages, and handed to Finder. Absent outside Electron. */
 export type FilesHost = {
-  /** Null for a path main will not serve. */
-  url(root: string, path: string): Promise<string | null>;
+  /** Null for a path main will not serve. `envId` is the machine the file is on, this Mac when absent. */
+  url(root: string, path: string, envId?: string): Promise<string | null>;
   reveal(path: string): Promise<void>;
   /** Resolves to why it could not open, or "" once it did. */
   openExternal(path: string): Promise<string>;
-  /** A workspace root whose files are served by that machine's daemon, not this disk. */
-  bindRemote?(root: string, envId: string): Promise<void>;
-  unbindRemote?(root: string): Promise<void>;
 };
 
 /** Machines other than this Mac. Absent outside Electron. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localPath } from "./localLink";
+import { isPathLike, localPath } from "./localLink";
 
 describe("localPath", () => {
   it("reads absolute, relative and file:// links as files", () => {
@@ -7,6 +7,7 @@ describe("localPath", () => {
     expect(localPath("src/math.js")).toBe("src/math.js");
     expect(localPath("./NOTES.md")).toBe("./NOTES.md");
     expect(localPath("file:///Users/me/a%20b.ts")).toBe("/Users/me/a b.ts");
+    expect(localPath("~/Downloads/shot.png")).toBe("~/Downloads/shot.png");
   });
 
   it("drops the line a link points into", () => {
@@ -23,5 +24,23 @@ describe("localPath", () => {
     expect(localPath("//cdn.example.com/x.js")).toBeNull();
     expect(localPath("docs")).toBeNull();
     expect(localPath(undefined)).toBeNull();
+  });
+});
+
+describe("isPathLike", () => {
+  it("takes paths in the workspace and outside it", () => {
+    expect(isPathLike("src/a.ts")).toBe(true);
+    expect(isPathLike("README.md")).toBe(true);
+    expect(isPathLike("/home/agent/out/shot.png")).toBe(true);
+    expect(isPathLike("/tmp/report.html")).toBe(true);
+    expect(isPathLike("~/Downloads/x.pdf")).toBe(true);
+  });
+
+  it("leaves code that is not a path alone", () => {
+    expect(isPathLike("npm run build")).toBe(false);
+    expect(isPathLike("a.b()")).toBe(false);
+    expect(isPathLike("/usr/bin")).toBe(false);
+    expect(isPathLike("~/.zshrc x")).toBe(false);
+    expect(isPathLike("https://example.com/a.js")).toBe(false);
   });
 });

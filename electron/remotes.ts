@@ -7,7 +7,7 @@ import { CHANNELS } from "../src/lib/browser/bridge";
 import { isMachineAlias } from "../src/lib/browser/machines";
 import type { RemoteEnv } from "../src/lib/protocol";
 import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote } from "../src/lib/remotes";
-import { bindRemoteRoot, unbindRemoteRoot } from "./browser/files";
+import { setRemoteResolver } from "./browser/files";
 import { setMachines } from "./browser/guests";
 import type { Upstream } from "./browser/remote-proxy";
 import { release } from "./build-info";
@@ -161,16 +161,10 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
     return row;
   });
 
-  ipcMain.handle("files:bind-remote", async (_event, root: unknown, envId: unknown) => {
-    if (typeof root !== "string" || typeof envId !== "string") return;
+  setRemoteResolver(async (envId) => {
     const token = await getToken(envId);
     const row = (await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {}).catch(() => [])).find((item) => item.id === envId);
-    if (!token || !row) return;
-    bindRemoteRoot(root, { origin: originOf(row), token });
-  });
-
-  ipcMain.handle("files:unbind-remote", (_event, root: unknown) => {
-    if (typeof root === "string") unbindRemoteRoot(root);
+    return token && row ? { origin: originOf(row), token } : null;
   });
 
   /** Each machine the window knows, by alias; one not connected, or with no proxy, is kept with none. */
