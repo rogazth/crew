@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BotIcon, ServerIcon, SquareIcon, TerminalIcon, UsersIcon } from "lucide-react";
+import { BotIcon, MessagesSquareIcon, ServerIcon, SquareIcon, TerminalIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
 import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
@@ -22,13 +22,13 @@ export function StateDot({ state }: { state: PanelState }) {
 }
 
 export function PanelKindIcon({ kind, className }: { kind: PanelKind; className: string }) {
-  if (kind === "agent") return <BotIcon className={className} />;
-  if (kind === "crew") return <UsersIcon className={className} />;
+  if (kind === "subagent") return <BotIcon className={className} />;
+  if (kind === "session") return <MessagesSquareIcon className={className} />;
   if (kind === "process") return <ServerIcon className={className} />;
   return <TerminalIcon className={className} />;
 }
 
-/** What an entry is: the CLI's mark for a Crew subagent, the kind's glyph for the rest. */
+/** What an entry is: the CLI's mark for every agent, the kind's glyph for the rest. */
 export function EntryIcon({ entry, className }: { entry: PanelEntry; className: string }) {
   if (entry.provider) return <ProviderIcon provider={entry.provider} className={className} />;
   return <PanelKindIcon kind={entry.kind} className={`${className} text-icon`} />;

@@ -34,7 +34,7 @@ export function EntryView({ entry, block, chat, error, active, onStop, onClose }
   const now = useNow(1000, running);
   const scroller = useRef<HTMLDivElement>(null);
   // A Crew subagent's Stop is in its composer, as the session's is.
-  const stoppable = running && entry.stoppable && entry.kind !== "crew";
+  const stoppable = running && entry.stoppable && !entry.writable;
   const detail = block ? agentDetail(block) : null;
   const view = block ? subagentView(block) : null;
 

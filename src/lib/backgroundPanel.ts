@@ -1,19 +1,29 @@
 /**
- * What a session's background panel lists (plan Part B, decisions 33–36): one
- * list of the work a session left running or finished. It merges three
- * sources: the commands and subagents on its board, the Crew children it
- * started, and the Crew processes it started. Pure: the caller passes what it
+ * What a session's background panel lists (plan Part B, decisions 33–36, and
+ * the orchestration plan's decisions 1–4): one list of the work a session
+ * started. It merges four sources: the commands and subagents on its board,
+ * the Crew children it owns, the sessions it launched, and the Crew processes
+ * it started. Pure: the caller passes what it
  * holds, and gets the entries back in the order the panel shows them.
  */
 import { isRunning } from "./background";
 import { tokenCount } from "./contextMeter";
 import { childState, isOwnedChild, type ChildState } from "./letters";
-import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, Process, ProcessRun } from "./protocol";
+import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, BotRef, Process, ProcessRun, ThreadPair } from "./protocol";
 import { duration } from "./time";
 import type { Session } from "./types";
 
-/** What an entry is: a subagent, a Crew subagent, a shell, or a Crew process. */
-export type PanelKind = "agent" | "crew" | "shell" | "process";
+/**
+ * What an entry is: a subagent (native or Crew's, one kind), an independent
+ * session the session launched, a shell or monitor, or a Crew process.
+ */
+export type PanelKind = "subagent" | "session" | "shell" | "process";
+
+/** What differs underneath: how it stops and whether it can be written to, never how it looks. */
+export type PanelOrigin = "native" | "crew";
+
+/** An agent waiting on an answer is still running; this says what it waits for. */
+export type PanelAttention = "question" | "approval";
 
 export type PanelState = "running" | "done" | "failed" | "stopped";
 
@@ -24,6 +34,11 @@ export type PanelEntry = {
   /** Unique within the panel. */
   id: string;
   kind: PanelKind;
+  origin: PanelOrigin;
+  /** Whether the user may write to it: a Crew subagent that has not exited, and an independent session. */
+  writable: boolean;
+  /** Set while the agent waits on a question or an approval; its state is still running. */
+  attention?: PanelAttention;
   /** The shell command, the subagent's description, the child's name or the process's name. */
   title: string;
   detail: string;
@@ -38,19 +53,24 @@ export type PanelEntry = {
   stoppable: boolean;
   /** Why it cannot be stopped alone, or why it stopped when nobody asked. */
   stopNote?: string;
+  /** The CLI's mark: a native subagent wears its parent's. */
   provider?: string;
   source: PanelSource;
 };
 
 export type PanelSummary = {
-  running: { agents: number; shells: number; processes: number };
+  running: { agents: number; sessions: number; shells: number; processes: number };
   /** Entries that have ended, whatever ended them. */
   finished: number;
-  /** The folded line: "2 agents · 1 shell", "3 finished" when nothing runs, "" when empty. */
+  /** How many entries wait on the user's answer. */
+  attention: number;
+  /** What the status line says first: "scout asks", "2 waiting on you", "" when nothing waits. */
+  attentionText: string;
+  /** The folded line: "2 agents · 1 session · 1 shell", "3 finished" when nothing runs, "" when empty. */
   text: string;
 };
 
-const BOARD_KIND: Record<BackgroundKind, PanelKind> = { subagent: "agent", shell: "shell", monitor: "shell" };
+const BOARD_KIND: Record<BackgroundKind, PanelKind> = { subagent: "subagent", shell: "shell", monitor: "shell" };
 
 const BOARD_STATE: Record<BackgroundState, PanelState> = { running: "running", completed: "done", failed: "failed", stopped: "stopped" };
 
@@ -82,10 +102,13 @@ export function stoppableOf(command: BackgroundCommand, live: boolean): boolean 
 /** The panel's id for a board command, from the command's own. */
 export const commandEntryId = (commandId: string): string => `command:${commandId}`;
 
-function fromCommand(command: BackgroundCommand, live: boolean): PanelEntry {
+function fromCommand(command: BackgroundCommand, live: boolean, provider: string): PanelEntry {
+  const kind = BOARD_KIND[command.kind];
   return {
     id: commandEntryId(command.id),
-    kind: BOARD_KIND[command.kind],
+    kind,
+    origin: "native",
+    writable: false,
     title: command.command,
     detail: command.description ?? "",
     state: BOARD_STATE[command.state],
@@ -96,6 +119,8 @@ function fromCommand(command: BackgroundCommand, live: boolean): PanelEntry {
       window: command.window,
       model: command.model,
       activity: command.activity,
+      // A native subagent is the parent's own CLI at work.
+      provider: kind === "subagent" ? provider : undefined,
     }),
     stoppable: stoppableOf(command, live),
     ...present({ stopNote: command.stopNote }),
@@ -103,17 +128,24 @@ function fromCommand(command: BackgroundCommand, live: boolean): PanelEntry {
   };
 }
 
-function fromChild(session: Session): PanelEntry {
+const ATTENTION: Partial<Record<ChildState, PanelAttention>> = { question: "question", approval: "approval" };
+
+/** A Crew subagent the session owns, or an independent session it launched. */
+function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
   const reason = childState(session);
   const state = CHILD_STATE[reason];
   return {
     id: `session:${session.id}`,
-    kind: "crew",
+    kind,
+    origin: "crew",
+    // A subagent that exited has no process to hear it; a session of the user's is always theirs to write to.
+    writable: kind === "session" || reason !== "exited",
     title: session.name,
     detail: session.description,
     state,
     startedAt: session.createdAt,
     ...present({
+      attention: ATTENTION[reason],
       endedAt: state === "running" ? undefined : (session.lastEvent?.at ?? session.updatedAt),
       model: session.model || undefined,
       provider: session.provider,
@@ -144,6 +176,8 @@ function fromRun(process: Process, run: ProcessRun, startedAt: number): PanelEnt
   return {
     id: `process:${process.id}:${run.worktree ?? ""}`,
     kind: "process",
+    origin: "crew",
+    writable: false,
     title: process.name,
     detail: process.command,
     state,
@@ -153,49 +187,80 @@ function fromRun(process: Process, run: ProcessRun, startedAt: number): PanelEnt
   };
 }
 
+/** How an entry sorts: waiting on the user, then running, then ended. */
+const rank = (entry: PanelEntry) => (entry.attention ? 0 : entry.state === "running" ? 1 : 2);
+
 /**
- * Every entry of a session's panel: its board's commands and subagents, the
- * Crew children it still owns, and the process runs it started. Running
- * entries come first, newest first; then the ended ones, newest first.
- * A run that never started has no time to show, so it is left out.
+ * Every entry of a session's panel, the one list its status line, sheet and
+ * transcript read: its board's commands and subagents, the Crew subagents it
+ * owns, the independent sessions it launched (`launchedBy`; one launched by
+ * someone else is not its work), and the process runs it started. Attention
+ * first, then running, then ended, newest first in each. A run that never
+ * started has no time to show, so it is left out.
  */
 export function panelEntries(
   board: BackgroundList | null,
   children: readonly Session[],
   processes: readonly Process[],
-  sessionId: string,
+  parent: Pick<Session, "id" | "provider">,
 ): PanelEntry[] {
   const live = board?.live ?? false;
   const entries: PanelEntry[] = [
-    ...(board?.commands ?? []).map((command) => fromCommand(command, live)),
-    ...children.filter((session) => session.parentId === sessionId && isOwnedChild(session)).map(fromChild),
+    ...(board?.commands ?? []).map((command) => fromCommand(command, live, parent.provider)),
+    ...children.flatMap((session) => {
+      if (session.launchedBy === parent.id) return [fromChild(session, "session")];
+      return session.parentId === parent.id && isOwnedChild(session) ? [fromChild(session, "subagent")] : [];
+    }),
     ...processes.flatMap((process) =>
-      process.runs.flatMap((run) => (run.startedBy === sessionId && run.startedAt !== null ? [fromRun(process, run, run.startedAt)] : [])),
+      process.runs.flatMap((run) => (run.startedBy === parent.id && run.startedAt !== null ? [fromRun(process, run, run.startedAt)] : [])),
     ),
   ];
-  const rank = (entry: PanelEntry) => (entry.state === "running" ? 0 : 1);
   return entries.sort((a, b) => rank(a) - rank(b) || b.startedAt - a.startedAt);
 }
 
-/** The panel's folded line, and how many of each kind still run. Crew children count as agents. */
+const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count > 1 ? many : one}`;
+
+/** The panel's folded line, what waits on the user, and how many of each kind still run. */
 export function panelSummary(entries: readonly PanelEntry[]): PanelSummary {
   const running = entries.filter((entry) => entry.state === "running");
-  const agents = running.filter((entry) => entry.kind === "agent" || entry.kind === "crew").length;
-  const shells = running.filter((entry) => entry.kind === "shell").length;
-  const processes = running.filter((entry) => entry.kind === "process").length;
+  const count = (kind: PanelKind) => running.filter((entry) => entry.kind === kind).length;
+  const agents = count("subagent");
+  const sessions = count("session");
+  const shells = count("shell");
+  const processes = count("process");
   const finished = entries.length - running.length;
 
+  const waiting = running.filter((entry) => entry.attention);
+  const attentionText =
+    waiting.length === 0
+      ? ""
+      : waiting.length > 1
+        ? `${waiting.length} waiting on you`
+        : `${waiting[0]!.title} ${waiting[0]!.attention === "approval" ? "needs approval" : "asks"}`;
+
   const work: string[] = [];
-  if (agents > 0) work.push(`${agents} ${agents > 1 ? "agents" : "agent"}`);
-  if (shells > 0) work.push(`${shells} ${shells > 1 ? "shells" : "shell"}`);
-  if (processes > 0) work.push(`${processes} ${processes > 1 ? "processes" : "process"}`);
+  if (agents > 0) work.push(plural(agents, "agent"));
+  if (sessions > 0) work.push(plural(sessions, "session"));
+  if (shells > 0) work.push(plural(shells, "shell"));
+  if (processes > 0) work.push(plural(processes, "process", "processes"));
 
   const text = work.length > 0 ? work.join(" · ") : finished > 0 ? `${finished} finished` : "";
-  return { running: { agents, shells, processes }, finished, text };
+  return { running: { agents, sessions, shells, processes }, finished, attention: waiting.length, attentionText, text };
+}
+
+/**
+ * The pairs the Conversations group lists: those whose other party is a bot
+ * (no `kind`). A session, a terminal or the person is never a conversation;
+ * a session is opened as an agent. A pair the session is not in (`with`) counts
+ * when both of its parties are bots.
+ */
+export function botPairs(pairs: readonly ThreadPair[]): ThreadPair[] {
+  const isBot = (ref: BotRef | undefined) => ref !== undefined && ref.kind === undefined;
+  return pairs.filter((pair) => isBot(pair.peer) && (pair.with === undefined || isBot(pair.with)));
 }
 
 /** What each kind is called in a row's second line and an opened entry's header. */
-export const KIND_LABEL: Record<PanelKind, string> = { agent: "Subagent", crew: "Crew subagent", shell: "Shell", process: "Process" };
+export const KIND_LABEL: Record<PanelKind, string> = { subagent: "Subagent", session: "Session", shell: "Shell", process: "Process" };
 
 /**
  * A row's second line: the kind, then how long it has run, or how it ended and

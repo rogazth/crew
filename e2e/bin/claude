@@ -122,6 +122,8 @@ serve();
  *   subagent's own frame, and a `task_progress` with 41300 tokens on its step
  *   "Reading README.md". It runs until a `stop_task` for it, which ends it as
  *   `stopped`; the turn itself answers at once.
+ * - `shell` is a turn that sends a shell, `npm test`, to the background
+ *   (`sh1`) beside the subagents that run; it runs until the session ends.
  * - `initialize` answers the `/` menu: the commands `cold-run`, `compact` and
  *   `context`, and `writing-for-agents`, which `reload_skills` names a skill
  *   (as `system/init`'s `skills` does each turn). `reload_plugins` answers
@@ -255,6 +257,27 @@ function serve() {
     });
   }
 
+  /** A shell sent to the background (`sh1`) beside whatever subagents run: `task_started`, then the set. */
+  function startShell() {
+    emit({
+      type: "system",
+      subtype: "task_started",
+      session_id: sessionId,
+      task_id: "sh1",
+      tool_use_id: "toolu_sh1",
+      description: "npm test",
+      task_type: "local_bash",
+      is_backgrounded: true,
+    });
+    const tasks = [...agents.keys()].map((task_id) => ({ task_id, task_type: "local_agent", description: "Explore the repo" }));
+    emit({
+      type: "system",
+      subtype: "background_tasks_changed",
+      session_id: sessionId,
+      tasks: [...tasks, { task_id: "sh1", task_type: "local_bash", description: "npm test" }],
+    });
+  }
+
   /** A `stop_task` for a subagent: it ends as stopped, and nothing wakes the model. */
   function endAgent(task) {
     const call = agents.get(task);
@@ -318,6 +341,7 @@ function serve() {
       if (mine.stopped) return;
     }
     if (command === "agent") startAgent();
+    if (command === "shell") startShell();
     if (text.startsWith("!")) {
       await new Promise((resolve) => {
         const child = spawn("sh", ["-c", text.slice(1)], { cwd: CWD, env: process.env, stdio: "ignore" });

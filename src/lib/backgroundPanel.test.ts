@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  botPairs,
   clearedKey,
   entryDetail,
   finishedKeys,
@@ -14,7 +15,7 @@ import {
   type PanelKind,
   type PanelState,
 } from "./backgroundPanel";
-import type { BackgroundCommand, BackgroundList, Process, ProcessRun } from "./protocol";
+import type { BackgroundCommand, BackgroundList, Process, ProcessRun, ThreadPair } from "./protocol";
 import type { Session } from "./types";
 
 function command(id: string, extra: Partial<BackgroundCommand> = {}): BackgroundCommand {
@@ -24,6 +25,11 @@ function command(id: string, extra: Partial<BackgroundCommand> = {}): Background
 function list(commands: BackgroundCommand[], extra: Partial<BackgroundList> = {}): BackgroundList {
   return { sessionId: "s1", commands, live: true, waiting: false, hidden: [], ...extra };
 }
+
+const S1 = { id: "s1", provider: "claude" };
+
+/** A session that no one owns: the user's, or one launched by another. */
+const standalone = (id: string, extra: Partial<Session> = {}) => ({ ...session(id, extra), kind: "bot", parentId: undefined }) as unknown as Session;
 
 const session = (id: string, extra: Partial<Session> = {}) =>
   ({ id, name: id, kind: "child", status: "working", provider: "claude", model: "", description: "", createdAt: 0, updatedAt: 0, parentId: "s1", ...extra }) as Session;
@@ -66,7 +72,7 @@ function processOf(id: string, runs: ProcessRun[]): Process {
 }
 
 function entry(kind: PanelKind, state: PanelState): PanelEntry {
-  return { id: `${kind}-${state}`, kind, title: "", detail: "", state, startedAt: 0, stoppable: false, source: { type: "session", id: "x" } };
+  return { id: `${kind}-${state}`, kind, origin: "native", writable: false, title: "", detail: "", state, startedAt: 0, stoppable: false, source: { type: "session", id: "x" } };
 }
 
 describe("panelEntries", () => {
@@ -86,10 +92,10 @@ describe("panelEntries", () => {
       processOf("never", [run({ startedAt: null, state: "stopped" })]),
     ];
 
-    const entries = panelEntries(board, children, processes, "s1");
+    const entries = panelEntries(board, children, processes, S1);
 
     expect(entries.map((e) => e.title)).toEqual(["Process dev", "Fallback", "Explore: callers", "run sh1", "Process dev"]);
-    expect(entries.map((e) => e.kind)).toEqual(["process", "crew", "agent", "shell", "process"]);
+    expect(entries.map((e) => e.kind)).toEqual(["process", "subagent", "subagent", "shell", "process"]);
     expect(entries[0]!.source).toEqual({ type: "process", id: "dev", worktree: null });
     expect(entries[4]!.source).toEqual({ type: "process", id: "dev", worktree: "/wt/feature" });
   });
@@ -103,25 +109,25 @@ describe("panelEntries", () => {
     ]);
     const children = [session("mid", { name: "mid child", createdAt: 200 })];
 
-    const titles = panelEntries(board, children, [], "s1").map((e) => e.title);
+    const titles = panelEntries(board, children, [], S1).map((e) => e.title);
 
     expect(titles).toEqual(["run new-running", "mid child", "run old-running", "run ended-new", "run ended-old"]);
   });
 
   it("returns nothing when there is no board yet and nothing else", () => {
-    expect(panelEntries(null, [], [], "s1")).toEqual([]);
+    expect(panelEntries(null, [], [], S1)).toEqual([]);
   });
 
-  it("maps each board kind: a subagent is an agent, a shell and a monitor are shells", () => {
+  it("maps each board kind: a subagent is a subagent, a shell and a monitor are shells", () => {
     const board = list([
       command("a", { kind: "subagent", command: "Find the callers", description: "for the steer fallback" }),
       command("s", { kind: "shell" }),
       command("m", { kind: "monitor" }),
     ]);
 
-    const entries = panelEntries(board, [], [], "s1");
+    const entries = panelEntries(board, [], [], S1);
 
-    expect(entries.map((e) => e.kind)).toEqual(["agent", "shell", "shell"]);
+    expect(entries.map((e) => e.kind)).toEqual(["subagent", "shell", "shell"]);
     expect(entries[0]).toMatchObject({ title: "Find the callers", detail: "for the steer fallback", source: { type: "command", id: "a" } });
     expect(entries[1]).toMatchObject({ detail: "", source: { type: "command", id: "s" } });
   });
@@ -134,7 +140,7 @@ describe("panelEntries", () => {
       command("x", { state: "stopped" }),
     ]);
 
-    const states = Object.fromEntries(panelEntries(board, [], [], "s1").map((e) => [e.source.type === "command" ? e.source.id : "", e.state]));
+    const states = Object.fromEntries(panelEntries(board, [], [], S1).map((e) => [e.source.type === "command" ? e.source.id : "", e.state]));
 
     expect(states).toEqual({ r: "running", c: "done", f: "failed", x: "stopped" });
   });
@@ -153,7 +159,7 @@ describe("panelEntries", () => {
       command("bare", { kind: "subagent" }),
     ]);
 
-    const [full, bare] = panelEntries(board, [], [], "s1");
+    const [full, bare] = panelEntries(board, [], [], S1);
 
     expect(full).toMatchObject({ tokens: 12_000, window: 200_000, model: "claude-haiku-5-5", activity: "Grep", stopNote: "stops with the turn" });
     expect(bare).not.toHaveProperty("tokens");
@@ -174,10 +180,10 @@ describe("panelEntries", () => {
       session("stopped", { status: "idle", lastEvent: { kind: "stopped", at: 8, cursor: 2 } }),
     ];
 
-    const entries = panelEntries(null, children, [], "s1");
+    const entries = panelEntries(null, children, [], S1);
     const byName = Object.fromEntries(entries.map((e) => [e.title, e]));
 
-    expect(byName.working).toMatchObject({ kind: "crew", state: "running", stoppable: true, source: { type: "session", id: "working" } });
+    expect(byName.working).toMatchObject({ kind: "subagent", state: "running", stoppable: true, source: { type: "session", id: "working" } });
     expect(byName.asking).toMatchObject({ state: "running" });
     expect(byName.reported).toMatchObject({ state: "done", endedAt: 500, stoppable: false });
     expect(byName.failed).toMatchObject({ state: "failed", endedAt: 6 });
@@ -187,7 +193,7 @@ describe("panelEntries", () => {
   });
 
   it("takes a child's model, provider and description, and its start from when it was created", () => {
-    const [child] = panelEntries(null, [session("c", { name: "Fallback", description: "steer fallback", model: "Sonnet 5.5", provider: "codex", createdAt: 42 })], [], "s1");
+    const [child] = panelEntries(null, [session("c", { name: "Fallback", description: "steer fallback", model: "Sonnet 5.5", provider: "codex", createdAt: 42 })], [], S1);
 
     expect(child).toMatchObject({ title: "Fallback", detail: "steer fallback", model: "Sonnet 5.5", provider: "codex", startedAt: 42 });
   });
@@ -205,7 +211,7 @@ describe("panelEntries", () => {
     ];
     const processes = runs.map(([patch], index) => processOf(`p${index}`, [run({ ...patch, worktree: null })]));
 
-    const states = panelEntries(null, [], processes, "s1").map((e) => e.state);
+    const states = panelEntries(null, [], processes, S1).map((e) => e.state);
 
     expect(states.filter((s) => s === "running")).toHaveLength(3);
     expect(states.filter((s) => s === "done")).toHaveLength(1);
@@ -214,37 +220,137 @@ describe("panelEntries", () => {
   });
 });
 
+describe("panelEntries kinds", () => {
+  const launched = standalone("billing", { name: "billing-ui", launchedBy: "s1", provider: "codex" });
+  const owned = session("scout", { name: "scout", provider: "codex" });
+  const board = list([command("nat", { kind: "subagent", command: "Explore", startedAt: 5 }), command("sh", { startedAt: 6 })]);
+
+  it("lists a native subagent, a Crew subagent, a launched session and a shell, each with its origin", () => {
+    const entries = panelEntries(board, [owned, launched], [], S1);
+    const by = Object.fromEntries(entries.map((e) => [e.title, e]));
+
+    expect(by.Explore).toMatchObject({ kind: "subagent", origin: "native", writable: false, provider: "claude" });
+    expect(by.scout).toMatchObject({ kind: "subagent", origin: "crew", writable: true, provider: "codex" });
+    expect(by["billing-ui"]).toMatchObject({ kind: "session", origin: "crew", writable: true, provider: "codex", source: { type: "session", id: "billing" } });
+    expect(by["run sh"]).toMatchObject({ kind: "shell", origin: "native", writable: false });
+    expect(by.Explore!.provider).toBe("claude");
+  });
+
+  it("gives a native subagent its parent's provider, and a shell none", () => {
+    const entries = panelEntries(board, [], [], { id: "s1", provider: "opencode" });
+    const native = entries.find((e) => e.kind === "subagent");
+    const shell = entries.find((e) => e.kind === "shell");
+
+    expect(native).toMatchObject({ kind: "subagent", provider: "opencode" });
+    expect(shell).toMatchObject({ kind: "shell" });
+    expect(shell).not.toHaveProperty("provider");
+  });
+
+  it("lists a session this one launched and not one launched by someone else", () => {
+    const theirs = standalone("theirs", { name: "theirs", launchedBy: "s2" });
+    const user = standalone("mine", { name: "mine" });
+
+    expect(panelEntries(null, [launched, theirs, user], [], S1).map((e) => e.title)).toEqual(["billing-ui"]);
+  });
+
+  it("does not list a session that is both launched by and owned by another", () => {
+    const handed = session("handed", { name: "handed", launchedBy: "s9" });
+
+    expect(panelEntries(null, [handed], [], S1)).toEqual([]);
+  });
+
+  it("makes a Crew subagent writable until it exits, and a session always", () => {
+    const exited = session("gone", { name: "gone", status: "exited", lastEvent: { kind: "exited", at: 1, cursor: 1 } });
+    const reported = session("done", { name: "done", status: "idle", lastEvent: { kind: "report", at: 1, cursor: 1 } });
+    const sessionGone = { ...launched, id: "g2", name: "g2", status: "exited", lastEvent: { kind: "exited", at: 1, cursor: 1 } } as Session;
+    const by = Object.fromEntries(panelEntries(null, [exited, reported, sessionGone], [], S1).map((e) => [e.title, e.writable]));
+
+    expect(by).toEqual({ gone: false, done: true, g2: true });
+  });
+
+  it("makes a process never writable", () => {
+    expect(panelEntries(null, [], [processOf("dev", [run()])], S1)[0]).toMatchObject({ kind: "process", writable: false });
+  });
+
+  it("marks a child waiting on a question or approval, still running", () => {
+    const ask = session("ask", { name: "ask", status: "needs-input", lastEvent: { kind: "question", at: 1, cursor: 1 } });
+    const approve = session("approve", { name: "approve", status: "needs-input", lastEvent: { kind: "approval", at: 2, cursor: 1 } });
+    const by = Object.fromEntries(panelEntries(null, [ask, approve], [], S1).map((e) => [e.title, e]));
+
+    expect(by.ask).toMatchObject({ state: "running", attention: "question" });
+    expect(by.approve).toMatchObject({ state: "running", attention: "approval" });
+    expect(panelEntries(null, [session("w")], [], S1)[0]).not.toHaveProperty("attention");
+  });
+
+  it("sorts attention, then running, then ended, newest first in each", () => {
+    const asking = session("asking", { name: "asking", createdAt: 1, status: "needs-input", lastEvent: { kind: "question", at: 1, cursor: 1 } });
+    const newer = session("newer", { name: "newer", createdAt: 90, status: "needs-input", lastEvent: { kind: "approval", at: 1, cursor: 1 } });
+    const running = session("running", { name: "running", createdAt: 100 });
+    const ended = list([command("end", { startedAt: 500, state: "completed", exitCode: 0 })]);
+
+    expect(panelEntries(ended, [running, asking, newer], [], S1).map((e) => e.title)).toEqual(["newer", "asking", "running", "run end"]);
+  });
+});
+
+describe("botPairs", () => {
+  const last = { id: "l", from: { id: "a", name: "a" }, to: { id: "b", name: "b" }, text: "hi", at: 1, kind: "message" } as unknown as ThreadPair["last"];
+  const pair = (peer: ThreadPair["peer"], withRef?: ThreadPair["peer"]): ThreadPair => ({ peer, ...(withRef ? { with: withRef } : {}), last, count: 1 });
+  const bot = { id: "reviewer", name: "reviewer" };
+
+  it("keeps the pairs whose other party is a bot", () => {
+    const pairs = [pair(bot), pair({ id: "s", name: "billing-ui", kind: "session" }), pair({ id: "t", name: "term", kind: "terminal" }), pair({ id: "", name: "You", kind: "user" })];
+
+    expect(botPairs(pairs).map((p) => p.peer.name)).toEqual(["reviewer"]);
+  });
+
+  it("keeps a pair the session is not in only when both parties are bots", () => {
+    const other = { id: "docs", name: "docs" };
+
+    expect(botPairs([pair(bot, other), pair(bot, { id: "s", name: "x", kind: "session" }), pair({ id: "", name: "You", kind: "user" }, bot)])).toHaveLength(1);
+  });
+});
+
 describe("panelSummary", () => {
   it("is empty when there is nothing to list", () => {
-    expect(panelSummary([])).toEqual({ running: { agents: 0, shells: 0, processes: 0 }, finished: 0, text: "" });
+    expect(panelSummary([])).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 0, attention: 0, attentionText: "", text: "" });
   });
 
   it("says how many finished when nothing runs", () => {
-    const summary = panelSummary([entry("agent", "done"), entry("shell", "failed"), entry("process", "stopped")]);
+    const summary = panelSummary([entry("subagent", "done"), entry("shell", "failed"), entry("process", "stopped")]);
 
-    expect(summary).toEqual({ running: { agents: 0, shells: 0, processes: 0 }, finished: 3, text: "3 finished" });
+    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 3, attention: 0, attentionText: "", text: "3 finished" });
   });
 
   it("counts running work in the text, plural and singular", () => {
-    const summary = panelSummary([entry("agent", "running"), entry("shell", "running"), entry("process", "running"), entry("process", "running")]);
+    const summary = panelSummary([entry("subagent", "running"), entry("shell", "running"), entry("process", "running"), entry("process", "running")]);
 
-    expect(summary.running).toEqual({ agents: 1, shells: 1, processes: 2 });
+    expect(summary.running).toEqual({ agents: 1, sessions: 0, shells: 1, processes: 2 });
     expect(summary.text).toBe("1 agent · 1 shell · 2 processes");
-    expect(panelSummary([entry("agent", "running"), entry("agent", "running"), entry("shell", "running")]).text).toBe("2 agents · 1 shell");
+    expect(panelSummary([entry("subagent", "running"), entry("subagent", "running"), entry("shell", "running")]).text).toBe("2 agents · 1 shell");
     expect(panelSummary([entry("process", "running")]).text).toBe("1 process");
   });
 
-  it("counts a Crew child as an agent", () => {
-    const summary = panelSummary([entry("crew", "running"), entry("agent", "running")]);
+  it("counts native and Crew subagents as agents, and sessions apart", () => {
+    const summary = panelSummary([entry("subagent", "running"), { ...entry("subagent", "running"), origin: "crew" }, entry("session", "running"), entry("shell", "running")]);
 
-    expect(summary.running.agents).toBe(2);
-    expect(summary.text).toBe("2 agents");
+    expect(summary.running).toEqual({ agents: 2, sessions: 1, shells: 1, processes: 0 });
+    expect(summary.text).toBe("2 agents · 1 session · 1 shell");
+    expect(panelSummary([entry("session", "running"), entry("session", "running")]).text).toBe("2 sessions");
+  });
+
+  it("says what waits on the user ahead of the rest, one by name and many by count", () => {
+    const asks = (title: string, attention: "question" | "approval"): PanelEntry => ({ ...entry("subagent", "running"), title, attention });
+
+    expect(panelSummary([asks("scout", "question"), entry("shell", "running")])).toMatchObject({ attention: 1, attentionText: "scout asks", text: "1 agent · 1 shell" });
+    expect(panelSummary([asks("scout", "approval")]).attentionText).toBe("scout needs approval");
+    expect(panelSummary([asks("scout", "question"), asks("docs", "approval")])).toMatchObject({ attention: 2, attentionText: "2 waiting on you" });
+    expect(panelSummary([{ ...entry("subagent", "done"), attention: "question" }]).attentionText).toBe("");
   });
 
   it("shows only the running work in the text, and counts what finished apart", () => {
-    const summary = panelSummary([entry("shell", "running"), entry("agent", "done"), entry("crew", "failed")]);
+    const summary = panelSummary([entry("shell", "running"), entry("subagent", "done"), entry("subagent", "failed")]);
 
-    expect(summary).toEqual({ running: { agents: 0, shells: 1, processes: 0 }, finished: 2, text: "1 shell" });
+    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 1, processes: 0 }, finished: 2, attention: 0, attentionText: "", text: "1 shell" });
   });
 });
 
@@ -266,14 +372,14 @@ describe("stoppability", () => {
 
   it("makes a Crew child stoppable only while it runs", () => {
     const children = [session("on", { status: "working" }), session("off", { status: "idle", lastEvent: { kind: "report", at: 1, cursor: 1 } })];
-    const stoppable = Object.fromEntries(panelEntries(null, children, [], "s1").map((e) => [e.source.type === "session" ? e.source.id : "", e.stoppable]));
+    const stoppable = Object.fromEntries(panelEntries(null, children, [], S1).map((e) => [e.source.type === "session" ? e.source.id : "", e.stoppable]));
 
     expect(stoppable).toEqual({ on: true, off: false });
   });
 
   it("makes a process stoppable only while its run is up", () => {
     const processes = [processOf("up", [run({ state: "running" })]), processOf("down", [run({ state: "exited", exitCode: 0 })])];
-    const stoppable = Object.fromEntries(panelEntries(null, [], processes, "s1").map((e) => [e.title, e.stoppable]));
+    const stoppable = Object.fromEntries(panelEntries(null, [], processes, S1).map((e) => [e.title, e.stoppable]));
 
     expect(stoppable).toEqual({ "Process up": true, "Process down": false });
   });
@@ -283,15 +389,15 @@ describe("what a row says", () => {
   const ended = (patch: Partial<PanelEntry>): PanelEntry => ({ ...entry("shell", "done"), startedAt: 1000, ...patch });
 
   it("says the kind and how long it has run", () => {
-    expect(entryDetail(ended({ state: "running", kind: "agent" }), 1000 + 192_000)).toBe("Subagent · 3m 12s");
-    expect(entryDetail(ended({ state: "running", kind: "crew" }), 1000 + 9_000)).toBe("Crew subagent · 9s");
+    expect(entryDetail(ended({ state: "running", kind: "subagent" }), 1000 + 192_000)).toBe("Subagent · 3m 12s");
+    expect(entryDetail(ended({ state: "running", kind: "session" }), 1000 + 9_000)).toBe("Session · 9s");
   });
 
   it("says how it ended and after how long, with the reason when there is one", () => {
     expect(entryDetail(ended({ endedAt: 1000 + 61_000 }), 0)).toBe("Shell · done after 1m 1s");
     expect(entryDetail(ended({ state: "failed", endedAt: 1000 + 4_000 }), 0)).toBe("Shell · failed after 4s");
-    expect(entryDetail(ended({ state: "stopped", kind: "crew", endedAt: 1000 + 4_000, stopNote: "its CLI exited" }), 0)).toBe(
-      "Crew subagent · stopped after 4s · its CLI exited",
+    expect(entryDetail(ended({ state: "stopped", kind: "subagent", endedAt: 1000 + 4_000, stopNote: "its CLI exited" }), 0)).toBe(
+      "Subagent · stopped after 4s · its CLI exited",
     );
   });
 
@@ -317,7 +423,7 @@ describe("what a row says", () => {
 
 describe("clearing finished entries", () => {
   const board = (state: PanelState): PanelEntry => ({ ...entry("shell", state), id: `command:${state}`, source: { type: "command", id: state } });
-  const child = (state: PanelState, patch: Partial<PanelEntry> = {}): PanelEntry => ({ ...entry("crew", state), id: `session:${state}`, ...patch });
+  const child = (state: PanelState, patch: Partial<PanelEntry> = {}): PanelEntry => ({ ...entry("subagent", state), id: `session:${state}`, ...patch });
 
   it("hides an ended child or process the user cleared, and shows it again if it ends again", () => {
     const done = child("done", { endedAt: 500 });

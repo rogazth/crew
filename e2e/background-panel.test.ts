@@ -102,7 +102,7 @@ test("what the session started is one line under the composer, and its sheet lis
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 2, texts.join("\n"));
   assert.match(texts[0]!, /web.*Process · \d+s/, "running work comes first");
-  assert.match(texts[1]!, /Lint pass.*Crew subagent · done after/, "then what ended");
+  assert.match(texts[1]!, /Lint pass.*Subagent · done after/, "then what ended");
   assert.equal(await sheet().getByRole("button", { name: "Clear finished" }).count(), 1);
   await rows().nth(0).waitFor();
   assert.equal(await rows().nth(0).getAttribute("aria-selected"), "true");
@@ -240,4 +240,29 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   assert.deepEqual([board.commands[0]?.id, board.commands[0]?.state, board.commands[0]?.tokens], ["ag1", "stopped", 41_300]);
   await crew.window.keyboard.press("Escape");
   await sheet().waitFor({ state: "detached" });
+});
+
+test("the sheet lists a native subagent, a Crew subagent, a session and a shell as one work list", async () => {
+  const env = await sessionEnv();
+  await run(CREW, ["sessions", "start", "--provider", "opencode", "--name", "billing-ui", "--", "wire the billing page"], { env });
+  await waitFor(async () => (await sessions(crew, chat.workspaceId)).some((row) => row.launchedBy === chat.id), {
+    timeout: 20_000,
+    message: "the launched session reaches crewd",
+  });
+  const idle = () => waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
+  await send("agent");
+  await idle();
+  await send("shell");
+  await idle();
+
+  const work = crew.window.getByRole("button", { name: /shell/ });
+  await work.waitFor();
+  await work.click();
+  await sheet().waitFor();
+  await waitFor(async () => (await rows().count()) >= 3, { message: "three entries are listed" });
+  const texts = (await rows().allTextContents()).join("\n");
+  assert.match(texts, /Explore the repo.*Subagent · stopped/, texts);
+  assert.match(texts, /billing-ui.*Session ·/, texts);
+  assert.match(texts, /npm test.*Shell · \d+s/, texts);
+  if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "work-sheet.png") });
 });

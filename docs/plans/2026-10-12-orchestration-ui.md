@@ -430,7 +430,7 @@ report, light and dark.
 
 | # | Decision | Status |
 |---|---|---|
-| 1–4 | One work model | to do (step 2) |
+| 1–4 | One work model | done (step 2): model, summary and `botPairs` in `backgroundPanel.ts`; sheet icons and labels only |
 | 5–9 | The status line is the one place | to do (step 4) |
 | 10–16 | The thread, in place | to do (step 3) |
 | 17 | No tab for a subagent | to do (step 8) |

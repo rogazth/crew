@@ -14,7 +14,7 @@ import { useBackground } from "./useBackground";
  */
 export function useBackgroundPanel(session: Session, sessions: readonly Session[], processes: readonly Process[]) {
   const board = useBackground(session.id);
-  const all = useMemo(() => panelEntries(board, sessions, processes, session.id), [board, sessions, processes, session.id]);
+  const all = useMemo(() => panelEntries(board, sessions, processes, session), [board, sessions, processes, session]);
   const cleared = useMemo<ReadonlySet<string>>(() => new Set(board?.hidden), [board?.hidden]);
   const entries = useMemo(() => visibleEntries(all, cleared), [all, cleared]);
   /** What went wrong stopping an entry, by entry id, for its row to say. */
