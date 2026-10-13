@@ -81,6 +81,15 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
   await page().getByText("echo child").first().waitFor();
   await page().getByText("pong").first().waitFor();
   assert.match(await page().locator("[data-thread-header]").innerText(), /Done/);
+  // It is the chat's own transcript: its words select as the chat's do, and ⌘A keeps to the thread.
+  const thread = page().locator('[data-selectable="blocks"]');
+  assert.equal(await thread.count(), 1, "the thread is one transcript");
+  await thread.getByText("pong", { exact: true }).dblclick();
+  assert.equal(await crew.window.evaluate(() => window.getSelection()?.toString().trim()), "pong", "a double click selects the answer's word");
+  await crew.window.keyboard.press(`${MOD}+a`);
+  const all = (await crew.window.evaluate(() => window.getSelection()?.toString())) ?? "";
+  assert.match(all, /Reply with the single word pong\./, all);
+  assert.doesNotMatch(all, /Done: look into it/, "the parent's chat is not in the selection");
   await shoot("thread");
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });
@@ -104,6 +113,8 @@ test("Stop on a running subagent ends the child and not the parent's turn", asyn
   await page().waitFor();
   await page().getByText("echo child").first().waitFor();
   await page().locator("[data-thread-header]").getByText("Running").waitFor();
+  // The working line counts from when the call started, as the chat's does.
+  await page().getByText(/^Working for \d+s$/).waitFor();
   await shoot("running");
   // The parent's turn is still going: its Stop button is there.
   assert.equal((await crew.request<Session>("session_get", { id: chat.id })).status, "working");

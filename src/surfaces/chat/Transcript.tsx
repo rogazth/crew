@@ -34,6 +34,8 @@ type Props = {
   focusId: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** When the running turn began, for blocks that carry no time (a subagent's thread). */
+  since?: number | undefined;
 };
 
 /** A card the agent is stopped on: the time is the reader's, not the agent's. */
@@ -67,6 +69,7 @@ export function Transcript({
   focusId,
   onApprove,
   onAnswer,
+  since,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -255,7 +258,7 @@ export function Transcript({
         <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
         {working && (
           <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
-            <WorkingLine since={turnStart(blocks)} waiting={waiting(blocks)} />
+            <WorkingLine since={since ?? turnStart(blocks)} waiting={waiting(blocks)} />
           </div>
         )}
         {queued.length > 0 && (

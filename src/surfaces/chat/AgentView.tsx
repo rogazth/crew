@@ -6,15 +6,12 @@ import { KIND_LABEL, modelLine, tokensLabel, tokensTitle, type PanelEntry } from
 import type { Block } from '../../lib/blocks';
 import type { BackgroundCommand } from '../../lib/protocol';
 import { agentDetail, subagentView, threadBlocks } from '../../lib/subagent';
-import { foldTurns, groupRows } from '../../lib/transcriptRows';
 import { duration } from '../../lib/time';
-import { WorkingLine } from './Activity';
 import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
-import { Rows } from './Rows';
+import { Transcript } from './Transcript';
 
 const HEAD_FADE = '[mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]';
-const FADE = '[mask-image:linear-gradient(to_bottom,transparent,black_28px,black_calc(100%-56px),transparent)]';
 
 /** One level of the way down to the open thread: a session that holds the level below it. */
 export type Crumb = {
@@ -85,21 +82,24 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
   );
 }
 
-const noApprove = () => {};
-const noAnswer = () => {};
+const noop = () => {};
 
-/** A native subagent's thread, drawn as the chat draws its own: its prompts, its steps and its answers, in order. */
-function SubagentTranscript({ blocks, working }: { blocks: readonly Block[]; working: boolean }) {
-  const rows = useMemo(() => foldTurns(groupRows(threadBlocks(blocks)), working), [blocks, working]);
+/** A native subagent's thread, drawn by the chat's own transcript: its prompts, its steps and its answers, in order. */
+function SubagentTranscript({ calls, working, active }: { calls: readonly Block[]; working: boolean; active: boolean }) {
+  const blocks = useMemo(() => threadBlocks(calls), [calls]);
   return (
-    <>
-      <Rows rows={rows} working={working} focusId={null} onApprove={noApprove} onAnswer={noAnswer} />
-      {working && (
-        <div className={rows.length > 0 ? 'mt-2.5' : ''}>
-          <WorkingLine since={blocks.at(-1)?.at} waiting={false} />
-        </div>
-      )}
-    </>
+    <Transcript
+      blocks={blocks}
+      working={working}
+      active={active}
+      more={false}
+      loadingEarlier={false}
+      onLoadEarlier={noop}
+      focusId={null}
+      onApprove={noop}
+      onAnswer={noop}
+      since={calls.at(-1)?.at}
+    />
   );
 }
 
@@ -128,7 +128,6 @@ export function AgentView({
   const running = entry.state === 'running';
   const now = useNow(1000, running);
   const root = useRef<HTMLDivElement>(null);
-  const scroller = useRef<HTMLDivElement>(null);
   // An agent with a composer stops from it, as any session does.
   const stoppable = running && entry.stoppable && !entry.writable;
   // The newest call is the one at work; the first names the thread.
@@ -167,13 +166,6 @@ export function AgentView({
     return () => window.removeEventListener('keydown', key);
   }, [active, stoppable, onClose, onStop]);
 
-  // A running native subagent is read at its end, where the newest step lands.
-  const steps = blocks.reduce((sum, call) => sum + (agentDetail(call)?.steps?.length ?? 0), 0);
-  useEffect(() => {
-    const el = scroller.current;
-    if (el && running) el.scrollTop = el.scrollHeight;
-  }, [steps, running]);
-
   const tokens = tokensLabel(entry);
   const model = modelLine(entry);
   const state = entry.state[0]!.toUpperCase() + entry.state.slice(1);
@@ -190,15 +182,11 @@ export function AgentView({
     <div className="relative flex min-h-0 flex-1 flex-col">{chat}</div>
   ) : command && entry.kind === 'shell' ? (
     <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
+  ) : detail && view ? (
+    <SubagentTranscript calls={blocks} working={view.state === 'running'} active={active} />
   ) : (
-    <div ref={scroller} className={`min-h-0 flex-1 overflow-y-auto ${FADE}`}>
-      <div className="crew-prose mx-auto w-full max-w-[840px] px-6 pt-6 pb-10">
-        {detail && view ? (
-          <SubagentTranscript blocks={blocks} working={view.state === 'running'} />
-        ) : (
-          <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
-        )}
-      </div>
+    <div className="mx-auto w-full max-w-[840px] px-6 pt-8">
+      <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
     </div>
   );
   const footer = !entry.writable && <ReadOnlyFooter entry={entry} parent={parent?.name ?? 'the session'} stoppable={stoppable} />;
