@@ -128,13 +128,13 @@ impl Child {
 
 /// What a child's notifications come to, applied once the lock is let go.
 #[derive(Default)]
-struct ChildWork {
-    events: Vec<HarnessEvent>,
-    board: Vec<ChildBoard>,
+pub(super) struct ChildWork {
+    pub(super) events: Vec<HarnessEvent>,
+    pub(super) board: Vec<ChildBoard>,
 }
 
 /// A change to a child's entry in the background board.
-enum ChildBoard {
+pub(super) enum ChildBoard {
     Spawned { thread: String, call: String, label: String, nickname: Option<String>, model: Option<String> },
     State(String, BackgroundState),
     Usage { thread: String, tokens: u64, window: Option<u64> },
@@ -1134,7 +1134,7 @@ impl TurnHost {
 
     /// Applies what a child's notifications came to: its entry on the board,
     /// and its call's steps and state in the transcript.
-    fn codex_children_apply(&self, session_id: &str, work: ChildWork) {
+    pub(super) fn codex_children_apply(&self, session_id: &str, work: ChildWork) {
         if !work.board.is_empty() {
             let now = crate::store::now_millis();
             self.background.touch(session_id, |board| {
@@ -1142,11 +1142,11 @@ impl TurnHost {
                 for change in &work.board {
                     changed |= match change {
                         ChildBoard::Spawned { thread, call, label, nickname, model } => {
-                            board.codex_child(thread, call, label, nickname.as_deref(), model.as_deref(), now)
+                            board.agent_child(thread, call, label, nickname.as_deref(), model.as_deref(), now)
                         }
-                        ChildBoard::State(thread, state) => board.codex_child_state(thread, *state, now),
-                        ChildBoard::Usage { thread, tokens, window } => board.codex_child_usage(thread, *tokens, *window),
-                        ChildBoard::Activity(thread, activity) => board.codex_child_activity(thread, activity),
+                        ChildBoard::State(thread, state) => board.agent_child_state(thread, *state, now),
+                        ChildBoard::Usage { thread, tokens, window } => board.agent_child_usage(thread, *tokens, *window),
+                        ChildBoard::Activity(thread, activity) => board.agent_child_activity(thread, activity),
                     };
                 }
                 changed
@@ -1644,7 +1644,7 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
 }
 
 /// Where a subagent is and what it is on, as its call's row shows it.
-fn subagent_updated(call: &str, state: Option<SubagentState>, activity: Option<String>, output: Option<String>) -> HarnessEvent {
+pub(super) fn subagent_updated(call: &str, state: Option<SubagentState>, activity: Option<String>, output: Option<String>) -> HarnessEvent {
     HarnessEvent::SubagentUpdated { call_id: call.to_string(), state, activity, output, background: None }
 }
 

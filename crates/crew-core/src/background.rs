@@ -743,7 +743,7 @@ impl Board {
     /// is the thread's id, so a call that names it again fills in what the
     /// first left out and adds no second row. It runs from the start: its
     /// turn begins moments after the call, and the entry says so before that.
-    pub fn codex_child(
+    pub fn agent_child(
         &mut self,
         thread: &str,
         call: &str,
@@ -786,7 +786,7 @@ impl Board {
 
     /// An agent thread began a turn, or ended the one it ran. A thread that
     /// ended goes on after a message to it: the entry runs again, as new.
-    pub fn codex_child_state(&mut self, thread: &str, state: BackgroundState, now: i64) -> bool {
+    pub fn agent_child_state(&mut self, thread: &str, state: BackgroundState, now: i64) -> bool {
         let Some(at) = self.commands.iter().position(|row| row.thread_id.as_deref() == Some(thread)) else {
             return false;
         };
@@ -806,7 +806,7 @@ impl Board {
 
     /// An agent thread's token reading: what its newest response held, over
     /// its model's window. A reading that names no window keeps the last one.
-    pub fn codex_child_usage(&mut self, thread: &str, tokens: u64, window: Option<u64>) -> bool {
+    pub fn agent_child_usage(&mut self, thread: &str, tokens: u64, window: Option<u64>) -> bool {
         let Some(row) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) else {
             return false;
         };
@@ -817,7 +817,7 @@ impl Board {
     }
 
     /// What an agent thread is on now: the call it last started.
-    pub fn codex_child_activity(&mut self, thread: &str, activity: &str) -> bool {
+    pub fn agent_child_activity(&mut self, thread: &str, activity: &str) -> bool {
         let Some(row) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) else {
             return false;
         };
@@ -1479,8 +1479,8 @@ mod tests {
     #[test]
     fn a_codex_agent_thread_is_a_row_its_turns_start_and_end_and_no_terminal_listing_settles() {
         let mut board = Board::default();
-        assert!(board.codex_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 5));
-        assert!(!board.codex_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 6), "named twice");
+        assert!(board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 5));
+        assert!(!board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 6), "named twice");
         let row = board.command("t2").unwrap();
         assert_eq!((row.kind, row.state, row.started_at), (BackgroundKind::Subagent, BackgroundState::Running, 5));
         assert_eq!((row.thread_id.as_deref(), row.tool_call_id.as_deref(), row.stoppable), (Some("t2"), Some("call-1"), Some(true)));
@@ -1488,23 +1488,23 @@ mod tests {
         assert!(!board.codex_listed(&[], 7));
         assert_eq!(board.command("t2").unwrap().state, BackgroundState::Running);
 
-        assert!(board.codex_child_usage("t2", 4000, Some(100_000)));
-        assert!(board.codex_child_usage("t2", 6000, None));
+        assert!(board.agent_child_usage("t2", 4000, Some(100_000)));
+        assert!(board.agent_child_usage("t2", 6000, None));
         let row = board.command("t2").unwrap();
         assert_eq!((row.tokens, row.window), (Some(6000), Some(100_000)), "a reading with no window keeps the last");
-        assert!(board.codex_child_activity("t2", "echo one"));
+        assert!(board.agent_child_activity("t2", "echo one"));
 
-        assert!(board.codex_child_state("t2", BackgroundState::Completed, 9));
+        assert!(board.agent_child_state("t2", BackgroundState::Completed, 9));
         let row = board.command("t2").unwrap();
         assert_eq!((row.state, row.ended_at, row.activity.as_deref()), (BackgroundState::Completed, Some(9), None));
         // A message to the agent starts another turn: it runs again, as new.
-        assert!(board.codex_child_state("t2", BackgroundState::Running, 10));
+        assert!(board.agent_child_state("t2", BackgroundState::Running, 10));
         let row = board.command("t2").unwrap();
         assert_eq!((row.state, row.ended_at), (BackgroundState::Running, None));
-        assert!(board.codex_child_state("t2", BackgroundState::Stopped, 12));
-        assert!(!board.codex_child_state("t2", BackgroundState::Completed, 13), "a stop is how it ended");
+        assert!(board.agent_child_state("t2", BackgroundState::Stopped, 12));
+        assert!(!board.agent_child_state("t2", BackgroundState::Completed, 13), "a stop is how it ended");
         assert_eq!(board.command("t2").unwrap().state, BackgroundState::Stopped);
-        assert!(!board.codex_child_state("t3", BackgroundState::Running, 14), "no such agent");
+        assert!(!board.agent_child_state("t3", BackgroundState::Running, 14), "no such agent");
     }
 
     #[test]

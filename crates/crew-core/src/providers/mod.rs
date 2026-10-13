@@ -529,6 +529,14 @@ pub fn subagent_report(text: &str) -> String {
         let end = body.find("</task_result>").unwrap_or(body.len());
         return body[..end].trim().to_string();
     }
+    // opencode 2.x: `<subagent sessionID="…" state="completed">\nreport\n</subagent>`.
+    if let Some(open) = text.find("<subagent ") {
+        if let Some(close) = text[open..].find('>') {
+            let body = &text[open + close + 1..];
+            let end = body.find("</subagent>").unwrap_or(body.len());
+            return body[..end].trim().to_string();
+        }
+    }
     let Some(start) = text.find("[Subagent hand-back]") else {
         return text.to_string();
     };

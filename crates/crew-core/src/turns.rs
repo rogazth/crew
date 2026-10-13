@@ -1731,7 +1731,8 @@ impl TurnHost {
     /// Stop one entry of the board, through the provider that runs it: Claude's
     /// `stop_task` (a shell, a monitor, a subagent, the one the turn waits on
     /// too), Codex's `turn/interrupt` on an agent thread, Codex's
-    /// `thread/backgroundTerminals/terminate` on a terminal. Only while its
+    /// `thread/backgroundTerminals/terminate` on a terminal, opencode's
+    /// interrupt on a child session. Only while its
     /// CLI is up, and not an entry that says it cannot be stopped alone.
     pub fn background_stop(&self, session_id: &str, id: &str) -> Result<(), String> {
         let known = self.background.read(session_id, |board| {
@@ -1760,6 +1761,7 @@ impl TurnHost {
         let kind = match self.lock().get(session_id) {
             Some(Live::Claude(_)) => "claude",
             Some(Live::Codex(_)) => "codex",
+            Some(Live::Opencode(_)) => "opencode",
             _ => "",
         };
         match kind {
@@ -1774,6 +1776,8 @@ impl TurnHost {
                     self.codex_terminate(session_id, &process)?;
                 }
             },
+            // A child session is interrupted on its own: the parent's turn goes on.
+            "opencode" => self.opencode_interrupt_child(id)?,
             _ => return Err("Its session's CLI is gone, and it went with it.".into()),
         }
         let now = crate::store::now_millis();
@@ -4980,6 +4984,108 @@ mod mailbox_tests {
             _ => None,
         }));
         assert_eq!(asked, vec!["Bash".to_string()]);
+    }
+
+    fn until(mut ready: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if ready() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("it never came to pass");
+    }
+
+    fn child_row(world: &World, session: &str) -> Option<crew_protocol::BackgroundCommand> {
+        world.host.background_list(session).commands.into_iter().next()
+    }
+
+    fn subagent_call(world: &World, session: &str) -> (String, crew_protocol::ToolDetail) {
+        blocks(world, session)
+            .into_iter()
+            .find_map(|block| block.tool.filter(|tool| tool.name == "subagent"))
+            .map(|tool| (tool.call_id, tool.detail.expect("detail")))
+            .expect("the subagent call")
+    }
+
+    /// A child session a task call started has an entry of its own, linked to
+    /// the call, with its model, tokens and state; its steps and answer are
+    /// the call's, and the parent's message is what the parent wrote.
+    #[test]
+    fn an_opencode_child_session_is_an_entry_and_the_steps_of_its_call() {
+        use crew_protocol::{BackgroundKind, BackgroundState, BlockRole, SubagentState, ToolDetail};
+        let world = world();
+        let ws = workspace(&world);
+        let coder = bot(&world, &ws, "Coder");
+        turn(&world, &coder, "SUBAGENT");
+        let (call, detail) = subagent_call(&world, &coder.id);
+        let row = child_row(&world, &coder.id).expect("an entry");
+        assert_eq!((row.kind, row.state), (BackgroundKind::Subagent, BackgroundState::Completed));
+        assert_eq!(row.tool_call_id.as_deref(), Some(call.as_str()));
+        assert_eq!(row.thread_id.as_deref(), Some(row.id.as_str()));
+        assert_eq!(row.model.as_deref(), Some("opencode/nemotron-3.5-lightning-free"));
+        assert_eq!(row.description.as_deref(), Some("Reply with pong"));
+        assert_eq!(row.tokens, Some(3000 + 10 + 2 + 1000));
+        assert_eq!((row.stoppable, row.activity), (Some(true), None));
+        assert_eq!(world.host.background_list(&coder.id).commands.len(), 1);
+        let ToolDetail::Agent { state, output, steps, .. } = detail else {
+            panic!("not an agent row");
+        };
+        assert_eq!((state, output.as_deref()), (Some(SubagentState::Done), Some("pong")));
+        let steps = steps.expect("steps");
+        let rows: Vec<(BlockRole, String)> = steps.iter().map(|step| (step.role.clone(), step.text.clone())).collect();
+        assert_eq!(rows, [(BlockRole::Tool, "echo child".to_string()), (BlockRole::Assistant, "pong".to_string())]);
+        let said: Vec<String> = blocks(&world, &coder.id)
+            .into_iter()
+            .filter(|block| block.role == BlockRole::Assistant)
+            .map(|block| block.text)
+            .collect();
+        assert_eq!(said, ["report: SUBAGENT"], "the child's words are not the parent's answer");
+    }
+
+    /// Stop on the entry interrupts the child's own session; the parent's turn
+    /// is not interrupted and ends when it says so.
+    #[test]
+    fn stopping_an_opencode_child_interrupts_its_session_and_not_the_parent() {
+        use crew_protocol::{BackgroundState, SubagentState, ToolDetail};
+        let world = world();
+        let ws = workspace(&world);
+        let coder = bot(&world, &ws, "Coder");
+        world
+            .host
+            .start(TurnStart {
+                session_id: coder.id.clone(),
+                cwd: world.dir.to_string_lossy().into_owned(),
+                text: "SUBAGENT SLOW".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+                letter_id: None,
+                mode: None,
+                command: None,
+                skills: None,
+            })
+            .expect("start");
+        until(|| child_row(&world, &coder.id).is_some_and(|row| row.tokens.is_some()));
+        let row = child_row(&world, &coder.id).expect("entry");
+        assert_eq!(row.state, BackgroundState::Running);
+        assert!(world.host.is_running(&coder.id));
+        world.host.background_stop(&coder.id, &row.id).expect("stop");
+        settle(&world, &coder.id);
+        let row = child_row(&world, &coder.id).expect("entry");
+        assert_eq!(row.state, BackgroundState::Stopped);
+        let (_, detail) = subagent_call(&world, &coder.id);
+        let ToolDetail::Agent { state, .. } = detail else {
+            panic!("not an agent row");
+        };
+        assert_eq!(state, Some(SubagentState::Stopped));
+        let log = std::fs::read_to_string(world.dir.join(std::fs::read_dir(&world.dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| n.ends_with(".log") && n.starts_with("fake-opencode")).expect("log"))).expect("read log");
+        let interrupts: Vec<&str> = log.lines().filter(|line| line.contains("/interrupt")).collect();
+        assert_eq!(interrupts.len(), 1, "only the child was interrupted: {interrupts:?}");
+        assert!(interrupts[0].contains(&row.id));
     }
 }
 

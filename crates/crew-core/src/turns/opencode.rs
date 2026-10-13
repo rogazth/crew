@@ -28,12 +28,13 @@ use std::thread;
 use std::time::Duration;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, AttachedFile, BotRef, ContextReading, HarnessEvent, ToolStatus, TurnStart,
-    TurnUsage,
+    ApprovalDecision, ApprovalResolution, AttachedFile, BackgroundState, BotRef, ContextReading, HarnessEvent,
+    SubagentState, ToolStatus, TurnStart, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
+use super::codex::{subagent_updated, ChildBoard, ChildWork};
 use super::opencode_server::Conn;
 use super::{
     carries_conversation, conversation_to_resume, driven, keeps_process, path_list, typed_by_user, Answers, Harness,
@@ -100,6 +101,33 @@ pub(super) struct OpencodeLive {
     approvals: HashMap<u64, Pending<ApprovalResolution>>,
     questions: HashMap<u64, Pending<QuestionReply>>,
     next_ui: u64,
+    /// The child sessions the model's task calls started, by opencode's id:
+    /// they outlive the turn that started them, and what they say is their
+    /// call's, never the turn's.
+    children: HashMap<String, Child>,
+}
+
+/// How many events of a child are kept until its call names it.
+const HELD_LIMIT: usize = 200;
+
+/// A child session a `task`/`subagent` call started: opencode runs it on the
+/// same server, its events carry its own session id.
+#[derive(Default)]
+struct Child {
+    /// The parent's call that started it, once a `session.tool.progress`
+    /// (or the call's end) names the child. Until then its events wait.
+    call: Option<String>,
+    /// `provider/id` of its model, and that model's window.
+    model: Option<String>,
+    window: Option<u64>,
+    held: Vec<(String, Value)>,
+    /// Its calls, by id: the tool and input an end names only by the call.
+    calls: HashMap<String, (String, Map<String, Value>)>,
+    /// The text being written (`message/ordinal`), and what it says so far.
+    text: Option<String>,
+    current: String,
+    /// The last thing it said whole: what the call answers with.
+    report: Option<String>,
 }
 
 impl OpencodeLive {
@@ -126,6 +154,7 @@ impl OpencodeLive {
             approvals: HashMap::new(),
             questions: HashMap::new(),
             next_ui: 1,
+            children: HashMap::new(),
         }
     }
 
@@ -151,6 +180,11 @@ impl OpencodeLive {
     /// A turn opencode started by itself, that a turn of Crew's is to take over.
     pub(super) fn unclaimed(&self) -> bool {
         self.active && self.self_started && self.turn_tx.is_none() && !self.settled
+    }
+
+    /// The server is gone, and the child sessions with it.
+    pub(super) fn forget_children(&mut self) {
+        self.children.clear();
     }
 
     /// Every card waiting on it closes: the turn or the server is gone.
@@ -263,6 +297,10 @@ impl TurnHost {
         if let Some(Live::Opencode(live)) = self.lock().get_mut(id) {
             live.window = window;
         }
+        // Its children are listed and stopped while the server is up; a board
+        // already live keeps what runs on it (the server outlives a turn).
+        let now = crate::store::now_millis();
+        self.background.touch(id, |board| !board.is_live() && board.launch(now));
         if self.stop_requested(id) {
             return Err("cancelled".into());
         }
@@ -546,6 +584,16 @@ impl TurnHost {
         true
     }
 
+    /// Stop one child session a task call started, without the parent's turn:
+    /// opencode's interrupt on the child's own session (`resume=false`, so
+    /// what waits in its inbox is not run). The child says it ended, and the
+    /// call's state follows from that.
+    pub(super) fn opencode_interrupt_child(&self, child: &str) -> Result<(), String> {
+        let conn = self.opencode.conn().ok_or("opencode is not running.")?;
+        ok(conn.client().post_json(&format!("/api/session/{child}/interrupt?resume=false"), &json!({})), "stop the subagent")?;
+        Ok(())
+    }
+
     /// Write a message into the running turn: opencode reads it at the turn's
     /// next step. Refused when no turn runs to take it, so the caller queues
     /// it instead.
@@ -688,7 +736,7 @@ impl TurnHost {
             return;
         };
         let Some(id) = self.opencode.route(oc) else {
-            return;
+            return self.opencode_child_event(kind, oc, data);
         };
         match kind {
             "permission.asked" => return self.opencode_ask(&id, oc, data),
@@ -715,6 +763,7 @@ impl TurnHost {
         let mut outcome = None;
         let mut used = None;
         let mut stale = false;
+        let mut work = ChildWork::default();
         {
             let mut map = self.lock();
             let Some(Live::Opencode(live)) = map.get_mut(&id) else {
@@ -805,10 +854,21 @@ impl TurnHost {
                         detail: tool_detail(name, &input, &ToolEnd::default()),
                     });
                 }
+                "session.tool.progress" => {
+                    // A task call names the child session it runs in.
+                    if let (Some(call), Some(child)) =
+                        (data.get("id").and_then(Value::as_str), data.pointer("/metadata/sessionID").and_then(Value::as_str))
+                    {
+                        link_child(live, None, call, child, &mut work);
+                    }
+                }
                 "session.tool.success" | "session.tool.failed" => {
                     let Some(call) = data.get("id").and_then(Value::as_str) else {
                         return;
                     };
+                    if let Some(child) = data.pointer("/metadata/sessionID").and_then(Value::as_str) {
+                        link_child(live, None, call, child, &mut work);
+                    }
                     let (name, input) = live.calls.get(call).cloned().unwrap_or_else(|| ("tool".into(), Map::new()));
                     let failed = kind == "session.tool.failed";
                     let end = ToolEnd {
@@ -873,6 +933,7 @@ impl TurnHost {
         for event in events {
             self.transcripts.apply(&id, event);
         }
+        self.codex_children_apply(&id, work);
         if let Some((used, window)) = used {
             self.publish_context(&id, |_| Some(ContextReading { used, window, auto_compact_at: None, stale: None }));
         }
@@ -882,6 +943,66 @@ impl TurnHost {
         if let Some(outcome) = outcome {
             self.signal(&id, outcome);
         }
+    }
+
+    /// An event of a session the server did not bind to Crew: a child session
+    /// a task call started (its `session.created` carries `parentID`), or
+    /// nothing of ours. A child's events are its call's: its steps, its
+    /// state and its tokens go to the call and to the background board, and
+    /// never to the parent's message, usage or turn end. Its asks are the
+    /// owner's cards, answered on the child session.
+    fn opencode_child_event(&self, kind: &str, oc: &str, data: &Value) {
+        if kind == "session.created" {
+            let Some(parent) = data.get("parentID").and_then(Value::as_str) else {
+                return;
+            };
+            let model = data.get("model").and_then(|model| {
+                Some(format!("{}/{}", model.get("providerID")?.as_str()?, model.get("id")?.as_str()?))
+            });
+            let window = model.as_deref().and_then(|model| self.opencode.window(model));
+            let owner = self.opencode.route(parent);
+            let mut map = self.lock();
+            let owner = owner.or_else(|| {
+                map.iter().find_map(|(id, live)| match live {
+                    Live::Opencode(live) if live.children.contains_key(parent) => Some(id.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(Live::Opencode(live)) = owner.and_then(|id| map.get_mut(&id)) {
+                let window = window.or(live.window);
+                live.children.entry(oc.to_string()).or_insert_with(|| Child { model, window, ..Child::default() });
+            }
+            return;
+        }
+        let owner = self.lock().iter().find_map(|(id, live)| match live {
+            Live::Opencode(live) if live.children.contains_key(oc) => Some(id.clone()),
+            _ => None,
+        });
+        let Some(id) = owner else {
+            return;
+        };
+        match kind {
+            "permission.asked" => return self.opencode_ask(&id, oc, data),
+            "permission.replied" => {
+                let request = data.get("requestID").and_then(Value::as_str).unwrap_or_default();
+                return self.opencode_settled_ask(&id, request);
+            }
+            "form.created" => return self.opencode_form(&id, oc, data.get("form").unwrap_or(&Value::Null)),
+            "form.replied" | "form.cancelled" => {
+                let form = data.get("id").and_then(Value::as_str).unwrap_or_default();
+                return self.opencode_settled_ask(&id, form);
+            }
+            _ => {}
+        }
+        let mut work = ChildWork::default();
+        {
+            let mut map = self.lock();
+            let Some(Live::Opencode(live)) = map.get_mut(&id) else {
+                return;
+            };
+            child_note(live, oc, kind, data, &mut work);
+        }
+        self.codex_children_apply(&id, work);
     }
 
     /// A turn opencode started by itself on a session that keeps its
@@ -1242,6 +1363,195 @@ impl TurnHost {
     }
 }
 
+/// A task call names the child session it runs in: the call gets the child's
+/// entry on the board, and what the child said before it was named. `from`
+/// is the child that made the call, when it was not the turn's own: an
+/// agent's own agents are steps of the call that started the first.
+fn link_child(live: &mut OpencodeLive, from: Option<&str>, call: &str, child: &str, work: &mut ChildWork) {
+    let (named, top) = match from {
+        None => (live.calls.get(call).cloned(), Some(call.to_string())),
+        Some(from) => match live.children.get(from) {
+            Some(parent) => (parent.calls.get(call).cloned(), parent.call.clone()),
+            None => return,
+        },
+    };
+    let (Some(top), Some(entry)) = (top, live.children.get_mut(child)) else {
+        return;
+    };
+    if entry.call.is_some() {
+        return;
+    }
+    entry.call = Some(top.clone());
+    let (name, input) = named.unwrap_or_else(|| ("subagent".into(), Map::new()));
+    work.board.push(ChildBoard::Spawned {
+        thread: child.to_string(),
+        call: top,
+        label: tool_label(&name, &input),
+        nickname: input.get("description").and_then(Value::as_str).map(str::to_string),
+        model: entry.model.clone(),
+    });
+    let held = std::mem::take(&mut entry.held);
+    for (kind, data) in held {
+        child_note(live, child, &kind, &data, work);
+    }
+}
+
+/// What the child has said whole so far, as the call's answer.
+fn settle_text(child: &mut Child, steps: &mut Vec<HarnessEvent>) {
+    if child.text.take().is_some() {
+        steps.push(HarnessEvent::MessageCompleted {});
+        let said = std::mem::take(&mut child.current);
+        if !said.trim().is_empty() {
+            child.report = Some(said);
+        }
+    }
+}
+
+/// What a child's event adds to its call: steps, its state, its tokens.
+/// Until a call names the child there is no call to add it to, and the event
+/// is kept for then.
+fn child_note(live: &mut OpencodeLive, oc: &str, kind: &str, data: &Value, work: &mut ChildWork) {
+    // What is shown or counted; the rest is neither.
+    if !matches!(
+        kind,
+        "session.execution.started"
+            | "session.execution.succeeded"
+            | "session.execution.failed"
+            | "session.execution.interrupted"
+            | "session.text.delta"
+            | "session.text.ended"
+            | "session.tool.input.started"
+            | "session.tool.called"
+            | "session.tool.progress"
+            | "session.tool.success"
+            | "session.tool.failed"
+            | "session.step.ended"
+    ) {
+        return;
+    }
+    let Some(child) = live.children.get_mut(oc) else {
+        return;
+    };
+    let Some(call) = child.call.clone() else {
+        if child.held.len() >= HELD_LIMIT {
+            child.held.remove(0);
+        }
+        child.held.push((kind.to_string(), data.clone()));
+        return;
+    };
+    let mut steps = Vec::new();
+    let mut after = Vec::new();
+    let mut spawned = None;
+    match kind {
+        "session.execution.started" => {
+            work.board.push(ChildBoard::State(oc.to_string(), BackgroundState::Running));
+            after.push(subagent_updated(&call, Some(SubagentState::Running), None, None));
+        }
+        "session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted" => {
+            settle_text(child, &mut steps);
+            let report = child.report.take();
+            let (shown, state, report) = match kind {
+                "session.execution.succeeded" => (SubagentState::Done, BackgroundState::Completed, report),
+                "session.execution.interrupted" => (SubagentState::Stopped, BackgroundState::Stopped, report),
+                _ => (SubagentState::Failed, BackgroundState::Failed, report.or(Some(error_message(data)))),
+            };
+            work.board.push(ChildBoard::State(oc.to_string(), state));
+            after.push(subagent_updated(&call, Some(shown), None, report));
+        }
+        "session.text.delta" => {
+            let key = format!(
+                "{}/{}",
+                data.get("assistantMessageID").and_then(Value::as_str).unwrap_or_default(),
+                data.get("ordinal").and_then(Value::as_u64).unwrap_or(0)
+            );
+            if child.text.as_deref() != Some(key.as_str()) {
+                settle_text(child, &mut steps);
+                child.current.clear();
+                child.text = Some(key);
+            }
+            if let Some(delta) = data.get("delta").and_then(Value::as_str).filter(|delta| !delta.is_empty()) {
+                child.current.push_str(delta);
+                steps.push(HarnessEvent::MessageDelta { text: delta.to_string() });
+            }
+        }
+        "session.text.ended" => settle_text(child, &mut steps),
+        "session.tool.input.started" => {
+            let (Some(id), Some(name)) = (data.get("id").and_then(Value::as_str), data.get("name").and_then(Value::as_str))
+            else {
+                return;
+            };
+            settle_text(child, &mut steps);
+            child.calls.insert(id.to_string(), (name.to_string(), Map::new()));
+            let title = tool_label(name, &Map::new());
+            work.board.push(ChildBoard::Activity(oc.to_string(), title.clone()));
+            after.push(subagent_updated(&call, None, Some(title.clone()), None));
+            steps.push(HarnessEvent::ToolStarted { call_id: id.to_string(), name: name.to_string(), title, detail: None });
+        }
+        "session.tool.called" => {
+            let Some(id) = data.get("id").and_then(Value::as_str) else {
+                return;
+            };
+            let input = data.get("input").and_then(Value::as_object).cloned().unwrap_or_default();
+            let Some((name, known)) = child.calls.get_mut(id) else {
+                return;
+            };
+            *known = input.clone();
+            let title = tool_label(name, &input);
+            work.board.push(ChildBoard::Activity(oc.to_string(), title.clone()));
+            after.push(subagent_updated(&call, None, Some(title.clone()), None));
+            steps.push(HarnessEvent::ToolUpdated {
+                call_id: id.to_string(),
+                title: Some(title),
+                status: None,
+                detail: tool_detail(name, &input, &ToolEnd::default()),
+            });
+        }
+        "session.tool.progress" => {
+            if let (Some(id), Some(sub)) =
+                (data.get("id").and_then(Value::as_str), data.pointer("/metadata/sessionID").and_then(Value::as_str))
+            {
+                spawned = Some((id.to_string(), sub.to_string()));
+            }
+        }
+        "session.tool.success" | "session.tool.failed" => {
+            let Some(id) = data.get("id").and_then(Value::as_str) else {
+                return;
+            };
+            let (name, input) = child.calls.get(id).cloned().unwrap_or_else(|| ("tool".into(), Map::new()));
+            let failed = kind == "session.tool.failed";
+            let end = ToolEnd {
+                status: Some(if failed { "error" } else { "completed" }),
+                output: tool_output(data),
+                error: failed.then(|| error_message(data)),
+                metadata: data.get("metadata").and_then(Value::as_object),
+            };
+            let aborted = data.pointer("/error/type").and_then(Value::as_str) == Some("aborted");
+            steps.push(HarnessEvent::ToolUpdated {
+                call_id: id.to_string(),
+                title: None,
+                status: Some(if aborted { ToolStatus::Interrupted } else { tool_status(&name, &end) }),
+                detail: tool_detail(&name, &input, &end),
+            });
+            if let Some(sub) = data.pointer("/metadata/sessionID").and_then(Value::as_str) {
+                spawned = Some((id.to_string(), sub.to_string()));
+            }
+        }
+        "session.step.ended" => {
+            if let Some(tokens) = context_used(data) {
+                work.board.push(ChildBoard::Usage { thread: oc.to_string(), tokens, window: child.window });
+            }
+        }
+        _ => {}
+    }
+    for step in steps {
+        work.events.push(HarnessEvent::SubagentEvent { call_id: call.clone(), event: Box::new(step) });
+    }
+    work.events.extend(after);
+    if let Some((id, sub)) = spawned {
+        link_child(live, Some(oc), &id, &sub, work);
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn fake_opencode_server(dir: &std::path::Path) -> (String, std::path::PathBuf) {
     let name = format!("fake-opencode-{}", uuid::Uuid::new_v4().simple());
@@ -1386,6 +1696,51 @@ def run_turn(s, item):
             heard.append("answers: %s" % (json.dumps(got, sort_keys=True) if got != "cancelled" else "none"))
             return ""
         if tool(sid, msg, "question", {"questions": [{"question": "Which color?"}]}, question) is None:
+            return interrupted()
+    if "SUBAGENT" in last:
+        # A task call that runs a child session (2.0.26): the call, the child's
+        # `session.created` with its `parentID`, a `session.tool.progress` that
+        # names the child, the child's own execution on its own session id, and
+        # the call's answer. `SLOW` keeps the child at work until it is
+        # interrupted (its own session's interrupt) or the turn is.
+        call = hexid("call_")
+        inp = {"agent": "general", "description": "Reply with pong", "prompt": "Reply with the single word pong."}
+        emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
+        emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
+        csid = hexid("ses_")
+        cturn = {"interrupted": threading.Event(), "inbox": [], "hold": False}
+        sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": s["location"], "model": s.get("model"), "instructions": {}, "env": {}, "turns": 1, "busy": cturn, "held": []}
+        emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
+        emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
+        cmsg = hexid("msg_")
+        emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": "You are a subagent spawned by another session.\n" + inp["prompt"]}, "delivery": "steer"}})
+        emit("session.execution.started", {"sessionID": csid})
+        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+        tool(csid, cmsg, "shell", {"command": "echo child"}, lambda c: "child\n")
+        emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens(2000)})
+        cmsg = hexid("msg_")
+        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+        stopped = False
+        if "SLOW" in last:
+            while not (cturn["interrupted"].is_set() or turn["interrupted"].is_set()):
+                time.sleep(0.02)
+            stopped = True
+        if stopped:
+            emit("session.step.failed", {"sessionID": csid, "assistantMessageID": cmsg, "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": tokens(), "cost": 0})
+            emit("session.execution.interrupted", {"sessionID": csid, "reason": "user"})
+            outcome = "interrupted"
+        else:
+            emit("session.text.started", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0})
+            for piece in ("po", "ng"):
+                emit("session.text.delta", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "delta": piece})
+            emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": "pong"})
+            emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "stop", "cost": 0, "tokens": tokens(3000)})
+            emit("session.execution.succeeded", {"sessionID": csid})
+            outcome = "completed"
+        finish(sessions[csid], "interrupted" if stopped else "succeeded")
+        body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else "pong")
+        emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
+        if turn["interrupted"].is_set():
             return interrupted()
     if "MCP" in last:
         tool(sid, msg, "crew_list_peers", {}, lambda call: "[]")

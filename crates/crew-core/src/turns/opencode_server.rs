@@ -435,11 +435,18 @@ impl TurnHost {
             .filter_map(|(id, live)| match live {
                 Live::Opencode(live) => {
                     live.release_asks();
+                    live.forget_children();
                     (live.active && !live.settled && !live.cancelled).then(|| id.clone())
                 }
                 _ => None,
             })
             .collect();
+        // What ran on the server went with it.
+        let owners: Vec<String> =
+            self.lock().iter().filter(|(_, live)| matches!(live, Live::Opencode(_))).map(|(id, _)| id.clone()).collect();
+        for id in owners {
+            self.close_tray(&id);
+        }
         let message = super::exit_message("opencode", code, &[output]);
         for id in running {
             self.transcripts.apply(&id, HarnessEvent::SessionEnded { code });
