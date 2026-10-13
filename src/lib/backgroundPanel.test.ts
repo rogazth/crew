@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   botPairs,
+  conversationsOf,
   clearedKey,
   entryDetail,
   finishedKeys,
@@ -307,6 +308,24 @@ describe("botPairs", () => {
     const other = { id: "docs", name: "docs" };
 
     expect(botPairs([pair(bot, other), pair(bot, { id: "s", name: "x", kind: "session" }), pair({ id: "", name: "You", kind: "user" }, bot)])).toHaveLength(1);
+  });
+});
+
+describe("conversationsOf", () => {
+  const last = { id: "l", from: { id: "reviewer", name: "reviewer" }, to: { id: "me", name: "me", kind: "session" }, text: "Looks fine.\nOne nit.", at: 7, kind: "message" } as unknown as ThreadPair["last"];
+  const owner = { id: "me", name: "me", kind: "session" } as const;
+
+  it("lists bot pairs only, each with its other party, the last letter's first line and its thread", () => {
+    const pairs = [
+      { peer: { id: "reviewer", name: "reviewer" }, last, count: 2 },
+      { peer: { id: "s", name: "billing-ui", kind: "session" }, last, count: 1 },
+    ] as ThreadPair[];
+    const [one, ...rest] = conversationsOf(pairs, owner);
+
+    expect(rest).toEqual([]);
+    expect(one).toMatchObject({ label: "reviewer", last: "reviewer: Looks fine.", at: 7 });
+    expect(one!.thread.a.id).toBe("me");
+    expect(one!.thread.b.id).toBe("reviewer");
   });
 });
 

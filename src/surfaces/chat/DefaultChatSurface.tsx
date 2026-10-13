@@ -35,14 +35,12 @@ export function DefaultChatSurface({
   onOptions,
   optionsPending = false,
   switchProvider = false,
-  bar,
   overlay,
   inThread = false,
   readOnly = false,
 }: ChatSurfaceProps) {
   return (
     <>
-      {bar}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">

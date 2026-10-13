@@ -10,7 +10,7 @@ import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
 import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { markedCalls, turnTray } from "../lib/background";
-import { commandEntryId, type PanelEntry } from "../lib/backgroundPanel";
+import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
@@ -24,7 +24,6 @@ import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
 import type { PanelScope } from "./chat/Panel";
 import type { QueueScope } from "./chat/Queue";
-import { ChatBar } from "./chat/ChatBar";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 import { AgentView, type Crumb } from "./chat/AgentView";
 import { Thread } from "./chat/Thread";
@@ -37,8 +36,7 @@ type Props = {
   active: boolean;
   /**
    * Set when this chat is the body of an agent's thread: the sessions above it,
-   * outermost first. It has no bar of its own (the thread's header says whose
-   * it is), Esc goes back instead of stopping its turn, and what it opens in
+   * outermost first. The thread's header says whose it is, Esc goes back instead of stopping its turn, and what it opens in
    * place stacks on the thread.
    */
   trail?: readonly Crumb[];
@@ -221,9 +219,19 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     [cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
   );
 
+  const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);
   const work = useMemo<PanelScope>(
-    () => ({ entries: panel.entries, failed: panel.failed, onOpen: openEntry, onStop: panel.stop, onClear: panel.clear }),
-    [openEntry, panel.clear, panel.entries, panel.failed, panel.stop],
+    () => ({
+      entries: panel.entries,
+      failed: panel.failed,
+      onOpen: openEntry,
+      onStop: panel.stop,
+      onClear: panel.clear,
+      conversations,
+      sessions,
+      onOpenConversation: openThread,
+    }),
+    [conversations, openEntry, openThread, panel.clear, panel.entries, panel.failed, panel.stop, sessions],
   );
 
   const queue = useMemo<QueueScope>(
@@ -247,22 +255,26 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     [session],
   );
 
-  const thread = letters.thread && (
-    <Thread
-      key={`${letters.thread.a.id}|${letters.thread.b.id}|${letters.thread.focus ?? ""}`}
-      thread={letters.thread}
-      owner={letters.owner}
-      sessionId={session.id}
-      sessions={sessions}
-      active={active}
-      inChat={letters.inChat}
-      onClose={letters.closeThread}
-      onShowInChat={(letterId) => {
-        letters.closeThread();
-        showLetter(pane.current, letterId);
-      }}
-    />
-  );
+  const thread =
+    letters.thread &&
+    host &&
+    createPortal(
+      <Thread
+        key={`${letters.thread.a.id}|${letters.thread.b.id}|${letters.thread.focus ?? ""}`}
+        thread={letters.thread}
+        owner={letters.owner}
+        sessionId={session.id}
+        sessions={sessions}
+        active={active}
+        inChat={letters.inChat}
+        onClose={letters.closeThread}
+        onShowInChat={(letterId) => {
+          letters.closeThread();
+          showLetter(pane.current, letterId);
+        }}
+      />,
+      host,
+    );
   const live = panel.board?.live ?? false;
 
   // What the opened entry is made of: a board command, a Crew subagent's session.
@@ -278,7 +290,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     ],
     [trail, session.id, session.name, session.provider, session.kind],
   );
-  const threadOpen = Boolean(shown) && !letters.thread;
+  const threadOpen = Boolean(shown) || Boolean(letters.thread);
   const agentView =
     shown &&
     !letters.thread &&
@@ -353,25 +365,12 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onAnswer={reply}
               onOptions={changeOptions}
               switchProvider={fresh}
-              {...(embedded
-                ? { inThread: true }
-                : {
-                    bar: (
-                      <ChatBar
-                        session={session}
-                        sessions={sessions}
-                        kids={letters.kids}
-                        pairs={letters.pairs}
-                        onOpenSession={openSession}
-                        onOpenThread={openThread}
-                      />
-                    ),
-                  })}
+              {...(embedded ? { inThread: true } : {})}
               readOnly={readOnly}
-              overlay={thread}
             />
             </div>
             {agentView}
+            {thread}
           </BackgroundContext>
         </LetterContext>
         </ChatContext>

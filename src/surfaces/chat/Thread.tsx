@@ -1,6 +1,7 @@
-import { ArrowLeftRightIcon, CornerUpLeftIcon, MessagesSquareIcon } from "lucide-react";
+import { ArrowLeftRightIcon, ChevronLeftIcon, CornerUpLeftIcon, MessagesSquareIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Kbd } from "../../chrome/Kbd";
+import { Button } from "../../chrome/kit";
 import * as api from "../../lib/api";
 import { client } from "../../lib/client";
 import { mergeLetters, partyOf, rightSide, senderId, USER, type Party, type ThreadRef } from "../../lib/letters";
@@ -14,8 +15,8 @@ import { AssistantMessage } from "./Message";
 const PAGE = 40;
 /** How many pages back a checkpoint's letter is looked for before the thread opens at its end. */
 const FOCUS_PAGES = 10;
-/** Where an opened letter lands: just under the floating header. */
-const FOCUS_OFFSET = 72;
+/** Where an opened letter lands: a little under the header. */
+const FOCUS_OFFSET = 24;
 const NEAR_BOTTOM_PX = 16;
 /** A burst of mailbox moves reads the newest page once. */
 const SETTLE_MS = 250;
@@ -38,11 +39,13 @@ type Props = {
 type Page = { letters: ThreadLetter[]; more: boolean; loading: boolean };
 
 /**
- * One pair's thread, over the transcript in the same reading column: exactly
- * the two of them, in the order they wrote, the same from either side. Opens
- * already placed at its letter (or its end), with a fade and no travel; "Show
- * in chat" goes back to that letter's checkpoint, Esc or Close back to where
- * the reader was.
+ * One conversation between two bots as the whole pane, under the thread
+ * view's header shape: a way back, the two of them, "Conversation · N
+ * letters", esc. Exactly the two of them, in the order they wrote, the same
+ * from either side, and no composer (a bot is written to in its own chat).
+ * Opens already placed at its letter (or its end), with a fade and no travel;
+ * "Show in chat" goes back to that letter's checkpoint, Esc or the back
+ * button to where the reader was.
  */
 export function Thread({ thread, owner, sessionId, sessions, active, inChat, onClose, onShowInChat }: Props) {
   const { a, b, focus } = thread;
@@ -89,10 +92,14 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
   useEffect(() => {
     if (!active) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      // Captured and marked used, so a thread of an agent underneath does not also go back.
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [active, onClose]);
 
   // Placed before the first paint, at the letter or at the newest: it opens there, it never travels.
@@ -133,8 +140,27 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
   const [first, second] = opener && senderId(opener) === (b.id || USER) ? [b, a] : [a, b];
   const right = rightSide(thread, owner);
 
+  const count = `${page.letters.length}${page.more ? "+" : ""} ${page.letters.length === 1 && !page.more ? "letter" : "letters"}`;
+
   return (
-    <div className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas">
+    <div className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-conversation-view>
+      <header className="mx-auto flex w-full max-w-[760px] shrink-0 flex-col gap-0.5 px-6 pt-5 pb-3" data-thread-header>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" onClick={onClose} title="Back to the chat" aria-label="Back to the chat" className="size-7 shrink-0 p-0 text-text-muted">
+            <ChevronLeftIcon className="size-3.5" />
+          </Button>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
+            <Face party={first} sessions={sessions} className="size-4" />
+            <span className="truncate text-[15px] leading-5 font-medium">{first.name}</span>
+            <ArrowLeftRightIcon aria-label="and" className="size-3.5 shrink-0 text-placeholder" />
+            <Face party={second} sessions={sessions} className="size-4" />
+            <span className="truncate text-[15px] leading-5 font-medium">{second.name}</span>
+          </span>
+          <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
+          <Kbd keys="esc" />
+        </div>
+        <div className="truncate pl-8 text-[12px] leading-4 text-text-muted">{page.loading && page.letters.length === 0 ? "Conversation" : `Conversation · ${count}`}</div>
+      </header>
       <div
         ref={scroller}
         data-selectable="blocks"
@@ -144,16 +170,7 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        <div className="pointer-events-none sticky top-0 z-10 flex justify-center bg-linear-to-b from-canvas via-canvas/90 to-transparent px-6 pt-3 pb-6">
-          <div className="pointer-events-auto flex h-10 max-w-full items-center gap-2 rounded-full bg-surface px-3.5 text-[13px] font-medium shadow-float">
-            <Face party={first} sessions={sessions} className="size-5" />
-            <span className="truncate">{first.name}</span>
-            <ArrowLeftRightIcon aria-label="and" className="size-3.5 shrink-0 text-placeholder" />
-            <Face party={second} sessions={sessions} className="size-5" />
-            <span className="truncate">{second.name}</span>
-          </div>
-        </div>
-        <div className="crew-prose mx-auto flex w-full max-w-[760px] flex-col gap-5 px-6 pb-28">
+        <div className="crew-prose mx-auto flex w-full max-w-[760px] flex-col gap-5 px-6 pt-4 pb-10">
           {page.more && (
             <div className="flex justify-center">
               <button
@@ -186,16 +203,6 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
             ))
           )}
         </div>
-      </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-linear-to-t from-canvas via-canvas/90 to-transparent pt-10 pb-4">
-        <button
-          type="button"
-          onClick={onClose}
-          className="pointer-events-auto flex h-9 items-center gap-2 rounded-full bg-surface pr-2.5 pl-4 text-[13px] shadow-float transition-colors hover:bg-hover"
-        >
-          Close
-          <Kbd keys="esc" />
-        </button>
       </div>
     </div>
   );

@@ -431,10 +431,10 @@ report, light and dark.
 | # | Decision | Status |
 |---|---|---|
 | 1–4 | One work model | done (step 2): model, summary and `botPairs` in `backgroundPanel.ts`; sheet icons and labels only |
-| 5–9 | The status line is the one place | to do (step 4) |
+| 5–9 | The status line is the one place | done (step 4): `ChatBar` and the `bar` prop gone; the work segment carries attention, running work and `N conversations`; Paused is a warning segment; the sheet is titled "Work" with a Conversations group (bot pairs) |
 | 10–16 | The thread, in place | done (step 3): `AgentView.tsx` replaces `EntryView`; stacked threads via `trail`; the sheet closes when it opens an entry, so it is not restored; `focus` scrolls to the letter without lighting it yet (step 6) |
 | 17 | No tab for a subagent | done (step 8): `routeAgent` (`agentRoute.ts`) sends an owned child to its top owner; `openSession` opens that tab and queues a request `TurnChat` takes to open the thread; a restored child tab becomes its parent's (`childTabToParent`); a launched session keeps its tab |
-| 18 | Conversations only between bots | to do (step 4) |
+| 18 | Conversations only between bots | done (step 4): the sheet group opens `Thread.tsx` in place under the thread header shape, no composer; a letter checkpoint to a non-bot pair still opens it until step 6 |
 | 19–21 | Subagents, reports, sessions started | protocol done (step 1); rows to do (step 5) |
 | 22–24 | Messages and control rows | protocol done (step 1); rows to do (step 6) |
 | 25 | Answer a child from the parent | `letterKind` done (step 1); card to do (step 7) |

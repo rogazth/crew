@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import type { Block } from "../lib/blocks";
 import { client } from "../lib/client";
-import { childrenOf, isLetter, letterIdOf, sessionParty, type ThreadRef } from "../lib/letters";
+import { isLetter, letterIdOf, sessionParty, type ThreadRef } from "../lib/letters";
 import type { MailboxChanged, ThreadLetter, ThreadPair } from "../lib/protocol";
 import type { Session } from "../lib/types";
 import type { LetterScope } from "../surfaces/chat/context";
@@ -55,7 +55,7 @@ const NO_PAIRS: ThreadPair[] = [];
 const NO_LETTERS: ThreadLetter[] = [];
 
 /**
- * The pairs a chat's Conversations menu lists, newest first. A letter this
+ * The pairs a chat's Conversations group is made from, newest first. A letter this
  * session sends lands in someone else's box, so any box moving is a reason to
  * read again; `letters` (how many the transcript marks) is another.
  */
@@ -75,13 +75,12 @@ export function usePending(sessionId: string, enabled: boolean): ThreadLetter[] 
 }
 
 /**
- * What a chat needs to draw its letters: its children for the Sessions strip,
- * its pairs for the Conversations menu, the scope its checkpoints read, and
+ * What a chat needs to draw its letters: its pairs for the status line's
+ * conversations, the scope its checkpoints read, and
  * the thread open over it, if any.
  */
 export function useChatLetters(session: Session, sessions: readonly Session[], blocks: readonly Block[]) {
   const [thread, setThread] = useState<{ id: string; ref: ThreadRef } | null>(null);
-  const kids = useMemo(() => childrenOf(sessions).get(session.id) ?? NO_KIDS, [session.id, sessions]);
   const inChat = useMemo(
     () => new Set(blocks.flatMap((block) => (isLetter(block) ? [letterIdOf(block)!] : []))),
     [blocks],
@@ -94,7 +93,6 @@ export function useChatLetters(session: Session, sessions: readonly Session[], b
   const closeThread = useCallback(() => setThread(null), []);
   const scope = useMemo<LetterScope>(() => ({ owner, sessions, openThread }), [owner, sessions, openThread]);
   return {
-    kids,
     pairs,
     owner,
     scope,
@@ -105,8 +103,6 @@ export function useChatLetters(session: Session, sessions: readonly Session[], b
     closeThread,
   };
 }
-
-const NO_KIDS: Session[] = [];
 
 /**
  * Back in the transcript, at a letter's checkpoint. The thread closes first;

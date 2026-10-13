@@ -50,8 +50,6 @@ export type ChatSurfaceProps = {
   inThread?: boolean;
   /** No composer: the thread says why in its own footer. */
   readOnly?: boolean;
-  /** Over the chat: its sessions, whose it is, its conversations. */
-  bar?: ReactNode;
   /** Drawn over the transcript and the composer: a pair's thread, a background entry. */
   overlay?: ReactNode;
 };

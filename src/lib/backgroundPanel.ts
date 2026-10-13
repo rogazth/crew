@@ -8,7 +8,8 @@
  */
 import { isRunning } from "./background";
 import { tokenCount } from "./contextMeter";
-import { childState, isOwnedChild, type ChildState } from "./letters";
+import { summarize } from "./activity";
+import { childState, isOwnedChild, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
 import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, BotRef, Process, ProcessRun, ThreadPair } from "./protocol";
 import { duration } from "./time";
 import type { Session } from "./types";
@@ -257,6 +258,33 @@ export function panelSummary(entries: readonly PanelEntry[]): PanelSummary {
 export function botPairs(pairs: readonly ThreadPair[]): ThreadPair[] {
   const isBot = (ref: BotRef | undefined) => ref !== undefined && ref.kind === undefined;
   return pairs.filter((pair) => isBot(pair.peer) && (pair.with === undefined || isBot(pair.with)));
+}
+
+/** One row of the sheet's Conversations group: a pair of bots, the last letter's first line, and what opens it. */
+export type ConversationEntry = {
+  key: string;
+  /** The other party: its face leads the row. */
+  party: Party;
+  label: string;
+  /** "reviewer: first line of the last letter". */
+  last: string;
+  at: number;
+  thread: ThreadRef;
+};
+
+/** The Conversations group for a chat: bot pairs only, as the daemon sorted them (newest first). */
+export function conversationsOf(pairs: readonly ThreadPair[], owner: Party): ConversationEntry[] {
+  return botPairs(pairs).map((pair) => {
+    const thread = pairThread(pair, owner);
+    return {
+      key: `${pair.peer.id}:${pair.with?.id ?? ""}`,
+      party: thread.peer,
+      label: thread.label,
+      last: `${partyOf(pair.last.from).name}: ${summarize(pair.last.text)}`,
+      at: pair.last.at,
+      thread: { a: thread.a, b: thread.b },
+    };
+  });
 }
 
 /** What each kind is called in a row's second line and an opened entry's header. */

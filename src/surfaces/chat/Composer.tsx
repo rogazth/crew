@@ -35,7 +35,7 @@ import { crewAction } from "../../lib/turnRuntime";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
 import { McpSegment } from "./Mcp";
-import { WorkSegment, type PanelScope } from "./Panel";
+import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
@@ -413,6 +413,7 @@ export function Composer({
         {queue && queue.items.some((message) => !message.steering) && (
           <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />
         )}
+        {session.paused && <PausedSegment />}
         {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <span className="flex-1" />
         <span className="truncate text-placeholder">

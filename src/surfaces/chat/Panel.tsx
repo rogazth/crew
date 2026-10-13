@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { BotIcon, MessagesSquareIcon, ServerIcon, SquareIcon, TerminalIcon } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { BotIcon, MessagesSquareIcon, PauseIcon, ServerIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
-import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
+import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
+import type { ThreadRef } from "../../lib/letters";
+import { clock } from "../../lib/time";
+import type { Session } from "../../lib/types";
+import { Face } from "./Letters";
 
 /** A session's background work as the composer draws it, and what can be done with each entry. */
 export type PanelScope = {
@@ -12,7 +16,28 @@ export type PanelScope = {
   onOpen: (entry: PanelEntry) => void;
   onStop: (entry: PanelEntry) => void;
   onClear: () => void;
+  /** Bot pairs this chat has letters with: the sheet's second group, and the segment's count. */
+  conversations: readonly ConversationEntry[];
+  /** Whom a conversation's faces are drawn from. */
+  sessions: readonly Session[];
+  onOpenConversation: (thread: ThreadRef) => void;
 };
+
+/**
+ * Letters stopped waking this session after 20 turns in a row they started.
+ * Writing here resumes it, as before; the status line only says so.
+ */
+export function PausedSegment() {
+  return (
+    <span
+      title="Messages and reports from other sessions still arrive, but no longer start a turn. Write here to resume it."
+      className="flex h-6 items-center gap-1 px-1.5 text-warning"
+    >
+      <PauseIcon className="size-3" aria-hidden />
+      Paused after 20 automatic turns
+    </span>
+  );
+}
 
 /** Running pulses; a clean end is green, a failure red, a stop quiet. */
 export function StateDot({ state }: { state: PanelState }) {
@@ -35,8 +60,10 @@ export function EntryIcon({ entry, className }: { entry: PanelEntry; className: 
 }
 
 /**
- * The status line's running work ("2 agents · 1 shell", or "3 finished"
- * once nothing runs), and the sheet it opens over the composer. A click
+ * The status line's work segment: what waits on the user ("scout asks"),
+ * the running work ("2 agents · 1 shell", or "3 finished" once nothing runs)
+ * and the bot conversations ("2 conversations"), and the "Work" sheet they
+ * open over the composer: the entries, then the conversations. A click
  * outside the sheet closes it. While it is open the arrow keys move through
  * the entries, Enter opens one, x stops it and Esc closes the sheet; the
  * composer leaves Esc to it, so it does not also stop the turn.
@@ -53,15 +80,24 @@ export function WorkSegment({
   /** The sheet was closed with Esc: the composer takes the focus back. */
   onEscape: () => void;
 }) {
-  const { entries } = work;
+  const { entries, conversations } = work;
   const summary = useMemo(() => panelSummary(entries), [entries]);
   const running = entries.length > summary.finished;
-  const shown = open && entries.length > 0;
+  // One list for the keys: the entries, then the conversations.
+  const rows = useMemo<Row[]>(
+    () => [
+      ...entries.map((entry): Row => ({ id: entry.id, entry })),
+      ...conversations.map((conversation): Row => ({ id: `conversation:${conversation.key}`, conversation })),
+    ],
+    [entries, conversations],
+  );
+  const total = rows.length;
+  const shown = open && total > 0;
   const sheet = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   // The selection follows an entry, not a row: the list reorders as work ends.
   const [picked, setPicked] = useState<string | null>(null);
-  const at = Math.max(0, entries.findIndex((entry) => entry.id === picked));
+  const at = Math.max(0, rows.findIndex((row) => row.id === picked));
   const now = useNow(1000, shown && running);
 
   // The sheet takes the keys, so the arrows do not move the caret of a field behind it.
@@ -70,7 +106,7 @@ export function WorkSegment({
   }, [shown]);
 
   // Everything cleared while it was open: it closes, or the next entry would open it.
-  const empty = entries.length === 0;
+  const empty = total === 0;
   useEffect(() => {
     if (empty && open) onOpenChange(false);
   }, [empty, open, onOpenChange]);
@@ -97,27 +133,29 @@ export function WorkSegment({
       }
       const target = event.target as HTMLElement;
       if (target.closest("textarea, input, [contenteditable]") || event.metaKey || event.ctrlKey || event.altKey) return;
-      const entry = entries[at];
+      const row = rows[at];
+      const entry = row?.entry;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        setPicked(entries[stepCursor(at, event.key === "ArrowDown" ? 1 : -1, entries.length)]?.id ?? null);
-      } else if (event.key === "Enter" && entry && !(target instanceof HTMLButtonElement)) {
+        setPicked(rows[stepCursor(at, event.key === "ArrowDown" ? 1 : -1, rows.length)]?.id ?? null);
+      } else if (event.key === "Enter" && row && !(target instanceof HTMLButtonElement)) {
         event.preventDefault();
         onOpenChange(false);
-        work.onOpen(entry);
+        if (row.entry) work.onOpen(row.entry);
+        else work.onOpenConversation(row.conversation!.thread);
       } else if (event.key === "x" && entry?.state === "running" && entry.stoppable) {
         work.onStop(entry);
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [shown, entries, at, work, onOpenChange, onEscape]);
+  }, [shown, rows, at, work, onOpenChange, onEscape]);
 
   useEffect(() => {
     if (shown) sheet.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
   }, [shown, at]);
 
-  if (entries.length === 0) return null;
+  if (total === 0) return null;
   return (
     <>
       <button
@@ -131,8 +169,22 @@ export function WorkSegment({
         }}
         className={`flex h-6 items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-hover hover:text-text ${running ? "text-text-muted" : "text-placeholder"}`}
       >
+        {summary.attention > 0 && (
+          <span className="flex items-center gap-1 text-warning">
+            <TriangleAlertIcon className="size-3" aria-hidden />
+            {summary.attentionText}
+          </span>
+        )}
+        {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
         {running && <span className="crew-bg-dot" aria-hidden />}
         {summary.text}
+        {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
+        {conversations.length > 0 && (
+          <span className="flex items-center gap-1 text-text-muted">
+            <MessagesSquareIcon className="size-3" aria-hidden />
+            {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
+          </span>
+        )}
       </button>
       {shown && (
         <div
@@ -142,7 +194,7 @@ export function WorkSegment({
           className="absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
         >
           <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
-            Background work
+            Work
             <span className="flex-1" />
             {summary.finished > 0 && (
               <button type="button" onClick={work.onClear} className="rounded px-1.5 hover:bg-hover hover:text-text">
@@ -150,27 +202,83 @@ export function WorkSegment({
               </button>
             )}
           </div>
-          <div role="listbox" aria-label="Background work" className="flex flex-col">
-            {entries.map((entry, index) => (
-              <EntryRow
-                key={entry.id}
-                entry={entry}
-                now={now}
-                selected={index === at}
-                error={work.failed[entry.id]}
-                onSelect={() => setPicked(entry.id)}
-                onOpen={() => {
-                  onOpenChange(false);
-                  work.onOpen(entry);
-                }}
-                onStop={() => work.onStop(entry)}
-              />
-            ))}
+          <div role="listbox" aria-label="Work" className="flex flex-col">
+            {rows.map((row, index) =>
+              row.entry ? (
+                <EntryRow
+                  key={row.id}
+                  entry={row.entry}
+                  now={now}
+                  selected={index === at}
+                  error={work.failed[row.id]}
+                  onSelect={() => setPicked(row.id)}
+                  onOpen={() => {
+                    onOpenChange(false);
+                    work.onOpen(row.entry!);
+                  }}
+                  onStop={() => work.onStop(row.entry!)}
+                />
+              ) : (
+                <Fragment key={row.id}>
+                  {index === entries.length && (
+                    <div className={`px-2 pb-1 text-[11px] text-text-muted ${entries.length > 0 ? "pt-2.5" : "pt-1"}`}>Conversations</div>
+                  )}
+                  <ConversationRow
+                    conversation={row.conversation!}
+                    sessions={work.sessions}
+                    selected={index === at}
+                    onSelect={() => setPicked(row.id)}
+                    onOpen={() => {
+                      onOpenChange(false);
+                      work.onOpenConversation(row.conversation!.thread);
+                    }}
+                  />
+                </Fragment>
+              ),
+            )}
           </div>
           <div className="px-2 pt-1.5 pb-0.5 text-[10.5px] text-placeholder">↑↓ select · ↵ open · x stop · esc close</div>
         </div>
       )}
     </>
+  );
+}
+
+/** A row of the sheet's keys: an entry of the work, or a conversation. */
+type Row = { id: string; entry?: PanelEntry; conversation?: ConversationEntry };
+
+/** One conversation: the bot's face, its name, the last letter's first line and when it came. */
+function ConversationRow({
+  conversation,
+  sessions,
+  selected,
+  onSelect,
+  onOpen,
+}: {
+  conversation: ConversationEntry;
+  sessions: readonly Session[];
+  selected: boolean;
+  onSelect: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div
+      role="option"
+      aria-selected={selected}
+      data-conversation={conversation.key}
+      onMouseEnter={onSelect}
+      onClick={onOpen}
+      className={`flex w-full cursor-default items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? "bg-hover" : ""}`}
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-card">
+        <Face party={conversation.party} sessions={sessions} className="size-5" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[13px] leading-[18px]">{conversation.label}</span>
+        <span className="truncate text-[11.5px] leading-4 text-text-muted">{conversation.last}</span>
+      </span>
+      <span className="w-12 shrink-0 text-right text-[11px] text-placeholder tabular-nums">{clock(conversation.at)}</span>
+    </div>
   );
 }
 
