@@ -146,7 +146,7 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
     <div className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-conversation-view>
       <header className="mx-auto flex w-full max-w-[760px] shrink-0 flex-col gap-0.5 px-6 pt-5 pb-3" data-thread-header>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" onClick={onClose} title="Back to the chat" aria-label="Back to the chat" className="size-7 shrink-0 p-0 text-text-muted">
+          <Button variant="ghost" onClick={onClose} title="Back to the chat" aria-label="Back to the chat" className="size-7 shrink-0 p-0">
             <ChevronLeftIcon className="size-3.5" />
           </Button>
           <span className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
