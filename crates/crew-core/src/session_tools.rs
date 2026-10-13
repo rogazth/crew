@@ -2201,6 +2201,9 @@ def reader():
             blocks = [{"type": b.get("type"), "text": b.get("text")} if b.get("type") == "text" else {"type": b.get("type")} for b in rec["message"]["content"]]
             with open(INPUT, "a") as f: f.write(json.dumps(blocks) + "\n")
             put(("user", text_of(rec)))
+    # Its input closed, as when Crew (or the test) that ran it is gone: the
+    # CLI ends, where the main loop would wait on for good, an orphan.
+    os._exit(0)
 threading.Thread(target=reader, daemon=True).start()
 def background(seconds, text):
     # As written, for the command; as a number, for the wait.
