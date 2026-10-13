@@ -1,5 +1,5 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, lazy, memo, Suspense, useMemo, useState, type ReactNode } from "react";
 import { TypingDots } from "../../chrome/StatusDot";
 import {
@@ -46,7 +46,7 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
   other: WrenchIcon,
 };
 
-const DIGEST_ICON: Record<ActivityDigest["kind"], Icon> = { ...KIND_ICON, thought: SparkleIcon };
+const DIGEST_ICON: Record<ActivityDigest["kind"], Icon> = { ...KIND_ICON, thought: SparklesIcon };
 
 /** A row wears what it did, not what its phase was called. */
 const DETAIL_ICON: Record<NonNullable<ToolGlyphKind>, Icon> = {
@@ -376,7 +376,7 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
     return (
       <div data-block={block.id} className={`${ROW}${lit(block.id, marked)}`}>
         <span className="crew-node">
-          <SparkleIcon className="size-3.5" />
+          <SparklesIcon className="size-3.5" />
         </span>
         {label}
       </div>
@@ -389,7 +389,7 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
         className={`group flex min-h-6 w-full items-center gap-2 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
       >
         <span className="crew-node relative">
-          <SparkleIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
+          <SparklesIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
           <ChevronRightIcon
             className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
           />
