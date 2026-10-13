@@ -7277,11 +7277,30 @@ time.sleep(600)
 
     /// A real child of `provider` runs one turn for a bot parent, whose
     /// report wakes it; then the child goes idle and is reaped, and the
-    /// parent is not woken again for it: no letter, no turn.
+    /// parent is not woken again for it: no letter, no turn. The parent runs
+    /// on a fake CLI of another provider, so the real one never stands in
+    /// for it and every turn it takes is in a launch log.
     /// `binary`, when the one `live_child` finds is not the one to run.
     fn live_idle_exit_wakes_no_one(w: &World, provider: &str, model: &str, effort: &str, binary: Option<String>) {
-        let bot = w.session("bot", "Planner", "full");
+        let bot = if provider == "opencode" {
+            w.turns.override_binary("claude", fake_claude(&w.dir));
+            let row = session::create(
+                w.turns.store(),
+                w.workspace.clone(),
+                "bot".into(),
+                "Planner".into(),
+                "claude".into(),
+                "sonnet".into(),
+                String::new(),
+                "full".into(),
+            )
+            .expect("bot");
+            Caller::from_session(row)
+        } else {
+            w.session("bot", "Planner", "full")
+        };
         let me = bot.session_id().unwrap().to_string();
+        let turns_of_parent = || w.launches().len() + launched(&w.dir.join("claude-launch.log")).len();
         let id = w.live_child(&bot, provider, model, effort, "full");
         if let Some(binary) = binary {
             w.turns.override_binary(provider, binary);
@@ -7297,7 +7316,18 @@ time.sleep(600)
         let report = w.heard(&me, &id);
         says_one(&report.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report").text);
         w.settle(&me);
-        let woken = w.launches().len();
+        let waiting = |w: &World| -> Vec<String> {
+            crate::mailbox::waiting(w.turns.store(), &me)
+                .unwrap()
+                .into_iter()
+                .map(|l| format!("{} from {}: {}", l.kind, l.from.name, l.text))
+                .collect()
+        };
+        // A parent turn that fails before its CLI reads the report hands the
+        // letter back to the box: that is the parent's failure, not the exit's.
+        let before = waiting(w);
+        assert!(before.is_empty() && w.row(&me).status != "error", "the parent's turn on the report failed: {before:?}");
+        let woken = turns_of_parent();
         let heard = w.blocks(&me).len();
 
         std::thread::sleep(Duration::from_millis(30));
@@ -7305,10 +7335,9 @@ time.sleep(600)
         assert_eq!(w.row(&id).status, "exited");
         assert!(w.turns.test_agents().pid_of(&id).is_none(), "{provider}'s process outlived the exit");
         std::thread::sleep(Duration::from_secs(3));
-        let left: Vec<String> =
-            crate::mailbox::waiting(w.turns.store(), &me).unwrap().into_iter().map(|l| format!("{} from {}: {}", l.kind, l.from.name, l.text)).collect();
+        let left = waiting(w);
         assert!(left.is_empty(), "the exit left a letter: {left:?}");
-        assert_eq!(w.launches().len(), woken, "the exit woke the parent");
+        assert_eq!(turns_of_parent(), woken, "the exit woke the parent");
         assert_eq!(w.blocks(&me).len(), heard, "the exit reached the parent's transcript");
         let out = w.wait(&bot, &id, json!({ "timeout_s": 1 }));
         assert_eq!(out["sessions"][0]["event"], "exited", "{out}");
