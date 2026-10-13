@@ -116,6 +116,8 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
     }
   };
   for (const block of blocks) {
+    // The daemon marks a child's turn end for whoever reads it as text; the chat already shows it ended.
+    if (block.role === "system" && block.text === "Turn ended") continue;
     if (isQueued(block)) {
       flush();
       queued.push(block);

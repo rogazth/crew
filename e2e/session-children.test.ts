@@ -69,7 +69,6 @@ test("a session a session started is in the status line and the Work sheet, and 
   await row.click();
   const thread = crew.window.locator("[data-agent-view]");
   await thread.getByText("Done: tidy the imports").waitFor({ timeout: 10_000 });
-  await thread.getByText("Turn ended").waitFor({ timeout: 10_000 });
   assert.equal(await tabs.count(), before, "the tab count does not change");
   await shots(crew, "session-children");
 
