@@ -204,12 +204,39 @@ export function searchModels(providers: readonly ProviderDef[], query: string): 
     for (const model of modelsOf(provider.id)) {
       const variants = model.variants ? Object.values(model.variants).join(" ") : "";
       const fast = [model.fastId, ...(model.fastVariants ? Object.values(model.fastVariants) : [])].filter(Boolean).join(" ");
-      const hit = fuzzyMatch(query, `${provider.label} ${model.label} ${model.id} ${variants} ${fast} ${model.note ?? ""}`);
-      if (hit) scored.push({ match: { provider: provider.id, model }, score: hit.score });
+      const text = `${provider.label} ${model.label} ${model.id} ${variants} ${fast} ${model.note ?? ""}`;
+      const hit = fuzzyMatch(query, text);
+      // fuzzyMatch charges for length, which would rank a model below an older
+      // one for a longer id or a note; only how well the query fits counts here.
+      if (hit) scored.push({ match: { provider: provider.id, model }, score: hit.score + text.length });
     }
   }
-  scored.sort((a, b) => b.score - a.score || a.match.model.label.localeCompare(b.match.model.label));
-  return scored.map((entry) => entry.match);
+  // Equal matches of one family (Grok 4.5, Grok 4.7) go newest first: cursor's
+  // CLI lists its models in no such order. Families keep the order they came in.
+  const firstSeen = new Map<string, number>();
+  const keyed = scored.map((entry, index) => {
+    const { family, version } = versionOf(entry.match.model.label);
+    const familyKey = `${entry.match.provider} ${family}`;
+    if (!firstSeen.has(familyKey)) firstSeen.set(familyKey, index);
+    return { ...entry, family: firstSeen.get(familyKey)!, version };
+  });
+  keyed.sort((a, b) => b.score - a.score || a.family - b.family || compareVersions(b.version, a.version));
+  return keyed.map((entry) => entry.match);
+}
+
+/** "Grok 4.7 High" is family "Grok", version [4, 7]; a label without a number is version []. */
+function versionOf(label: string): { family: string; version: number[] } {
+  const found = /\d+(?:\.\d+)*/.exec(label);
+  if (!found) return { family: label, version: [] };
+  return { family: label.slice(0, found.index).trim(), version: found[0].split(".").map(Number) };
+}
+
+function compareVersions(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 /** The model an id runs, any of its effort or fast variants included. */

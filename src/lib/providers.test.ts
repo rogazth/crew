@@ -136,6 +136,18 @@ describe("searchModels", () => {
     expect(searchModels(PROVIDERS, "grok-4.7-xhigh")[0]).toMatchObject({ provider: "cursor", model: { label: "Grok 4.7" } });
   });
 
+  it("lists equally good matches newest first, as the registry orders them", () => {
+    const claude = searchModels(PROVIDERS, "sonnet").filter((hit) => hit.provider === "claude");
+    expect(claude.map((hit) => hit.model.label)).toEqual(["Sonnet 5.5", "Sonnet 5", "Sonnet 4.6", "Sonnet 4.5"]);
+  });
+
+  it("lists a family newest first whatever order the CLI listed it in", () => {
+    // As cursor-agent lists them: Grok 4.5 ahead of 4.7.
+    setListedModels("cursor", [{ id: "cursor-grok-4.5-high", label: "Grok 4.5" }, ...LISTED]);
+    const cursor = searchModels(PROVIDERS, "grok").filter((hit) => hit.provider === "cursor");
+    expect(cursor.map((hit) => hit.model.label)).toEqual(["Grok 4.7", "Grok 4.6", "Grok 4.5"]);
+  });
+
   it("matches nothing for a blank query", () => {
     expect(searchModels(PROVIDERS, "   ")).toEqual([]);
   });
