@@ -2760,11 +2760,24 @@ impl TurnHost {
     /// to a bot parent in the same transaction; then wake whoever waits, and
     /// only then try to hand the report over.
     fn child_event(&self, session: &crate::session::Session, kind: &str, outcome: &str, request: Option<&Value>) {
+        self.record_child_event(session, kind, outcome, request, true);
+    }
+
+    /// [`TurnHost::child_event`], with a letter to a bot parent only when
+    /// `tell` says so.
+    fn record_child_event(
+        &self,
+        session: &crate::session::Session,
+        kind: &str,
+        outcome: &str,
+        request: Option<&Value>,
+        tell: bool,
+    ) {
         let id = session.id.as_str();
         let cursor = self.transcripts.len(id) as i64;
         let (_, report) = self.transcripts.since(id, cursor as usize);
         let report = if kind == "needs-input" { String::new() } else { report };
-        let letter = self.report_letter(session, kind, outcome, &report, request, cursor);
+        let letter = if tell { self.report_letter(session, kind, outcome, &report, request, cursor) } else { None };
         let written = crate::session_events::record_reporting(
             &self.store,
             id,
@@ -2821,7 +2834,7 @@ impl TurnHost {
         }
         // What the user started in the subagent's tab is theirs: how the turn
         // ended is not the parent's to hear. Questions, approvals and an exit
-        // still are.
+        // mid-turn still are.
         if matches!(kind, "turn" | "error") && self.user_started.lock().unwrap_or_else(|e| e.into_inner()).contains(&session.id) {
             return None;
         }
@@ -2879,7 +2892,10 @@ impl TurnHost {
     }
 
     /// An idle child that exits: there is no turn to end, so the block and the
-    /// event are written here.
+    /// event are written here. Its parent already had the report of its last
+    /// turn, so no letter goes: waking a parent only to say a finished child
+    /// is gone would cost it a whole turn over its context. A wait or
+    /// `read_session` still shows the exit.
     pub fn exit_idle_child(&self, session: &crate::session::Session, why: &str, note: &str) {
         // A child that kept its process for the next turn has no next turn.
         self.release(&session.id);
@@ -2887,7 +2903,7 @@ impl TurnHost {
         self.transcripts.set_status(&session.id, "exited", None);
         self.transcripts.flush(&session.id);
         let _ = mailbox::drop_waiting(&self.store, &session.id);
-        self.child_event(session, "exited", why, None);
+        self.record_child_event(session, "exited", why, None, false);
     }
 
     /// Children a restart of the daemon caught mid-turn: `settle_open_turns`

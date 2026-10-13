@@ -5220,6 +5220,35 @@ time.sleep(600)
         assert_eq!(left, [message.id]);
     }
 
+    /// A child that goes idle and is reaped, or stopped while idle, has
+    /// nothing new for its bot parent: the report of its last turn already
+    /// reached it, so the exit wakes no one.
+    #[test]
+    fn an_idle_child_that_exits_does_not_wake_its_bot_parent() {
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let reaped = w.start(&bot, "x");
+        let stopped = w.start(&bot, "y");
+        w.settle(&reaped);
+        w.settle(&stopped);
+        w.heard(&me, &reaped);
+        w.heard(&me, &stopped);
+        w.settle(&me);
+        let launched = w.launches().len();
+        std::thread::sleep(Duration::from_millis(30));
+        w.call(&bot, "stop_session", json!({ "session": stopped })).expect("stop");
+        assert_eq!(w.tools.reap(Duration::from_millis(1)).unwrap(), vec![reaped.clone()]);
+        for id in [&reaped, &stopped] {
+            assert_eq!(w.row(id).status, "exited");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(crate::mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0, "an exit left a letter");
+        assert_eq!(w.launches().len(), launched, "an exit woke the bot");
+        let out = w.wait(&bot, &reaped, json!({ "timeout_s": 1 }));
+        assert_eq!(out["sessions"][0]["event"], "exited", "{out}");
+    }
+
     /// The prompt the bot's turn was handed: what it read.
     fn prompts(w: &World) -> Vec<String> {
         w.launches().iter().filter_map(|launch| launch["prompt"].as_str().map(str::to_string)).collect()
@@ -7244,6 +7273,81 @@ time.sleep(600)
         says_one(&w.live_say(&parent, &id, "Again: reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
+    }
+
+    /// A real child of `provider` runs one turn for a bot parent, whose
+    /// report wakes it; then the child goes idle and is reaped, and the
+    /// parent is not woken again for it: no letter, no turn.
+    /// `binary`, when the one `live_child` finds is not the one to run.
+    fn live_idle_exit_wakes_no_one(w: &World, provider: &str, model: &str, effort: &str, binary: Option<String>) {
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let id = w.live_child(&bot, provider, model, effort, "full");
+        if let Some(binary) = binary {
+            w.turns.override_binary(provider, binary);
+        }
+        let _reap = Reap(w, id.clone());
+        let sent = w.call(&bot, "send_message", json!({ "to": id, "text": "Reply with just the word one." })).expect("send");
+        assert_eq!(sent["delivery"], "started", "{sent}");
+        until_long("the child's turn ended", Duration::from_secs(240), || {
+            !w.turns.is_running(&id) && !matches!(w.row(&id).status.as_str(), "starting" | "working")
+        });
+        let ended = w.blocks(&id).iter().rev().take(4).map(|b| format!("{:?}: {}", b.role, b.text)).collect::<Vec<_>>().join("\n");
+        assert_eq!(w.row(&id).status, "idle", "{provider}'s turn did not end cleanly:\n{ended}");
+        let report = w.heard(&me, &id);
+        says_one(&report.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report").text);
+        w.settle(&me);
+        let woken = w.launches().len();
+        let heard = w.blocks(&me).len();
+
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(w.tools.reap(Duration::from_millis(1)).unwrap(), vec![id.clone()]);
+        assert_eq!(w.row(&id).status, "exited");
+        assert!(w.turns.test_agents().pid_of(&id).is_none(), "{provider}'s process outlived the exit");
+        std::thread::sleep(Duration::from_secs(3));
+        let left: Vec<String> =
+            crate::mailbox::waiting(w.turns.store(), &me).unwrap().into_iter().map(|l| format!("{} from {}: {}", l.kind, l.from.name, l.text)).collect();
+        assert!(left.is_empty(), "the exit left a letter: {left:?}");
+        assert_eq!(w.launches().len(), woken, "the exit woke the parent");
+        assert_eq!(w.blocks(&me).len(), heard, "the exit reached the parent's transcript");
+        let out = w.wait(&bot, &id, json!({ "timeout_s": 1 }));
+        assert_eq!(out["sessions"][0]["event"], "exited", "{out}");
+        eprintln!("{provider}: reaped without waking the parent");
+    }
+
+    /// Runs the real `claude` on haiku, low effort. Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --nocapture live_claude_idle_exit`
+    #[test]
+    #[ignore]
+    fn live_claude_idle_exit_wakes_no_one() {
+        live_idle_exit_wakes_no_one(&world(), "claude", "claude-haiku-5-5", "low", None);
+    }
+
+    /// Runs the real `codex` on luna, low effort. Needs `codex login`.
+    /// `cargo test -p crew-core --lib -- --ignored --nocapture live_codex_idle_exit`
+    #[test]
+    #[ignore]
+    fn live_codex_idle_exit_wakes_no_one() {
+        live_idle_exit_wakes_no_one(&world(), "codex", "gpt-5.6-luna", "low", None);
+    }
+
+    /// Runs the real opencode 2.x server on a free model, with folders of its
+    /// own as `live_opencode_a_turn` has. Run it alone: it moves HOME.
+    /// `cargo test -p crew-core --lib -- --ignored --nocapture live_opencode_idle_exit`
+    #[test]
+    #[ignore]
+    fn live_opencode_idle_exit_wakes_no_one() {
+        let w = world();
+        let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
+        let home = w.dir.join("opencode-home");
+        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+            let dir = home.join(sub);
+            std::fs::create_dir_all(&dir).expect("dir");
+            std::env::set_var(key, dir);
+        }
+        let _server = Reap(&w, "opencode:server".into());
+        let model = std::env::var("OPENCODE_LIVE_MODEL").unwrap_or_else(|_| "opencode/nemotron-3.5-lightning-free".into());
+        live_idle_exit_wakes_no_one(&w, "opencode", &model, "", Some(binary));
     }
 
     /// Until `done` holds, for as long as a real model may take.
