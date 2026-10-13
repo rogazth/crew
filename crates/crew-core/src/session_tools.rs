@@ -1170,7 +1170,7 @@ impl SessionTools {
                         "cursor": event["cursor"],
                         "note": format!("send_message to {} gives it more in the same conversation; read_session shows what it did.", row.id),
                     });
-                    for key in ["outcome", "report_truncated"] {
+                    for key in ["outcome"] {
                         if !event[key].is_null() && !(key == "outcome" && status == "reported") {
                             result[key] = event[key].clone();
                         }
@@ -1654,7 +1654,6 @@ fn wait_seconds(args: &Value) -> Result<u64, String> {
 }
 
 fn describe_event(row: &Session, event: &Event, earlier: usize) -> Value {
-    let (report, clipped) = session_events::clip_report(&event.report);
     let mut out = json!({
         "id": row.id,
         "name": row.name,
@@ -1666,13 +1665,7 @@ fn describe_event(row: &Session, event: &Event, earlier: usize) -> Value {
         out["outcome"] = json!(event.outcome);
     }
     if event.kind != "needs-input" {
-        out["report"] = json!(report);
-        if clipped {
-            out["report_truncated"] = json!(format!(
-                "The report is longer than this; read_session with since = {} reads the turn.",
-                event.cursor.saturating_sub(40).max(0)
-            ));
-        }
+        out["report"] = json!(event.report);
     }
     if let Some(request) = &event.request {
         out["request"] = request.clone();
@@ -5569,6 +5562,31 @@ time.sleep(600)
             .unwrap();
         assert_eq!(reports, 0, "a report is still on its way");
         assert_eq!(session_events::seen(w.turns.store(), &id).unwrap(), w.row(&id).cursor);
+    }
+
+    /// A long report reaches the parent whole, by the wait's result and by the
+    /// letter that wakes it: nothing cuts it, and it is not left to read_session.
+    #[test]
+    fn a_long_report_reaches_the_parent_whole_by_wait_and_by_wake() {
+        let long: String = (0..2100).map(|n| format!("w{n:04} ")).collect::<String>().trim_end().to_string();
+        assert!(long.len() > 12_000);
+        let expected = format!("report: {long}");
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": format!("go\n{long}"), "wait": true, "timeout_s": 20 })).expect("start");
+        assert_eq!(out["report"], json!(expected), "the wait cut the report");
+        assert!(out.get("report_truncated").is_none(), "{out}");
+
+        let woken = w.session("bot", "Planner 2", "full");
+        let me = woken.session_id().unwrap().to_string();
+        w.busy(&woken, 0.5);
+        let out = w.call(&woken, "delegate", json!({ "provider": "opencode", "prompt": format!("SLEEP 2\n{long}"), "wait": true, "timeout_s": 1 })).expect("start");
+        assert_eq!(out["status"], "running", "{out}");
+        let id = out["id"].as_str().unwrap().to_string();
+        w.heard(&me, &id);
+        w.settle(&me);
+        let woke = prompts(&w).into_iter().find(|p| p.contains("## Report from session") && p.contains("w2099")).expect("never woken with the report");
+        assert!(woke.contains(&expected), "the wake cut the report");
     }
 
     /// A wait that runs out leaves the child working; its report wakes the

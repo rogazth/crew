@@ -35,9 +35,6 @@ CREATE TABLE IF NOT EXISTS session_events (
 );
 ";
 
-/// The longest report a wait hands back. The rest is a `read_session` away.
-pub const REPORT_LIMIT: usize = 4000;
-
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Event {
     pub session_id: String,
@@ -185,18 +182,6 @@ pub fn report(blocks: &[Block]) -> String {
     String::new()
 }
 
-/// A report cut to what a wait hands back.
-pub fn clip_report(report: &str) -> (String, bool) {
-    if report.len() <= REPORT_LIMIT {
-        return (report.to_string(), false);
-    }
-    let mut end = REPORT_LIMIT;
-    while !report.is_char_boundary(end) {
-        end -= 1;
-    }
-    (report[..end].to_string(), true)
-}
-
 /// Wakes whoever waits on a session when anything happens to one. One for the
 /// whole daemon: a waiter re-reads its own sessions on every wake, and events
 /// are a few a minute, not a few a millisecond.
@@ -281,16 +266,6 @@ mod tests {
             block(BlockRole::User, "two"),
         ];
         assert_eq!(report(&blocks), "");
-    }
-
-    #[test]
-    fn a_long_report_is_cut_on_a_character() {
-        let long = "é".repeat(REPORT_LIMIT);
-        let (cut, clipped) = clip_report(&long);
-        assert!(clipped);
-        assert!(cut.len() <= REPORT_LIMIT);
-        assert!(long.starts_with(&cut));
-        assert_eq!(clip_report("short"), ("short".to_string(), false));
     }
 
     /// The event and the report that tells a bot parent of it are one write:
