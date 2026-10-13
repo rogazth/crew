@@ -201,7 +201,7 @@ export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: stri
 
 /**
  * That an agent reported, where the report arrived: one row like the one that started it, and its name opens
- * its thread at that turn, where the report is read whole. An agent with no thread to open shows the words here.
+ * its thread at that turn, where the report is read whole. An agent with no thread to open shows the words here, whole.
  */
 export function Report({ peer, text, target, focus }: { peer: Peer; text: string; target: string | undefined; focus?: string }) {
   return (
@@ -211,7 +211,7 @@ export function Report({ peer, text, target, focus }: { peer: Peer; text: string
       </ToolLine>
       {target ? null : (
         <Hang className="bg-card px-3.5 py-2.5">
-          <LongText text={text} />
+          <LongText text={text} fold={false} />
         </Hang>
       )}
     </div>
