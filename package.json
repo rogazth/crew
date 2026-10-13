@@ -8,6 +8,8 @@
   "productName": "Crew",
   "scripts": {
     "dev": "vite",
+    "prototype:chat": "CREW_PORT=1430 vite --open '/?prototype=chat'",
+    "prototype:chat:app": "VITE_CREW_PROTOTYPE=chat CREW_PORT=1430 CREW_USER_DATA=\"$HOME/Library/Application Support/Crew Prototype\" node scripts/app.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "app": "node scripts/app.mjs",
@@ -150,5 +152,10 @@
       "identity": "-"
     },
     "afterSign": "scripts/sign-mac.cjs"
+  },
+  "reactDoctor": {
+    "ignore": {
+      "files": ["prototype/**"]
+    }
   }
 }
