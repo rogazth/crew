@@ -66,6 +66,9 @@ export function toolLine(block: Block): ToolLine {
   if (!detail) return { text: title, mono: false, failed };
 
   switch (detail.kind) {
+    // Drawn as its title until the orchestration rows land.
+    case "crew":
+      return { text: title, mono: false, failed };
     case "command": {
       const failedRun = failed || (detail.exitCode !== undefined && detail.exitCode !== 0);
       return {
@@ -140,6 +143,8 @@ export function hasBody(block: Block): boolean {
   const detail = detailOf(block);
   if (!detail) return false;
   switch (detail.kind) {
+    case "crew":
+      return false;
     case "command":
       return filled(detail.output) || detail.command.includes("\n");
     case "file":
@@ -166,11 +171,11 @@ export function hasBody(block: Block): boolean {
 }
 
 /** What kind of glyph a row wears, read off the detail rather than the name. */
-export type ToolGlyphKind = Exclude<ToolDetail["kind"], "output"> | null;
+export type ToolGlyphKind = Exclude<ToolDetail["kind"], "output" | "crew"> | null;
 
 export function glyphKind(block: Block): ToolGlyphKind {
   const kind = detailOf(block)?.kind;
-  return kind === undefined || kind === "output" ? null : kind;
+  return kind === undefined || kind === "output" || kind === "crew" ? null : kind;
 }
 
 /** The clip marker the daemon appends when a payload was cut. */

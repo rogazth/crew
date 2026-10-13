@@ -575,7 +575,16 @@ impl TurnHost {
                 return Err("No opencode turn is running to take it.".into());
             };
             // In before the request: its delivery can beat the answer.
-            live.steers.push((None, Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest }));
+            live.steers.push((None, Steer {
+                    sent: sent.clone(),
+                    text: text.to_string(),
+                    from,
+                    kind: letter.as_deref().and_then(|id| mailbox::letter_kind(&self.store, id)),
+                    letter,
+                    files,
+                    typed,
+                    rest,
+                }));
             oc
         };
         let forget = || {

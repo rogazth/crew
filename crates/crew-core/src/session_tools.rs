@@ -5210,6 +5210,7 @@ time.sleep(600)
         let blocks = w.heard(&me, &id);
         let letter = blocks.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report reached the bot");
         assert_eq!(letter.text, "report: x");
+        assert_eq!(letter.letter_kind, Some(crew_protocol::LetterKind::Report));
         w.settle(&me);
         // A report the parent read itself does not come again; a message the
         // child wrote it still does.
@@ -5841,6 +5842,8 @@ time.sleep(600)
         let said = w.blocks(&id).into_iter().find(|block| block.role == BlockRole::User).expect("the prompt");
         assert_eq!(said.text, "Carry on with the plan: step 2.");
         assert_eq!(said.from_bot.map(|from| from.id), Some(me.clone()));
+        // The prompt is the session's first letter, from the bot that started it.
+        assert_eq!(said.letter_kind, Some(crew_protocol::LetterKind::Started));
 
         // Listed for what it is, and the launcher's chat says it started it.
         let peer = w.peer(&bot, &id);
@@ -6038,6 +6041,7 @@ time.sleep(600)
         let reports: Vec<&Block> = lead.iter().filter(|block| block.from_bot.as_ref().is_some_and(|f| f.id == child)).collect();
         assert_eq!(reports.len(), 2);
         assert!(reports.iter().all(|block| block.letter_id.is_some()));
+        assert!(reports.iter().all(|block| block.letter_kind == Some(crew_protocol::LetterKind::Report)));
 
         let page = mailbox::thread(w.turns.store(), &child, &me, None, None).expect("thread");
         let shape: Vec<(String, &str, &str)> = page

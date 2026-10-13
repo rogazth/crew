@@ -168,6 +168,136 @@ pub fn is_letter_tool(verb: &str) -> bool {
     is_message_tool(verb) || matches!(verb, "delegate" | "start_session")
 }
 
+/// The Crew tools that act on sessions without writing a letter, whose rows
+/// read from a [`crew_protocol::ToolDetail::Crew`].
+pub fn is_control_tool(verb: &str) -> bool {
+    matches!(
+        verb,
+        "start_sessions" | "interrupt_session" | "read_session" | "list_peers" | "stop_session" | "update_session"
+    )
+}
+
+/// A control tool's detail from its call alone: whom it names, before the
+/// answer says who they are.
+fn control_detail(verb: &str, input: &Map<String, Value>) -> crew_protocol::ToolDetail {
+    use crew_protocol::{CrewTarget, ToolDetail};
+    let named = |id: Option<String>, name: String, provider: Option<String>| CrewTarget { id, name, provider, note: None };
+    // What the call names a session by: an id from `list_peers`, or a name.
+    let session = || string_field(Some(input), "session").map(|session| named(Some(session.clone()), session, None));
+    let mut text = None;
+    let mut count = None;
+    let mut note = None;
+    let targets = match verb {
+        "start_sessions" => {
+            let list = input.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+            count = Some(list.len() as u32);
+            list.iter()
+                .map(|entry| {
+                    let entry = as_record(entry);
+                    let provider = string_field(entry, "provider");
+                    let name = string_field(entry, "name").or_else(|| provider.clone()).unwrap_or_else(|| "new session".into());
+                    named(None, name, provider)
+                })
+                .collect()
+        }
+        "interrupt_session" => {
+            text = string_field(Some(input), "text");
+            session().into_iter().collect()
+        }
+        "update_session" => {
+            note = string_field(Some(input), "action");
+            if note.as_deref() == Some("rename") {
+                text = string_field(Some(input), "name");
+            }
+            session().into_iter().collect()
+        }
+        "list_peers" => Vec::new(),
+        _ => session().into_iter().collect(),
+    };
+    ToolDetail::Crew { verb: verb.to_string(), targets, text, count, note }
+}
+
+/// A control tool's detail once its call answered: the ids and names Crew
+/// gave, and the counts. `None` for an answer that adds nothing.
+fn control_result(verb: &str, call: crew_protocol::ToolDetail, answer: &Value) -> Option<crew_protocol::ToolDetail> {
+    use crew_protocol::{CrewTarget, ToolDetail};
+    let ToolDetail::Crew { mut targets, text, mut count, mut note, .. } = call else {
+        return None;
+    };
+    let field = |key: &str| string_field(answer.as_object(), key);
+    match verb {
+        "start_sessions" => {
+            let entries = answer.get("sessions")?.as_array()?;
+            let asked = std::mem::take(&mut targets);
+            targets = entries
+                .iter()
+                .enumerate()
+                .map(|(at, entry)| {
+                    let entry = as_record(entry);
+                    let ok = entry.and_then(|entry| entry.get("ok")).and_then(Value::as_bool) != Some(false);
+                    let was = asked.get(at);
+                    CrewTarget {
+                        id: string_field(entry, "id"),
+                        name: string_field(entry, "name")
+                            .or_else(|| was.map(|was| was.name.clone()))
+                            .unwrap_or_else(|| "new session".into()),
+                        provider: string_field(entry, "provider").or_else(|| was.and_then(|was| was.provider.clone())),
+                        note: if ok { None } else { string_field(entry, "error").or_else(|| Some("failed".into())) },
+                    }
+                })
+                .collect();
+            count = answer.get("started").and_then(Value::as_u64).map(|n| n as u32).or(count);
+        }
+        "interrupt_session" => {
+            if let Some(target) = targets.first_mut() {
+                target.id = field("session").or(target.id.take());
+                target.name = field("name").unwrap_or_else(|| target.name.clone());
+            }
+            if answer.get("interrupted").and_then(Value::as_bool) == Some(false) {
+                note = Some("idle".into());
+            }
+        }
+        "read_session" => {
+            if let Some(target) = targets.first_mut() {
+                target.id = field("session").or(target.id.take());
+            }
+            let start = answer.get("start").and_then(Value::as_u64)?;
+            let cursor = answer.get("cursor").and_then(Value::as_u64)?;
+            count = Some(cursor.saturating_sub(start) as u32);
+        }
+        "list_peers" => {
+            let peers = answer.as_array()?;
+            let of = |kind: &str| {
+                peers.iter().filter(|peer| peer.get("type").and_then(Value::as_str) == Some(kind)).count()
+            };
+            let words = [(of("session"), "session"), (of("subagent"), "subagent"), (of("bot"), "bot")]
+                .iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, word)| format!("{n} {word}{}", if *n == 1 { "" } else { "s" }))
+                .collect::<Vec<_>>();
+            count = Some(peers.len() as u32);
+            note = Some(words.join(", ")).filter(|words| !words.is_empty());
+        }
+        "stop_session" => {
+            if let Some(target) = targets.first_mut() {
+                target.id = field("session").or(target.id.take());
+            }
+            count = Some(answer.get("also_stopped").and_then(Value::as_array).map_or(0, Vec::len) as u32);
+        }
+        "update_session" => {
+            if let Some(target) = targets.first_mut() {
+                target.id = field("session").or(target.id.take());
+            }
+            if let Some(deleted) = answer.get("deleted").and_then(Value::as_array) {
+                // The session itself is among them: the rest went with it.
+                count = Some(deleted.len().saturating_sub(1) as u32);
+            }
+        }
+        _ => return None,
+    }
+    Some(ToolDetail::Crew { verb: verb.to_string(), targets, text, count, note })
+}
+
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
 /// message to another bot is half of a conversation happening in two places,
 /// and so is the prompt a session was started on.
@@ -195,6 +325,9 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
             delivery: None,
             error: None,
         });
+    }
+    if is_control_tool(verb) {
+        return Some(control_detail(verb, &input));
     }
     if !is_message_tool(verb) {
         return None;
@@ -227,7 +360,18 @@ pub fn crew_result_detail(
     result: &str,
     failed: bool,
 ) -> Option<crew_protocol::ToolDetail> {
-    let Some(crew_protocol::ToolDetail::Message { to, text, what, .. }) = crew_tool_detail(name, input) else {
+    let call = crew_tool_detail(name, input)?;
+    if let crew_protocol::ToolDetail::Crew { verb, .. } = &call {
+        // A failed control call keeps the generic failed row, with the error.
+        if failed {
+            let text = result.trim();
+            return (!text.is_empty()).then(|| crew_protocol::ToolDetail::Output { text: text.to_string() });
+        }
+        let answer: Value = serde_json::from_str(result.trim()).ok()?;
+        let verb = verb.clone();
+        return control_result(&verb, call, &answer);
+    }
+    let crew_protocol::ToolDetail::Message { to, text, what, .. } = call else {
         return None;
     };
     let row = |letter_id, to_id, to_name, delivery, error| crew_protocol::ToolDetail::Message {
@@ -500,7 +644,7 @@ mod tests {
                 "{name}"
             );
         }
-        assert!(detail("mcp__crew__list_peers", serde_json::json!({})).is_none());
+        assert!(detail("mcp__crew__list_routines", serde_json::json!({})).is_none());
         let label = crew_label("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "x" }).as_object().unwrap());
         assert_eq!(label.as_deref(), Some("Crew send to session abc"));
     }
@@ -781,6 +925,202 @@ mod tests {
             started,
             Some(ToolDetail::Message { ref text, letter_id: Some(ref l), to_name: Some(ref n), .. }) if text == "fix it" && l == "L2" && n == "codex: fix it"
         ));
-        assert_eq!(crew_result_detail("mcp__crew__list_peers", start, "[]", false), None);
+        // A tool with nothing to add to its row: a letter tool's answer that is not JSON.
+        assert_eq!(crew_result_detail("mcp__crew__send_message", input, "ok", false), None);
+    }
+
+    fn crew_detail(
+        name: &str,
+        input: serde_json::Value,
+        answer: Option<(&str, bool)>,
+    ) -> crew_protocol::ToolDetail {
+        let input = input.as_object().unwrap();
+        let call = crew_tool_detail(name, input).expect("a call detail");
+        match answer {
+            Some((result, failed)) => crew_result_detail(name, input, result, failed).unwrap_or(call),
+            None => call,
+        }
+    }
+
+    fn target(id: Option<&str>, name: &str, provider: Option<&str>, note: Option<&str>) -> crew_protocol::CrewTarget {
+        crew_protocol::CrewTarget {
+            id: id.map(str::to_string),
+            name: name.into(),
+            provider: provider.map(str::to_string),
+            note: note.map(str::to_string),
+        }
+    }
+
+    fn crew(
+        verb: &str,
+        targets: Vec<crew_protocol::CrewTarget>,
+        text: Option<&str>,
+        count: Option<u32>,
+        note: Option<&str>,
+    ) -> crew_protocol::ToolDetail {
+        crew_protocol::ToolDetail::Crew {
+            verb: verb.into(),
+            targets,
+            text: text.map(str::to_string),
+            count,
+            note: note.map(str::to_string),
+        }
+    }
+
+    /// The tools that act on sessions read as a row of their own, under both
+    /// spellings, from the call and again once it answered.
+    #[test]
+    fn the_control_tools_carry_whom_they_acted_on_and_what_came_of_it() {
+        use serde_json::json;
+        for prefix in ["mcp__crew__", "crew_"] {
+            let name = |verb: &str| format!("{prefix}{verb}");
+
+            // start_sessions: one target per entry, a failed one with Crew's reason.
+            let input = json!({ "sessions": [
+                { "name": "billing-ui", "provider": "claude", "prompt": "a" },
+                { "provider": "codex", "prompt": "b" },
+                { "name": "docs", "prompt": "c" },
+            ] });
+            assert_eq!(
+                crew_detail(&name("start_sessions"), input.clone(), None),
+                crew(
+                    "start_sessions",
+                    vec![
+                        target(None, "billing-ui", Some("claude"), None),
+                        target(None, "codex", Some("codex"), None),
+                        target(None, "docs", None, None),
+                    ],
+                    None,
+                    Some(3),
+                    None
+                )
+            );
+            let answer = json!({ "started": 2, "failed": 1, "sessions": [
+                { "index": 0, "ok": true, "id": "s1", "name": "billing-ui", "provider": "claude" },
+                { "index": 1, "ok": true, "id": "s2", "name": "codex: b", "provider": "codex" },
+                { "index": 2, "ok": false, "error": "no such worktree" },
+            ] })
+            .to_string();
+            assert_eq!(
+                crew_detail(&name("start_sessions"), input, Some((&answer, false))),
+                crew(
+                    "start_sessions",
+                    vec![
+                        target(Some("s1"), "billing-ui", Some("claude"), None),
+                        target(Some("s2"), "codex: b", Some("codex"), None),
+                        target(None, "docs", None, Some("no such worktree")),
+                    ],
+                    None,
+                    Some(2),
+                    None
+                )
+            );
+
+            // interrupt_session: with and without a redirect, and one with nothing to interrupt.
+            let redirect = json!({ "session": "s1", "text": "use the new API" });
+            assert_eq!(
+                crew_detail(&name("interrupt_session"), redirect.clone(), None),
+                crew("interrupt_session", vec![target(Some("s1"), "s1", None, None)], Some("use the new API"), None, None)
+            );
+            let answer = r#"{ "session": "s1", "name": "billing-ui", "interrupted": true, "letter_id": "L1" }"#;
+            assert_eq!(
+                crew_detail(&name("interrupt_session"), redirect, Some((answer, false))),
+                crew(
+                    "interrupt_session",
+                    vec![target(Some("s1"), "billing-ui", None, None)],
+                    Some("use the new API"),
+                    None,
+                    None
+                )
+            );
+            let idle = r#"{ "session": "s1", "name": "billing-ui", "interrupted": false }"#;
+            assert_eq!(
+                crew_detail(&name("interrupt_session"), json!({ "session": "s1" }), Some((idle, false))),
+                crew("interrupt_session", vec![target(Some("s1"), "billing-ui", None, None)], None, None, Some("idle"))
+            );
+
+            // read_session: the count is what the read covered.
+            let answer = r#"{ "session": "s1", "status": "idle", "text": "x", "start": 8, "cursor": 20, "more": false }"#;
+            assert_eq!(
+                crew_detail(&name("read_session"), json!({ "session": "s1" }), Some((answer, false))),
+                crew("read_session", vec![target(Some("s1"), "s1", None, None)], None, Some(12), None)
+            );
+
+            // list_peers: counts per type in the note.
+            let answer = json!([
+                { "id": "a", "type": "session" }, { "id": "b", "type": "session" }, { "id": "c", "type": "session" },
+                { "id": "d", "type": "subagent" },
+                { "id": "e", "type": "bot" }, { "id": "f", "type": "bot" }, { "id": "g", "type": "bot" },
+            ])
+            .to_string();
+            assert_eq!(
+                crew_detail(&name("list_peers"), json!({}), Some((&answer, false))),
+                crew("list_peers", vec![], None, Some(7), Some("3 sessions, 1 subagent, 3 bots"))
+            );
+            assert_eq!(
+                crew_detail(&name("list_peers"), json!({}), Some(("[]", false))),
+                crew("list_peers", vec![], None, Some(0), None)
+            );
+
+            // stop_session: the subagents stopped with it.
+            let answer = r#"{ "session": "s1", "status": "exited", "cursor": 3, "also_stopped": [{ "id": "a", "name": "x" }, { "id": "b", "name": "y" }] }"#;
+            assert_eq!(
+                crew_detail(&name("stop_session"), json!({ "session": "s1" }), Some((answer, false))),
+                crew("stop_session", vec![target(Some("s1"), "s1", None, None)], None, Some(2), None)
+            );
+            let alone = r#"{ "session": "s1", "status": "exited", "cursor": 3 }"#;
+            assert_eq!(
+                crew_detail(&name("stop_session"), json!({ "session": "s1" }), Some((alone, false))),
+                crew("stop_session", vec![target(Some("s1"), "s1", None, None)], None, Some(0), None)
+            );
+
+            // update_session: rename or delete in the note.
+            let rename = json!({ "session": "s1", "action": "rename", "name": "payments" });
+            assert_eq!(
+                crew_detail(&name("update_session"), rename.clone(), None),
+                crew("update_session", vec![target(Some("s1"), "s1", None, None)], Some("payments"), None, Some("rename"))
+            );
+            let answer = r#"{ "session": "s1", "name": "payments", "note": "Renamed." }"#;
+            assert_eq!(
+                crew_detail(&name("update_session"), rename, Some((answer, false))),
+                crew("update_session", vec![target(Some("s1"), "s1", None, None)], Some("payments"), None, Some("rename"))
+            );
+            let delete = json!({ "session": "s1", "action": "delete" });
+            let answer = r#"{ "session": "s1", "deleted": ["a", "s1"], "note": "Deleted." }"#;
+            assert_eq!(
+                crew_detail(&name("update_session"), delete, Some((answer, false))),
+                crew("update_session", vec![target(Some("s1"), "s1", None, None)], None, Some(1), Some("delete"))
+            );
+
+            // A failed call keeps the generic failed row with Crew's reason.
+            let input = json!({ "session": "s1" });
+            assert_eq!(
+                crew_detail(&name("stop_session"), input, Some(("s1 was not started by you", true))),
+                crew_protocol::ToolDetail::Output { text: "s1 was not started by you".into() }
+            );
+        }
+    }
+
+    /// The old `call_tool` gateway still names the tool in its arguments.
+    #[test]
+    fn a_control_tool_called_through_the_gateway_reads_the_same() {
+        let input = serde_json::json!({ "name": "stop_session", "arguments": { "session": "s1" } });
+        assert_eq!(
+            crew_tool_detail("mcp__crew__call_tool", input.as_object().unwrap()),
+            Some(crew("stop_session", vec![target(Some("s1"), "s1", None, None)], None, None, None))
+        );
+    }
+
+    /// Claude's own result path hands the answer to the same reader.
+    #[test]
+    fn claude_reads_a_control_tools_answer_into_its_row() {
+        let input = serde_json::json!({ "session": "s1" });
+        let detail = crate::providers::claude::tool_result_detail(
+            "mcp__crew__read_session",
+            input.as_object().unwrap(),
+            r#"{ "session": "s1", "start": 0, "cursor": 4 }"#,
+            false,
+        );
+        assert_eq!(detail, Some(crew("read_session", vec![target(Some("s1"), "s1", None, None)], None, Some(4), None)));
     }
 }

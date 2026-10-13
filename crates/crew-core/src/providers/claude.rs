@@ -1030,7 +1030,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
     // The message row already shows the message. Its result is the delivery
     // receipt: what it adds is the letter's id and whom it reached, or why it
     // was refused, never the receipt in the message's place.
-    if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_letter_tool(verb)) {
+    if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_letter_tool(verb) || super::is_control_tool(verb)) {
         return super::crew_result_detail(name, input, content, failed);
     }
     // "1 file delivered to user": the files themselves are the row.

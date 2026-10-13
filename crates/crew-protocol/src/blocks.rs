@@ -127,6 +127,40 @@ pub struct TurnUsage {
     pub duration_ms: Option<u64>,
 }
 
+/// A session a Crew tool acted on, as the call and its answer name it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct CrewTarget {
+    /// Its id, once the call or its answer gave one: absent for a
+    /// `start_sessions` entry that failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    /// Its name; before the answer, what the call named it by.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<String>,
+    /// Why this one failed, for an entry of `start_sessions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+/// How a letter reads in a transcript, from the mailbox letter's `kind`.
+/// `started` is the first letter of a session its sender started: the prompt.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub enum LetterKind {
+    Message,
+    Report,
+    Question,
+    Approval,
+    Started,
+}
+
 /// What a tool actually did, normalized across providers. A transcript line
 /// reads the same whether it came from Claude's `Bash`, Codex's `exec_command`
 /// or opencode's `bash`: the adapters translate into this, and the UI renders
@@ -234,6 +268,35 @@ pub enum ToolDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         error: Option<String>,
+    },
+    /// One of Crew's own tools that acts on sessions without writing a letter:
+    /// `start_sessions`, `interrupt_session`, `read_session`, `list_peers`,
+    /// `stop_session`, `update_session`. The call fills in `verb`, `targets`
+    /// and `text`; its answer adds the ids, the counts and the note.
+    Crew {
+        /// The tool, without its prefix: `start_sessions`, `interrupt_session`,
+        /// `read_session`, `list_peers`, `stop_session` or `update_session`.
+        verb: String,
+        /// Whom it acted on, one per entry for `start_sessions`. Empty for
+        /// `list_peers`.
+        targets: Vec<CrewTarget>,
+        /// What it carried: the redirect of `interrupt_session`, the new name
+        /// of an `update_session` rename.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+        /// How many: sessions started, messages read, peers listed, subagents
+        /// stopped with the session, subagents deleted with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        count: Option<u32>,
+        /// What the verb adds in words: `list_peers`' counts per type
+        /// (`3 sessions, 1 subagent, 3 bots`), `rename` or `delete` for
+        /// `update_session`, `idle` for an `interrupt_session` that found
+        /// nothing running.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        note: Option<String>,
     },
     /// The agent's checklist, whole: every call restates all of it.
     Todo { items: Vec<TodoItem> },
@@ -419,6 +482,13 @@ impl ToolDetail {
                 delivery,
                 error: error.map(|text| clip(&text, limit)),
             },
+            ToolDetail::Crew { verb, targets, text, count, note } => ToolDetail::Crew {
+                verb,
+                targets,
+                text: text.map(|text| clip(&text, limit)),
+                count,
+                note,
+            },
             ToolDetail::Todo { items } => ToolDetail::Todo {
                 items: items
                     .into_iter()
@@ -461,6 +531,10 @@ impl ToolDetail {
             ToolDetail::Search { query, .. } => query.clone(),
             ToolDetail::Fetch { url, .. } => url.clone(),
             ToolDetail::Message { to, .. } => to.clone(),
+            ToolDetail::Crew { verb, targets, .. } => match targets.as_slice() {
+                [] => verb.replace('_', " "),
+                names => names.iter().map(|target| target.name.as_str()).collect::<Vec<_>>().join(", "),
+            },
             ToolDetail::Todo { items } => {
                 let done = items.iter().filter(|item| item.status == TodoStatus::Completed).count();
                 format!("{done}/{} done", items.len())
@@ -558,6 +632,11 @@ pub struct Block {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub letter_id: Option<String>,
+    /// What kind of letter `from_bot` wrote, from the mailbox letter's kind.
+    /// Absent on a block that is not a bot's letter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub letter_kind: Option<LetterKind>,
 }
 
 /// How full a session's context window is, as its CLI last reported it.
@@ -619,6 +698,9 @@ pub enum HarnessEvent {
         #[serde(default, rename = "letterId", skip_serializing_if = "Option::is_none")]
         #[ts(optional, rename = "letterId")]
         letter_id: Option<String>,
+        #[serde(default, rename = "letterKind", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "letterKind")]
+        letter_kind: Option<LetterKind>,
     },
     #[serde(rename = "system.message")]
     #[ts(rename = "system.message")]

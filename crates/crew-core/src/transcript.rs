@@ -194,12 +194,20 @@ impl TranscriptHub {
                 files: files.filter(|rows| !rows.is_empty()),
                 from_bot: None,
                 letter_id,
+                letter_kind: None,
             },
         );
     }
 
     /// A line another bot wrote into this transcript: the letter `letter_id`.
-    pub fn append_from_bot(&self, session_id: &str, text: &str, from: crew_protocol::BotRef, letter_id: Option<String>) {
+    pub fn append_from_bot(
+        &self,
+        session_id: &str,
+        text: &str,
+        from: crew_protocol::BotRef,
+        letter_id: Option<String>,
+        letter_kind: Option<crew_protocol::LetterKind>,
+    ) {
         self.apply(
             session_id,
             HarnessEvent::UserMessage {
@@ -208,6 +216,7 @@ impl TranscriptHub {
                 files: None,
                 from_bot: Some(from),
                 letter_id,
+                letter_kind,
             },
         );
     }

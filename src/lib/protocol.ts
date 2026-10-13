@@ -142,7 +142,12 @@ fromBot?: BotRef,
  * off ("Started session …"), or the user writing to its child ("You
  * wrote to …"). The sender's tool row carries the same id.
  */
-letterId?: string, };
+letterId?: string, 
+/**
+ * What kind of letter `from_bot` wrote, from the mailbox letter's kind.
+ * Absent on a block that is not a bot's letter.
+ */
+letterKind?: LetterKind, };
 
 export type BlockApproval = { requestId: number, name: string, input?: Record<string, unknown>, decided?: ApprovalDecision, };
 
@@ -318,6 +323,24 @@ id: string, browser: string, profile: string, };
 
 export type CookieSourceId = { sourceId: string, };
 
+/**
+ * A session a Crew tool acted on, as the call and its answer name it.
+ */
+export type CrewTarget = { 
+/**
+ * Its id, once the call or its answer gave one: absent for a
+ * `start_sessions` entry that failed.
+ */
+id?: string, 
+/**
+ * Its name; before the answer, what the call named it by.
+ */
+name: string, provider?: string, 
+/**
+ * Why this one failed, for an entry of `start_sessions`.
+ */
+note?: string, };
+
 export type DaemonInfo = { url: string, token: string, };
 
 export type DirEntry = { name: string, path: string, 
@@ -386,7 +409,7 @@ export type FolderEntry = { name: string, path: string, dir: boolean,
  */
 ignored: boolean, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, letterId?: string, } | { "type": "system.message", text: string, letterId?: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "tool.files", callId: string, files: Array<AttachedFile>, } | { "type": "subagent.event", callId: string, event: HarnessEvent, } | { "type": "subagent.updated", callId: string, state?: SubagentState, activity?: string, 
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, letterId?: string, letterKind?: LetterKind, } | { "type": "system.message", text: string, letterId?: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "tool.files", callId: string, files: Array<AttachedFile>, } | { "type": "subagent.event", callId: string, event: HarnessEvent, } | { "type": "subagent.updated", callId: string, state?: SubagentState, activity?: string, 
 /**
  * Its report, when it came this way rather than as the call's result.
  */
@@ -459,6 +482,12 @@ expires?: number, };
 export type Key = { key: string, };
 
 export type KeyValue = { key: string, value: string, };
+
+/**
+ * How a letter reads in a transcript, from the mailbox letter's `kind`.
+ * `started` is the first letter of a session its sender started: the prompt.
+ */
+export type LetterKind = "message" | "report" | "question" | "approval" | "started";
 
 /**
  * Offsets count UTF-16 code units, as JavaScript strings do.
@@ -1196,7 +1225,34 @@ delivery?: string,
 /**
  * Why Crew refused it: no letter was made.
  */
-error?: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
+error?: string, } | { "kind": "crew", 
+/**
+ * The tool, without its prefix: `start_sessions`, `interrupt_session`,
+ * `read_session`, `list_peers`, `stop_session` or `update_session`.
+ */
+verb: string, 
+/**
+ * Whom it acted on, one per entry for `start_sessions`. Empty for
+ * `list_peers`.
+ */
+targets: Array<CrewTarget>, 
+/**
+ * What it carried: the redirect of `interrupt_session`, the new name
+ * of an `update_session` rename.
+ */
+text?: string, 
+/**
+ * How many: sessions started, messages read, peers listed, subagents
+ * stopped with the session, subagents deleted with it.
+ */
+count?: number, 
+/**
+ * What the verb adds in words: `list_peers`' counts per type
+ * (`3 sessions, 1 subagent, 3 bots`), `rename` or `delete` for
+ * `update_session`, `idle` for an `interrupt_session` that found
+ * nothing running.
+ */
+note?: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
 /**
  * What it reported back.
  */

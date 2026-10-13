@@ -16,6 +16,7 @@ const BODIES: { [K in Kind]: Render<K> } = {
   search: (detail, failed) => (detail.output ? <Result head="results" text={detail.output} danger={failed} /> : null),
   fetch: (detail, failed) => (detail.output ? <FetchBody text={detail.output} failed={failed} /> : null),
   message: (detail) => <Pre head={`to ${botLabel(detail.to)}`} text={detail.text} />,
+  crew: () => null,
   todo: (detail) => <Todos items={detail.items} />,
   agent: (detail) => (
     <Pair

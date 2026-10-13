@@ -458,6 +458,8 @@ struct Steer {
     from: crew_protocol::BotRef,
     /// The letter it is, claimed while the turn has not read it yet.
     letter: Option<String>,
+    /// What kind of letter it is, for the block that shows it.
+    kind: Option<crew_protocol::LetterKind>,
     /// What was attached to it; its paths are in `sent`.
     files: Vec<AttachedFile>,
     /// Whether the transcript shows it as the user's own message rather than
@@ -474,6 +476,7 @@ pub(crate) struct Extra {
     letter: String,
     text: String,
     from: crew_protocol::BotRef,
+    kind: Option<crew_protocol::LetterKind>,
 }
 
 impl Steer {
@@ -504,6 +507,7 @@ impl Steer {
             files: Some(self.files).filter(|files| !files.is_empty()),
             from_bot: (!typed).then_some(self.from),
             letter_id: self.letter,
+            letter_kind: self.kind.filter(|_| !typed),
         }];
         for extra in self.rest {
             events.push(HarnessEvent::UserMessage {
@@ -512,6 +516,7 @@ impl Steer {
                 files: None,
                 from_bot: Some(extra.from),
                 letter_id: Some(extra.letter),
+                letter_kind: extra.kind,
             });
         }
         events
@@ -1288,6 +1293,7 @@ impl TurnHost {
                         &letter.text,
                         letter.from.clone(),
                         Some(letter.id.clone()),
+                        mailbox::letter_kind(&self.store, &letter.id),
                     );
                 }
             }
@@ -1332,6 +1338,10 @@ impl TurnHost {
                         &params.text,
                         from.clone(),
                         params.letter_id.clone(),
+                        params
+                            .letter_id
+                            .as_deref()
+                            .and_then(|id| mailbox::letter_kind(&self.store, id)),
                     );
                     params.text = mailbox::envelope(
                         &from,
@@ -2648,7 +2658,12 @@ impl TurnHost {
         let first = &letters[0];
         let rest: Vec<Extra> = letters[1..]
             .iter()
-            .map(|letter| Extra { letter: letter.id.clone(), text: letter.text.clone(), from: letter.from.clone() })
+            .map(|letter| Extra {
+                letter: letter.id.clone(),
+                text: letter.text.clone(),
+                from: letter.from.clone(),
+                kind: mailbox::letter_kind(&self.store, &letter.id),
+            })
             .collect();
         let tried = self.steer_files(&session.id, &first.text, first.from.clone(), Some(first.id.clone()), Vec::new(), rest);
         match tried {
@@ -3239,7 +3254,16 @@ impl TurnHost {
             if !live.active || live.cancelled || !live.initialized {
                 return Err("No Claude turn is running to take it.".into());
             }
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest });
+            live.steers.push(Steer {
+                sent: sent.clone(),
+                text: text.to_string(),
+                from,
+                kind: letter.as_deref().and_then(|id| mailbox::letter_kind(&self.store, id)),
+                letter,
+                files,
+                typed,
+                rest,
+            });
             build_claude_user_message(&live.claude_session_id, None, steered.trim(), &paths, &images)
         };
         if let Err(error) = self.agents.write(session_id, &serde_json::to_string(&message).unwrap_or_default()) {

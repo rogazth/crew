@@ -100,6 +100,14 @@ describe("daemon appends", () => {
     expect(blocks[0]?.fromBot).toEqual({ id: "a1", name: "Crew" });
   });
 
+  it("keeps what kind of letter a bot wrote", () => {
+    const blocks = run([
+      { type: "user.message", text: "done", fromBot: { id: "a1", name: "scout" }, letterId: "L1", letterKind: "report" },
+      { type: "user.message", text: "hi", fromBot: { id: "a1", name: "scout" } },
+    ]);
+    expect(blocks.map((b) => b.letterKind)).toEqual(["report", undefined]);
+  });
+
   it("projects a system row from system.message", () => {
     const blocks = run([{ type: "system.message", text: "Stopped" }]);
     expect(blocks.map((b) => [b.role, b.text])).toEqual([["system", "Stopped"]]);

@@ -272,6 +272,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...(event.files && event.files.length > 0 ? { files: event.files } : {}),
         ...(event.fromBot ? { fromBot: event.fromBot } : {}),
         ...(event.letterId ? { letterId: event.letterId } : {}),
+        ...(event.letterKind ? { letterKind: event.letterKind } : {}),
       };
       return [...blocks, block];
     }

@@ -416,6 +416,33 @@ pub fn render(letter: &Letter, parent: Option<&str>) -> String {
     }
 }
 
+/// What a letter is called in a transcript: its kind, except that the first
+/// letter a session ever got, from the bot that started it, is `started`: the
+/// prompt it was started on. `None` for a letter the box does not hold.
+pub fn letter_kind(store: &Store, letter_id: &str) -> Option<crew_protocol::LetterKind> {
+    use crew_protocol::LetterKind;
+    let (kind, by_starter, first): (String, bool, bool) = store
+        .with(|conn| {
+            conn.prepare_cached(
+                "SELECT m.kind,
+                        COALESCE(m.from_session IN (s.parent_id, s.launched_by), 0),
+                        NOT EXISTS (SELECT 1 FROM mailbox e WHERE e.to_session = m.to_session AND e.rowid < m.rowid)
+                   FROM mailbox m JOIN sessions s ON s.id = m.to_session
+                  WHERE m.id = ?1",
+            )?
+            .query_row(params![letter_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .optional()
+        })
+        .ok()??;
+    Some(match kind.as_str() {
+        REPORT => LetterKind::Report,
+        QUESTION => LetterKind::Question,
+        APPROVAL => LetterKind::Approval,
+        _ if by_starter && first => LetterKind::Started,
+        _ => LetterKind::Message,
+    })
+}
+
 /// Write a letter, on a connection the caller may hold a transaction on.
 pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::Result<()> {
     conn.prepare_cached(

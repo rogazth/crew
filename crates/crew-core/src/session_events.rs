@@ -257,6 +257,7 @@ mod tests {
             usage: None,
             from_bot: None,
             letter_id: None,
+            letter_kind: None,
         }
     }
 

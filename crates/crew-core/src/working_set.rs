@@ -161,6 +161,13 @@ pub(crate) fn detail_line(detail: &ToolDetail) -> String {
                 _ => format!("wrote to {to}: {}", clip(text, MESSAGE_LIMIT)),
             }
         }
+        ToolDetail::Crew { verb, targets, .. } => {
+            let names: Vec<&str> = targets.iter().map(|target| target.name.as_str()).collect();
+            match names.is_empty() {
+                true => verb.replace('_', " "),
+                false => format!("{}: {}", verb.replace('_', " "), clip(&names.join(", "), LINE_LIMIT)),
+            }
+        }
         ToolDetail::Todo { items } => {
             let done = items.iter().filter(|item| item.status == TodoStatus::Completed).count();
             format!("todos: {done}/{} done", items.len())

@@ -868,7 +868,16 @@ impl TurnHost {
                 return Err("No Codex turn is running to take it.".into());
             };
             // In before the request: its echo can beat the answer.
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed, rest });
+            live.steers.push(Steer {
+                sent: sent.clone(),
+                text: text.to_string(),
+                from,
+                kind: letter.as_deref().and_then(|id| mailbox::letter_kind(&self.store, id)),
+                letter,
+                files,
+                typed,
+                rest,
+            });
             target
         };
         match self.codex_call(session_id, "turn/steer", steer_params(&thread, &turn, &sent), STEER_TIMEOUT) {

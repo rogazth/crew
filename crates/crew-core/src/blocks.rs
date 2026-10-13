@@ -20,6 +20,7 @@ pub fn new_block(role: BlockRole, text: impl Into<String>) -> Block {
         usage: None,
         from_bot: None,
         letter_id: None,
+        letter_kind: None,
     }
 }
 
@@ -374,6 +375,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             files,
             from_bot,
             letter_id,
+            letter_kind,
         } => {
             let mut block = new_block(BlockRole::User, text);
             if hidden == Some(true) {
@@ -384,6 +386,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             }
             block.from_bot = from_bot;
             block.letter_id = letter_id;
+            block.letter_kind = letter_kind;
             let mut next = blocks;
             next.push(block);
             next
@@ -721,6 +724,7 @@ mod tests {
                     files: None,
                     from_bot: None,
                     letter_id: None,
+                    letter_kind: None,
                 },
                 HarnessEvent::SystemMessage {
                     text: "Stopped".into(),
@@ -888,6 +892,7 @@ mod tests {
                 hidden: None,
                 from_bot: None,
                 letter_id: None,
+                letter_kind: None,
             },
             HarnessEvent::SystemMessage { text: "note".into(), letter_id: None },
             HarnessEvent::SessionNote { message: "note".into() },
@@ -941,6 +946,7 @@ mod tests {
                     hidden: None,
                     from_bot: None,
                     letter_id: None,
+                    letter_kind: None,
                 },
                 HarnessEvent::MessageDelta { text: "earlier answer".into() },
                 HarnessEvent::MessageCompleted {},
