@@ -12,6 +12,7 @@ import {
   parseTabs,
   persistedTabs,
   pinTab,
+  childTabToParent,
   reopenTab,
   reorderTabs,
   selectTab,
@@ -137,6 +138,11 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
         return changed ? next : prev;
       }),
     [],
+  );
+  /** A subagent's tab in the strip (restored from an older layout) becomes its parent's. */
+  const childToParent = useCallback(
+    (childTabId: string, parentTab: Tab) => mutate((s) => childTabToParent(s, childTabId, parentTab)),
+    [mutate],
   );
   const reopen = useCallback(() => mutate(reopenTab), [mutate]);
   const step = useCallback(
@@ -281,6 +287,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     open,
     close,
     closeForSession,
+    childToParent,
     reopen,
     step,
     activate,

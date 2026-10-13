@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { requestRoute, routeAgent } from "../lib/agentRoute";
 import * as api from "../lib/api";
 import { fileView } from "../lib/browser/files";
 import { fileTabId, newBrowserTab, newFileBrowserTab, newSignInTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
@@ -39,7 +40,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage],
   );
 
-  const openSession = useCallback(
+  const openTabOf = useCallback(
     (session: Session) => {
       closePage();
       const tab = { id: sessionTabId(session.id), kind: "session" as const, sessionId: session.id };
@@ -49,6 +50,32 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     },
     [closePage, route, tabs],
   );
+
+  /**
+   * A subagent never has a tab: it opens as a thread in its parent's (the top
+   * owner's, for a subagent of a subagent). Anything else has its own.
+   */
+  const openSession = useCallback(
+    (session: Session, focus?: string) => {
+      const owner = routeAgent(session, sessions);
+      if (!owner) return openTabOf(session);
+      requestRoute(owner, focus);
+      openTabOf(owner.root);
+    },
+    [openTabOf, sessions],
+  );
+
+  // A subagent's tab from an older layout becomes its parent's, with the thread open when it was in front.
+  useEffect(() => {
+    for (const tab of tabs.tabs) {
+      if (tab.kind !== "session") continue;
+      const session = sessions.find((row) => row.id === tab.sessionId);
+      const owner = session && routeAgent(session, sessions);
+      if (!owner) continue;
+      if (tabs.active?.id === tab.id) requestRoute(owner);
+      tabs.childToParent(tab.id, { id: sessionTabId(owner.root.id), kind: "session", sessionId: owner.root.id });
+    }
+  }, [sessions, tabs]);
 
   /** A message from a bot names its sender; the name opens its tab. */
   const openSessionById = useCallback(

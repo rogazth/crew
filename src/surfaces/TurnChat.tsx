@@ -5,6 +5,7 @@ import { useCommands } from "../hooks/useCommands";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useMarkSeen } from "../hooks/useMarkSeen";
 import { useThread } from "../hooks/useThread";
+import { onAgentRequest, peekAgentRequest, takeAgentRequest } from "../lib/agentRoute";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
 import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
@@ -104,6 +105,21 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     },
     [allEntries, openEntry, openSession],
   );
+  // A subagent opened from outside (a notification, the sidebar, a restored tab) arrives as a request for this chat.
+  const takeRequest = useCallback(() => {
+    const request = peekAgentRequest(session.id);
+    if (!request) return;
+    // Its row may not have arrived yet: the request waits for the next list.
+    const entry = allEntries.find((one) => one.id === `session:${request.childId}`);
+    if (!entry) return;
+    takeAgentRequest(session.id);
+    openEntry(entry, request.focus);
+  }, [allEntries, openEntry, session.id]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a request made before this chat showed
+    takeRequest();
+    return onAgentRequest(takeRequest);
+  }, [takeRequest]);
   const chatActions = useMemo(() => ({ ...actions, openAgent }), [actions, openAgent]);
   const openOutput = useCallback(
     (commandId: string) => {

@@ -161,6 +161,17 @@ export function closeSessionTab(state: TabState, sessionId: string): TabState {
   return tab ? withoutTab(state, tab.id, state.closed) : state;
 }
 
+/**
+ * A subagent's tab is not kept: the parent's tab takes its place (or its seat
+ * in the strip), active when the subagent's was. Never lands in the reopen stack.
+ */
+export function childTabToParent(state: TabState, childTabId: string, parentTab: Tab): TabState {
+  if (!state.tabs.some((t) => t.id === childTabId)) return state;
+  const has = state.tabs.some((t) => t.id === parentTab.id);
+  const tabs = state.tabs.flatMap((t) => (t.id === childTabId ? (has ? [] : [parentTab]) : [t]));
+  return { ...state, tabs, activeId: state.activeId === childTabId ? parentTab.id : state.activeId };
+}
+
 /** The last tab closed, back where it stood, the way a browser's ⌘⇧T brings it. */
 export function reopenTab(state: TabState): TabState {
   const [closed, ...rest] = state.closed;

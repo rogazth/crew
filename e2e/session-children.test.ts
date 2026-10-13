@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sendInChat, stripTabIds, waitFor, type Crew } from "./harness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CREW = path.join(ROOT, "target/debug/crew");
@@ -49,4 +49,31 @@ test("a session a session started is a chip in its parent and opens as a chat", 
   await crew.window.getByText("Done: tidy the imports").waitFor({ timeout: 10_000 });
   await crew.window.getByText("Turn ended").waitFor({ timeout: 10_000 });
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "session-children.png") });
+
+  // Plan 2026-10-12 (decision 17): a subagent never has a tab. Esc goes back to the parent...
+  const agentView = crew.window.locator("[data-agent-view]");
+  await crew.window.keyboard.press("Escape");
+  await agentView.waitFor({ state: "detached" });
+  const childTab = `session:${child.id}`;
+  assert.ok(!(await stripTabIds(crew)).includes(childTab), "opening it from the chip made no tab");
+
+  // ...a click on a banner about the child opens the parent's tab with the thread in it...
+  await crew.app.evaluate(({ BrowserWindow }, target) => {
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.send("notify:click", target);
+  }, { workspaceId: main.id, sessionId: child.id });
+  await agentView.waitFor({ timeout: 10_000 });
+  await agentView.getByText("Done: tidy the imports").waitFor();
+  assert.deepEqual((await stripTabIds(crew)).filter((id) => id.startsWith("session:")), [`session:${shell.id}`]);
+
+  // ...and a layout saved with the child's tab restores as the parent's, thread open.
+  await crew.request("state_set", {
+    key: `tabs:${main.id}`,
+    value: JSON.stringify({ tabs: [{ id: childTab, kind: "session", sessionId: child.id }], activeId: childTab }),
+  });
+  await crew.reload();
+  await agentView.waitFor({ timeout: 15_000 });
+  await agentView.getByText("Done: tidy the imports").waitFor();
+  const ids = await stripTabIds(crew);
+  assert.ok(!ids.includes(childTab), ids.join(", "));
+  assert.ok(ids.includes(`session:${shell.id}`), ids.join(", "));
 });
