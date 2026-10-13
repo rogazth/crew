@@ -825,6 +825,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   padding: 0;
   border: 0;
   background: none;
+  /* The plate scrolls, so it clips its own paint; clipping here too would cut
+     its ring flush along the edges and leave it showing only at the corners. */
+  contain: none;
 }
 .crew-md [data-streamdown="table-wrapper"] > div:has(table) {
   width: fit-content;
