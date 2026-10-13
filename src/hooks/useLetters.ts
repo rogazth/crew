@@ -114,5 +114,12 @@ export function showLetter(root: HTMLElement | null, letterId: string) {
     const scroller = row?.closest<HTMLElement>("[data-selectable='blocks']");
     // Not scrollIntoView: that also scrolls every clipped ancestor, which is the jump.
     if (row && scroller) scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 24;
+    // Lit as a search hit is: it fades, because the point is to find it.
+    if (row) {
+      row.classList.remove("crew-found");
+      void (row as HTMLElement).offsetWidth;
+      row.classList.add("crew-found");
+      window.setTimeout(() => row.classList.remove("crew-found"), 2600);
+    }
   });
 }

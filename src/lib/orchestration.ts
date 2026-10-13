@@ -104,3 +104,102 @@ export function startNoteTarget(block: Block): string | null {
   if (block.role !== "system") return null;
   return START_NOTE.exec(block.text)?.[1] ?? null;
 }
+
+/** The icon a control row wears, by what it did. */
+export type ControlIcon = "interrupt" | "read" | "list" | "stop" | "rename" | "delete";
+
+/**
+ * A control call as one line: `before`, the session it acted on, `after`.
+ * `text` is what it carried when that is worth a card (an interrupt's redirect).
+ */
+export type Control = { icon: ControlIcon; before: string; target?: CrewTarget; after: string; text?: string };
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * What `interrupt_session`, `read_session`, `list_peers`, `stop_session` and
+ * `update_session` say in a transcript. Null for any other block, and for a
+ * call that failed: that one keeps the generic failed row with its error.
+ */
+export function controlOf(block: Block): Control | null {
+  if (block.role !== "tool" || block.tool?.status === "failed") return null;
+  const detail = block.tool?.detail;
+  if (detail?.kind !== "crew") return null;
+  const target = detail.targets[0];
+  const at = target ? { target } : {};
+  switch (detail.verb) {
+    case "interrupt_session": {
+      const text = detail.text?.trim();
+      if (text) return { icon: "interrupt", before: "Interrupted", ...at, after: " and redirected it", text };
+      return { icon: "interrupt", before: "Interrupted", ...at, after: detail.note === "idle" ? " · it was idle" : "" };
+    }
+    case "read_session": {
+      const n = detail.count;
+      const after = n === undefined ? "'s messages" : n === 1 ? "'s last message" : `'s last ${n} messages`;
+      return { icon: "read", before: "Read", ...at, after };
+    }
+    case "list_peers": {
+      const peers = detail.count === undefined ? "peers" : plural(detail.count, "peer");
+      return { icon: "list", before: `Listed ${peers}${detail.note ? ` · ${detail.note}` : ""}`, after: "" };
+    }
+    case "stop_session":
+      return { icon: "stop", before: "Stopped", ...at, after: detail.count ? ` and its ${plural(detail.count, "subagent")}` : "" };
+    case "update_session":
+      if (detail.note === "rename") return { icon: "rename", before: "Renamed", ...at, after: detail.text ? ` to ${detail.text}` : "" };
+      if (detail.note === "delete") {
+        const also = detail.count ? ` and its ${plural(detail.count, "subagent")}` : "";
+        return { icon: "delete", before: "Deleted", ...at, after: `${also} · its worktree stays` };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** How a send went over, as the muted suffix on its row; null when the answer did not say. */
+export function deliveryNote(delivery: string | undefined): string | null {
+  switch (delivery) {
+    case "started":
+      return "started a turn";
+    case "queued":
+      return "queued";
+    case "steered":
+      return "read mid-turn";
+    case "answered":
+      return "answered its question";
+    default:
+      return null;
+  }
+}
+
+/** A message out: whom, the words, the letter it made, how it was delivered. */
+export type Sent = { to: CrewTarget; text: string; letterId?: string; delivery: string | null; handoff: boolean };
+
+/** A `send_message` that went (a refused one is a refusal; a start is a start). */
+export function sentOf(block: Block): Sent | null {
+  if (block.role !== "tool") return null;
+  const detail = block.tool?.detail;
+  if (detail?.kind !== "message" || detail.error) return null;
+  if (detail.what === "start" || detail.what === "launch") return null;
+  const to: CrewTarget = { name: detail.toName ?? detail.to, ...(detail.toId ? { id: detail.toId } : {}) };
+  return {
+    to,
+    text: detail.text,
+    ...(detail.letterId ? { letterId: detail.letterId } : {}),
+    delivery: deliveryNote(detail.delivery),
+    handoff: detail.what === "handoff",
+  };
+}
+
+/** What a letter from another party says it is, by the kind its mailbox gave it. */
+export function envelopeOf(kind: string | undefined): { word: string; tag?: string } {
+  switch (kind) {
+    case "question":
+    case "approval":
+      return { word: "asks", tag: "waits on an answer" };
+    case "started":
+      return { word: "started this session" };
+    default:
+      return { word: "wrote" };
+  }
+}

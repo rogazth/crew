@@ -6,8 +6,8 @@ import { duration, dayLabel } from "../../lib/time";
 import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
-import { CheckpointRow, QueuedGroup, RefusedRow } from "./Letters";
-import { ReportLetter, StartedRow, SubagentCall } from "./Orchestration";
+import { QueuedGroup, RefusedRow } from "./Letters";
+import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall } from "./Orchestration";
 import { AssistantMessage, DateBreak, Note, SharedFiles, TurnFooter, UserMessage } from "./Message";
 
 type Props = {
@@ -67,8 +67,14 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
         );
       case "letter":
         return (
-          <div key={row.block.id} data-block={row.block.id} className={className}>
-            <CheckpointRow block={row.block} />
+          <div key={row.block.id} className={className}>
+            <LetterRow block={row.block} marked={focusId} />
+          </div>
+        );
+      case "control":
+        return (
+          <div key={row.block.id} className={className}>
+            <ControlRow block={row.block} marked={focusId} />
           </div>
         );
       case "refused":

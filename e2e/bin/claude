@@ -257,6 +257,52 @@ function serve() {
     });
   }
 
+  /**
+   * The Crew tools an orchestrator calls, each with the answer Crew gives
+   * (`crew`): the calls and results only, no session behind them. `delegate`,
+   * `start_sessions`, `send_message`, then the control tools, and a subagent
+   * that answers with a report.
+   */
+  function crewCalls(sent) {
+    let k = 0;
+    const call = (name, input, result) => {
+      const id = `toolu_crew${++k}`;
+      emit({ type: "assistant", session_id: sessionId, message: { id: `msg_crew${k}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+      emit({
+        type: "user",
+        session_id: sessionId,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(result), is_error: false }] },
+      });
+    };
+    const crew = (verb) => `mcp__crew__${verb}`;
+    call("Agent", { description: "Scout refund callers", subagent_type: "scout", prompt: "Find every caller of refund()" }, "4 callers. checkout/refund.ts and admin/refunds.tsx expect a full refund only.");
+    call(crew("delegate"), { name: "reviewer", prompt: "Review the branch" }, { letter_id: "L-delegate", id: "fake-reviewer", name: "reviewer", delivery: "started" });
+    call(
+      crew("start_sessions"),
+      { sessions: [{ name: "billing-ui", provider: "claude", prompt: "Empty state" }, { name: "refunds-api", provider: "codex", prompt: "Partial refunds" }, { name: "docs-sweep", provider: "claude", prompt: "Docs" }] },
+      {
+        started: 2,
+        sessions: [
+          { ok: true, id: "billing-ui", name: "billing-ui", provider: "claude" },
+          { ok: true, id: "fake-refunds", name: "refunds-api", provider: "codex" },
+          { ok: false, name: "docs-sweep", provider: "claude", error: "no free worktree name" },
+        ],
+      },
+    );
+    if (sent) {
+      // A send that really went (`crew sent <session id> <letter id> <name>`): its row names the real session and letter.
+      const [id, letter, name] = sent;
+      call(crew("send_message"), { to: name, text: "Use the existing component" }, { letter_id: letter, id, to: name, delivery: "queued" });
+      return;
+    }
+    call(crew("send_message"), { to: "refunds-api", text: "Decision: partial refunds keep the 90-day limit.\n\n- Apply it in policy.rs\n- Add a test at 91 days" }, { letter_id: "L-send", id: "fake-refunds", to: "refunds-api", delivery: "steered" });
+    call(crew("interrupt_session"), { session: "billing-ui", text: "Stop the illustration work: copy only." }, { session: "billing-ui", name: "billing-ui", interrupted: true });
+    call(crew("read_session"), { session: "billing-ui" }, { session: "billing-ui", start: 3, cursor: 15, messages: [] });
+    call(crew("list_peers"), {}, [{ type: "session" }, { type: "session" }, { type: "session" }, { type: "subagent" }, { type: "bot" }, { type: "bot" }, { type: "bot" }]);
+    call(crew("stop_session"), { session: "docs-sweep" }, { session: "docs-sweep", also_stopped: ["a", "b"] });
+    call(crew("update_session"), { session: "docs-sweep", action: "delete" }, { session: "docs-sweep", deleted: ["docs-sweep"] });
+  }
+
   /** A shell sent to the background (`sh1`) beside whatever subagents run: `task_started`, then the set. */
   function startShell() {
     emit({
@@ -342,6 +388,8 @@ function serve() {
     }
     if (command === "agent") startAgent();
     if (command === "shell") startShell();
+    if (command === "crew") crewCalls();
+    if (command === "crewsent") crewCalls(text.trim().split(/\s+/).slice(1));
     if (text.startsWith("!")) {
       await new Promise((resolve) => {
         const child = spawn("sh", ["-c", text.slice(1)], { cwd: CWD, env: process.env, stdio: "ignore" });

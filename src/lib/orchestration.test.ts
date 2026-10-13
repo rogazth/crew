@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { agentMeta, firstLine, foldsLongText, nativeName, nativeReport, startedOf, startedSessionsSentence } from "./orchestration";
+import { agentMeta, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -128,5 +128,74 @@ describe("the rows a transcript groups into", () => {
       false,
     );
     expect(kinds(rows)).toEqual(["date", "message", "fold", "subagent", "started", "message", "report", "message"]);
+  });
+});
+
+describe("control rows", () => {
+  const crew = (verb: string, rest: Partial<Extract<ToolDetail, { kind: "crew" }>> = {}): Block =>
+    tool({ kind: "crew", verb, targets: [{ id: "s1", name: "billing-ui" }], ...rest });
+  const sentence = (block: Block) => {
+    const control = controlOf(block);
+    return control ? `${control.before}${control.target ? ` [${control.target.name}]` : ""}${control.after}` : null;
+  };
+
+  it("says each verb in one line", () => {
+    expect(sentence(crew("interrupt_session", { text: "use the component" }))).toBe("Interrupted [billing-ui] and redirected it");
+    expect(sentence(crew("interrupt_session"))).toBe("Interrupted [billing-ui]");
+    expect(sentence(crew("interrupt_session", { note: "idle" }))).toBe("Interrupted [billing-ui] · it was idle");
+    expect(sentence(crew("read_session", { count: 12 }))).toBe("Read [billing-ui]'s last 12 messages");
+    expect(sentence(crew("read_session", { count: 1 }))).toBe("Read [billing-ui]'s last message");
+    expect(sentence(tool({ kind: "crew", verb: "list_peers", targets: [], count: 7, note: "3 sessions, 1 subagent, 3 bots" }))).toBe(
+      "Listed 7 peers · 3 sessions, 1 subagent, 3 bots",
+    );
+    expect(sentence(crew("stop_session", { count: 2 }))).toBe("Stopped [billing-ui] and its 2 subagents");
+    expect(sentence(crew("stop_session", { count: 0 }))).toBe("Stopped [billing-ui]");
+    expect(sentence(crew("update_session", { note: "rename", text: "ui" }))).toBe("Renamed [billing-ui] to ui");
+    expect(sentence(crew("update_session", { note: "delete", count: 0 }))).toBe("Deleted [billing-ui] · its worktree stays");
+  });
+
+  it("has a card only for an interrupt's redirect, and leaves a failed call to the generic row", () => {
+    expect(controlOf(crew("interrupt_session", { text: "go on" }))?.text).toBe("go on");
+    expect(controlOf(crew("read_session", { count: 3 }))?.text).toBeUndefined();
+    const failed = crew("stop_session");
+    failed.tool!.status = "failed";
+    expect(controlOf(failed)).toBeNull();
+    expect(controlOf(crew("start_sessions"))).toBeNull();
+  });
+
+  it("groups a control call into a row of its own", () => {
+    expect(groupRows([crew("read_session", { count: 3 })]).map((row) => row.kind)).toEqual(["control"]);
+  });
+});
+
+describe("messages", () => {
+  const message = (rest: Partial<Extract<ToolDetail, { kind: "message" }>>) =>
+    tool({ kind: "message", to: "docs-sweep", text: "Keep the limit", letterId: "L1", toId: "s2", toName: "docs-sweep", ...rest });
+
+  it("says how a send went over", () => {
+    expect(deliveryNote("steered")).toBe("read mid-turn");
+    expect(deliveryNote("queued")).toBe("queued");
+    expect(deliveryNote("started")).toBe("started a turn");
+    expect(deliveryNote("answered")).toBe("answered its question");
+    expect(deliveryNote(undefined)).toBeNull();
+  });
+
+  it("reads a send_message as whom, the words and the delivery; a start or a refusal is not one", () => {
+    expect(sentOf(message({ delivery: "steered" }))).toEqual({
+      to: { id: "s2", name: "docs-sweep" },
+      text: "Keep the limit",
+      letterId: "L1",
+      delivery: "read mid-turn",
+      handoff: false,
+    });
+    expect(sentOf(message({ what: "handoff" }))?.handoff).toBe(true);
+    expect(sentOf(message({ what: "start" }))).toBeNull();
+    expect(sentOf(message({ error: "no such session" }))).toBeNull();
+  });
+
+  it("names a letter in by its kind", () => {
+    expect(envelopeOf("message")).toEqual({ word: "wrote" });
+    expect(envelopeOf("question")).toEqual({ word: "asks", tag: "waits on an answer" });
+    expect(envelopeOf("started")).toEqual({ word: "started this session" });
   });
 });

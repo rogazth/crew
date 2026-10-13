@@ -5,26 +5,45 @@
  * and the same card; the card reads from the chat's work list, so it says
  * what the sheet says.
  */
-import { BotIcon, MessagesSquareIcon, type LucideIcon } from "lucide-react";
+import {
+  BotIcon,
+  CircleStopIcon,
+  EyeIcon,
+  HandIcon,
+  MessageSquareIcon,
+  MessagesSquareIcon,
+  PencilIcon,
+  SendIcon,
+  Trash2Icon,
+  UsersIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { lazy, memo, Suspense, useContext, useState, type ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import type { PanelEntry, PanelState } from "../../lib/backgroundPanel";
 import type { Block } from "../../lib/blocks";
+import { botLabel } from "../../lib/botNames";
+import { checkpointOf, resolveParty, USER } from "../../lib/letters";
 import {
   agentMeta,
+  controlOf,
+  envelopeOf,
   firstLine,
   FOLD_LINES,
   foldsLongText,
   nativeName,
   nativeReport,
+  sentOf,
   startedOf,
   startedSessionsSentence,
 } from "../../lib/orchestration";
 import type { CrewTarget } from "../../lib/protocol";
 import { agentDetail, subagentView } from "../../lib/subagent";
 import { useChatActions, useLetterScope, WorkContext } from "./context";
+import { Note, UserMessage } from "./Message";
 import { StateDot } from "./Panel";
+import type { Session } from "../../lib/types";
 
 /** streamdown is half a megabyte: a long text loads it when it is first drawn. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -67,22 +86,26 @@ export function Hang({ children, className = "" }: { children: ReactNode; classN
 /** Who a name stands for: a bot is its face, an agent its CLI's mark. */
 export type Peer = { id?: string | undefined; name: string; provider?: string | undefined; bot?: boolean | undefined };
 
-function PeerMark({ peer, className }: { peer: Peer; className: string }) {
+export function PeerMark({ peer, className }: { peer: Peer; className: string }) {
   if (peer.bot && peer.id) return <BotAvatar seed={peer.id} bare className={`${className} shrink-0`} />;
   if (peer.provider) return <ProviderIcon provider={peer.provider} className={`${className} shrink-0`} />;
   return <BotIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
 }
 
-/** A session or a bot as the chat's sessions know it. */
-function usePeer(id: string | undefined, name: string, provider?: string): Peer {
-  const { sessions } = useLetterScope();
-  const session = id ? sessions.find((row) => row.id === id) : undefined;
+/** A session or a bot as the chat's sessions know it: by id, else by name when the call named it by name only. */
+function peerOf(sessions: readonly Session[], id: string | undefined, name: string, provider?: string): Peer {
+  const session = id ? sessions.find((row) => row.id === id) : sessions.find((row) => row.name === name);
   return {
-    id,
-    name,
+    id: id ?? session?.id,
+    name: session?.name ?? name,
     provider: session?.provider ?? provider,
     bot: session ? session.kind === "bot" : undefined,
   };
+}
+
+function usePeer(id: string | undefined, name: string, provider?: string): Peer {
+  const { sessions } = useLetterScope();
+  return peerOf(sessions, id, name, provider);
 }
 
 /** The mark and the name, in `text-text`; a click opens that party (its thread, or a bot's chat). */
@@ -359,4 +382,124 @@ export const ReportLetter = memo(function ReportLetter({ block, marked }: { bloc
       <Report peer={peer} text={block.text} target={from.id} focus={block.letterId} />
     </div>
   );
+});
+
+/** A message out: `Message to [peer]` with how it went over, and the words in a card. */
+const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked: string | null }) {
+  const sent = sentOf(block);
+  const peer = usePeer(sent?.to.id, sent?.to.name ?? "", sent?.to.provider);
+  if (!sent) return null;
+  return (
+    <div data-letter={sent.letterId} className="flex flex-col gap-1.5">
+      <ToolLine icon={SendIcon} aside="send_message" id={block.id} marked={marked}>
+        {sent.handoff ? "Handed" : "Message to"} <PeerName peer={peer} {...(sent.letterId ? { focus: sent.letterId } : {})} />
+        {sent.handoff ? " to you" : ""}
+        {sent.delivery ? <span className="text-placeholder"> · {sent.delivery}</span> : null}
+      </ToolLine>
+      {sent.text.trim() ? (
+        <Hang className="px-3.5 py-2.5">
+          <LongText text={sent.text} />
+        </Hang>
+      ) : null}
+    </div>
+  );
+});
+
+const CONTROL_ICON = {
+  interrupt: [HandIcon, "interrupt_session"],
+  read: [EyeIcon, "read_session"],
+  list: [UsersIcon, "list_peers"],
+  stop: [CircleStopIcon, "stop_session"],
+  rename: [PencilIcon, "update_session"],
+  delete: [Trash2Icon, "update_session"],
+} as const;
+
+/** `interrupt_session`, `read_session`, `list_peers`, `stop_session`, `update_session`: one line, and a card only for text. */
+export const ControlRow = memo(function ControlRow({ block, marked }: { block: Block; marked: string | null }) {
+  const control = controlOf(block);
+  const target = control?.target;
+  const peer = usePeer(target?.id, target?.name ?? "", target?.provider);
+  if (!control) return null;
+  const [icon, aside] = CONTROL_ICON[control.icon];
+  return (
+    <div className="flex flex-col gap-1.5">
+      <ToolLine icon={icon} aside={aside} id={block.id} marked={marked}>
+        {control.before}
+        {target ? (
+          <>
+            {" "}
+            <PeerName peer={peer} />
+          </>
+        ) : null}
+        {control.after}
+      </ToolLine>
+      {control.text ? (
+        <Hang className="px-3.5 py-2.5 text-[13.5px] leading-[20px] text-text-muted">
+          <span className="whitespace-pre-wrap">{control.text}</span>
+        </Hang>
+      ) : null}
+    </div>
+  );
+});
+
+/**
+ * A letter from another party (a session, a bot, a parent): its mark in a tile,
+ * its name, what kind of letter it is, and the words under it. Not a bubble: the
+ * bubble is the user's.
+ */
+const LetterIn = memo(function LetterIn({ block, marked }: { block: Block; marked: string | null }) {
+  const from = block.fromBot;
+  const peer = usePeer(from?.id, from?.name ?? "", undefined);
+  const { openAgent } = useChatActions();
+  if (!from) return null;
+  const { word, tag } = envelopeOf(block.letterKind);
+  const id = peer.id;
+  return (
+    <div data-letter={block.letterId} className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
+      <span className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-card">
+        <PeerMark peer={peer} className="size-3.5" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-baseline gap-1.5 text-[12.5px]">
+          {id ? (
+            <button
+              type="button"
+              onClick={() => openAgent(id, block.letterId ? { focus: block.letterId } : undefined)}
+              className="rounded-chrome font-medium text-text hover:underline"
+            >
+              {peer.name}
+            </button>
+          ) : (
+            <span className="font-medium text-text">{peer.name}</span>
+          )}
+          <span className="text-text-muted">{word}</span>
+          {tag ? <span className="text-placeholder">· {tag}</span> : null}
+        </div>
+        <LongText text={block.text} />
+      </div>
+    </div>
+  );
+});
+
+/** The line a note leaves when the user writes to a child: its name opens that child's thread at the letter. */
+const WroteLine = memo(function WroteLine({ block, marked }: { block: Block; marked: string | null }) {
+  const { owner, sessions } = useLetterScope();
+  const mark = owner ? checkpointOf(block, owner, botLabel) : null;
+  const to = mark && owner ? resolveParty(mark.to, sessions, owner.id) : null;
+  const peer = peerOf(sessions, to?.id || undefined, to?.name ?? "");
+  if (!mark || mark.from.id !== USER) return block.role === "user" ? <UserMessage block={block} /> : <Note block={block} />;
+  return (
+    <div data-letter={mark.letterId}>
+      <ToolLine icon={MessageSquareIcon} id={block.id} marked={marked}>
+        You wrote to <PeerName peer={peer} focus={mark.letterId} />
+      </ToolLine>
+    </div>
+  );
+});
+
+/** A letter row: the message this chat sent, the letter it received, or the note a write to a child leaves. */
+export const LetterRow = memo(function LetterRow({ block, marked }: { block: Block; marked: string | null }) {
+  if (block.role === "tool") return <SentRow block={block} marked={marked} />;
+  if (block.role === "user" && block.fromBot) return <LetterIn block={block} marked={marked} />;
+  return <WroteLine block={block} marked={marked} />;
 });

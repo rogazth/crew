@@ -8,7 +8,7 @@
  */
 import { type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, letterIdOf } from "./letters";
-import { isReportLetter, startedOf, startNoteTarget } from "./orchestration";
+import { controlOf, isReportLetter, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
 
 /** A gap this long between messages gets a date line, like a chat app. */
@@ -25,7 +25,7 @@ export type Row =
   | { kind: "date"; id: string; at: number }
   /** A settled turn's work before its answer, behind one line. */
   | { kind: "fold"; id: string; rows: Row[]; durationMs?: number; failed: boolean }
-  /** A letter sent or received: who wrote to whom, the words a click away in the pair's thread. */
+  /** A letter sent or received: a message out with its card, a letter in from another party. */
   | { kind: "letter"; block: Block }
   /** A send Crew refused, with its reason. */
   | { kind: "refused"; block: Block }
@@ -37,6 +37,8 @@ export type Row =
   | { kind: "subagent"; block: Block }
   /** A Crew call that started something: `delegate`, `start_session`, `start_sessions`. */
   | { kind: "started"; block: Block }
+  /** A Crew control call (`interrupt_session`, `read_session`, `list_peers`, `stop_session`, `update_session`): one line. */
+  | { kind: "control"; block: Block }
   /** A Crew subagent's report letter, drawn where it arrived. */
   | { kind: "report"; block: Block }
   /** Files the agent sent the user (`SendUserFile`): shown like a reply, never folded away. */
@@ -51,6 +53,7 @@ export function speaker(row: Row): Speaker {
     row.kind === "fold" ||
     row.kind === "subagent" ||
     row.kind === "started" ||
+    row.kind === "control" ||
     row.kind === "shared"
   ) {
     return "agent";
@@ -128,6 +131,12 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       if (start.kind === "sessions") {
         for (const target of start.targets) if (target.id) started.add(target.id);
       } else if (start.target.id) started.add(start.target.id);
+      if (block.usage) rows.push(footerFor(block, block.usage));
+      continue;
+    }
+    if (controlOf(block)) {
+      flush();
+      rows.push({ kind: "control", block });
       if (block.usage) rows.push(footerFor(block, block.usage));
       continue;
     }
@@ -248,6 +257,7 @@ function staysOut(row: Row): boolean {
     row.kind === "background" ||
     row.kind === "subagent" ||
     row.kind === "started" ||
+    row.kind === "control" ||
     row.kind === "shared"
   );
 }
@@ -262,6 +272,7 @@ export function rowBlocks(row: Row): Block[] {
     row.kind === "background" ||
     row.kind === "subagent" ||
     row.kind === "started" ||
+    row.kind === "control" ||
     row.kind === "shared"
   ) {
     return [row.block];
@@ -350,6 +361,7 @@ function rowId(row: Row): string {
     row.kind === "background" ||
     row.kind === "subagent" ||
     row.kind === "started" ||
+    row.kind === "control" ||
     row.kind === "shared"
     ? row.block.id
     : row.id;

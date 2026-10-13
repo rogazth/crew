@@ -1,15 +1,13 @@
-import { ArrowRightIcon, BotIcon, MessageSquareIcon, UserIcon, XIcon } from "lucide-react";
+import { BotIcon, UserIcon, XIcon } from "lucide-react";
 import { memo } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { botLabel } from "../../lib/botNames";
 import type { Block } from "../../lib/blocks";
-import { checkpointOf, refusalOf, resolveParty, USER, type Party } from "../../lib/letters";
-import { clock } from "../../lib/time";
+import { refusalOf, USER, type Party } from "../../lib/letters";
 import type { Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
 import { useLetterScope } from "./context";
-import { Note, UserMessage } from "./Message";
 
 /** A bot is its face; a session is its CLI's mark; the user is the person glyph. */
 export function Face({ party, sessions, className = "size-4" }: { party: Party; sessions: readonly Session[]; className?: string }) {
@@ -23,41 +21,6 @@ export function Face({ party, sessions, className = "size-4" }: { party: Party; 
   if (session) return <ProviderIcon provider={session.provider} className={`${className} shrink-0`} />;
   return <BotIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
 }
-
-/**
- * Who wrote to whom, at the point it happened, and nothing else: the words
- * live in that pair's thread, one click away. A note whose words do not say
- * who is drawn as the note it is.
- */
-export const CheckpointRow = memo(function CheckpointRow({ block }: { block: Block }) {
-  const { owner, sessions, openThread } = useLetterScope();
-  const mark = owner ? checkpointOf(block, owner, botLabel) : null;
-  if (!owner || !mark) return block.role === "user" ? <UserMessage block={block} /> : <Note block={block} />;
-  const from = resolveParty(mark.from, sessions, owner.id);
-  const to = resolveParty(mark.to, sessions, owner.id);
-  return (
-    <button
-      type="button"
-      data-letter={mark.letterId}
-      onClick={() => openThread({ a: from, b: to, focus: mark.letterId })}
-      title={`Open the conversation between ${from.name} and ${to.name}`}
-      className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]"
-    >
-      <span className="crew-node">
-        <MessageSquareIcon className="size-3.5" />
-      </span>
-      <span className="flex min-w-0 items-center gap-1.5 text-text-muted transition-colors group-hover:text-text">
-        <Face party={from} sessions={sessions} className="size-3.5" />
-        <span className="truncate">{from.name}</span>
-        <ArrowRightIcon aria-label="to" className="size-3 shrink-0 text-placeholder" />
-        <Face party={to} sessions={sessions} className="size-3.5" />
-        <span className="truncate">{to.name}</span>
-      </span>
-      <span className="h-px min-w-4 flex-1 bg-hairline" />
-      {mark.at !== undefined && <span className="shrink-0 text-[11px] text-placeholder tabular-nums">{clock(mark.at)}</span>}
-    </button>
-  );
-});
 
 /** A send Crew refused: the call failed, nothing was delivered, and the row says why. */
 export const RefusedRow = memo(function RefusedRow({ block }: { block: Block }) {

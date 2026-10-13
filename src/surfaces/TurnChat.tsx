@@ -12,7 +12,7 @@ import { attachedFrom } from "../lib/attachments";
 import { markedCalls, turnTray } from "../lib/background";
 import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
-import { queuedLetters } from "../lib/letters";
+import { queuedLetters, sessionParty } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
@@ -94,14 +94,26 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     [closeThread, openProcessRun, processes, session.id],
   );
   // An agent opens in place, from wherever it is named: an entry of the work, or a session by its id.
+  const openThread = useCallback(
+    (ref: ThreadRef) => {
+      setOutput(null);
+      openLetters(ref);
+    },
+    [openLetters],
+  );
   const allEntries = panel.all;
   const openAgent = useCallback(
     (target: string, options?: { focus?: string }) => {
       const entry = allEntries.find((one) => one.id === target || one.id === `session:${target}`);
-      if (entry) openEntry(entry, options?.focus);
-      else openSession(target);
+      if (entry) return openEntry(entry, options?.focus);
+      // A bot only has conversations: its name opens the letters between it and this chat.
+      const other = sessions.find((row) => row.id === target);
+      if (other?.kind === "bot") {
+        return openThread({ a: letters.owner, b: sessionParty(other), ...(options?.focus ? { focus: options.focus } : {}) });
+      }
+      openSession(target);
     },
-    [allEntries, openEntry, openSession],
+    [allEntries, letters.owner, openEntry, openSession, openThread, sessions],
   );
   // A subagent opened from outside (a notification, the sidebar, a restored tab) arrives as a request for this chat.
   const takeRequest = useCallback(() => {
@@ -125,13 +137,6 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       setOutput({ sessionId: session.id, id: commandEntryId(commandId) });
     },
     [closeThread, session.id],
-  );
-  const openThread = useCallback(
-    (ref: ThreadRef) => {
-      setOutput(null);
-      openLetters(ref);
-    },
-    [openLetters],
   );
   const letterScope = useMemo<LetterScope>(() => ({ ...letters.scope, openThread }), [letters.scope, openThread]);
   const backgroundScope = useMemo<BackgroundScope>(() => ({ calls: markedCalls(commands), open: openOutput }), [commands, openOutput]);
