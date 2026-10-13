@@ -1,9 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChevronLeftIcon, GitBranchIcon, SquareIcon } from 'lucide-react';
-import { BotAvatar } from '../../chrome/BotAvatar';
-import { Kbd } from '../../chrome/Kbd';
-import { Button } from '../../chrome/kit';
-import { ProviderIcon } from '../../chrome/ProviderIcon';
+import { SquareIcon, XIcon } from 'lucide-react';
+import { Button, IconButton } from '../../chrome/kit';
 import { useNow } from '../../hooks/useNow';
 import { KIND_LABEL, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
 import type { Block } from '../../lib/blocks';
@@ -14,6 +11,7 @@ import { SubagentBody } from './Activity';
 import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
 
+const HEAD_FADE = '[mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]';
 const FADE = '[mask-image:linear-gradient(to_bottom,transparent,black_28px,black_calc(100%-56px),transparent)]';
 
 /** One level of the way down to the open thread: a session that holds the level below it. */
@@ -57,14 +55,6 @@ type Props = {
  */
 const open: symbol[] = [];
 
-function CrumbMark({ crumb, className }: { crumb: Crumb; className: string }) {
-  return crumb.bot ? (
-    <BotAvatar seed={crumb.id} bare className={className} />
-  ) : (
-    <ProviderIcon provider={crumb.provider} className={className} />
-  );
-}
-
 /** Why there is nothing to write to, and the keys the thread answers to. */
 function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; parent: string; stoppable: boolean }) {
   const why =
@@ -94,7 +84,7 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
 }
 
 /**
- * One agent's thread as the whole pane: a breadcrumb header, the body by kind
+ * One agent's thread as the whole pane: a floating name pill with a close button, the body by kind
  * (a session's chat, a native subagent's steps, a shell's output), and either
  * the agent's own composer or a footer that says why there is none. The chat
  * that opened it stays mounted underneath. Esc goes back one level and never
@@ -172,79 +162,63 @@ export function AgentView({
     if (entry.kind === 'subagent' && parent) meta.push(`reports to ${parent.name}`);
     else if (entry.kind === 'session' && (startedBy ?? parent?.name)) meta.push(`started by ${startedBy ?? parent!.name}`);
   }
-  const ancestors = crumbs.slice();
-  const last = ancestors.length - 1;
+  const body = chat ? (
+    <div className="relative flex min-h-0 flex-1 flex-col">{chat}</div>
+  ) : command && entry.kind === 'shell' ? (
+    <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
+  ) : (
+    <div ref={scroller} className={`min-h-0 flex-1 overflow-y-auto ${FADE}`}>
+      <div className="mx-auto flex w-full max-w-[840px] flex-col gap-1 px-6 pt-6 pb-10">
+        {detail && view ? (
+          <SubagentBody detail={detail} state={view.state} marked={null} />
+        ) : (
+          <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
+        )}
+      </div>
+    </div>
+  );
+  const footer = !entry.writable && <ReadOnlyFooter entry={entry} parent={parent?.name ?? 'the session'} stoppable={stoppable} />;
+
+  // The pill names this thread only: a Crew session by its name, a native subagent by its type, never the prompt it was sent.
+  const name = entry.kind === 'subagent' && entry.origin === 'native' ? detail?.agentType || 'Subagent' : entry.title;
+  const elapsed = duration((entry.endedAt ?? now) - entry.startedAt);
 
   return (
     <div ref={root} className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id}>
-      <header className="mx-auto flex w-full max-w-[840px] shrink-0 flex-col gap-0.5 px-6 pt-5 pb-3" data-thread-header>
-        <div className="flex items-center gap-1">
-          <nav aria-label="Thread" className="flex min-w-0 flex-1 items-center gap-1">
-            {ancestors.map((crumb, index) => (
-              <span key={`${crumb.id}-${index}`} className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  onClick={crumb.back}
-                  title={`Back to ${crumb.name}`}
-                  className="h-7 gap-1.5 px-1.5 text-[13px] font-normal text-text-muted"
-                >
-                  {index === last && <ChevronLeftIcon className="size-3.5" />}
-                  <CrumbMark crumb={crumb} className="size-4" />
-                  <span className="max-w-[140px] truncate">{crumb.name}</span>
-                </Button>
-                <span className="text-placeholder">/</span>
-              </span>
-            ))}
-            <span className="flex min-w-0 items-center gap-1.5 pl-1">
-              <EntryIcon entry={entry} className="size-4 shrink-0" />
-              <span className="truncate text-[15px] leading-5 font-medium">{entry.title}</span>
-            </span>
-          </nav>
-          {/* Facts as plain text, the way Linear writes an issue's properties: no pills. */}
-          <span className="flex shrink-0 items-center gap-3 text-[12px] text-text-muted tabular-nums">
-            {tokens && <span title={tokensTitle(entry)}>{tokens}</span>}
-            <span className="flex items-center gap-1.5">
-              <StateDot state={entry.state} />
-              <span className="text-text">{state}</span>
-              {duration((entry.endedAt ?? now) - entry.startedAt)}
-            </span>
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-16 bg-gradient-to-b from-canvas via-canvas/90 to-transparent" />
+      <header className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center gap-2 px-6" data-thread-header>
+        <div
+          title={[...meta, branch, tokens && tokensTitle(entry)].filter(Boolean).join(' · ')}
+          className="pointer-events-auto flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-surface pr-2 pl-3 shadow-float"
+        >
+          <EntryIcon entry={entry} className="size-4 shrink-0" />
+          <span className="min-w-0 truncate text-[13px] leading-5 font-medium">{name}</span>
+          <span className="h-4 w-px shrink-0 bg-hairline" />
+          <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums">
+            <StateDot state={entry.state} />
+            <span className="text-text">{state}</span>
+            {elapsed}
           </span>
-          <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
           {stoppable && (
             <Button variant="ghost" keys="x" onClick={onStop} className="group/stop h-7 px-2 text-[12.5px] font-normal hover:text-danger">
               <SquareIcon className="size-2.5 fill-current text-icon group-hover/stop:text-danger" />
               Stop
             </Button>
           )}
-          <Kbd keys="esc" />
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-text-muted">
-          <span className="truncate">{meta.join(' · ')}</span>
-          {branch && (
-            <span title={worktree ?? ''} className="flex min-w-0 shrink items-center gap-1 before:content-['·'] before:mr-0.5">
-              <GitBranchIcon className="size-3 shrink-0" />
-              <span className="truncate">{branch}</span>
-            </span>
-          )}
-        </div>
+        <IconButton
+          icon={XIcon}
+          label="Close"
+          title={`Back to ${parent?.name ?? 'the session'}`}
+          onClick={onClose}
+          className="pointer-events-auto size-9 rounded-full bg-surface shadow-float"
+        />
       </header>
-      {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
-      {chat ? (
-        <div className="relative flex min-h-0 flex-1 flex-col">{chat}</div>
-      ) : command && entry.kind === 'shell' ? (
-        <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
-      ) : (
-        <div ref={scroller} className={`min-h-0 flex-1 overflow-y-auto ${FADE}`}>
-          <div className="mx-auto flex w-full max-w-[840px] flex-col gap-1 px-6 pt-6 pb-10">
-            {detail && view ? (
-              <SubagentBody detail={detail} state={view.state} marked={null} />
-            ) : (
-              <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
-            )}
-          </div>
-        </div>
-      )}
-      {!entry.writable && <ReadOnlyFooter entry={entry} parent={parent?.name ?? 'the session'} stoppable={stoppable} />}
+      <div className="relative z-0 flex min-h-0 flex-1 flex-col pt-14">
+        {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
+        <div className={`relative flex min-h-0 flex-1 flex-col ${HEAD_FADE}`}>{body}</div>
+      </div>
+      {footer}
     </div>
   );
 }
