@@ -137,7 +137,12 @@ function Lightbox({
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Backdrop className="crew-lightbox-scrim" />
-        <Dialog.Popup className="crew-lightbox" aria-label={file.name}>
+        <Dialog.Popup
+          className="crew-lightbox"
+          aria-label={file.name}
+          // The popup fills the viewport above the scrim, so the empty space around the image is the outside.
+          onClick={(event) => event.target === event.currentTarget && onClose()}
+        >
           {src ? <img src={src} alt={file.name} className="crew-lightbox-image" /> : null}
           <div className="crew-lightbox-bar">
             <span className="min-w-0 truncate">{file.name}</span>
