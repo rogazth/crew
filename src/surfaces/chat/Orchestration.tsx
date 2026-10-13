@@ -72,7 +72,7 @@ export function ToolLine({
   return (
     <div
       data-block={id}
-      className={`flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px] text-text-muted${id ? lit(id, marked) : ""}`}
+      className={`flex min-h-6 items-center gap-2 text-[13px] leading-[18px] text-text-muted${id ? lit(id, marked) : ""}`}
     >
       <span className="crew-node">
         <Glyph className="size-3.5" />
@@ -122,13 +122,13 @@ export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
       {peer.name}
     </>
   );
-  if (!peer.id) return <span className="inline-flex h-[18px] items-center gap-1 align-top text-text">{body}</span>;
+  if (!peer.id) return <span className="inline-flex h-[18px] items-center gap-1 align-top font-medium text-text">{body}</span>;
   const id = peer.id;
   return (
     <button
       type="button"
       onClick={() => openAgent(id, focus ? { focus } : undefined)}
-      className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top text-text hover:underline"
+      className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top font-medium text-text hover:underline"
     >
       {body}
     </button>
@@ -199,32 +199,21 @@ export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: stri
   );
 }
 
-/** What an agent said when it was done, where it arrived: the label opens its thread at that turn. */
+/**
+ * That an agent reported, where the report arrived: one row like the one that started it, and its name opens
+ * its thread at that turn, where the report is read whole. An agent with no thread to open shows the words here.
+ */
 export function Report({ peer, text, target, focus }: { peer: Peer; text: string; target: string | undefined; focus?: string }) {
-  const { openAgent } = useChatActions();
-  const label = (
-    <>
-      Report from
-      <PeerMark peer={peer} className="size-3.5" />
-      <span className="text-text">{peer.name}</span>
-    </>
-  );
   return (
-    <div className="ml-[26px] flex flex-col gap-1" data-report>
-      {target ? (
-        <button
-          type="button"
-          onClick={() => openAgent(target, focus ? { focus } : undefined)}
-          className="inline-flex items-center gap-1 self-start rounded-chrome text-[12px] text-text-muted hover:underline"
-        >
-          {label}
-        </button>
-      ) : (
-        <span className="inline-flex items-center gap-1 text-[12px] text-text-muted">{label}</span>
+    <div className="flex flex-col gap-1" data-report>
+      <ToolLine icon={BotIcon}>
+        Report from <PeerName peer={{ ...peer, id: target }} {...(focus ? { focus } : {})} />
+      </ToolLine>
+      {target ? null : (
+        <Hang className="bg-card px-3.5 py-2.5">
+          <LongText text={text} />
+        </Hang>
       )}
-      <div className="rounded-xl bg-card px-3.5 py-2.5">
-        <LongText text={text} />
-      </div>
     </div>
   );
 }
@@ -268,7 +257,7 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
       <ToolLine icon={BotIcon} id={block.id} marked={marked}>
         Started a subagent{" "}
         {entry ? (
-          <button type="button" onClick={() => openAgent(entry.id)} className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top text-text hover:underline">
+          <button type="button" onClick={() => openAgent(entry.id)} className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top font-medium text-text hover:underline">
             <PeerMark peer={peer} className="size-3.5" />
             {peer.name}
           </button>
