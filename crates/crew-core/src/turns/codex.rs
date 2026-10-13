@@ -135,7 +135,7 @@ pub(super) struct ChildWork {
 
 /// A change to a child's entry in the background board.
 pub(super) enum ChildBoard {
-    Spawned { thread: String, call: String, label: String, nickname: Option<String>, model: Option<String> },
+    Spawned { thread: String, call: String, label: String, nickname: Option<String>, model: Option<String>, effort: Option<String> },
     State(String, BackgroundState),
     Usage { thread: String, tokens: u64, window: Option<u64> },
     Activity(String, String),
@@ -1141,8 +1141,8 @@ impl TurnHost {
                 let mut changed = false;
                 for change in &work.board {
                     changed |= match change {
-                        ChildBoard::Spawned { thread, call, label, nickname, model } => {
-                            board.agent_child(thread, call, label, nickname.as_deref(), model.as_deref(), now)
+                        ChildBoard::Spawned { thread, call, label, nickname, model, effort } => {
+                            board.agent_child(thread, call, label, nickname.as_deref(), model.as_deref(), effort.as_deref(), now)
                         }
                         ChildBoard::State(thread, state) => board.agent_child_state(thread, *state, now),
                         ChildBoard::Usage { thread, tokens, window } => board.agent_child_usage(thread, *tokens, *window),
@@ -1524,6 +1524,7 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
     };
     let label = exec_item(item).map(|row| tool_label(&row)).unwrap_or_else(|| "Subagent".into());
     let model = string_field(Some(item), "model").filter(|model| !model.is_empty());
+    let effort = string_field(Some(item), "reasoningEffort").filter(|effort| !effort.is_empty());
     for thread in threads {
         if live.thread_id.as_deref() == Some(thread.as_str()) {
             continue;
@@ -1541,6 +1542,7 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
             label: label.clone(),
             nickname,
             model: model.clone(),
+            effort: effort.clone(),
         });
         for (method, params) in held {
             child_note(live, &thread, &method, &params, work);
@@ -1782,7 +1784,7 @@ def run(turn, text):
         child_out("turn/started", {"turn": {"id": CHILD_TURN, "status": "inProgress"}})
         echo = {"type": "commandExecution", "id": "child-exec", "command": "/bin/zsh -lc 'echo one'", "cwd": os.getcwd(), "status": "inProgress", "aggregatedOutput": None, "exitCode": None}
         child_item("started", echo)
-        item("completed", dict(spawn, status="completed", model="gpt-5.6-luna", receiverThreadIds=[CHILD], agentsStates={CHILD: {"status": "pendingInit", "message": None}}))
+        item("completed", dict(spawn, status="completed", model="gpt-5.6-luna", reasoningEffort="low", receiverThreadIds=[CHILD], agentsStates={CHILD: {"status": "pendingInit", "message": None}}))
         def child_work():
             said = "msg_child"
             child_item("started", {"type": "agentMessage", "id": said, "text": "", "phase": "final_answer"})
@@ -2464,6 +2466,7 @@ mod child_tests {
         assert_eq!((row.tokens, row.window), (Some(4000), Some(100_000)));
         assert_eq!((row.thread_id.as_deref(), row.tool_call_id.as_deref()), (Some(CHILD), Some("spawn-1")));
         assert_eq!((row.model.as_deref(), row.stoppable, row.activity), (Some("gpt-5.6-luna"), Some(true), None));
+        assert_eq!(row.effort.as_deref(), Some("low"), "the effort the spawn ran at");
         assert!(row.ended_at.is_some());
         assert_eq!(host.background_list(&session).commands.len(), 1, "the agent is no terminal");
     }

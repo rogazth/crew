@@ -76,6 +76,11 @@ activity?: string,
  */
 model?: string, 
 /**
+ * The reasoning effort a subagent runs at, as its CLI spells it, when
+ * the CLI says: Codex's `reasoningEffort`, opencode's model variant.
+ */
+effort?: string, 
+/**
  * A subagent the turn is still waiting on, as opposed to one sent to the
  * background. A foreground one ends with the turn that started it.
  */

@@ -80,6 +80,11 @@ pub struct BackgroundCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
+    /// The reasoning effort a subagent runs at, as its CLI spells it, when
+    /// the CLI says: Codex's `reasoningEffort`, opencode's model variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<String>,
     /// A subagent the turn is still waiting on, as opposed to one sent to the
     /// background. A foreground one ends with the turn that started it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +195,7 @@ mod tests {
             stop_note: Some("stops with the turn".into()),
             activity: Some("Grep".into()),
             model: Some("claude-haiku-5-5".into()),
+            effort: None,
             foreground: Some(true),
             thread_id: Some("th_child".into()),
         };

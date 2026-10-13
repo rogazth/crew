@@ -7627,6 +7627,39 @@ time.sleep(600)
         assert!(compacted.used < after.used || compacted.stale.is_some(), "{after:?} then {compacted:?}");
     }
 
+    /// Runs the real opencode 2.x server on a free model, isolated as above:
+    /// a turn that starts one task subagent. Its entry names the model it ran
+    /// on and, when opencode gives it a variant, the effort.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 --nocapture live_opencode_a_subagent`
+    #[test]
+    #[ignore]
+    fn live_opencode_a_subagent_entry_names_its_model() {
+        use crew_protocol::BackgroundKind;
+        let w = world();
+        let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
+        let home = w.dir.join("opencode-home");
+        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+            let dir = home.join(sub);
+            std::fs::create_dir_all(&dir).expect("dir");
+            std::env::set_var(key, dir);
+        }
+        w.turns.override_binary("opencode", binary);
+        let _reap = Reap(&w, "opencode:server".into());
+        let model = std::env::var("OPENCODE_LIVE_MODEL").unwrap_or_else(|_| "opencode/nemotron-3.5-lightning-free".into());
+        let mine = w.user_session("opencode", &model, "full");
+        w.type_to(
+            &mine,
+            "Use the task tool to start exactly one general subagent whose task is to reply with just the word one. Wait for it, then reply with just the word finished.",
+            None,
+            None,
+        );
+        until_long("the turn ended", Duration::from_secs(240), || !w.turns.is_running(&mine.id));
+        let list = w.turns.background_list(&mine.id);
+        eprintln!("entries: {:#?}", list.commands);
+        let row = list.commands.iter().find(|row| row.kind == BackgroundKind::Subagent).expect("an entry for the subagent");
+        assert_eq!(row.model.as_deref(), Some(model.as_str()), "{row:?}");
+    }
+
     /// Runs the real `cursor-agent acp` on its auto model: three short turns.
     /// The first two share one process and one ACP session; Crew's MCP server
     /// started with the session answers on the second turn; the meter reads
@@ -7695,7 +7728,7 @@ time.sleep(600)
         let report = w.live_say(
             &parent,
             &id,
-            "Spawn exactly one subagent whose task is to reply with just the word one. Wait for it, then reply with just the word finished. Do nothing else.",
+            "You must call the spawn_agent tool exactly once, with the task: reply with just the word one. Do not answer before spawning it. Wait for the agent, then reply with just the word finished.",
         );
         w.settle(&id);
         let list = until_background(&w, &id, |list| list.commands.iter().any(|row| row.state != BackgroundState::Running));
@@ -7709,6 +7742,7 @@ time.sleep(600)
         assert_eq!(row.state, BackgroundState::Completed, "{row:?}");
         assert!(row.thread_id.is_some() && row.tool_call_id.is_some(), "{row:?}");
         assert!(row.tokens.is_some_and(|tokens| tokens > 0) && row.window.is_some(), "{row:?}");
+        assert!(row.model.is_some() && row.effort.is_some(), "the agent's model and effort: {row:?}");
         let call = blocks
             .iter()
             .filter_map(|block| block.tool.as_ref())

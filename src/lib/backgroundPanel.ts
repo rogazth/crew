@@ -9,6 +9,7 @@
 import { isRunning } from "./background";
 import { tokenCount } from "./contextMeter";
 import { summarize } from "./activity";
+import { EFFORT_LABELS, modelLabel, type Effort } from "./providers";
 import { childState, isOwnedChild, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
 import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, BotRef, Process, ProcessRun, ThreadPair } from "./protocol";
 import { duration } from "./time";
@@ -50,6 +51,8 @@ export type PanelEntry = {
   tokens?: number;
   window?: number;
   model?: string;
+  /** The reasoning effort it runs at, when its source says: Claude's native subagents never do. */
+  effort?: string;
   activity?: string;
   stoppable: boolean;
   /** Why it cannot be stopped alone, or why it stopped when nobody asked. */
@@ -121,6 +124,7 @@ function fromCommand(command: BackgroundCommand, live: boolean, provider: string
       tokens: command.tokens,
       window: command.window,
       model: command.model,
+      effort: command.effort,
       activity: command.activity,
       // A native subagent is the parent's own CLI at work.
       provider: kind === "subagent" ? provider : undefined,
@@ -152,6 +156,7 @@ function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
       attention: ATTENTION[reason],
       endedAt: state === "running" ? undefined : (session.lastEvent?.at ?? session.updatedAt),
       model: session.model || undefined,
+      effort: session.effort || undefined,
       provider: session.provider,
     }),
     stoppable: state === "running",
@@ -296,15 +301,29 @@ export function conversationsOf(pairs: readonly ThreadPair[], owner: Party): Con
 export const KIND_LABEL: Record<PanelKind, string> = { subagent: "Subagent", session: "Session", shell: "Shell", process: "Process" };
 
 /**
- * A row's second line: the kind, then how long it has run, or how it ended and
+ * A row's second line: the kind and its model, then how long it has run, or how it ended and
  * after how long. A source that never says when it ended (a process) names its
  * state alone; a note on why it ended is kept at the end.
  */
 export function entryDetail(entry: PanelEntry, now: number): string {
-  const kind = KIND_LABEL[entry.kind];
+  const model = modelLine(entry);
+  const kind = model ? `${KIND_LABEL[entry.kind]} · ${model}` : KIND_LABEL[entry.kind];
   if (entry.state === "running") return `${kind} · ${duration(now - entry.startedAt)}`;
   const ended = entry.endedAt === undefined ? entry.state : `${entry.state} after ${duration(entry.endedAt - entry.startedAt)}`;
   return `${kind} · ${ended}${entry.stopNote ? ` · ${entry.stopNote}` : ""}`;
+}
+
+/**
+ * "Haiku 5.5 · high": the model as the picker names it, and the effort when
+ * known; null when the source names no model. An id Crew does not list is
+ * kept as is, without the date a CLI stamps on it.
+ */
+export function modelLine(entry: PanelEntry): string | null {
+  if (!entry.model) return null;
+  const id = entry.model.replace(/-\d{8}$/, "");
+  const model = entry.provider ? modelLabel(entry.provider, id) : id;
+  const effort = entry.effort && (EFFORT_LABELS[entry.effort as Effort]?.toLowerCase() ?? entry.effort);
+  return effort ? `${model} · ${effort}` : model;
 }
 
 /** "41k tokens" for an entry whose source counts them; null when it does not, or none were used. */

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { SquareIcon, XIcon } from 'lucide-react';
 import { IconButton } from '../../chrome/kit';
 import { useNow } from '../../hooks/useNow';
-import { KIND_LABEL, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
+import { KIND_LABEL, modelLine, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
 import type { Block } from '../../lib/blocks';
 import type { BackgroundCommand } from '../../lib/protocol';
 import { agentDetail, subagentView, threadBlocks } from '../../lib/subagent';
@@ -175,13 +175,14 @@ export function AgentView({
   }, [steps, running]);
 
   const tokens = tokensLabel(entry);
+  const model = modelLine(entry);
   const state = entry.state[0]!.toUpperCase() + entry.state.slice(1);
   const branch = worktree ? worktree.split('/').pop() : null;
   const meta: ReactNode[] = [KIND_LABEL[entry.kind]];
   if (entry.kind === 'shell') meta.push(entry.title);
   else {
     if (entry.kind === 'session') meta.push('yours');
-    else if (entry.model) meta.push(entry.model);
+    else if (entry.model) meta.push(entry.effort ? `${entry.model} · ${entry.effort}` : entry.model);
     if (entry.kind === 'subagent' && parent) meta.push(`reports to ${parent.name}`);
     else if (entry.kind === 'session' && (startedBy ?? parent?.name)) meta.push(`started by ${startedBy ?? parent!.name}`);
   }
@@ -216,6 +217,7 @@ export function AgentView({
         >
           <EntryIcon entry={entry} className="size-4 shrink-0" />
           <span className="min-w-0 truncate text-[13px] leading-5 font-medium">{name}</span>
+          {model && <span className="shrink-0 text-[12px] text-text-muted">{model}</span>}
           <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums">
             <StateDot state={entry.state} />

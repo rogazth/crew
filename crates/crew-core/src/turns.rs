@@ -5047,6 +5047,7 @@ mod mailbox_tests {
         assert_eq!(row.tool_call_id.as_deref(), Some(call.as_str()));
         assert_eq!(row.thread_id.as_deref(), Some(row.id.as_str()));
         assert_eq!(row.model.as_deref(), Some("opencode/nemotron-3.5-lightning-free"));
+        assert_eq!(row.effort, None, "opencode's default variant is no effort");
         assert_eq!(row.description.as_deref(), Some("Reply with pong"));
         assert_eq!(row.tokens, Some(3000 + 10 + 2 + 1000));
         assert_eq!((row.stoppable, row.activity), (Some(true), None));
@@ -5469,6 +5470,7 @@ mod background_stop_tests {
             stop_note: note.map(str::to_string),
             activity: None,
             model: None,
+            effort: None,
             foreground: None,
             thread_id: None,
         }

@@ -476,6 +476,7 @@ impl Board {
                     stop_note: None,
                     activity: None,
                     model: None,
+                    effort: None,
                     foreground: None,
                     thread_id: None,
                 };
@@ -593,6 +594,7 @@ impl Board {
                                 stop_note: None,
                                 activity: None,
                                 model: None,
+                                effort: None,
                                 foreground: None,
                                 thread_id: None,
                             }
@@ -761,6 +763,7 @@ impl Board {
         label: &str,
         nickname: Option<&str>,
         model: Option<&str>,
+        effort: Option<&str>,
         now: i64,
     ) -> bool {
         if let Some(known) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) {
@@ -770,6 +773,9 @@ impl Board {
             }
             if known.model.is_none() {
                 known.model = model.map(str::to_string);
+            }
+            if known.effort.is_none() {
+                known.effort = effort.map(str::to_string);
             }
             return *known != before;
         }
@@ -790,6 +796,7 @@ impl Board {
             stop_note: None,
             activity: None,
             model: model.map(str::to_string),
+            effort: effort.map(str::to_string),
             foreground: None,
             thread_id: Some(thread.to_string()),
         })
@@ -904,6 +911,7 @@ impl Board {
                 stop_note: None,
                 activity: None,
                 model: None,
+                effort: None,
                 foreground: None,
                 thread_id: None,
             });
@@ -1490,8 +1498,8 @@ mod tests {
     #[test]
     fn a_codex_agent_thread_is_a_row_its_turns_start_and_end_and_no_terminal_listing_settles() {
         let mut board = Board::default();
-        assert!(board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 5));
-        assert!(!board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 6), "named twice");
+        assert!(board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), Some("low"), 5));
+        assert!(!board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), Some("low"), 6), "named twice");
         let row = board.command("t2").unwrap();
         assert_eq!((row.kind, row.state, row.started_at), (BackgroundKind::Subagent, BackgroundState::Running, 5));
         assert_eq!((row.thread_id.as_deref(), row.tool_call_id.as_deref(), row.stoppable), (Some("t2"), Some("call-1"), Some(true)));

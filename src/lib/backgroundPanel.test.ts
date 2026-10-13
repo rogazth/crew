@@ -5,6 +5,7 @@ import {
   clearedKey,
   entryDetail,
   finishedKeys,
+  modelLine,
   panelEntries,
   panelSummary,
   stepCursor,
@@ -419,6 +420,16 @@ describe("what a row says", () => {
     expect(entryDetail(ended({ state: "stopped", kind: "subagent", endedAt: 1000 + 4_000, stopNote: "its CLI exited" }), 0)).toBe(
       "Subagent · stopped after 4s · its CLI exited",
     );
+  });
+
+  it("names the model as the picker does, with its effort when known", () => {
+    const sub = { state: "running", kind: "subagent", provider: "claude" } as const;
+    expect(modelLine(ended({ ...sub, model: "claude-haiku-5-5" }))).toBe("Haiku 5.5");
+    expect(modelLine(ended({ ...sub, model: "claude-haiku-5-5-20261001" }))).toBe("Haiku 5.5");
+    expect(modelLine(ended({ ...sub, model: "claude-opus-5-5", effort: "xhigh" }))).toBe("Opus 5.5 · extra high");
+    expect(modelLine(ended({ ...sub, model: "some-new-model" }))).toBe("some-new-model");
+    expect(modelLine(ended(sub))).toBeNull();
+    expect(entryDetail(ended({ ...sub, model: "claude-haiku-5-5" }), 1000 + 9_000)).toBe("Subagent · Haiku 5.5 · 9s");
   });
 
   it("names only the state of an ended entry whose source never says when", () => {

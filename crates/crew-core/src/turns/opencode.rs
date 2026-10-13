@@ -119,6 +119,8 @@ struct Child {
     call: Option<String>,
     /// `provider/id` of its model, and that model's window.
     model: Option<String>,
+    /// Its model's variant, the effort it runs at; opencode's "default" is none.
+    effort: Option<String>,
     window: Option<u64>,
     held: Vec<(String, Value)>,
     /// Its calls, by id: the tool and input an end names only by the call.
@@ -966,6 +968,11 @@ impl TurnHost {
             let model = data.get("model").and_then(|model| {
                 Some(format!("{}/{}", model.get("providerID")?.as_str()?, model.get("id")?.as_str()?))
             });
+            let effort = data
+                .pointer("/model/variant")
+                .and_then(Value::as_str)
+                .filter(|variant| !variant.is_empty() && *variant != "default")
+                .map(str::to_string);
             let window = model.as_deref().and_then(|model| self.opencode.window(model));
             let owner = self.opencode.route(parent);
             let mut map = self.lock();
@@ -977,7 +984,7 @@ impl TurnHost {
             });
             if let Some(Live::Opencode(live)) = owner.and_then(|id| map.get_mut(&id)) {
                 let window = window.or(live.window);
-                live.children.entry(oc.to_string()).or_insert_with(|| Child { model, window, ..Child::default() });
+                live.children.entry(oc.to_string()).or_insert_with(|| Child { model, effort, window, ..Child::default() });
             }
             return;
         }
@@ -1408,6 +1415,7 @@ fn link_child(live: &mut OpencodeLive, from: Option<&str>, call: &str, child: &s
         label: tool_label(&name, &input),
         nickname: input.get("description").and_then(Value::as_str).map(str::to_string),
         model: entry.model.clone(),
+        effort: entry.effort.clone(),
     });
     let held = std::mem::take(&mut entry.held);
     for (kind, data) in held {
