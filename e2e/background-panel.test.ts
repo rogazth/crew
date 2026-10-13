@@ -163,8 +163,11 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   // One header, a breadcrumb: where it is, once.
   assert.equal(await visible("[data-thread-header]").count(), 1, "exactly one header is on screen");
   const header = await page.locator("[data-thread-header]").innerText();
-  assert.match(header, new RegExp(`${chat.name}\\s*/\\s*Lint pass`), header);
-  assert.match(header, /Subagent .*reports to /s, header);
+  assert.match(header, /Lint pass/, header);
+  assert.doesNotMatch(header, new RegExp(chat.name), "the pill names only this session");
+  assert.equal(await page.locator("[data-thread-header]").getByRole("button", { name: "Close" }).count(), 1, "a round close button");
+  assert.doesNotMatch(header, /esc/i, "no key hint in the header");
+  assert.match((await page.locator("[data-thread-header] [title]").first().getAttribute("title")) ?? "", /Subagent .*reports to /s);
   assert.doesNotMatch(header + (await page.innerText()), /Back to the chat|Started by/);
   assert.equal(await visible("text=Conversations").count(), 0, "no parent bar over the thread");
 
@@ -351,7 +354,7 @@ test("a shell opens in place under the same header, with its output and no compo
   await page.locator("[data-background-output]").waitFor();
   assert.equal(await page.locator("textarea").count(), 0);
   assert.match(await page.locator("[data-thread-header]").innerText(), /npm test/);
-  assert.match(await page.locator("[data-thread-header]").innerText(), /Shell/);
+  assert.match((await page.locator("[data-thread-header] [title]").first().getAttribute("title")) ?? "", /Shell/);
   assert.match(await page.locator("[data-thread-footer]").innerText(), /Output of a shell/);
   await shoot("thread-shell");
   await crew.window.keyboard.press("Escape");
