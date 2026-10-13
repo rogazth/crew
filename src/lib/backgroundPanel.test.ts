@@ -188,7 +188,8 @@ describe("panelEntries", () => {
     expect(byName.asking).toMatchObject({ state: "running" });
     expect(byName.reported).toMatchObject({ state: "done", endedAt: 500, stoppable: false });
     expect(byName.failed).toMatchObject({ state: "failed", endedAt: 6 });
-    expect(byName.exited).toMatchObject({ state: "stopped", stopNote: "its CLI exited" });
+    expect(byName.exited).toMatchObject({ state: "stopped" });
+    expect(byName.exited?.stopNote).toBeUndefined();
     expect(byName.stopped).toMatchObject({ state: "stopped" });
     expect(byName.stopped).not.toHaveProperty("stopNote");
   });

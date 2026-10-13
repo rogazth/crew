@@ -153,7 +153,6 @@ function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
       endedAt: state === "running" ? undefined : (session.lastEvent?.at ?? session.updatedAt),
       model: session.model || undefined,
       provider: session.provider,
-      stopNote: reason === "exited" ? "its CLI exited" : undefined,
     }),
     stoppable: state === "running",
     source: { type: "session", id: session.id },
