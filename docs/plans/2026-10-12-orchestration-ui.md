@@ -435,8 +435,8 @@ report, light and dark.
 | 10–16 | The thread, in place | to do (step 3) |
 | 17 | No tab for a subagent | to do (step 8) |
 | 18 | Conversations only between bots | to do (step 4) |
-| 19–21 | Subagents, reports, sessions started | to do (steps 1, 5) |
-| 22–24 | Messages and control rows | to do (steps 1, 6) |
-| 25 | Answer a child from the parent | to do (step 7) |
+| 19–21 | Subagents, reports, sessions started | protocol done (step 1); rows to do (step 5) |
+| 22–24 | Messages and control rows | protocol done (step 1); rows to do (step 6) |
+| 25 | Answer a child from the parent | `letterKind` done (step 1); card to do (step 7) |
 | 26 | Removals | with each step |
 | 27 | Design system | with each step |
