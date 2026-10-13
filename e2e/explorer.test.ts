@@ -27,6 +27,7 @@ before(async () => {
           "README.md": "# app\n",
         },
       },
+      { name: "other", files: { "lib/other.ts": "export {};\n" } },
     ],
   });
   repo = crew.workspaces[0]!.path;
@@ -150,4 +151,42 @@ test("X4: ⌘⇧E and ⌘⇧F close their half when it shows, wherever the keybo
   await treeRow("src").waitFor();
   await pressChord(crew, `${MOD}+Shift+e`);
   await explorer().waitFor({ state: "detached" });
+});
+
+test("X5: each workspace keeps its own explorer, open or closed, across a reload", async () => {
+  const [app, other] = crew.workspaces;
+  assert.ok(app && other);
+  // Open in app on the files half.
+  await pressChord(crew, `${MOD}+Shift+e`);
+  await treeRow("src").waitFor();
+
+  // other never had it open: closed there, and opened on search.
+  await pressChord(crew, `${MOD}+2`);
+  await explorer().waitFor({ state: "detached" });
+  await pressChord(crew, `${MOD}+Shift+f`);
+  await explorer().getByRole("textbox", { name: "Search in files" }).waitFor();
+  await pressChord(crew, `${MOD}+Shift+f`);
+  await explorer().waitFor({ state: "detached" });
+
+  // Back in app it still shows its files, and other's stays closed.
+  await pressChord(crew, `${MOD}+1`);
+  await treeRow("src").waitFor();
+  await pressChord(crew, `${MOD}+2`);
+  await explorer().waitFor({ state: "detached" });
+
+  // crewd keeps each one's.
+  assert.deepEqual(JSON.parse((await crew.request<string>("state_get", { key: `explorer:view:${app.id}` })) ?? "null"), {
+    open: true,
+    mode: "files",
+  });
+  assert.deepEqual(JSON.parse((await crew.request<string>("state_get", { key: `explorer:view:${other.id}` })) ?? "null"), {
+    open: false,
+    mode: "search",
+  });
+  await crew.reload();
+  await pressChord(crew, `${MOD}+1`);
+  await treeRow("src").waitFor();
+  await pressChord(crew, `${MOD}+2`);
+  await crew.window.getByRole("tree", { name: "Files" }).waitFor({ state: "detached" });
+  assert.equal(await explorer().count(), 0, "other's explorer stays closed after the reload");
 });

@@ -73,10 +73,10 @@ export function App() {
 
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
-  const explorer = useExplorer();
   const explorerWidth = useSidebarWidth("explorer:width", 280);
   const active = workspaces.active;
   const workspaceId = active?.id ?? null;
+  const explorer = useExplorer(workspaceId);
   // Home is a workspace with no project: one folder, no git, its own panel and start page.
   const isHome = active?.home === true;
   const {
@@ -113,13 +113,15 @@ export function App() {
   // tabs open or closed, crewd ends with the workspace.
   const { dropWorkspace: forgetTabs } = tabs;
   const { remove: deleteWorkspace } = workspaces;
+  const { forget: forgetExplorer } = explorer;
   const removeWorkspace = useCallback(
     async (id: string) => {
       forgetTabs(id);
       forgetSessions(id);
       await deleteWorkspace(id);
+      forgetExplorer(id);
     },
-    [deleteWorkspace, forgetSessions, forgetTabs],
+    [deleteWorkspace, forgetExplorer, forgetSessions, forgetTabs],
   );
 
   // The daemon deletes its sessions with it; the strip it had goes the way a
