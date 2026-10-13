@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, settleTurn, type Block, type HarnessEvent } from "./blocks";
-import { currentStep, shownSteps, subagentSuffix, subagentView } from "./subagent";
+import type { PanelEntry } from "./backgroundPanel";
+import { callsOfEntry, currentStep, entryOfCall, resumesEntry, shownSteps, subagentSuffix, subagentView, threadBlocks } from "./subagent";
 import { foldTurns, groupRows, type Row } from "./transcriptRows";
 
 const AGENT = { kind: "agent", description: "Find the parser", agentType: "Explore", prompt: "Where is it?" } as const;
@@ -213,5 +214,64 @@ describe("the opened row", () => {
     expect(shownSteps({ ...AGENT, steps, output: "It is in a.ts, line 4." }).map((s) => s.id)).toEqual(["s1"]);
     expect(shownSteps({ ...AGENT, steps, output: "Something else." }).map((s) => s.id)).toEqual(["s1", "s2"]);
     expect(shownSteps({ ...AGENT, steps }).map((s) => s.id)).toEqual(["s1", "s2"]);
+  });
+});
+
+describe("a subagent that a second call continues", () => {
+  const call = (id: string, detail: object, extra: Partial<Block> = {}): Block => ({
+    id: `b-${id}`,
+    role: "tool",
+    text: "",
+    tool: { callId: id, name: "subagent", title: "Subagent", status: "completed", detail: { ...AGENT, ...detail } as never },
+    ...extra,
+  });
+  const first = call("c1", { prompt: "First ask", output: "First answer", state: "done", thread: "ses_1", steps: [{ id: "s1", role: "tool", text: "ls" }] });
+  const second = call("c2", { prompt: "Second ask", output: "Second answer", state: "done", thread: "ses_1" });
+  const entry: PanelEntry = {
+    id: "command:ses_1",
+    kind: "subagent",
+    origin: "native",
+    writable: false,
+    title: "x",
+    detail: "",
+    state: "done",
+    startedAt: 0,
+    stoppable: false,
+    callId: "c1",
+    source: { type: "command", id: "ses_1" },
+  };
+
+  it("links the second call to the entry the first started", () => {
+    expect(entryOfCall([entry], first)).toBe(entry);
+    expect(entryOfCall([entry], second)).toBe(entry);
+    expect(resumesEntry(entry, first)).toBe(false);
+    expect(resumesEntry(entry, second)).toBe(true);
+    expect(entryOfCall([entry], call("c3", { thread: "ses_other" }))).toBeUndefined();
+  });
+
+  it("gathers the entry's calls in the order the transcript holds them", () => {
+    const other = call("c9", { thread: "ses_2" });
+    expect(callsOfEntry([first, other, second], entry).map((b) => b.id)).toEqual(["b-c1", "b-c2"]);
+  });
+
+  it("reads as a chat: each ask, its steps and its answer, in order", () => {
+    const blocks = threadBlocks([first, second]);
+    expect(blocks.map((b) => [b.role, b.text])).toEqual([
+      ["user", "First ask"],
+      ["tool", "ls"],
+      ["assistant", "First answer"],
+      ["user", "Second ask"],
+      ["assistant", "Second answer"],
+    ]);
+    expect(blocks.every((b) => b.at === undefined)).toBe(true);
+    expect(kinds(groupRows(blocks))).toEqual(["message", "activity", "message", "message", "message"]);
+  });
+
+  it("says so when a call ended with nothing to report", () => {
+    const quiet = call("c4", { prompt: "Ask", state: "stopped", output: undefined });
+    expect(threadBlocks([quiet]).map((b) => [b.role, b.text])).toEqual([
+      ["user", "Ask"],
+      ["system", "Stopped before reporting back."],
+    ]);
   });
 });

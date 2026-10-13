@@ -15,15 +15,12 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block, type SubagentState } from "../../lib/blocks";
-import { shownSteps, type AgentDetail } from "../../lib/subagent";
+import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
-import { groupRows } from "../../lib/transcriptRows";
 import { ApprovalCard } from "./ApprovalCard";
 import { AttachmentStrip } from "./Attachments";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
-import { Pre, Prose } from "./ToolParts";
 
 /** streamdown is half a megabyte: a thought loads it only once it is opened. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -356,68 +353,6 @@ function ToolRow({
       <div className="crew-tool-files">
         <AttachmentStrip files={block.files} />
       </div>
-    </div>
-  );
-}
-
-/**
- * What a subagent did, as its row opens it and as its page in the background
- * panel shows it: what it was asked, its steps, and what it brought back.
- */
-export function SubagentBody({ detail, state, marked }: { detail: AgentDetail; state: SubagentState; marked: string | null }) {
-  const steps = useMemo(() => shownSteps(detail), [detail]);
-  return (
-    <>
-      {detail.prompt ? <Pre head="asked" text={detail.prompt} wrap /> : null}
-      {steps.length > 0 ? <SubagentSteps steps={steps} running={state === "running"} marked={marked} /> : null}
-      {detail.output ? <Prose text={detail.output} /> : <p className="py-0.5 text-[12.5px] text-text-muted">{STATE_NOTE[state]}</p>}
-    </>
-  );
-}
-
-const STATE_NOTE: Record<SubagentState, string> = {
-  running: "Working…",
-  done: "Nothing came back.",
-  failed: "It failed before reporting back.",
-  stopped: "Stopped before reporting back.",
-};
-
-const noApprove = () => {};
-const noAnswer = () => {};
-
-/** Its steps, drawn as the transcript draws a turn: calls in phases, its words between them. */
-function SubagentSteps({ steps, running, marked }: { steps: Block[]; running: boolean; marked: string | null }) {
-  const rows = useMemo(() => groupRows(steps), [steps]);
-  return (
-    <div className="flex flex-col gap-1.5 py-0.5">
-      {rows.map((row, index) => {
-        if (row.kind === "activity") {
-          return (
-            <ActivityGroup
-              key={row.id}
-              blocks={row.blocks}
-              live={running && index === rows.length - 1}
-              focusId={null}
-              marked={marked}
-              onApprove={noApprove}
-              onAnswer={noAnswer}
-              flat
-            />
-          );
-        }
-        if (row.kind === "message" && row.block.role === "assistant" && row.block.text.trim()) {
-          return (
-            <p
-              key={row.block.id}
-              data-block={row.block.id}
-              className="whitespace-pre-wrap py-0.5 text-[13px] leading-[19px] text-text-muted"
-            >
-              {row.block.text.trim()}
-            </p>
-          );
-        }
-        return null;
-      })}
     </div>
   );
 }

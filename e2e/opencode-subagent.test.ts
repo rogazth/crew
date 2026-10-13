@@ -118,3 +118,32 @@ test("Stop on a running subagent ends the child and not the parent's turn", asyn
   const calls = (await interrupts()).slice(before);
   assert.equal(calls.length, 1, "only the child was interrupted");
 });
+
+test("a second call that continues the same subagent is its own card and opens the same thread with both turns", async () => {
+  await send("again SUBAGENT RESUME");
+  await idle();
+  await crew.window.getByText("Done: again SUBAGENT RESUME", { exact: true }).waitFor();
+  const cards = crew.window.locator("[data-agent-card]");
+  await waitFor(async () => (await cards.count()) >= 2, { message: "one card per call" });
+  const resumed = crew.window.getByText("Resumed a subagent");
+  await resumed.last().waitFor();
+  assert.equal(await resumed.count(), 1);
+  // Each call brought its own report back, in order.
+  assert.equal((await crew.window.locator("[data-report]").count()) >= 2, true);
+  await shoot("transcript");
+
+  await cards.last().click();
+  await page().waitFor();
+  const thread = page();
+  await thread.getByText("Reply with the single word pong.", { exact: true }).waitFor();
+  await thread.getByText("Again, reply with the single word pong.", { exact: true }).waitFor();
+  await thread.getByText("pong again", { exact: true }).waitFor();
+  const text = await thread.innerText();
+  assert.ok(text.indexOf("Reply with the single word pong.") < text.indexOf("Again, reply"), text);
+  assert.ok(text.indexOf("Again, reply") < text.indexOf("pong again"), text);
+  // No wrapper card around the answers: they are chat messages.
+  assert.equal(await thread.locator(".ring-1.ring-hairline").count(), 0);
+  await shoot("thread");
+  await crew.window.keyboard.press("Escape");
+  await page().waitFor({ state: "detached" });
+});

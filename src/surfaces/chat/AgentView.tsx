@@ -1,15 +1,17 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { SquareIcon, XIcon } from 'lucide-react';
 import { Button, IconButton } from '../../chrome/kit';
 import { useNow } from '../../hooks/useNow';
 import { KIND_LABEL, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
 import type { Block } from '../../lib/blocks';
 import type { BackgroundCommand } from '../../lib/protocol';
-import { agentDetail, subagentView } from '../../lib/subagent';
+import { agentDetail, subagentView, threadBlocks } from '../../lib/subagent';
+import { foldTurns, groupRows } from '../../lib/transcriptRows';
 import { duration } from '../../lib/time';
-import { SubagentBody } from './Activity';
+import { WorkingLine } from './Activity';
 import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
+import { Rows } from './Rows';
 
 const HEAD_FADE = '[mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]';
 const FADE = '[mask-image:linear-gradient(to_bottom,transparent,black_28px,black_calc(100%-56px),transparent)]';
@@ -33,8 +35,8 @@ type Props = {
   startedBy?: string;
   /** The worktree it runs in, when it has one of its own. */
   worktree?: string | null;
-  /** A native subagent's call in the transcript: its steps live in it. */
-  block: Block | null;
+  /** A native subagent's calls in the transcript, oldest first: its steps live in them. A call that continued it adds one. */
+  blocks: readonly Block[];
   /** The board command behind a shell. */
   command?: BackgroundCommand;
   /** The session that holds the command, and whether its CLI is up, to read a shell's output. */
@@ -83,6 +85,24 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
   );
 }
 
+const noApprove = () => {};
+const noAnswer = () => {};
+
+/** A native subagent's thread, drawn as the chat draws its own: its prompts, its steps and its answers, in order. */
+function SubagentTranscript({ blocks, working }: { blocks: readonly Block[]; working: boolean }) {
+  const rows = useMemo(() => foldTurns(groupRows(threadBlocks(blocks)), working), [blocks, working]);
+  return (
+    <>
+      <Rows rows={rows} working={working} focusId={null} onApprove={noApprove} onAnswer={noAnswer} />
+      {working && (
+        <div className={rows.length > 0 ? 'mt-2.5' : ''}>
+          <WorkingLine since={blocks.at(-1)?.at} waiting={false} />
+        </div>
+      )}
+    </>
+  );
+}
+
 /**
  * One agent's thread as the whole pane: a floating name pill with a close button, the body by kind
  * (a session's chat, a native subagent's steps, a shell's output), and either
@@ -95,7 +115,7 @@ export function AgentView({
   crumbs,
   startedBy,
   worktree,
-  block,
+  blocks,
   command,
   sessionId,
   live,
@@ -111,8 +131,11 @@ export function AgentView({
   const scroller = useRef<HTMLDivElement>(null);
   // An agent with a composer stops from it, as any session does.
   const stoppable = running && entry.stoppable && !entry.writable;
-  const detail = block ? agentDetail(block) : null;
-  const view = block ? subagentView(block) : null;
+  // The newest call is the one at work; the first names the thread.
+  const first = blocks[0];
+  const last = blocks.at(-1);
+  const detail = first ? agentDetail(first) : null;
+  const view = last ? subagentView(last) : null;
   const parent = crumbs.at(-1);
 
   const token = useRef(Symbol('thread'));
@@ -145,7 +168,7 @@ export function AgentView({
   }, [active, stoppable, onClose, onStop]);
 
   // A running native subagent is read at its end, where the newest step lands.
-  const steps = detail?.steps?.length ?? 0;
+  const steps = blocks.reduce((sum, call) => sum + (agentDetail(call)?.steps?.length ?? 0), 0);
   useEffect(() => {
     const el = scroller.current;
     if (el && running) el.scrollTop = el.scrollHeight;
@@ -168,9 +191,9 @@ export function AgentView({
     <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
   ) : (
     <div ref={scroller} className={`min-h-0 flex-1 overflow-y-auto ${FADE}`}>
-      <div className="mx-auto flex w-full max-w-[840px] flex-col gap-1 px-6 pt-6 pb-10">
+      <div className="crew-prose mx-auto w-full max-w-[840px] px-6 pt-6 pb-10">
         {detail && view ? (
-          <SubagentBody detail={detail} state={view.state} marked={null} />
+          <SubagentTranscript blocks={blocks} working={view.state === 'running'} />
         ) : (
           <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
         )}

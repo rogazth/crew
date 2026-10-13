@@ -21,6 +21,7 @@
 # own session id (a shell step, then "pong"), and the call's answer
 # (`<subagent sessionID=.. state=..>`). SUBAGENT SLOW holds the child until its
 # own session's interrupt (the daemon's Stop on the entry), which ends only it.
+# SUBAGENT RESUME makes a second call that names the same child session.
 #
 # Every request is appended to $HOME/fake-opencode.log as {method, path, body}.
 import base64, json, os, queue, sys, threading, time, uuid
@@ -91,41 +92,51 @@ def tool(sid, msg, name, inp, run):
     emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": result}], "metadata": {"truncated": False}, "executed": False})
 
 
-def run_subagent(sid, msg, slow, interrupted):
-    call = hexid("call_")
-    inp = {"agent": "general", "description": "Reply with pong", "prompt": "Reply with the single word pong."}
-    emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
-    emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
-    csid = hexid("ses_")
-    sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": None, "model": None, "busy": True, "waiting": [], "interrupt": interrupted}
-    emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
-    emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
-    cmsg = hexid("msg_")
-    emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": "You are a subagent spawned by another session.\n" + inp["prompt"]}, "delivery": "steer"}})
-    emit("session.execution.started", {"sessionID": csid})
-    emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
-    tool(csid, cmsg, "shell", {"command": "echo child"}, lambda c: "child\n")
-    emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens()})
-    cmsg = hexid("msg_")
-    emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
-    stopped = False
-    if slow:
-        interrupted.wait(120)
-        stopped = True
-    if stopped:
-        emit("session.step.failed", {"sessionID": csid, "assistantMessageID": cmsg, "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": tokens(), "cost": 0})
-        emit("session.execution.interrupted", {"sessionID": csid, "reason": "user"})
-    else:
-        emit("session.text.started", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0})
-        for piece in ("po", "ng"):
-            emit("session.text.delta", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "delta": piece})
-        emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": "pong"})
-        emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "stop", "cost": 0, "tokens": tokens()})
-        emit("session.execution.succeeded", {"sessionID": csid})
-    outcome = "interrupted" if stopped else "completed"
-    sessions[csid]["busy"] = False
-    body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else "pong")
-    emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
+def run_subagent(sid, msg, slow, interrupted, resume=False):
+    csid = None
+    # RESUME: a second call names the same child session and continues it.
+    for round in range(2 if resume else 1):
+        again = round == 1
+        inp = {"agent": "general", "description": "Reply with pong again" if again else "Reply with pong", "prompt": "Again, reply with the single word pong." if again else "Reply with the single word pong."}
+        if csid:
+            inp["sessionID"] = csid
+        call = hexid("call_")
+        emit("session.tool.input.started", {"sessionID": sid, "assistantMessageID": msg, "id": call, "name": "subagent"})
+        emit("session.tool.called", {"sessionID": sid, "assistantMessageID": msg, "id": call, "input": inp, "executed": False})
+        if not csid:
+            csid = hexid("ses_")
+            sessions[csid] = {"id": csid, "created": now(), "title": inp["description"], "location": None, "model": None, "busy": True, "waiting": [], "interrupt": interrupted}
+            emit("session.created", {"sessionID": csid, "parentID": sid, "title": inp["description"], "agent": "general", "model": {"providerID": "opencode", "id": "nemotron-3.5-lightning-free", "variant": "default"}})
+            emit("session.tool.progress", {"sessionID": sid, "assistantMessageID": msg, "id": call, "metadata": {"sessionID": csid, "status": "running"}})
+        else:
+            sessions[csid]["busy"] = True
+        cmsg = hexid("msg_")
+        emit("session.inbox.enqueued", {"inboxID": hexid("msg_"), "sessionID": csid, "item": {"type": "user", "payload": {"text": inp["prompt"] if again else "You are a subagent spawned by another session.\n" + inp["prompt"]}, "delivery": "steer"}})
+        emit("session.execution.started", {"sessionID": csid})
+        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+        tool(csid, cmsg, "shell", {"command": "echo child again" if again else "echo child"}, lambda c: "child\n")
+        emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "tool-calls", "cost": 0, "tokens": tokens()})
+        cmsg = hexid("msg_")
+        emit("session.step.started", {"sessionID": csid, "assistantMessageID": cmsg})
+        stopped = False
+        if slow:
+            interrupted.wait(120)
+            stopped = True
+        answer = "pong again" if again else "pong"
+        if stopped:
+            emit("session.step.failed", {"sessionID": csid, "assistantMessageID": cmsg, "error": {"type": "aborted", "message": "Step interrupted"}, "tokens": tokens(), "cost": 0})
+            emit("session.execution.interrupted", {"sessionID": csid, "reason": "user"})
+        else:
+            emit("session.text.started", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0})
+            for piece in (answer[:2], answer[2:]):
+                emit("session.text.delta", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "delta": piece})
+            emit("session.text.ended", {"sessionID": csid, "assistantMessageID": cmsg, "ordinal": 0, "text": answer})
+            emit("session.step.ended", {"sessionID": csid, "assistantMessageID": cmsg, "finish": "stop", "cost": 0, "tokens": tokens()})
+            emit("session.execution.succeeded", {"sessionID": csid})
+        outcome = "interrupted" if stopped else "completed"
+        sessions[csid]["busy"] = False
+        body = '<subagent sessionID="%s" state="%s">\n%s\n</subagent>' % (csid, outcome, "" if stopped else answer)
+        emit("session.tool.success", {"sessionID": sid, "assistantMessageID": msg, "id": call, "content": [{"type": "text", "text": body}], "metadata": {"sessionID": csid, "status": outcome, "truncated": False}, "executed": False})
 
 
 def run_turn(s, item):
@@ -138,7 +149,7 @@ def run_turn(s, item):
     last = text.splitlines()[-1] if text else ""
     heard = []
     if "SUBAGENT" in last:
-        run_subagent(sid, msg, "SLOW" in last, threading.Event())
+        run_subagent(sid, msg, "SLOW" in last, threading.Event(), "RESUME" in last)
     if "ASKQUESTION" in last:
         def question(call):
             fid = hexid("frm_")

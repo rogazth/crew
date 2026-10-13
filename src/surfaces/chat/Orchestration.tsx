@@ -46,7 +46,7 @@ import {
   startedSessionsSentence,
 } from "../../lib/orchestration";
 import type { CrewTarget } from "../../lib/protocol";
-import { agentDetail, subagentView } from "../../lib/subagent";
+import { agentDetail, entryOfCall, resumesEntry, subagentView } from "../../lib/subagent";
 import { useChatActions, useLetterScope, WorkContext } from "./context";
 import { Note, UserMessage } from "./Message";
 import { StateDot } from "./Panel";
@@ -249,16 +249,18 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
   const detail = agentDetail(block);
   const view = subagentView(block);
   if (!detail || !view) return null;
-  const entry = block.tool ? entries.find((one) => one.callId === block.tool?.callId) : undefined;
+  const entry = entryOfCall(entries, block);
+  // A call that goes on with a subagent an earlier call started has its own steps and state: the entry is the whole subagent's.
+  const resumed = resumesEntry(entry, block);
   const provider = entry?.provider ?? sessions.find((row) => row.id === owner?.id)?.provider;
   const peer: Peer = { name: nativeName(detail), provider };
-  const state = entry?.state ?? view.state;
-  const meta = agentMeta(entry ? entryFacts(entry) : { state, activity: view.current });
+  const state = detail.thread ? view.state : (entry?.state ?? view.state);
+  const meta = agentMeta(entry ? { ...entryFacts(entry), state } : { state, activity: view.current });
   const report = state === "done" ? nativeReport(block) : null;
   return (
     <div className="flex flex-col gap-1.5">
       <ToolLine icon={BotIcon} id={block.id} marked={marked}>
-        Started a subagent{" "}
+        {resumed ? "Resumed a subagent" : "Started a subagent"}{" "}
         {entry ? (
           <button type="button" onClick={() => openAgent(entry.id)} className={`${PEER_CHIP} rounded-chrome hover:underline`}>
             <PeerMark peer={peer} className="size-3.5" />

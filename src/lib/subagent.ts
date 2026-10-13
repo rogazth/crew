@@ -4,6 +4,7 @@
  * by `subagent.event`, so nothing here ever reads as the agent's own work.
  */
 import type { Block, SubagentState } from "./blocks";
+import type { PanelEntry } from "./backgroundPanel";
 import { summarize } from "./activity";
 import { detailOf, prettyTitle, type ToolDetail } from "./toolDetail";
 
@@ -95,6 +96,59 @@ export function shownSteps(detail: AgentDetail): Block[] {
   // A step keeps less of it than the row does: the start says whether it is the same text.
   const same = said.length > 0 && report.startsWith(said.slice(0, 400));
   return same ? steps.slice(0, -1) : steps;
+}
+
+/**
+ * The work-list entry a native subagent's call stands for: the one the call
+ * started, or the one its session already had when the call continues it.
+ */
+export function entryOfCall(entries: readonly PanelEntry[], block: Block): PanelEntry | undefined {
+  const callId = block.tool?.callId;
+  const byCall = callId ? entries.find((one) => one.callId === callId) : undefined;
+  if (byCall) return byCall;
+  const thread = agentDetail(block)?.thread;
+  return thread ? entries.find((one) => one.source.type === "command" && one.source.id === thread) : undefined;
+}
+
+/** Whether a call goes on with a subagent an earlier call started, rather than starting one. */
+export function resumesEntry(entry: PanelEntry | undefined, block: Block): boolean {
+  return entry?.callId !== undefined && block.tool?.callId !== undefined && entry.callId !== block.tool.callId;
+}
+
+/** Every call of the transcript that is this entry's, oldest first: its first call, then the ones that continued it. */
+export function callsOfEntry(blocks: readonly Block[], entry: PanelEntry): Block[] {
+  return blocks.filter((block) => {
+    const detail = agentDetail(block);
+    if (!detail) return false;
+    return block.tool?.callId === entry.callId || (entry.source.type === "command" && detail.thread === entry.source.id);
+  });
+}
+
+const STATE_NOTE: Partial<Record<SubagentState, string>> = {
+  done: "Nothing came back.",
+  failed: "It failed before reporting back.",
+  stopped: "Stopped before reporting back.",
+};
+
+/**
+ * A subagent's thread as the chat's own blocks, so it draws like any chat:
+ * for each call what it was asked, the child's steps, and what it answered.
+ * A call that continued the child adds its turn after the first. The blocks
+ * carry no time, so the thread shows no date lines of its own.
+ */
+export function threadBlocks(calls: readonly Block[]): Block[] {
+  const blocks: Block[] = [];
+  for (const call of calls) {
+    const detail = agentDetail(call);
+    if (!detail) continue;
+    if (detail.prompt?.trim()) blocks.push({ id: `${call.id}:asked`, role: "user", text: detail.prompt });
+    blocks.push(...shownSteps(detail));
+    const state = subagentState(call, detail);
+    const note = STATE_NOTE[state];
+    if (detail.output?.trim()) blocks.push({ id: `${call.id}:report`, role: "assistant", text: detail.output });
+    else if (state !== "running" && note) blocks.push({ id: `${call.id}:note`, role: "system", text: note });
+  }
+  return blocks;
 }
 
 /** "Explore · 12 steps"; the type when there is no count yet. */

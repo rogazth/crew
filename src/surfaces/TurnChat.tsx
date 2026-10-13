@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { callsOfEntry } from "../lib/subagent";
 import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
 import { useCommands } from "../hooks/useCommands";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
@@ -287,7 +288,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const openedChild = shown?.source.type === "session" ? sessions.find((row) => row.id === shown.source.id) : undefined;
   useMarkSeen(sessions, openedChild?.id ?? null);
   // A Claude subagent's steps live in the call that started it.
-  const openedCall = openedCommand?.toolCallId ? (held.find((block) => block.tool?.callId === openedCommand.toolCallId) ?? null) : null;
+  const openedCalls = useMemo(() => (shown?.source.type === "command" ? callsOfEntry(held, shown) : []), [held, shown]);
   const path = useMemo<readonly Crumb[]>(
     () => [
       ...(trail ?? []),
@@ -306,7 +307,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         entry={shown}
         crumbs={path}
         {...(openedChild ? { startedBy: openedChild.launchedByName ?? openedChild.parentName ?? "a session", worktree: openedChild.worktree } : {})}
-        block={openedCall}
+        blocks={openedCalls}
         {...(openedCommand ? { command: openedCommand } : {})}
         sessionId={session.id}
         live={live}
