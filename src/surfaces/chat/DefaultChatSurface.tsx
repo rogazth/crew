@@ -37,6 +37,8 @@ export function DefaultChatSurface({
   switchProvider = false,
   bar,
   overlay,
+  inThread = false,
+  readOnly = false,
 }: ChatSurfaceProps) {
   return (
     <>
@@ -74,28 +76,31 @@ export function DefaultChatSurface({
             onAnswer={onAnswer}
           />
         )}
-        <Composer
-          centered={blocks.length === 0}
-          ref={field}
-          session={session}
-          draft={draft}
-          files={files}
-          working={working}
-          ready={ready}
-          waiting={blocks.some(awaitsUser)}
-          onDraft={onDraft}
-          onAttach={onAttach}
-          onPasteFiles={onPasteFiles}
-          onRemoveFile={onRemoveFile}
-          onSend={onSend}
-          onStop={onStop}
-          {...(whileWorking ? { whileWorking } : {})}
-          {...(queue ? { queue } : {})}
-          {...(work ? { work } : {})}
-          {...(onOptions ? { onOptions } : {})}
-          optionsPending={optionsPending}
-          switchProvider={switchProvider}
-        />
+        {!readOnly && (
+          <Composer
+            escBack={inThread}
+            centered={blocks.length === 0}
+            ref={field}
+            session={session}
+            draft={draft}
+            files={files}
+            working={working}
+            ready={ready}
+            waiting={blocks.some(awaitsUser)}
+            onDraft={onDraft}
+            onAttach={onAttach}
+            onPasteFiles={onPasteFiles}
+            onRemoveFile={onRemoveFile}
+            onSend={onSend}
+            onStop={onStop}
+            {...(whileWorking ? { whileWorking } : {})}
+            {...(queue ? { queue } : {})}
+            {...(work ? { work } : {})}
+            {...(onOptions ? { onOptions } : {})}
+            optionsPending={optionsPending}
+            switchProvider={switchProvider}
+          />
+        )}
         {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
         {overlay}
       </div>

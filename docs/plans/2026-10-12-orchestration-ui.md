@@ -432,7 +432,7 @@ report, light and dark.
 |---|---|---|
 | 1–4 | One work model | done (step 2): model, summary and `botPairs` in `backgroundPanel.ts`; sheet icons and labels only |
 | 5–9 | The status line is the one place | to do (step 4) |
-| 10–16 | The thread, in place | to do (step 3) |
+| 10–16 | The thread, in place | done (step 3): `AgentView.tsx` replaces `EntryView`; stacked threads via `trail`; the sheet closes when it opens an entry, so it is not restored; `focus` scrolls to the letter without lighting it yet (step 6) |
 | 17 | No tab for a subagent | to do (step 8) |
 | 18 | Conversations only between bots | to do (step 4) |
 | 19–21 | Subagents, reports, sessions started | protocol done (step 1); rows to do (step 5) |

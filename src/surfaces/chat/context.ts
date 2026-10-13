@@ -11,6 +11,12 @@ export type ChatActions = {
   openPath: (path: string) => void;
   /** Opens a bot's tab: the name on a message from one is a link. */
   openSession: (sessionId: string) => void;
+  /**
+   * Opens an agent's thread in place, over the chat that holds it: an entry id
+   * of the chat's work (`session:<id>`, `command:<id>`) or a session id.
+   * `focus` is a letter id the thread opens scrolled to.
+   */
+  openAgent: (target: string, options?: { focus?: string }) => void;
   /** The workspace index, for `@` mentions. */
   files: ProjectFile[];
   /** The workspace's commands, whose runs a session started are in its background panel. */
@@ -26,6 +32,7 @@ export type ChatActions = {
 export const ChatContext = createContext<ChatActions>({
   openPath: () => undefined,
   openSession: () => undefined,
+  openAgent: () => undefined,
   files: [],
   processes: [],
   openProcessRun: () => undefined,

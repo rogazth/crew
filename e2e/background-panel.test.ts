@@ -130,9 +130,24 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
 });
 
-test("↵ opens a Crew subagent over the chat with its own composer, and Esc goes back", async () => {
+/** With E2E_SHOTS set, the window as it is, light and dark. */
+async function shoot(name: string): Promise<void> {
+  const dir = process.env.E2E_SHOTS;
+  if (!dir) return;
+  await crew.window.emulateMedia({ colorScheme: "light" });
+  await crew.window.screenshot({ path: path.join(dir, `${name}.png`) });
+  await crew.window.emulateMedia({ colorScheme: "dark" });
+  await crew.window.screenshot({ path: path.join(dir, `${name}-dark.png`) });
+  await crew.window.emulateMedia({ colorScheme: null });
+}
+
+const visible = (selector: string) => crew.window.locator(`${selector} >> visible=true`);
+
+test("↵ opens a Crew subagent as one thread over the chat, with its own composer and meter, and Esc goes back", async () => {
   const { 0: child } = (await sessions(crew, chat.workspaceId)).filter((row) => row.parentId === chat.id);
   assert.ok(child);
+  // What the reader had typed in the parent comes back untouched.
+  await composer().fill("half a thought");
   await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
   await sheet().waitFor();
   await crew.window.keyboard.press("ArrowDown");
@@ -140,15 +155,42 @@ test("↵ opens a Crew subagent over the chat with its own composer, and Esc goe
   await crew.window.keyboard.press("Enter");
   await sheet().waitFor({ state: "detached" });
 
-  const page = crew.window.locator("[data-entry-view]");
+  const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
-  await page.getByText("Lint pass", { exact: true }).first().waitFor();
   await page.getByText("Done: tidy the imports").waitFor();
   await page.locator(`textarea[placeholder*="Ask Lint pass anything"]`).waitFor();
 
+  // One header, a breadcrumb: where it is, once.
+  assert.equal(await visible("[data-thread-header]").count(), 1, "exactly one header is on screen");
+  const header = await page.locator("[data-thread-header]").innerText();
+  assert.match(header, new RegExp(`${chat.name}\\s*/\\s*Lint pass`), header);
+  assert.match(header, /Subagent .*reports to /s, header);
+  assert.doesNotMatch(header + (await page.innerText()), /Back to the chat|Started by/);
+  assert.equal(await visible("text=Conversations").count(), 0, "no parent bar over the thread");
+
+  // The status line under the composer is the child's: never the parent's.
+  const line = visible("[data-status-line]");
+  assert.equal(await line.count(), 1, "one status line on screen");
+  assert.equal(await line.getAttribute("data-session"), child.id);
+  assert.equal(await visible(`[data-session="${chat.id}"]`).count(), 0, "nothing of the parent's meter or line shows");
+  await shoot("thread-crew");
+
+  // Its composer writes to the child, which answers and reports again.
+  const before = (await crew.request<Session>("session_get", { id: child.id })).lastEvent?.at ?? 0;
+  const field = page.locator("textarea");
+  await field.fill("ping");
+  await field.press("Enter");
+  await page.getByText("ping", { exact: true }).first().waitFor();
+  await waitFor(async () => ((await crew.request<Session>("session_get", { id: child.id })).lastEvent?.at ?? 0) > before, {
+    timeout: 20_000,
+    message: "the child answers",
+  });
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: child.id })).status === "idle", { message: "its turn is over" });
+
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
-  await composer().waitFor();
+  assert.equal(await composer().inputValue(), "half a thought", "the parent's draft is intact");
+  await composer().fill("");
 });
 
 test("x stops a command, and opening a command opens its tab", async () => {
@@ -265,4 +307,53 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   assert.match(texts, /billing-ui.*Session ·/, texts);
   assert.match(texts, /npm test.*Shell · \d+s/, texts);
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "work-sheet.png") });
+});
+
+/** The sheet is open already when the test before left it so. */
+async function openWorkSheet(): Promise<void> {
+  if (!(await sheet().isVisible())) await crew.window.getByRole("button", { name: /finished$|agent|session|shell|process/ }).click();
+  await sheet().waitFor();
+}
+
+test("a native subagent opens with no composer and a read-only footer, and x stops it", async () => {
+  const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
+  // The one the CLI ran before has ended: it runs another.
+  await send("agent");
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
+  await openWorkSheet();
+  await rows().filter({ hasText: /Explore the repo.*Subagent · \d+s/ }).first().click();
+  await sheet().waitFor({ state: "detached" });
+
+  const page = crew.window.locator("[data-agent-view]");
+  await page.waitFor();
+  assert.equal(await page.locator("textarea").count(), 0, "a native subagent takes no message");
+  assert.equal(await visible("[data-status-line]").count(), 0, "no composer, so no status line of any chat");
+  const footer = page.locator("[data-thread-footer]");
+  assert.match(await footer.innerText(), new RegExp(`Read only · its report goes to ${chat.name}.*esc back.*x stop`, "s"));
+  assert.equal(await visible("[data-thread-header]").count(), 1);
+  await shoot("thread-native");
+
+  await crew.window.keyboard.press("x");
+  await page.getByText("Stopped", { exact: true }).waitFor();
+  assert.ok((await controls()).includes("stop_task ag2"), (await controls()).join("\n"));
+  await crew.window.keyboard.press("Escape");
+  await page.waitFor({ state: "detached" });
+  await composer().waitFor();
+});
+
+test("a shell opens in place under the same header, with its output and no composer", async () => {
+  await openWorkSheet();
+  await rows().filter({ hasText: /npm test.*Shell/ }).first().click();
+  await sheet().waitFor({ state: "detached" });
+
+  const page = crew.window.locator("[data-agent-view]");
+  await page.waitFor();
+  await page.locator("[data-background-output]").waitFor();
+  assert.equal(await page.locator("textarea").count(), 0);
+  assert.match(await page.locator("[data-thread-header]").innerText(), /npm test/);
+  assert.match(await page.locator("[data-thread-header]").innerText(), /Shell/);
+  assert.match(await page.locator("[data-thread-footer]").innerText(), /Output of a shell/);
+  await shoot("thread-shell");
+  await crew.window.keyboard.press("Escape");
+  await page.waitFor({ state: "detached" });
 });

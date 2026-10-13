@@ -38,7 +38,7 @@ export function ContextMeter({ sessionId, provider }: { sessionId: string; provi
   const percent = Math.round(share * 100);
   const label = providerOf(provider)?.label ?? provider;
   return (
-    <span className="group relative flex h-6 cursor-default items-center px-1.5">
+    <span data-context-meter data-session={sessionId} className="group relative flex h-6 cursor-default items-center px-1.5">
       <span className={`flex items-center gap-1 text-[11.5px] text-text-muted tabular-nums ${stale ? "opacity-50" : ""}`}>
         <Ring share={share} />
         {percent}%

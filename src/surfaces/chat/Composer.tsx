@@ -76,6 +76,8 @@ type Props = {
   optionsPending?: boolean;
   /** Other providers are offered, not only the session's own. */
   switchProvider?: boolean;
+  /** In a thread: Esc goes back one level and never stops the turn; the Stop button does. */
+  escBack?: boolean;
 };
 
 /** What the session's row says it runs, as the chips show it. */
@@ -114,6 +116,7 @@ export function Composer({
   onOptions,
   optionsPending = false,
   switchProvider = false,
+  escBack = false,
 }: Props) {
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
@@ -271,7 +274,7 @@ export function Composer({
       return;
     }
     // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
-    if (event.key === "Escape" && working && sheet !== "work") {
+    if (event.key === "Escape" && working && sheet !== "work" && !escBack) {
       event.preventDefault();
       onStop();
       return;
@@ -325,7 +328,9 @@ export function Composer({
                     ? `${session.name} is working — ↵ adds this to the running turn`
                     : whileWorking === "queue"
                       ? `${session.name} is working — ↵ queues this for the next turn`
-                      : `${session.name} is working — esc stops it`
+                      : escBack
+                        ? `${session.name} is working`
+                        : `${session.name} is working — esc stops it`
                   : `Ask ${session.name} anything — @ to mention a file, / for commands`
             }
             spellCheck={false}
@@ -401,7 +406,7 @@ export function Composer({
           </div>
         </div>
       </form>
-      <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
+      <div data-status-line data-session={session.id} className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
         <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
@@ -415,7 +420,7 @@ export function Composer({
             <>The new settings apply with your next message, which restarts {session.name} where it left off</>
           ) : working ? (
             <>
-              <kbd className="font-sans">esc</kbd> stop
+              <kbd className="font-sans">esc</kbd> {escBack ? "back" : "stop"}
               {whileWorking === "steer" && (
                 <>
                   {" "}· <kbd className="font-sans">↵</kbd> add to the turn · <kbd className="font-sans">⌘↵</kbd> next turn
@@ -429,6 +434,11 @@ export function Composer({
             </>
           ) : (
             <>
+              {escBack && (
+                <>
+                  <kbd className="font-sans">esc</kbd> back ·{" "}
+                </>
+              )}
               <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · / command
               {onOptions && (
                 <>

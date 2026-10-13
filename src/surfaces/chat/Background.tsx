@@ -1,9 +1,7 @@
-import { BotIcon, EyeIcon, SquareIcon, TerminalIcon } from "lucide-react";
+import { BotIcon, EyeIcon, TerminalIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Kbd } from "../../chrome/Kbd";
-import { useNow } from "../../hooks/useBackground";
 import * as api from "../../lib/api";
-import { isRunning, plainText, stateLabel } from "../../lib/background";
+import { isRunning, plainText } from "../../lib/background";
 import type { Block } from "../../lib/blocks";
 import type { BackgroundCommand, BackgroundKind, BackgroundOutput } from "../../lib/protocol";
 import { clock } from "../../lib/time";
@@ -25,18 +23,6 @@ function KindIcon({ kind, className }: { kind: BackgroundKind; className: string
   if (kind === "subagent") return <BotIcon className={className} />;
   if (kind === "monitor") return <EyeIcon className={className} />;
   return <TerminalIcon className={className} />;
-}
-
-/** Stops one command; what went wrong, if anything, for the row to say. */
-function useStop(sessionId: string) {
-  const [failed, setFailed] = useState<Record<string, string>>({});
-  const stop = (id: string) => {
-    setFailed(({ [id]: _, ...rest }) => rest);
-    void api.backgroundStop(sessionId, id).catch((error: unknown) =>
-      setFailed((prev) => ({ ...prev, [id]: error instanceof Error ? error.message : String(error) })),
-    );
-  };
-  return { failed, stop };
 }
 
 /**
@@ -70,29 +56,18 @@ export const BackgroundMarker = memo(function BackgroundMarker({ block }: { bloc
   );
 });
 
-type OutputProps = {
-  sessionId: string;
-  command: BackgroundCommand;
-  live: boolean;
-  /** False while the tab sits behind another one: Esc is the shown one's. */
-  active: boolean;
-  onClose: () => void;
-};
-
 /**
- * One command's output over the transcript, in the reading column: the end
- * of what it wrote, read again every second while it runs. Esc or Back to the
- * chat returns to where the reader was.
+ * One command's output as the body of its thread: the end of what it wrote,
+ * read again every second while it runs, in the reading column. The thread's
+ * header says what it is and carries Stop and Esc.
  */
-export function BackgroundOutputView({ sessionId, command, live, active, onClose }: OutputProps) {
+export function ShellOutput({ sessionId, command, live }: { sessionId: string; command: BackgroundCommand; live: boolean }) {
   const [output, setOutput] = useState<BackgroundOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const running = isRunning(command);
   const following = running && live;
-  const now = useNow(1000, running);
-  const { failed, stop } = useStop(sessionId);
 
   // Read now, and again while it runs; once it has ended, once more for its last words.
   useEffect(() => {
@@ -115,77 +90,35 @@ export function BackgroundOutputView({ sessionId, command, live, active, onClose
     };
   }, [command.id, following, sessionId]);
 
-  useEffect(() => {
-    if (!active) return;
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [active, onClose]);
-
   // It follows the output while the reader is at its end.
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [output]);
 
-  const text = plainText(output?.output ?? "");
+  const text = plainText(output?.output ?? '');
   return (
-    <div className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-background-output={command.id}>
-      <div
-        ref={scroller}
-        onScroll={(event) => {
-          const el = event.currentTarget;
-          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-        }}
-        className="min-h-0 flex-1 overflow-y-auto"
-      >
-        <div className="pointer-events-none sticky top-0 z-10 flex justify-center bg-linear-to-b from-canvas via-canvas/90 to-transparent px-6 pt-3 pb-6">
-          <div className="pointer-events-auto flex h-10 max-w-full items-center gap-1 rounded-full bg-surface px-1.5 shadow-float">
-            <span className="flex h-7 min-w-0 items-center gap-2 px-2 text-[13px]">
-              <KindIcon kind={command.kind} className="size-3.5 shrink-0 text-icon" />
-              <span className="truncate font-mono text-[12.5px]">{command.command}</span>
-            </span>
-            <span className="flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-card px-2.5 text-[12px] text-text-muted tabular-nums">
-              <CommandDot command={command} />
-              {stateLabel(command, now)}
-            </span>
-            {following && (
-              <button
-                type="button"
-                onClick={() => stop(command.id)}
-                className="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-text transition-colors hover:bg-hover"
-              >
-                <SquareIcon className="size-3" />
-                Stop
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="mx-auto w-full max-w-[760px] px-6 pb-28">
-          <p className="mb-2 px-1 text-[12px] text-text-muted">
-            Started {clock(command.startedAt)} · {following ? "following its output" : "its last output"}
-            {output?.truncated ? " · only the end" : ""}
-          </p>
-          {(error ?? failed[command.id]) && <p className="mb-2 px-1 text-[12px] text-danger">{error ?? failed[command.id]}</p>}
-          <pre
-            data-selectable
-            className="overflow-x-auto rounded-xl border border-border bg-sidebar px-4 py-3 font-mono text-[12.5px] leading-[19px] whitespace-pre-wrap text-text"
-          >
-            {text || (output ? <span className="text-text-muted">No output yet.</span> : <span className="text-text-muted">Reading…</span>)}
-          </pre>
-        </div>
-      </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-linear-to-t from-canvas via-canvas/90 to-transparent pt-10 pb-4">
-        <button
-          type="button"
-          onClick={onClose}
-          className="pointer-events-auto flex h-9 items-center gap-2 rounded-full bg-surface pr-2.5 pl-4 text-[13px] shadow-float transition-colors hover:bg-hover"
+    <div
+      ref={scroller}
+      data-background-output={command.id}
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+      }}
+      className="min-h-0 flex-1 overflow-y-auto"
+    >
+      <div className="mx-auto w-full max-w-[760px] px-6 pt-4 pb-10">
+        <p className="mb-2 px-1 text-[12px] text-text-muted">
+          Started {clock(command.startedAt)} · {following ? 'following its output' : 'its last output'}
+          {output?.truncated ? ' · only the end' : ''}
+        </p>
+        {error && <p className="mb-2 px-1 text-[12px] text-danger">{error}</p>}
+        <pre
+          data-selectable
+          className="overflow-x-auto rounded-xl border border-border bg-sidebar px-4 py-3 font-mono text-[12.5px] leading-[19px] whitespace-pre-wrap text-text"
         >
-          Back to the chat
-          <Kbd keys="esc" />
-        </button>
+          {text || (output ? <span className="text-text-muted">No output yet.</span> : <span className="text-text-muted">Reading…</span>)}
+        </pre>
       </div>
     </div>
   );

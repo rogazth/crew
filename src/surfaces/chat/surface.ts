@@ -46,6 +46,10 @@ export type ChatSurfaceProps = {
   switchProvider?: boolean;
   /** A chip changed that only a relaunch reaches; the next message does it. */
   optionsPending?: boolean;
+  /** In a thread, the chat of an agent the user may write to: Esc goes back instead of stopping its turn. */
+  inThread?: boolean;
+  /** No composer: the thread says why in its own footer. */
+  readOnly?: boolean;
   /** Over the chat: its sessions, whose it is, its conversations. */
   bar?: ReactNode;
   /** Drawn over the transcript and the composer: a pair's thread, a background entry. */

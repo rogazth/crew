@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
 import { useCommands } from "../hooks/useCommands";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
@@ -16,16 +17,15 @@ import { mentionedFiles } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, othersPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
-import { BackgroundContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
+import { BackgroundContext, ChatContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
-import { BackgroundOutputView } from "./chat/Background";
 import type { PanelScope } from "./chat/Panel";
 import type { QueueScope } from "./chat/Queue";
 import { ChatBar } from "./chat/ChatBar";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
-import { EntryView } from "./chat/EntryView";
+import { AgentView, type Crumb } from "./chat/AgentView";
 import { Thread } from "./chat/Thread";
 
 type Props = {
@@ -34,15 +34,38 @@ type Props = {
   sessions: readonly Session[];
   cwd: string;
   active: boolean;
+  /**
+   * Set when this chat is the body of an agent's thread: the sessions above it,
+   * outermost first. It has no bar of its own (the thread's header says whose
+   * it is), Esc goes back instead of stopping its turn, and what it opens in
+   * place stacks on the thread.
+   */
+  trail?: readonly Crumb[];
+  /** The thread has no composer: the agent exited. */
+  readOnly?: boolean;
+  /** A letter the thread opens scrolled to. */
+  focusLetter?: string;
 };
 
-export function TurnChat({ session, sessions, cwd, active }: Props) {
+/** The pane a thread covers: the outermost chat's, so a thread opened from inside another covers it whole. */
+const PaneContext = createContext<HTMLElement | null>(null);
+
+export function TurnChat({ session, sessions, cwd, active, trail, readOnly = false, focusLetter }: Props) {
+  const embedded = trail !== undefined;
   const { blocks: held, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
-  const pane = useRef<HTMLDivElement>(null);
-  const { files: projectFiles, openSession, processes, openProcessRun } = useChatActions();
+  const pane = useRef<HTMLDivElement | null>(null);
+  const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);
+  const bindPane = useCallback((el: HTMLDivElement | null) => {
+    pane.current = el;
+    setPaneEl(el);
+  }, []);
+  const outerPane = useContext(PaneContext);
+  const host = outerPane ?? paneEl;
+  const actions = useChatActions();
+  const { files: projectFiles, openSession, processes, openProcessRun } = actions;
   const letters = useChatLetters(session, sessions, held);
   // What waits in its box for the next turn: others' letters under the turn
   // that is running, the user's own above the composer.
@@ -54,11 +77,11 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   const menu = useCommands(session.id);
   const commands = useMemo(() => turnTray(panel.board), [panel.board]);
   // One thing over the transcript at a time: a pair's thread, or an entry of the background panel.
-  const [output, setOutput] = useState<{ sessionId: string; id: string } | null>(null);
+  const [output, setOutput] = useState<{ sessionId: string; id: string; focus?: string } | null>(null);
   const shown = output?.sessionId === session.id ? panel.all.find((entry) => entry.id === output.id) : undefined;
   const { closeThread, openThread: openLetters } = letters;
   const openEntry = useCallback(
-    (entry: PanelEntry) => {
+    (entry: PanelEntry, focus?: string) => {
       const { source } = entry;
       // A process has a tab of its own: the panel leaves the chat to it.
       if (source.type === "process") {
@@ -67,10 +90,21 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
         return;
       }
       closeThread();
-      setOutput({ sessionId: session.id, id: entry.id });
+      setOutput({ sessionId: session.id, id: entry.id, ...(focus ? { focus } : {}) });
     },
     [closeThread, openProcessRun, processes, session.id],
   );
+  // An agent opens in place, from wherever it is named: an entry of the work, or a session by its id.
+  const allEntries = panel.all;
+  const openAgent = useCallback(
+    (target: string, options?: { focus?: string }) => {
+      const entry = allEntries.find((one) => one.id === target || one.id === `session:${target}`);
+      if (entry) openEntry(entry, options?.focus);
+      else openSession(target);
+    },
+    [allEntries, openEntry, openSession],
+  );
+  const chatActions = useMemo(() => ({ ...actions, openAgent }), [actions, openAgent]);
   const openOutput = useCallback(
     (commandId: string) => {
       closeThread();
@@ -92,6 +126,11 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   useEffect(() => {
     if (active) field.current?.focus();
   }, [active]);
+
+  // Opened from a letter: the thread starts at the block carrying it.
+  useEffect(() => {
+    if (focusLetter && ready) showLetter(pane.current, focusLetter);
+  }, [focusLetter, ready]);
 
   // What home's composer wrote before the session existed is its first turn.
   useEffect(() => {
@@ -216,75 +255,111 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   useMarkSeen(sessions, openedChild?.id ?? null);
   // A Claude subagent's steps live in the call that started it.
   const openedCall = openedCommand?.toolCallId ? (held.find((block) => block.tool?.callId === openedCommand.toolCallId) ?? null) : null;
-  const entryView =
+  const path = useMemo<readonly Crumb[]>(
+    () => [
+      ...(trail ?? []),
+      { id: session.id, name: session.name, provider: session.provider, bot: session.kind === "bot", back: () => setOutput(null) },
+    ],
+    [trail, session.id, session.name, session.provider, session.kind],
+  );
+  const threadOpen = Boolean(shown) && !letters.thread;
+  const agentView =
     shown &&
     !letters.thread &&
-    (openedCommand && shown.kind === "shell" ? (
-      <BackgroundOutputView
-        key={shown.id}
-        sessionId={session.id}
-        command={openedCommand}
-        live={live}
-        active={active}
-        onClose={() => setOutput(null)}
-      />
-    ) : (
-      <EntryView
+    host &&
+    createPortal(
+      <AgentView
         key={shown.id}
         entry={shown}
+        crumbs={path}
+        {...(openedChild ? { startedBy: openedChild.launchedByName ?? openedChild.parentName ?? "a session", worktree: openedChild.worktree } : {})}
         block={openedCall}
+        {...(openedCommand ? { command: openedCommand } : {})}
+        sessionId={session.id}
+        live={live}
         error={panel.failed[shown.id]}
         active={active}
         onStop={() => panel.stop(shown)}
         onClose={() => setOutput(null)}
-        {...(openedChild ? { chat: <TurnChat session={openedChild} sessions={sessions} cwd={cwd} active={active} /> } : {})}
-      />
-    ));
+        {...(openedChild
+          ? {
+              chat: (
+                <TurnChat
+                  session={openedChild}
+                  sessions={sessions}
+                  cwd={cwd}
+                  active={active}
+                  trail={path}
+                  readOnly={!shown.writable}
+                  {...(output?.focus ? { focusLetter: output.focus } : {})}
+                />
+              ),
+            }
+          : {})}
+      />,
+      host,
+    );
 
   return (
-    <div ref={pane} className="relative flex h-full flex-col bg-canvas">
-      <LetterContext value={letterScope}>
-        <BackgroundContext value={backgroundScope}>
-          <DefaultChatSurface
-            session={session}
-            blocks={blocks}
-            working={working}
-            ready={ready}
-            active={active}
-            more={more}
-            loadingEarlier={loadingEarlier}
-            onLoadEarlier={loadEarlier}
-            focusId={focusId}
-            draft={draft}
-            files={files}
-            over={over}
-            field={field}
-            onDraft={setDraft}
-            onSend={submit}
-            onStop={() => void stop(session)}
-            work={work}
-            {...(whileWorking ? { whileWorking, queue } : {})}
-            onAttach={() => void attach()}
-            onPasteFiles={pasteFiles}
-            onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
-            onApprove={approve}
-            onAnswer={reply}
-            onOptions={changeOptions}
-            switchProvider={fresh}
-            bar={
-              <ChatBar
-                session={session}
-                sessions={sessions}
-                kids={letters.kids}
-                pairs={letters.pairs}
-                onOpenSession={openSession}
-                onOpenThread={openThread}
-              />
-            }
-            overlay={entryView || thread}
-          />
-        </BackgroundContext>
-      </LetterContext>
+    <div
+      ref={bindPane}
+      className={`relative flex flex-col bg-canvas ${embedded ? "min-h-0 flex-1" : "h-full"}`}
+    >
+      <PaneContext value={host}>
+        <ChatContext value={chatActions}>
+        <LetterContext value={letterScope}>
+          <BackgroundContext value={backgroundScope}>
+            {/* Under a thread the chat stays mounted, hidden and inert: its scroll, draft and open sheet come back as they were. */}
+            <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen ? "invisible" : ""}`}>
+            <DefaultChatSurface
+              session={session}
+              blocks={blocks}
+              working={working}
+              ready={ready}
+              active={active}
+              more={more}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlier={loadEarlier}
+              focusId={focusId}
+              draft={draft}
+              files={files}
+              over={over}
+              field={field}
+              onDraft={setDraft}
+              onSend={submit}
+              onStop={() => void stop(session)}
+              work={work}
+              {...(whileWorking ? { whileWorking, queue } : {})}
+              onAttach={() => void attach()}
+              onPasteFiles={pasteFiles}
+              onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
+              onApprove={approve}
+              onAnswer={reply}
+              onOptions={changeOptions}
+              switchProvider={fresh}
+              {...(embedded
+                ? { inThread: true }
+                : {
+                    bar: (
+                      <ChatBar
+                        session={session}
+                        sessions={sessions}
+                        kids={letters.kids}
+                        pairs={letters.pairs}
+                        onOpenSession={openSession}
+                        onOpenThread={openThread}
+                      />
+                    ),
+                  })}
+              readOnly={readOnly}
+              overlay={thread}
+            />
+            </div>
+            {agentView}
+          </BackgroundContext>
+        </LetterContext>
+        </ChatContext>
+      </PaneContext>
     </div>
   );
 }

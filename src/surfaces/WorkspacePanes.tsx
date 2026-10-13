@@ -111,6 +111,7 @@ export function WorkspacePanes({
         onOpenFile({ path: absolute, relative, name: relative.split('/').pop() ?? relative });
       },
       openSession: onOpenSession,
+      openAgent: onOpenSession,
       files,
       processes,
       openProcessRun: onOpenProcessRun,
