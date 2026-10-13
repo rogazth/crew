@@ -317,7 +317,7 @@ function EntryRow({
         </span>
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span title={entry.detail || entry.title} className={`truncate text-[13px] leading-[18px] ${entry.state === "running" ? "" : "text-text-muted"}`}>
+        <span title={entry.detail || entry.title} className="truncate text-[13px] leading-[18px]">
           {entry.title}
         </span>
         <span className="truncate text-[11.5px] leading-4 text-text-muted">
