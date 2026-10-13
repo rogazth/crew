@@ -113,22 +113,25 @@ function usePeer(id: string | undefined, name: string, provider?: string): Peer 
   return peerOf(sessions, id, name, provider);
 }
 
+/** A name inside a sentence: set off from the words before it, its mark a little apart from it, long names cut. */
+const PEER_CHIP = "ml-0.5 inline-flex h-[18px] max-w-[24em] items-center gap-1.5 align-top font-medium text-text";
+
 /** The mark and the name, in `text-text`; a click opens that party (its thread, or a bot's chat). */
 export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
   const { openAgent } = useChatActions();
   const body = (
     <>
       <PeerMark peer={peer} className="size-3.5" />
-      {peer.name}
+      <span className="truncate">{peer.name}</span>
     </>
   );
-  if (!peer.id) return <span className="inline-flex h-[18px] items-center gap-1 align-top font-medium text-text">{body}</span>;
+  if (!peer.id) return <span className={PEER_CHIP}>{body}</span>;
   const id = peer.id;
   return (
     <button
       type="button"
       onClick={() => openAgent(id, focus ? { focus } : undefined)}
-      className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top font-medium text-text hover:underline"
+      className={`${PEER_CHIP} rounded-chrome hover:underline`}
     >
       {body}
     </button>
@@ -257,9 +260,9 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
       <ToolLine icon={BotIcon} id={block.id} marked={marked}>
         Started a subagent{" "}
         {entry ? (
-          <button type="button" onClick={() => openAgent(entry.id)} className="inline-flex h-[18px] items-center gap-1 rounded-chrome align-top font-medium text-text hover:underline">
+          <button type="button" onClick={() => openAgent(entry.id)} className={`${PEER_CHIP} rounded-chrome hover:underline`}>
             <PeerMark peer={peer} className="size-3.5" />
-            {peer.name}
+            <span className="truncate">{peer.name}</span>
           </button>
         ) : (
           <PeerName peer={peer} />

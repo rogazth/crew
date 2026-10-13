@@ -110,7 +110,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   // Its own rail, unless a run folds it: then the run's steps are the rail.
   const folds = !flat && steps.length >= FOLD_AT;
   const rows = (
-    <div className={`flex flex-col gap-1.5 ${folds ? "" : "crew-timeline"}`}>
+    <div className={`flex flex-col gap-0.5 ${folds ? "" : "crew-timeline"}`}>
       {steps.map((block) => (
         <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
       ))}
@@ -211,7 +211,7 @@ function RunShell({
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+      <Collapsible.Trigger className="group flex min-h-6 w-full items-center gap-2 text-left text-[13px] leading-[18px]">
         <span className="crew-node relative">
           {createElement(failed ? XIcon : DIGEST_ICON[digest.kind], {
             className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
@@ -240,7 +240,7 @@ function RunShell({
   );
 }
 
-const ROW = "group flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]";
+const ROW = "group flex min-h-6 items-center gap-2 text-[13px] leading-[18px]";
 
 /** The row a search hit sent the reader to. */
 function lit(id: string, marked: string | null): string {
@@ -303,6 +303,7 @@ function ToolLine({
       <span className="crew-node relative">
         <ToolGlyph pending={isOpen(block)} failed={failed} open={open} openable={openable} icon={icon} />
       </span>
+      {line.verb ? <span className={`shrink-0 transition-colors ${tone}`}>{line.verb}</span> : null}
       <span className={`min-w-0 truncate transition-colors ${tone} ${line.mono ? "font-mono text-[12.5px]" : ""}`}>
         {line.text}
       </span>
@@ -450,7 +451,7 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger
         data-block={block.id}
-        className={`group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
+        className={`group flex min-h-6 w-full items-center gap-2 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
       >
         <span className="crew-node relative">
           <SparkleIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
@@ -472,18 +473,50 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
 }
 
 function AnsweredRow({ block }: { block: Block }) {
+  const [open, setOpen] = useState(false);
   const summary = answerSummary(block);
-  const dismissed = block.question?.dismissed === true;
+  const ask = block.question;
+  const dismissed = ask?.dismissed === true;
+  const label = (
+    <span className={`min-w-0 truncate ${dismissed ? "text-placeholder line-through" : "text-text-muted"}`}>
+      {block.text}
+      {summary && !dismissed ? <span className="text-text">: {summary}</span> : null}
+    </span>
+  );
+  // What was asked and what went back, each pair whole: the row only has room for the answers.
+  const pairs = dismissed ? [] : (ask?.questions ?? []).map((q) => ({ q: q.question, a: ask?.answers?.[q.question] ?? "" }));
+  if (pairs.length === 0) {
+    return (
+      <div className={ROW}>
+        <span className="crew-node">
+          <MessageCircleMoreIcon className="size-3.5" />
+        </span>
+        {label}
+      </div>
+    );
+  }
   return (
-    <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
-      <span className="crew-node">
-        <MessageCircleMoreIcon className="size-3.5" />
-      </span>
-      <span className={`min-w-0 truncate ${dismissed ? "text-placeholder line-through" : "text-text-muted"}`}>
-        {block.text}
-        {summary && !dismissed ? <span className="text-text">: {summary}</span> : null}
-      </span>
-    </div>
+    <Collapsible.Root open={open} onOpenChange={setOpen}>
+      <Collapsible.Trigger className={`${ROW} w-full text-left`}>
+        <span className="crew-node relative">
+          <MessageCircleMoreIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
+          <ChevronRightIcon
+            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+          />
+        </span>
+        {label}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="crew-phase-panel">
+        <dl className="crew-tool-body flex flex-col gap-2 py-1 text-[13px] leading-[19px]">
+          {pairs.map(({ q, a }) => (
+            <div key={q} className="flex flex-col">
+              <dt className="text-text-muted">{q}</dt>
+              <dd className={a ? "text-text" : "text-placeholder"}>{a || "No answer"}</dd>
+            </div>
+          ))}
+        </dl>
+      </Collapsible.Panel>
+    </Collapsible.Root>
   );
 }
 
@@ -496,7 +529,7 @@ export function WorkingLine({ since, waiting }: { since: number | undefined; wai
   const now = useNow(1000, !waiting);
   const label = waiting ? "Waiting for you" : since !== undefined ? `Working for ${duration(Math.max(0, now - since))}` : "Working";
   return (
-    <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
+    <div className="flex min-h-6 items-center gap-2 text-[13px] leading-[18px]">
       <span className="crew-node">
         {waiting ? <MessageCircleMoreIcon className="size-3.5 text-warning" /> : <TypingDots />}
       </span>

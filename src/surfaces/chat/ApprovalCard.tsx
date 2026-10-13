@@ -65,10 +65,7 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
         <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
           <ShieldCheckIcon className="size-4" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate font-semibold">{headline(name, input, block.text)}</span>
-          <span className="text-[12px] text-text-muted">Waiting for your approval</span>
-        </div>
+        <span className="min-w-0 flex-1 truncate font-medium">{headline(name, input, block.text)}</span>
       </div>
       <Suspense fallback={null}>
         <ApprovalBody name={name} input={input} />
@@ -94,8 +91,8 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
 function headline(name: string, input: Record<string, unknown> | undefined, title: string): string {
   const path = str(input, "file_path") ?? str(input, "path");
   const leaf = path?.split("/").pop();
-  if (EDIT.test(name)) return leaf ? `Wants to edit ${leaf}` : "Wants to edit a file";
-  if (/^bash$/i.test(name)) return "Wants to run a command";
-  if (/^read$/i.test(name)) return leaf ? `Wants to read ${leaf}` : "Wants to read a file";
-  return `Wants to use ${name}: ${title}`;
+  if (EDIT.test(name)) return leaf ? `Edit ${leaf}?` : "Edit this file?";
+  if (/^bash$/i.test(name)) return "Run this command?";
+  if (/^read$/i.test(name)) return leaf ? `Read ${leaf}?` : "Read this file?";
+  return `Use ${name}: ${title}?`;
 }

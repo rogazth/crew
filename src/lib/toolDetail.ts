@@ -6,6 +6,8 @@ export type { ToolDetail };
 /** The collapsed row: one line, and whether it reads as code. */
 export type ToolLine = {
   text: string;
+  /** What the call did, ahead of a bare path or query that would not say. */
+  verb?: string | undefined;
   /** Commands and paths are monospace; prose is not. */
   mono: boolean;
   /** Dim trailer: a line range, a diff tally, a match count. */
@@ -83,7 +85,7 @@ export function toolLine(block: Block): ToolLine {
         detail.lineStart !== undefined && detail.lineEnd !== undefined
           ? `${detail.lineStart}–${detail.lineEnd}`
           : undefined;
-      return { text: shortPath(detail.path), mono: true, suffix: range, failed };
+      return { text: shortPath(detail.path), verb: "Read", mono: true, suffix: range, failed };
     }
     case "edit": {
       // Show what the provider counted and nothing else: "+0 −0" would read as
@@ -94,6 +96,7 @@ export function toolLine(block: Block): ToolLine {
       ].filter((part): part is string => part !== null);
       return {
         text: shortPath(detail.path),
+        verb: /write|create/i.test(block.tool?.name ?? "") ? "Write" : "Edit",
         mono: true,
         suffix: parts.length > 0 ? parts.join(" ") : undefined,
         failed,
@@ -102,12 +105,17 @@ export function toolLine(block: Block): ToolLine {
     case "search":
       return {
         text: detail.query,
+        verb: "Search",
         mono: true,
         suffix: detail.matches === undefined ? undefined : matchLabel(detail.matches),
         failed,
       };
-    case "fetch":
-      return { text: detail.title ?? host(detail.url), mono: false, suffix: host(detail.url), failed };
+    case "fetch": {
+      // A page with no title of its own is named by its host; saying it twice tells nothing.
+      const site = host(detail.url);
+      const text = detail.title?.trim() || site;
+      return { text, mono: false, suffix: text.includes(site) ? undefined : site, failed };
+    }
     case "message":
       return { text: firstLine(detail.text), mono: false, suffix: `to ${botLabel(detail.to)}`, failed };
     case "todo": {

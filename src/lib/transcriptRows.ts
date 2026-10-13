@@ -223,6 +223,8 @@ function footerFor(block: Block, usage: TurnUsage): Row {
 export function gapBefore(prev: Row | undefined, current: Row): string {
   if (!prev) return "";
   if (current.kind === "footer") return "mt-2";
+  // Calls sit tighter than paragraphs: two runs in a row read as one.
+  if (prev.kind === "activity" && current.kind === "activity") return "mt-0.5";
   const from = speaker(prev);
   const to = speaker(current);
   if (from === "meta" || to === "meta") return "mt-4";

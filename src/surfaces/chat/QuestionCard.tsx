@@ -1,8 +1,9 @@
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
-import { CheckIcon, MessageCircleQuestionIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, MessageCircleQuestionIcon } from "lucide-react";
 import { Button } from "../../chrome/kit";
+import { Kbd } from "../../chrome/Kbd";
 import { useEffect, useRef, useState } from "react";
 import type { Answers, Block, Question } from "../../lib/blocks";
 
@@ -29,6 +30,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
   const [step, setStep] = useState(0);
   const [picks, setPicks] = useState<Picks>({});
   const card = useRef<HTMLDivElement>(null);
+  const other = useRef<HTMLInputElement>(null);
 
   const questions = ask?.questions ?? [];
   const current = questions[step];
@@ -98,6 +100,9 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
       if (index >= 0 && index < current.options.length && event.key.length === 1) {
         event.preventDefault();
         choose(current.options[index]!.label);
+      } else if (index === current.options.length && event.key.length === 1) {
+        event.preventDefault();
+        other.current?.focus();
       }
     };
     document.addEventListener("keydown", onKey, true);
@@ -106,60 +111,69 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
 
   if (!ask || !current) return null;
 
+  const many = questions.length > 1;
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none">
       <div className="flex items-center gap-2.5">
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-info/12 text-info">
           <MessageCircleQuestionIcon className="size-4" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="font-semibold">{current.question}</span>
-          <span className="text-[12px] text-text-muted">
-            {questions.length > 1 ? `Question ${step + 1} of ${questions.length}` : "Waiting for your answer"}
-            {current.multiSelect ? " · pick any" : ""}
-          </span>
-        </div>
+        <span className="min-w-0 flex-1 truncate font-medium">{many ? "Questions" : "Question"}</span>
+        {current.multiSelect ? <span className="shrink-0 text-[12px] text-text-muted">Pick any</span> : null}
       </div>
-      {questions.length > 1 && (
-        <div className="flex gap-1">
-          {questions.map((q, index) => (
-            <button
-              key={q.question}
-              type="button"
-              onClick={() => setStep(index)}
-              className={`flex h-6 items-center gap-1 rounded-full px-2.5 text-[12px] leading-4 transition-colors ${
-                index === step ? "bg-accent text-inverse" : "text-text-muted ring-1 ring-hairline hover:text-text"
-              }`}
-            >
-              {answered(picks[q.question]) && index !== step ? <CheckIcon className="size-3" /> : null}
-              {q.header}
-            </button>
-          ))}
-        </div>
-      )}
-      <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
-      <input
-        value={pick.other}
-        onChange={(event) => set({ ...pick, other: event.target.value })}
-        placeholder={current.multiSelect ? "Anything else" : "Something else"}
-        className="h-9 rounded-xl bg-canvas px-3 text-[13px] ring-1 ring-border outline-none placeholder:text-placeholder focus:ring-border-strong"
-      />
+      <p className="text-[14.5px] leading-[21px]">{current.question}</p>
+      <div className="crew-options flex flex-col">
+        <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
+        <label className={CHOICE}>
+          <span className="crew-keycap" {...(pick.other.trim() ? { "data-checked": "" } : {})}>
+            {LETTERS[current.options.length] ?? "·"}
+          </span>
+          <input
+            ref={other}
+            value={pick.other}
+            onChange={(event) => set({ ...pick, other: event.target.value })}
+            placeholder={current.multiSelect ? "Anything else…" : "Something else…"}
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
+          />
+        </label>
+      </div>
       <div className="flex items-center gap-1.5">
-        <span className="flex-1 text-[11.5px] text-text-muted">
-          {hot ? `${LETTERS[0]}–${LETTERS[current.options.length - 1]} to pick · ↵ ${last ? "to send" : "for next"} · esc to dismiss` : ""}
-        </span>
-        <Button variant="ghost" className="h-7 px-2.5" onClick={() => onAnswer(ask.requestId, null)}>
-          Dismiss
+        {many ? (
+          <span className="flex items-center gap-0.5 text-[12.5px] text-text-muted tabular-nums">
+            <button
+              type="button"
+              aria-label="Previous question"
+              disabled={step === 0}
+              onClick={() => setStep(step - 1)}
+              className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
+            >
+              <ChevronUpIcon className="size-3.5" />
+            </button>
+            {step + 1} / {questions.length}
+            <button
+              type="button"
+              aria-label="Next question"
+              disabled={last}
+              onClick={() => setStep(step + 1)}
+              className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
+            >
+              <ChevronDownIcon className="size-3.5" />
+            </button>
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        <Button className="h-7 px-2.5" {...(hot ? { keys: "esc" } : {})} onClick={() => onAnswer(ask.requestId, null)}>
+          Skip
         </Button>
-        {last ? (
-          <Button variant="primary" className="h-7 px-2.5" disabled={!complete} onClick={submit}>
-            Send answer
-          </Button>
-        ) : (
-          <Button variant="primary" className="h-7 px-2.5" disabled={!answered(pick)} onClick={advance}>
-            Next
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          className="h-7 px-2.5"
+          disabled={last ? !complete : !answered(pick)}
+          onClick={last ? submit : advance}
+        >
+          {last ? "Send" : "Continue"}
+          {hot && <Kbd keys="↵" className="border-white/20 bg-white/10 text-current! opacity-80" />}
+        </Button>
       </div>
     </div>
   );
@@ -174,22 +188,21 @@ function Options({
   chosen: string[];
   onChoose: (label: string) => void;
 }) {
+  // The letter is the control: it fills when its choice is picked, so the row needs no radio of its own.
   if (question.multiSelect) {
     const picked = new Set(chosen);
     return (
-      <div role="group" aria-label={question.question} className="crew-options flex flex-col">
+      <div role="group" aria-label={question.question} className="contents">
         {question.options.map((option, index) => (
           <label key={option.label} className={CHOICE}>
             <Checkbox.Root
               checked={picked.has(option.label)}
               onCheckedChange={() => onChoose(option.label)}
-              className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-[5px] ring-1 ring-border-strong outline-none focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent data-checked:ring-accent"
+              className="crew-keycap outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
             >
-              <Checkbox.Indicator>
-                <CheckIcon className="size-3 text-inverse" />
-              </Checkbox.Indicator>
+              {LETTERS[index] ?? "·"}
             </Checkbox.Root>
-            <OptionLabel option={option} index={index} />
+            <OptionLabel option={option} />
           </label>
         ))}
       </div>
@@ -200,35 +213,29 @@ function Options({
       aria-label={question.question}
       value={chosen[0] ?? ""}
       onValueChange={(next) => onChoose(String(next))}
-      className="crew-options flex flex-col"
+      className="contents"
     >
       {question.options.map((option, index) => (
         <label key={option.label} className={CHOICE}>
-          <Radio.Root
-            value={option.label}
-            className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full ring-1 ring-border-strong outline-none focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent data-checked:ring-accent"
-          >
-            <Radio.Indicator className="size-1.5 rounded-full bg-inverse" />
+          <Radio.Root value={option.label} className="crew-keycap outline-none focus-visible:ring-2 focus-visible:ring-focus/50">
+            {LETTERS[index] ?? "·"}
           </Radio.Root>
-          <OptionLabel option={option} index={index} />
+          <OptionLabel option={option} />
         </label>
       ))}
     </RadioGroup>
   );
 }
 
-/** One choice: a row that lights when hovered, the control on its left. */
+/** One choice: a row that lights when hovered, its letter on the left. */
 const CHOICE =
   "flex cursor-pointer items-start gap-2.5 rounded-lg ring-1 ring-hairline transition-colors hover:bg-hover has-data-checked:bg-card has-data-checked:ring-border-strong";
 
-function OptionLabel({ option, index }: { option: Question["options"][number]; index: number }) {
+function OptionLabel({ option }: { option: Question["options"][number] }) {
   return (
-    <span className="flex items-start gap-2">
-      <kbd className="crew-keycap mt-px">{LETTERS[index] ?? "·"}</kbd>
-      <span className="flex min-w-0 flex-col">
-        <span>{option.label}</span>
-        {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
-      </span>
+    <span className="flex min-w-0 flex-col">
+      <span>{option.label}</span>
+      {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
     </span>
   );
 }
