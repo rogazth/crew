@@ -189,11 +189,11 @@ export function AgentView({
       <header className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center gap-2 px-6" data-thread-header>
         <div
           title={[...meta, branch, tokens && tokensTitle(entry)].filter(Boolean).join(' · ')}
-          className="pointer-events-auto flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-surface pr-2 pl-3 shadow-float"
+          className="pointer-events-auto flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-surface pr-3 pl-3 shadow-float"
         >
           <EntryIcon entry={entry} className="size-4 shrink-0" />
           <span className="min-w-0 truncate text-[13px] leading-5 font-medium">{name}</span>
-          <span className="h-4 w-px shrink-0 bg-hairline" />
+          <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums">
             <StateDot state={entry.state} />
             <span className="text-text">{state}</span>
