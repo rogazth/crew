@@ -12,6 +12,7 @@ import {
   stoppableOf,
   tokensLabel,
   tokensTitle,
+  commandPreview,
   shellLabel,
   visibleEntries,
   type PanelEntry,
@@ -140,7 +141,7 @@ describe("panelEntries", () => {
     delete bare.description;
     const [entry] = panelEntries(list([bare]), [], [], S1);
 
-    expect(entry).toMatchObject({ title: "Shell", detail: "cd /x && php artisan serve --port=8000" });
+    expect(entry).toMatchObject({ title: "Shell", detail: "cd /x && php artisan serve --port=8000", preview: "php artisan serve --port=8000" });
   });
 
   it("maps a board command's state", () => {
@@ -510,5 +511,22 @@ describe("shellLabel", () => {
   it("is just Shell when nothing was said, however long the command", () => {
     expect(shellLabel({})).toBe("Shell");
     expect(shellLabel({ description: "  " })).toBe("Shell");
+  });
+});
+
+describe("commandPreview", () => {
+  it("drops the cd it opens with, even inside a subshell, and keeps the first line", () => {
+    expect(commandPreview("cd /a && (cd apps/api && php artisan serve --port=8000) > /tmp/x.log &\nsleep 1")).toBe(
+      "php artisan serve --port=8000) > /tmp/x.log &",
+    );
+  });
+
+  it("falls back to the command when only a cd is there", () => {
+    expect(commandPreview("cd /tmp &&")).toBe("cd /tmp &&");
+  });
+
+  it("is not set for a shell that has a description", () => {
+    const [entry] = panelEntries(list([command("s")]), [], [], S1);
+    expect(entry).not.toHaveProperty("preview");
   });
 });

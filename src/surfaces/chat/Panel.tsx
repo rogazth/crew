@@ -319,6 +319,7 @@ function EntryRow({
       <span className="flex min-w-0 flex-1 flex-col">
         <span title={entry.detail || entry.title} className="truncate text-[13px] leading-[18px]">
           {entry.title}
+          {entry.preview && <span className="ml-2 font-mono text-[11.5px] text-text-muted">{entry.preview}</span>}
         </span>
         <span className="truncate text-[11.5px] leading-4 text-text-muted">
           {entryDetail(entry, now)}

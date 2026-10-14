@@ -44,6 +44,8 @@ export type PanelEntry = {
   /** The shell command, the subagent's description, the child's name or the process's name. */
   title: string;
   detail: string;
+  /** What a row shows after a title that does not say what runs: a nameless shell's command, in one line. */
+  preview?: string;
   state: PanelState;
   startedAt: number;
   endedAt?: number;
@@ -116,6 +118,15 @@ export function shellLabel(command: Pick<BackgroundCommand, "description">): str
   return command.description?.trim() || "Shell";
 }
 
+const CD_PREFIX = /^\(?\s*cd\s+\S+\s*&&\s*/;
+
+/** A command in one line for a row: its first line without the `cd dir &&` it opens with. */
+export function commandPreview(command: string): string {
+  let line = (command.split("\n").find((l) => l.trim()) ?? "").trim();
+  for (let bare = line.replace(CD_PREFIX, ""); bare !== line; bare = line.replace(CD_PREFIX, "")) line = bare;
+  return line.replace(/\s+/g, " ") || command.trim();
+}
+
 function fromCommand(command: BackgroundCommand, live: boolean, provider: string): PanelEntry {
   const kind = BOARD_KIND[command.kind];
   const shell = kind === "shell";
@@ -131,6 +142,7 @@ function fromCommand(command: BackgroundCommand, live: boolean, provider: string
     state: BOARD_STATE[command.state],
     startedAt: command.startedAt,
     ...present({
+      preview: shell && !said ? commandPreview(command.command) : undefined,
       endedAt: command.endedAt,
       tokens: command.tokens,
       window: command.window,
