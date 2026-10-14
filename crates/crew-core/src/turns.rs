@@ -4969,7 +4969,7 @@ mod mailbox_tests {
         assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
         let child_told = host.persona(&child, Harness::Mcp, true, &cwd).expect("child persona");
         assert!(child_told.starts_with("## Crew session"), "{child_told}");
-        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && child_told.contains("`mcp__crew__delegate`: not for you"), "{child_told}");
+        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && child_told.contains("you cannot delegate or start sessions"), "{child_told}");
         assert!(child_told.contains("your question tool reaches B"), "{child_told}");
         for gone in crate::tools::REMOVED_TOOLS {
             assert!(!told.contains(gone) && !child_told.contains(gone), "{gone}: {told}\n{child_told}");

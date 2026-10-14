@@ -833,6 +833,9 @@ Also check how Codex names Crew's tools: `turns.rs` ~113 says
   `alwaysLoad: true` in the `--mcp-config` of bots and children, so Claude
   Code never defers Crew's tools behind its own tool search. Terminals are
   left to the user.
+  *Revised 2026-10-13:* the server stays `alwaysLoad`, and `tools/list`
+  marks every tool without a harness lookalike `_meta` `anthropic/alwaysLoad:
+  false`, so Claude loads those through its tool search (`tools::on_demand`).
 - **Prompt blocks vary by caller kind only.** The browser and process
   families are always registered (`crewd/src/lib.rs` ~586) and the server
   does not announce `listChanged`, so "when attached" cannot change mid

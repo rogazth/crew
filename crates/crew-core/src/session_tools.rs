@@ -30,7 +30,7 @@ use crate::mailbox;
 use crate::session::{self, Session};
 use crate::session_events::{self, Event, Signal};
 use crate::store::{now_millis, Store};
-use crate::tools::{cli, provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput, GLOSSARY};
+use crate::tools::{cli, provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput};
 use crate::turns::{TurnHost, STEERABLE};
 use crate::worktree::Worktree;
 
@@ -760,18 +760,7 @@ impl SessionTools {
                     .into(),
             );
         }
-        if how == Start::Delegate {
-            if let Caller::Child(me) = caller {
-                return Err(format!(
-                    "A subagent cannot delegate: do this yourself, or ask {}. send_message reaches it; start_session \
-                     starts a separate session if the user wants one.",
-                    match me.parent_id.as_deref() {
-                        Some(parent) => format!("your parent ({})", self.who(Some(parent))),
-                        None => "whoever started you".to_string(),
-                    }
-                ));
-            }
-        }
+        self.depth_one(caller)?;
         let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
         if how == Start::Launch && (wait || args.get("timeout_s").is_some_and(|raw| !raw.is_null())) {
             return Err(
@@ -1013,8 +1002,23 @@ impl SessionTools {
     /// `start_sessions`: up to [`BATCH_MAX`] separate sessions in one call,
     /// each made on its own. An entry that fails does not stop the others, and
     /// a worktree made for one that then failed stays, named in its result.
+    /// Decision 28: a subagent works at depth one. It is not listed the start
+    /// tools; a call that reaches them anyway (opencode's one server lists
+    /// every session the same tools) is told what to do instead.
+    fn depth_one(&self, caller: &Caller) -> Result<(), String> {
+        let Caller::Child(me) = caller else { return Ok(()) };
+        Err(format!(
+            "A subagent cannot delegate or start sessions: do this yourself, or ask {} with send_message.",
+            match me.parent_id.as_deref() {
+                Some(parent) => format!("your parent ({})", self.who(Some(parent))),
+                None => "whoever started you".to_string(),
+            }
+        ))
+    }
+
     fn start_many(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
         caller.workspace_id()?;
+        self.depth_one(caller)?;
         let list = args
             .get("sessions")
             .and_then(Value::as_array)
@@ -1850,11 +1854,11 @@ pub fn catalog() -> Vec<Tool> {
                 "Hand one job to a subagent: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
                 "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
-                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. A subagent cannot delegate. ",
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. ",
                 "request_id makes the call safe to retry: the same id from you returns the subagent the first call made. Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
             ),
             schema: start_schema(true),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex fix the failing login test\n  crew sessions delegate --wait --timeout-s 300 -- what does the billing webhook do?")],
         },
         Tool {
@@ -1863,10 +1867,10 @@ pub fn catalog() -> Vec<Tool> {
                 "Start a separate session: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, that shows in the sidebar like one the user opened. It is the user's: it works for the user, reports to nobody, is not capped and is not ended when idle. It opens as a chat. ",
                 "Use it when the user wants a session they can see and talk to. Do not use it just because the user said \"subagent\": that is delegate. ",
                 "It sees nothing of your conversation: put everything it needs in the prompt. Its first prompt arrives in a message naming you, so it can answer with send_message to your id (unless your CLI takes no letters); to coordinate, say so in the prompt (\"product decisions: ask me with send_message to <your id>, not the user\"). Crew does nothing more for you than record that you launched it. read_session and stop_session are for subagents. ",
-                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. request_id makes the call safe to retry: the same id from you returns the session the first call made. For several at once, start_sessions. A subagent may call this."
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. request_id makes the call safe to retry: the same id from you returns the session the first call made. For several at once, start_sessions."
             ),
             schema: start_schema(false),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --name Reviewer review the diff on main")],
         },
         Tool {
@@ -1886,12 +1890,12 @@ pub fn catalog() -> Vec<Tool> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "prompt": start_schema(false)["properties"]["prompt"].clone(),
-                                "provider": start_schema(false)["properties"]["provider"].clone(),
-                                "model": start_schema(false)["properties"]["model"].clone(),
-                                "worktree": start_schema(false)["properties"]["worktree"].clone(),
-                                "name": start_schema(false)["properties"]["name"].clone(),
-                                "autonomy": start_schema(false)["properties"]["autonomy"].clone()
+                                "prompt": { "type": "string", "description": "As in start_session." },
+                                "provider": { "type": "string", "enum": provider_names() },
+                                "model": { "type": "string", "description": "As in start_session." },
+                                "worktree": { "type": "string" },
+                                "name": { "type": "string" },
+                                "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"] }
                             },
                             "required": ["prompt"]
                         },
@@ -1901,7 +1905,7 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["sessions"]
             }),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"provider\": \"codex\"}'")],
         },
         Tool {
@@ -1961,7 +1965,7 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["session", "action"]
             }),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![
                 cli("sessions", "rename").sets("action", "rename").rest(&["session", "name"]).eg("crew sessions rename 3f2a… Auth refactor"),
                 cli("sessions", "delete").sets("action", "delete").pos(&["session"]).eg("crew sessions delete 3f2a…"),
@@ -1979,16 +1983,19 @@ impl ToolFamily for SessionTools {
         if matches!(caller, Caller::Child(_)) {
             return None;
         }
-        // A terminal is told the words and the tools in its own text
-        // (`prompts::terminal`); what is left is its subagents.
-        let mut note = if matches!(caller, Caller::Terminal(_)) { String::new() } else { format!(
-            "{GLOSSARY} delegate hands a job to a subagent (another provider CLI, in this checkout or a worktree of \
+        // A bot and a terminal are told the words and the tools in their own
+        // text (`prompts`); the user, calling from outside, gets the glossary
+        // from `tools::instructions` and how the tools fit from here. What is
+        // left for a session is its live subagents.
+        let mut note = if !matches!(caller, Caller::User { .. }) { String::new() } else { 
+            "delegate hands a job to a subagent (another provider CLI, in this checkout or a worktree of \
              its own): its report wakes a bot when its turn ends, or wait: true waits for it; read_session reads \
              what it did, send_message gives it more, stop_session ends it. start_session starts a separate session \
              the user can see and talk to, which reports to nobody (start_sessions, up to 20 at once); do not use it \
              just because the user said \"subagent\". send_message writes to any bot or session that does not have more autonomy than you do. \
              list_peers lists who you can write to."
-        ) };
+                .to_string()
+        };
         if let (Some(me), Ok(workspace)) = (caller.session(), caller.workspace_id()) {
             if let Ok(live) = self.live_children(workspace, &me.id) {
                 if !live.is_empty() {
@@ -2522,7 +2529,7 @@ while True:
         for launch in &launches {
             let system = launch["system"].as_str().unwrap();
             assert!(system.contains("is delivered to"), "{system}");
-            assert!(system.contains("`crew_send_message`") && system.contains("`crew_delegate`: not for you"), "{system}");
+            assert!(system.contains("`crew_send_message`") && system.contains("you cannot delegate or start sessions"), "{system}");
         }
         let prompt = launches[0]["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("## Message\nFrom: shell (terminal") && !prompt.contains("Your final message"), "{prompt}");
@@ -4233,7 +4240,7 @@ time.sleep(600)
         let first = sent(&log, "session/prompt")[0]["prompt"][0]["text"].as_str().unwrap().to_string();
         assert!(first.contains("is delivered to"), "the persona is in the message: {first}");
         assert!(first.contains("the MCP server `crew`") && first.contains("`send_message`"), "the MCP tools, not the crew CLI: {first}");
-        assert!(!first.contains("find_tool") && first.contains("`delegate`: not for you"), "{first}");
+        assert!(!first.contains("find_tool") && first.contains("you cannot delegate or start sessions"), "{first}");
         assert!(first.trim_end().ends_with("remember 4817"), "{first}");
 
         let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
@@ -5015,7 +5022,7 @@ time.sleep(600)
     }
 
     #[test]
-    fn a_subagent_is_offered_the_two_start_tools_and_not_the_driving_ones() {
+    fn a_subagent_is_offered_neither_the_start_tools_nor_the_driving_ones() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let id = w.start(&parent, "x");
@@ -5024,11 +5031,11 @@ time.sleep(600)
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
         let listed = toolbox.visible_names(CallerKind::Child);
-        for name in ["read_session", "stop_session", "create_bot"].iter().chain(crate::tools::REMOVED_TOOLS) {
+        let gone = ["read_session", "stop_session", "create_bot", "delegate", "start_session", "start_sessions", "update_session"];
+        for name in gone.iter().chain(crate::tools::REMOVED_TOOLS) {
             assert!(!listed.contains(name), "a child is listed {name}");
         }
-        // delegate is listed so that it can answer "do this yourself"; start_session is open to it.
-        for name in ["send_message", "list_peers", "delegate", "start_session"] {
+        for name in ["send_message", "list_peers", "interrupt_session"] {
             assert!(listed.contains(&name), "a child is not listed {name}");
         }
         for parent in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
@@ -5038,11 +5045,10 @@ time.sleep(600)
         w.settle(&id);
     }
 
-    /// Decision 28: a subagent works at depth one. Its `delegate` answers what
-    /// to do instead; `start_session` stays open, and what it starts is a
-    /// session of the user's, launched by it.
+    /// Decision 28: a subagent works at depth one. A start call that reaches
+    /// it anyway answers what to do instead, and makes nothing.
     #[test]
-    fn a_subagent_cannot_delegate_but_may_start_a_session() {
+    fn a_subagent_cannot_delegate_or_start_a_session() {
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         w.turns.override_claude_home(w.dir.join("home"));
@@ -5050,9 +5056,14 @@ time.sleep(600)
         let id = w.start(&parent, "x");
         w.settle(&id);
         let kid = Caller::from_session(w.row(&id));
-        let refused = w.call(&kid, "delegate", json!({ "provider": "claude", "prompt": "y" }));
-        let why = refused.expect_err("a subagent delegated");
-        assert!(why.contains("do this yourself, or ask your parent") && why.contains("shell"), "{why}");
+        for (tool, args) in [
+            ("delegate", json!({ "provider": "claude", "prompt": "y" })),
+            ("start_session", json!({ "provider": "claude", "prompt": "y" })),
+            ("start_sessions", json!({ "sessions": [{ "prompt": "y" }] })),
+        ] {
+            let why = w.call(&kid, tool, args).expect_err("a subagent started one");
+            assert!(why.contains("do this yourself, or ask your parent") && why.contains("shell"), "{tool}: {why}");
+        }
         assert!(w.live_of(&id).is_empty(), "something was made");
 
         // One the user started has no parent to ask.
@@ -5061,12 +5072,6 @@ time.sleep(600)
         let orphan = Caller::from_session(w.row(&top));
         let why = w.call(&orphan, "delegate", json!({ "prompt": "z" })).expect_err("a subagent delegated");
         assert!(why.contains("do this yourself, or ask whoever started you"), "{why}");
-
-        let out = w.call(&kid, "start_session", json!({ "provider": "claude", "prompt": "a separate job", "name": "Spin-off" })).expect("start_session is open");
-        let made = out["id"].as_str().unwrap().to_string();
-        let row = w.row(&made);
-        assert_eq!((row.kind.as_str(), row.parent_id.as_deref(), row.launched_by.as_deref()), ("terminal", None, Some(id.as_str())));
-        w.settle(&made);
     }
 
     /// Models have confused the words before, so each place a model reads
@@ -5074,12 +5079,15 @@ time.sleep(600)
     /// report are, in the same words.
     #[test]
     fn the_words_are_said_wherever_a_model_reads_them() {
+        use crate::tools::GLOSSARY;
         let w = world();
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
         let shell = w.session("terminal", "shell", "full");
         let told = crate::tools::instructions(&toolbox, &shell);
         assert!(told.contains(GLOSSARY), "{told}");
+        let user = crate::tools::instructions(&toolbox, &Caller::User { workspace_id: None });
+        assert_eq!(user.matches(GLOSSARY).count(), 1, "{user}");
         for word in ["A bot is", "A session is", "A subagent is", "independent one", "A message is", "A report is", "A subagent works for the session that started it"] {
             assert!(GLOSSARY.contains(word), "{word}: {GLOSSARY}");
         }
@@ -5092,8 +5100,10 @@ time.sleep(600)
         assert!(start.description.contains("Do not use it just because the user said \"subagent\""), "{}", start.description);
         assert!(w.tools.instructions(&shell).is_none(), "the terminal's own text says it already");
         let bot = w.session("bot", "Planner", "full");
-        let bot_told = w.tools.instructions(&bot).unwrap();
-        assert!(bot_told.contains(GLOSSARY) && bot_told.contains("do not use it just because the user said"), "{bot_told}");
+        // A bot's prompt is Crew's and says it all: nothing to add until it has subagents.
+        assert!(w.tools.instructions(&bot).is_none(), "a bot is told again what its prompt says");
+        let told = w.tools.instructions(&Caller::User { workspace_id: None }).unwrap();
+        assert!(!told.contains(GLOSSARY) && told.contains("do not use it just because the user said"), "{told}");
         let id = w.start(&shell, "x");
         assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its subagents");
         let child = Caller::from_session(w.row(&id));
@@ -8049,8 +8059,9 @@ time.sleep(600)
         let b = make("B", &a);
         let c = make("C", &b);
         let sibling = make("S", &a);
-        let kept = Caller::from_session(w.row(&a));
-        let launched = w.call(&kept, "start_session", json!({ "provider": "opencode", "prompt": "mine" })).expect("launch")["id"].as_str().unwrap().to_string();
+        // A session it launched before subagents worked at depth one (decision 28).
+        let launched = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "mine" })).expect("launch")["id"].as_str().unwrap().to_string();
+        session::set_launched_by(w.turns.store(), &launched, &a).expect("launched by a");
         w.settle(&launched);
         w.call(&shell, "send_message", json!({ "to": a, "text": "SLEEP 30" })).expect("busy");
         until("the turn is up", || w.launches().len() == 3);

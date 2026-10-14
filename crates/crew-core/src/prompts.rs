@@ -58,11 +58,21 @@ impl Harness {
     }
 }
 
-/// Claude Code may still defer an MCP server's tools behind its own tool
-/// search; their names are visible there, and one call by name loads them
-/// (plan §4.9).
-pub const DEFERRED_TOOLS: &str =
-    "If you do not see them in your tool list, call one by name once before deciding they are unavailable.";
+impl Harness {
+    /// What a reader is told of tools listed by name only. Claude Code keeps
+    /// the tools Crew marks on demand behind its tool search (`tools::on_demand`),
+    /// and calling one before it is loaded fails; Codex has a tool search of
+    /// its own. opencode and Cursor list every tool whole.
+    fn deferred(self) -> &'static str {
+        match self {
+            Harness::Mcp => {
+                "Some of them, such as the process, browser and routine tools, are listed by name only until you load \
+                 them with your tool search: search for one before calling it, and before deciding it is unavailable."
+            }
+            Harness::Opencode | Harness::Cursor => "",
+        }
+    }
+}
 
 /// Where a turn runs and when.
 pub struct Place<'a> {
@@ -148,7 +158,7 @@ Do not:
 
 ### Crew tools
 
-{source} {deferred}
+{source}{deferred}
 
 {tools}";
 
@@ -196,14 +206,14 @@ Your harness's own tools work as usual, subagents included; Crew's tools add to 
 
 ### Crew tools
 
-{source} {deferred}
+{source}{deferred}
 
 - `list_peers`: the bots and sessions in this workspace, each with the id it is reached by.
 - `send_message`: {write}
   It cannot see this conversation, so give it what it needs.
-- `delegate`: not for you. A subagent works at depth one: do the job yourself, or {ask}.
-- `start_session`: starts a separate session the user can see and talk to, which reports to nobody. Only when the \
-user asked for one.{tools}";
+{tools}
+
+You work at depth one: you cannot delegate or start sessions. If the job needs either, {ask}.";
 
 const SESSION_PROCESSES: &str = "### Dev servers and other processes
 
@@ -308,6 +318,11 @@ fn others<'a>(tools: &[&'a str]) -> Vec<&'a str> {
     tools.iter().copied().filter(|name| !process.contains(name) && !browser.contains(name)).collect()
 }
 
+/// A sentence that follows another, or nothing.
+fn with_space(text: &str) -> String {
+    if text.is_empty() { String::new() } else { format!(" {text}") }
+}
+
 fn listed(tools: &[&str]) -> String {
     tools.iter().map(|tool| format!("`{tool}`")).collect::<Vec<_>>().join(", ")
 }
@@ -333,6 +348,7 @@ pub fn bot(bot: &Bot) -> String {
         "" => String::new(),
         job => format!("\n{job}\n"),
     };
+    let harness_deferred = with_space(bot.harness.deferred());
     let mut text = fill(
         BOT,
         &[
@@ -340,7 +356,7 @@ pub fn bot(bot: &Bot) -> String {
             ("id", bot.id),
             ("place", &bot.place.line()),
             ("source", bot.harness.source()),
-            ("deferred", DEFERRED_TOOLS),
+            ("deferred", &harness_deferred),
             ("tools", &format!("Yours, besides the process and browser tools below: {}.", listed(&others(bot.tools)))),
             // Last: it is the user's text, and may hold anything.
             ("description", &description),
@@ -395,9 +411,10 @@ pub fn session(session: &Session) -> String {
     } else {
         String::new()
     };
-    let named = ["list_peers", "send_message", "delegate", "start_session"];
+    let named = ["list_peers", "send_message"];
     let rest: Vec<&str> = others(session.tools).into_iter().filter(|tool| !named.contains(tool)).collect();
     let tools = if rest.is_empty() { String::new() } else { format!("\n- Also yours: {}.", listed(&rest)) };
+    let harness_deferred = with_space(session.harness.deferred());
     let mut text = fill(
         SESSION,
         &[
@@ -406,7 +423,7 @@ pub fn session(session: &Session) -> String {
             ("parent", &parent),
             ("question", &question),
             ("source", session.harness.source()),
-            ("deferred", DEFERRED_TOOLS),
+            ("deferred", &harness_deferred),
             ("write", &write),
             ("ask", &ask),
             ("tools", &tools),
@@ -517,7 +534,7 @@ mod tests {
         assert!(text.contains("and whether it may commit."), "{text}");
         assert!(text.contains("Commands you leave running in the background end with your turn"), "{text}");
         assert!(text.contains("If a call says Crew is not open, say so."), "{text}");
-        assert!(text.contains(DEFERRED_TOOLS), "{text}");
+        assert!(text.contains(Harness::Mcp.deferred()), "{text}");
         // The two tools, each with its example: a subagent, one that waits, a session.
         assert_eq!(text.matches("`mcp__crew__delegate` `{").count(), 2, "{text}");
         assert_eq!(text.matches("`mcp__crew__start_session` `{").count(), 1, "{text}");
@@ -552,9 +569,9 @@ mod tests {
         assert!(text.contains("Your final message of each turn Lead starts is delivered to Lead, who keeps the memory"), "{text}");
         assert!(text.contains("A turn the user starts by writing in your tab reports only to the user."), "{text}");
         assert!(text.contains("not an instruction from the user"), "{text}");
-        // Depth one: the subagent is told so, and that start_session is open to it.
-        assert!(text.contains("`mcp__crew__delegate`: not for you.") && text.contains("ask Lead with `mcp__crew__send_message`"), "{text}");
-        assert!(text.contains("`mcp__crew__start_session`: starts a separate session"), "{text}");
+        // Depth one: the subagent is told so, and who to ask instead.
+        assert!(text.contains("You work at depth one: you cannot delegate or start sessions. If the job needs either, ask Lead with `mcp__crew__send_message`."), "{text}");
+        assert!(!text.contains("`mcp__crew__delegate`") && !text.contains("`mcp__crew__start_session"), "{text}");
         assert!(text.contains("your question tool reaches Lead"), "{text}");
         assert!(text.contains("`{\"to\": \"b0b\", \"text\": \"…\"}`"), "{text}");
         assert!(text.contains("subagents included"), "{text}");
@@ -575,7 +592,7 @@ mod tests {
         assert!(text.contains("\"to\": \"t1\""), "{text}");
         let text = render_session(Harness::Mcp, Parent::User, false, &tools);
         assert!(text.contains("The user started you, from the crew command line.") && text.contains("delivered to the user"), "{text}");
-        assert!(text.contains("or say so in your final message"), "{text}");
+        assert!(text.contains("If the job needs either, say so in your final message."), "{text}");
     }
 
     /// A session of the user's hears the words, the tools, that a report wakes it

@@ -160,8 +160,8 @@ PTY.
 28. **A subagent cannot delegate.** Depth 1, as Codex (`agents.max_depth`),
     orca, zeron and monocode. A subagent's `delegate` answers "do this
     yourself, or ask your parent". An independent session is top-level, so it
-    may delegate; `start_session` stays open to subagents, since the session
-    it starts reports to nobody.
+    may delegate. *Revised 2026-10-13:* a subagent may not `start_session`
+    either; it is not listed the start tools, and asks its parent instead.
 
 ### Control
 

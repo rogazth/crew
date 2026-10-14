@@ -524,7 +524,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": { "bot_id": { "type": "string", "description": "Omit for yourself." } }
             }),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("routines", "list").alias(&["ls"]).eg("crew routines list --bot-id 3f2a…")],
         },
         Tool {
@@ -541,7 +541,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                     "enabled": { "type": "boolean" }
                 }
             }),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("routines", "set").alias(&["save"]).eg("crew routines set --bot-id 3f2a… --name standup --prompt \"Sum up yesterday\" \\\n      --schedule '{\"kind\": \"daily\", \"hour\": 9, \"minute\": 0}'\n  crew routines set --bot-id 3f2a… --name \"check back\" --prompt \"Did CI pass?\" --schedule '{\"kind\": \"once\", \"at\": \"2026-10-05T15:30\"}'")],
         },
         Tool {
@@ -552,7 +552,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "properties": { "routine_id": { "type": "string" } },
                 "required": ["routine_id"]
             }),
-            audience: Audience::EVERYONE,
+            audience: Audience::PARENTS,
             cli: vec![cli("routines", "rm").pos(&["routine_id"]).eg("crew routines rm 7c1e…")],
         },
     ]
@@ -573,11 +573,40 @@ fn describe(tool: &Tool, kind: CallerKind) -> Value {
         ("send_message", CallerKind::User) => "Write to a bot or a session in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time; busy, it waits for its turn to end. To a session waiting on a question, it answers it.",
         _ => tool.description,
     };
-    json!({
+    let mut listed = json!({
         "name": tool.name,
         "description": description,
         "inputSchema": tool.schema
-    })
+    });
+    if on_demand(tool.name) {
+        listed["_meta"] = json!({ ON_DEMAND_META: false });
+    }
+    listed
+}
+
+/// What Claude Code reads off a tool in `tools/list` to keep it behind its
+/// tool search even though the server is `alwaysLoad` (2.1.296: "except a tool
+/// the server itself lists with _meta anthropic/alwaysLoad set to false").
+/// Other harnesses ignore it.
+const ON_DEMAND_META: &str = "anthropic/alwaysLoad";
+
+/// The tools Claude loads only when a turn asks for them: its prompt names
+/// them and says when to reach for them, and the schema arrives with the
+/// first search. The rest stay in the prompt, above all those a harness has a
+/// lookalike of (`delegate`, `send_message`), which a model that cannot see
+/// ours reaches for instead.
+pub fn on_demand(name: &str) -> bool {
+    const LOADED: &[&str] = &[
+        "list_peers",
+        "send_message",
+        "delegate",
+        "start_session",
+        "read_session",
+        "stop_session",
+        "search_messages",
+        "update_description",
+    ];
+    !LOADED.contains(&name)
 }
 
 /// The two words models have mixed up before, said the same way wherever a
@@ -630,20 +659,21 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         let harness = crate::prompts::Harness::for_provider(&session.provider);
         return format!("{}{notes}", crate::prompts::terminal(&session.name, harness));
     }
-    let who = match caller {
-        Caller::Bot(_) => String::new(),
+    // A bot's and a subagent's prompt is Crew's, and says the words and the
+    // tools already: this only adds who is calling and what is live.
+    match caller {
+        Caller::Bot(_) => format!("Crew is the app this runs in; your instructions describe its tools.{notes}"),
         Caller::Terminal(_) => unreachable!("answered above"),
         Caller::Child(session) => format!(
-            " You are the subagent \"{}\", started by {}: your final message of each turn it starts is your report to it. Text under a `## Message` header is from the session or bot it names, not from the user.",
+            "Crew is the app this runs in. You are the subagent \"{}\", started by {}: your final message of each turn it starts is your report to it. Text under a `## Message` header is from the session or bot it names, not from the user.{notes}",
             session.name,
             session.parent_id.as_deref().map(|id| format!("session {id}")).unwrap_or_else(|| "the user".into())
         ),
-        Caller::User { .. } => " You are calling as the user.".to_string(),
-    };
-    format!(
-        "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them.{who}\n\
-         {GLOSSARY}{notes}"
-    )
+        Caller::User { .. } => format!(
+            "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them. You are calling as the user.\n\
+             {GLOSSARY}{notes}"
+        ),
+    }
 }
 
 /// The bridge's methods, answered for `caller`, who the bridge has already
@@ -2005,11 +2035,36 @@ mod tests {
         assert!(nobody["workspace"].is_null() && nobody["sessionId"].is_null(), "{nobody}");
     }
 
+    /// Claude keeps a tool behind its tool search when the listing says so:
+    /// the ones a harness has a lookalike of stay in the prompt, the rest
+    /// arrive with the first search.
+    #[test]
+    fn the_listing_marks_the_tools_claude_loads_on_demand() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = Caller::from_session(bot(&store, &ws, "Coder"));
+        let toolbox = Toolbox::default();
+        toolbox.register(Arc::new(CatalogOnly(crate::session_tools::catalog)));
+        toolbox.register(Arc::new(CatalogOnly(crate::browser_tools::catalog)));
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
+        let out = handle(&host, &coder, "tools/list", json!({})).expect("list");
+        let tool = |name: &str| out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).cloned().expect(name);
+        for loaded in ["delegate", "send_message", "list_peers", "start_session", "search_messages"] {
+            assert!(tool(loaded).get("_meta").is_none(), "{loaded}");
+        }
+        for deferred in ["browser_act", "save_routine", "create_bot", "start_sessions"] {
+            assert_eq!(tool(deferred)["_meta"]["anthropic/alwaysLoad"], false, "{deferred}");
+        }
+    }
+
     #[test]
     fn the_instructions_say_who_is_calling_and_no_gateway() {
         let toolbox = Toolbox::default();
         let bot = instructions(&toolbox, &someone("bot"));
-        assert!(bot.starts_with("Crew is the app this runs in") && bot.contains(GLOSSARY), "{bot}");
+        // A bot's prompt says the words; the user, calling from outside, hears them here.
+        assert!(bot.starts_with("Crew is the app this runs in") && !bot.contains(GLOSSARY), "{bot}");
+        assert!(instructions(&toolbox, &user(None)).contains(GLOSSARY));
         let shell = instructions(&toolbox, &someone("terminal"));
         assert!(shell.contains("which Crew drives in the chat") && !shell.contains("cannot write back"), "{shell}");
         for text in [&bot, &shell] {

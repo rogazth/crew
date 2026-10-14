@@ -923,8 +923,9 @@ const scenarios = {
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
     assert(names.includes("send_message") && names.includes("list_peers"), `a child is listed: ${names}`);
+    assert(!names.includes("delegate") && !names.includes("start_session"), `a child is offered the start tools: ${names}`);
     const call = await tool(childToken, "delegate", { provider, model: MODELS[provider], prompt: "x" });
-    assert(!call.ok && /yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
+    assert(!call.ok && /Unknown tool|yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.
     const more = [];
     for (let n = 0; n < 3; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
