@@ -586,6 +586,9 @@ struct ClaudeLive {
     /// user's own menu: a bot's CLI reads fewer settings, so what it lists
     /// must not stand for the folder.
     menu_cwd: Option<String>,
+    /// Whether the user has been told this process runs fast turns at
+    /// standard speed, which is said once.
+    fast_refused: bool,
     stderr: Vec<String>,
     /// Steers written and not yet echoed, oldest first. A turn that ends
     /// before reading one leaves it here: the CLI starts a turn of its own on
@@ -641,6 +644,7 @@ impl ClaudeLive {
             init_tx: None,
             init_id: None,
             menu_cwd: None,
+            fast_refused: false,
             stderr: Vec::new(),
             steers: Vec::new(),
             background: HashSet::new(),
@@ -3714,6 +3718,15 @@ impl TurnHost {
             return;
         }
 
+        // A turn's `init` and `result` say what became of fast mode: a turn
+        // asked to be fast that the account cannot run fast goes at standard
+        // speed without an error, and this is how the Fast toggle learns.
+        let fast_state = string_field(Some(&rec), "fast_mode_state");
+        let fast_reason = string_field(Some(&rec), "fast_mode_disabled_reason");
+        if fast_state.is_some() || fast_reason.is_some() {
+            crate::provider_session::note_claude_fast_mode(fast_state.as_deref(), fast_reason.as_deref());
+        }
+
         let mut events = Vec::new();
         let mut bind: Option<String> = None;
         // A result held on background work: its count, and the process and
@@ -4002,6 +4015,12 @@ impl TurnHost {
                 events.push(HarnessEvent::TurnCompleted {
                     usage: Some(claude_turn_usage(&rec)),
                 });
+                if live.applied.service_tier.as_deref() == Some("fast") && !live.fast_refused {
+                    if let Some(message) = fast_reason.as_deref().and_then(crate::provider_session::claude_fast_refusal) {
+                        live.fast_refused = true;
+                        events.push(HarnessEvent::SessionNote { message });
+                    }
+                }
                 if live.waits_for_background && !live.background.is_empty() && failed.is_none() && !live.cancelled {
                     // Not over: Claude carries on by itself once its
                     // background commands finish, and that is the report.

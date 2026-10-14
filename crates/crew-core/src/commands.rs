@@ -123,13 +123,15 @@ impl CommandsHost {
     /// The catalog as a window shows it: the provider's entries, each a
     /// command or a skill, after Crew's `actions`. An entry that shares a name
     /// with an action is dropped, so `/model` is one thing: Crew changes the
-    /// model, and the CLI's own never sees it.
+    /// model, and the CLI's own never sees it. So is the CLI's `/fast` where
+    /// Crew lists none: Claude's cannot work under Crew ("not available in
+    /// the Agent SDK"), and an account without fast mode has nothing to switch.
     pub fn catalog(&self, provider: &str, cwd: &str, actions: Vec<CommandEntry>, now: i64) -> CommandCatalog {
         let reported = {
             let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             map.get(&(provider.to_string(), cwd.to_string())).cloned().unwrap_or_default()
         };
-        let named: HashSet<&str> = actions.iter().map(|action| action.name.as_str()).collect();
+        let named: HashSet<&str> = actions.iter().map(|action| action.name.as_str()).chain(["fast"]).collect();
         let mut entries = actions.clone();
         entries.extend(
             reported
@@ -318,6 +320,18 @@ mod tests {
     fn fast_is_not_an_action_where_there_is_no_fast_mode() {
         assert!(crew_actions(true).iter().any(|action| action.name == "fast"));
         assert!(!crew_actions(false).iter().any(|action| action.name == "fast"));
+    }
+
+    /// Claude's own `/fast` is never listed: Crew's is, or none at all.
+    #[test]
+    fn claudes_own_fast_is_not_listed_where_crew_has_no_fast() {
+        let host = CommandsHost::default();
+        host.learn("claude", "/repo", Some(vec![entry("fast", "command"), entry("compact", "command")]), None, 1);
+        let without = host.catalog("claude", "/repo", crew_actions(false), 2);
+        assert!(!without.entries.iter().any(|entry| entry.name == "fast"));
+        let with = host.catalog("claude", "/repo", crew_actions(true), 2);
+        let fast: Vec<_> = with.entries.iter().filter(|entry| entry.name == "fast").map(|entry| entry.kind.as_str()).collect();
+        assert_eq!(fast, ["crew"]);
     }
 
     /// A folder nothing was read for still has the actions, dated now.

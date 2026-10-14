@@ -652,6 +652,23 @@ const FAST_MODE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const HIDING_REASONS: [&str; 6] =
     ["free", "preference", "extra_usage_disabled", "not_first_party", "disabled_by_env", "model_not_allowed"];
 
+/// What to tell the user when Claude ran a turn asked to be fast at standard
+/// speed, which it does without a word: `reason` is its
+/// `fast_mode_disabled_reason`. None when the reason does not rule fast out.
+pub fn claude_fast_refusal(reason: &str) -> Option<String> {
+    if !HIDING_REASONS.contains(&reason) {
+        return None;
+    }
+    let why = match reason {
+        "extra_usage_disabled" => "it needs extra usage, which this account does not have turned on".to_string(),
+        "free" => "this plan does not include it".to_string(),
+        "not_first_party" => "it is only offered on Anthropic's own API".to_string(),
+        "model_not_allowed" => "this model does not offer it".to_string(),
+        other => format!("Claude Code turned it down ({other})"),
+    };
+    Some(format!("Fast mode is not available: {why}. The turn ran at standard speed."))
+}
+
 /// Asks Claude's CLI for the fast-mode state off the caller's thread when it is
 /// installed, so the Fast toggle has its answer by the first composer.
 pub fn prewarm_claude_fast_mode() {
@@ -716,12 +733,37 @@ fn refresh_claude_fast_mode_in_background() {
     });
 }
 
+/// How many times the CLI is asked. It now and then answers `on` with no
+/// reason for an account that cannot use fast mode (2.1.299: one in four), so
+/// an `on` is only believed when every answer says so.
+const FAST_MODE_PROBES: usize = 2;
+
 fn refresh_claude_fast_mode() {
     let Some(binary) = shell_path::resolve("claude") else { return };
-    match probe_claude_fast_mode(&binary) {
-        Ok((state, reason)) => note_claude_fast_mode(state.as_deref(), reason.as_deref()),
-        Err(err) => eprintln!("[fast mode] {err}"),
+    let mut answers = Vec::new();
+    for _ in 0..FAST_MODE_PROBES {
+        match probe_claude_fast_mode(&binary) {
+            Ok(answer) => answers.push(answer),
+            Err(err) => eprintln!("[fast mode] {err}"),
+        }
     }
+    if let Some((state, reason)) = believed_fast_mode(answers) {
+        note_claude_fast_mode(state.as_deref(), reason.as_deref());
+    }
+}
+
+/// The answer that stands among several: one that rules fast out wins, then
+/// one that gives any reason, then the first.
+fn believed_fast_mode(answers: Vec<(Option<String>, Option<String>)>) -> Option<(Option<String>, Option<String>)> {
+    let refused = |answer: &(Option<String>, Option<String>)| {
+        answer.1.as_deref().is_some_and(|reason| HIDING_REASONS.contains(&reason))
+    };
+    let position = answers
+        .iter()
+        .position(refused)
+        .or_else(|| answers.iter().position(|answer| answer.1.is_some()))
+        .unwrap_or(0);
+    answers.into_iter().nth(position)
 }
 
 /// Asks the CLI for the account's fast-mode state over its control channel: an
@@ -1323,6 +1365,29 @@ note
         }
         assert_eq!(fast_mode_from(None, None, Some(&hidden("free"))), hidden("free"));
         assert_eq!(fast_mode_from(None, None, None), unknown);
+    }
+
+    /// An `on` the CLI gave by mistake does not outweigh a refusal.
+    #[test]
+    fn a_refusal_outweighs_a_stray_on() {
+        let answer = |state: &str, reason: Option<&str>| (Some(state.to_string()), reason.map(str::to_string));
+        let refused = answer("off", Some("extra_usage_disabled"));
+        assert_eq!(believed_fast_mode(vec![answer("on", None), refused.clone()]), Some(refused.clone()));
+        assert_eq!(believed_fast_mode(vec![refused.clone(), answer("on", None)]), Some(refused));
+        assert_eq!(believed_fast_mode(vec![answer("on", None), answer("on", None)]), Some(answer("on", None)));
+        assert_eq!(believed_fast_mode(Vec::new()), None);
+    }
+
+    /// A reason that rules fast out is told to the user; one that only says
+    /// the reading is not in yet is not.
+    #[test]
+    fn a_refused_fast_turn_says_why() {
+        let note = claude_fast_refusal("extra_usage_disabled").expect("a note");
+        assert!(note.contains("extra usage") && note.contains("standard speed"), "{note}");
+        assert!(claude_fast_refusal("preference").is_some());
+        for reason in ["sdk_opt_in_required", "network_error", "pending"] {
+            assert_eq!(claude_fast_refusal(reason), None, "{reason}");
+        }
     }
 
     /// The state comes off the initialize answer, and the CLI is stopped after it.
