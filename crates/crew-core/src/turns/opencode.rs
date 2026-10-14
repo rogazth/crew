@@ -370,8 +370,9 @@ impl TurnHost {
                 oc.clone()
             }
             None => {
+                // No title: opencode names a session it was not given one
+                // for, after its first message.
                 let mut body = json!({
-                    "title": session.name,
                     "location": { "directory": params.cwd },
                     "permissions": rules,
                 });

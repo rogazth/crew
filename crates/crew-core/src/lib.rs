@@ -43,6 +43,7 @@ pub mod session_history;
 pub mod session_tools;
 pub mod shell_path;
 pub mod store;
+pub mod titles;
 pub mod tools;
 pub mod transcript;
 pub mod turns;

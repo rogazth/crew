@@ -692,7 +692,7 @@ fn adopt_title(store: &Store, row: &Session, title: String) -> Result<Option<Str
 }
 
 /// `claude`, `claude 2`, …: what Crew names a session before its provider does.
-fn is_placeholder_name(name: &str, provider: &str) -> bool {
+pub(crate) fn is_placeholder_name(name: &str, provider: &str) -> bool {
     match name.strip_prefix(provider) {
         Some("") => true,
         Some(rest) => rest
@@ -920,7 +920,7 @@ fn folders<'a>(session: &'a Session, cwd: &'a str) -> Vec<&'a str> {
     [Some(cwd), gone].into_iter().flatten().collect()
 }
 
-fn provider_title_of(store: &Store, id: &str) -> Result<Option<String>, String> {
+pub(crate) fn provider_title_of(store: &Store, id: &str) -> Result<Option<String>, String> {
     store.with(|conn| {
         conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?
             .query_row(params![id], |row| row.get(0))

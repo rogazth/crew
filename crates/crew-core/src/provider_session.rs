@@ -1053,7 +1053,10 @@ impl ClaudeDirs {
 pub fn title(provider: &str, id: &str) -> Option<String> {
     let title = match provider {
         "codex" => codex_title(&codex_home()?.join("session_index.jsonl"), id),
-        "cursor" => cursor_title(&home()?.join(".cursor/chats"), id),
+        "cursor" => {
+            let cursor = home()?.join(".cursor");
+            cursor_acp_title(&cursor.join("acp-sessions"), id).or_else(|| cursor_title(&cursor.join("chats"), id))
+        }
         "opencode" => opencode_title(&opencode_db()?, id),
         _ => None,
     }?;
@@ -1113,7 +1116,7 @@ fn cursor_has_conversation(chats: &Path, id: &str) -> bool {
 }
 
 /// Append-only: a `/rename` lands as a later line for the same id.
-fn codex_title(index: &Path, id: &str) -> Option<String> {
+pub(crate) fn codex_title(index: &Path, id: &str) -> Option<String> {
     let text = std::fs::read_to_string(index).ok()?;
     text.lines()
         .rev()
@@ -1135,16 +1138,32 @@ fn cursor_title(chats: &Path, id: &str) -> Option<String> {
     })
 }
 
+/// A chat driven over ACP keeps its store in `acp-sessions/<id>`, where
+/// Cursor writes the title it gives it after the first turn.
+fn cursor_acp_title(sessions: &Path, id: &str) -> Option<String> {
+    if !is_chat_id(id) {
+        return None;
+    }
+    let meta = std::fs::read_to_string(sessions.join(id).join("meta.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&meta).ok()?;
+    value.get("title")?.as_str().map(str::to_string)
+}
+
+/// opencode 2.x keeps its sessions in `session_v2`, and 1.x ones in
+/// `session` (a DB that predates 2.x has both). A session Crew opened before
+/// it stopped naming them carries Crew's own placeholder, which is no title.
 fn opencode_title(db: &Path, id: &str) -> Option<String> {
     if !db.exists() {
         return None;
     }
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     conn.busy_timeout(Duration::from_millis(500)).ok()?;
-    let title: String = conn
-        .query_row("SELECT title FROM session WHERE id = ?1", params![id], |row| row.get(0))
-        .ok()?;
-    (!title.starts_with("New session - ")).then_some(title)
+    let title: String = ["session_v2", "session"].into_iter().find_map(|table| {
+        conn.query_row(&format!("SELECT title FROM {table} WHERE id = ?1"), params![id], |row| row.get::<_, Option<String>>(0))
+            .ok()
+            .flatten()
+    })?;
+    (!title.starts_with("New session - ") && !crate::session::is_placeholder_name(&title, "opencode")).then_some(title)
 }
 
 fn home() -> Option<PathBuf> {
@@ -1529,6 +1548,19 @@ time.sleep(600)
     }
 
     #[test]
+    fn cursor_acp_title_reads_the_sessions_store() {
+        let root = temp_dir("cursor-acp-title");
+        std::fs::create_dir_all(root.join("f046c807-c613")).unwrap();
+        std::fs::write(root.join("f046c807-c613/meta.json"), r#"{"schemaVersion":1,"cwd":"/x","title":"Lisbon Trip Planner"}"#).unwrap();
+        std::fs::create_dir_all(root.join("untitled")).unwrap();
+        std::fs::write(root.join("untitled/meta.json"), r#"{"schemaVersion":1,"cwd":"/x"}"#).unwrap();
+        assert_eq!(cursor_acp_title(&root, "f046c807-c613").as_deref(), Some("Lisbon Trip Planner"));
+        assert_eq!(cursor_acp_title(&root, "untitled"), None);
+        assert_eq!(cursor_acp_title(&root, "../escape"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn cursor_title_finds_the_chat_in_any_folder() {
         let root = temp_dir("cursor-title");
         let chat = root.join("0eaad84c/5e047119-f117");
@@ -1550,12 +1582,19 @@ time.sleep(600)
         conn.execute_batch(
             "CREATE TABLE session (id TEXT, title TEXT);
              INSERT INTO session VALUES ('named', 'Friendly greeting');
-             INSERT INTO session VALUES ('fresh', 'New session - 2026-09-17T17:59:15.722Z');",
+             INSERT INTO session VALUES ('fresh', 'New session - 2026-09-17T17:59:15.722Z');
+             CREATE TABLE session_v2 (id TEXT, title TEXT);
+             INSERT INTO session_v2 VALUES ('v2', 'Planning trip to Lisbon');
+             INSERT INTO session_v2 VALUES ('untitled', NULL);
+             INSERT INTO session_v2 VALUES ('crew', 'opencode 8');",
         )
         .unwrap();
         drop(conn);
         assert_eq!(opencode_title(&db, "named").as_deref(), Some("Friendly greeting"));
         assert_eq!(opencode_title(&db, "fresh"), None);
+        assert_eq!(opencode_title(&db, "v2").as_deref(), Some("Planning trip to Lisbon"));
+        assert_eq!(opencode_title(&db, "untitled"), None);
+        assert_eq!(opencode_title(&db, "crew"), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

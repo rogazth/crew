@@ -1445,7 +1445,19 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_sync_title" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || session::sync_title(&store, id)).await?)
+            let turns = hosts.turns.clone();
+            json(
+                block(move || {
+                    let name = session::sync_title(&store, id.clone())?;
+                    // Nothing yet: a provider that does not name its sessions
+                    // under Crew is asked to, and the next sweep adopts it.
+                    if name.is_none() {
+                        turns.name_untitled(&id);
+                    }
+                    Ok::<_, String>(name)
+                })
+                .await?,
+            )
         }
         "session_mark_seen" => {
             let proto::SessionMarkSeen { id, cursor } = parse(params)?;

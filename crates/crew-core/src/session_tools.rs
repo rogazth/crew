@@ -2143,6 +2143,11 @@ def reader():
                 ]
                 out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"mcpServers": servers}}})
                 continue
+            if req.get("subtype") == "generate_session_title":
+                # Asked beside the turn, so it keeps a log of its own.
+                with open(os.path.join(HERE, "claude-titles.log"), "a") as f: f.write("%s %s\n" % (req.get("persist"), req.get("description")))
+                out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"title": "Named"}}})
+                continue
             if req.get("subtype") == "get_context_usage":
                 # Asked on its own schedule, so it stays out of the control log.
                 out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"totalTokens": 1234, "maxTokens": 200000, "rawMaxTokens": 200000, "autoCompactThreshold": 160000, "isAutoCompactEnabled": True, "model": "fake"}}})
@@ -3207,6 +3212,20 @@ time.sleep(600)
         let reply = w.blocks(&mine.id).into_iter().find(|block| block.text == "Current session: 29% used").expect("no reply");
         assert_eq!(reply.role, BlockRole::Assistant);
         assert_eq!(w.blocks(&mine.id).iter().filter(|block| block.text == "Current session: 29% used").count(), 1);
+        w.turns.release(&mine.id);
+    }
+
+    /// The CLI names a conversation in stream-json only when asked: a user's
+    /// Claude is asked once, on its first message, to name it after that.
+    #[test]
+    fn a_users_claude_is_asked_once_to_name_its_conversation() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.say(&mine, "hello");
+        w.say(&mine, "again");
+        let titles = w.dir.join("claude-titles.log");
+        until("the title was asked", || titles.exists());
+        assert_eq!(std::fs::read_to_string(&titles).unwrap().lines().collect::<Vec<_>>(), ["True hello"]);
         w.turns.release(&mine.id);
     }
 
