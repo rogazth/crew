@@ -22,7 +22,7 @@ import type { BackgroundCommand, BackgroundList, Process, ProcessRun, ThreadPair
 import type { Session } from "./types";
 
 function command(id: string, extra: Partial<BackgroundCommand> = {}): BackgroundCommand {
-  return { id, command: `run ${id}`, kind: "shell", startedAt: 1000, state: "running", ...extra };
+  return { id, command: `sh -c ${id}`, description: `run ${id}`, kind: "shell", startedAt: 1000, state: "running", ...extra };
 }
 
 function list(commands: BackgroundCommand[], extra: Partial<BackgroundList> = {}): BackgroundList {
@@ -133,6 +133,14 @@ describe("panelEntries", () => {
     expect(entries.map((e) => e.kind)).toEqual(["subagent", "shell", "shell"]);
     expect(entries[0]).toMatchObject({ title: "Find the callers", detail: "for the steer fallback", source: { type: "command", id: "a" } });
     expect(entries[1]).toMatchObject({ detail: "", source: { type: "command", id: "s" } });
+  });
+
+  it("names a shell with no description Shell and keeps its command for the tooltip", () => {
+    const bare = command("s", { command: "cd /x && php artisan serve --port=8000" });
+    delete bare.description;
+    const [entry] = panelEntries(list([bare]), [], [], S1);
+
+    expect(entry).toMatchObject({ title: "Shell", detail: "cd /x && php artisan serve --port=8000" });
   });
 
   it("maps a board command's state", () => {
@@ -495,23 +503,12 @@ describe("clearing finished entries", () => {
 });
 
 describe("shellLabel", () => {
-  it("prefers what the model said the shell is for", () => {
-    expect(shellLabel({ command: "npm run dev", description: " Start the app " })).toBe("Start the app");
+  it("is what the model said the shell is for", () => {
+    expect(shellLabel({ description: " Start the app " })).toBe("Start the app");
   });
 
-  it("drops the cd it opens with, even inside a subshell", () => {
-    const long = "cd /home/agent/furry/app && (cd apps/api && php artisan serve --host=127.0.0.1 --port=8000 --no-interaction) > /tmp/api.log 2>&1 &";
-    const label = shellLabel({ command: long });
-    expect(label.startsWith("php artisan serve")).toBe(true);
-    expect(label.length).toBeLessThanOrEqual(60);
-    expect(label.endsWith("…")).toBe(true);
-  });
-
-  it("keeps a short command as it is, first line only", () => {
-    expect(shellLabel({ command: "npm test\nnpm run lint" })).toBe("npm test");
-  });
-
-  it("falls back to the command when only a cd is there", () => {
-    expect(shellLabel({ command: "cd /tmp &&" })).toBe("cd /tmp &&");
+  it("is just Shell when nothing was said, however long the command", () => {
+    expect(shellLabel({})).toBe("Shell");
+    expect(shellLabel({ description: "  " })).toBe("Shell");
   });
 });

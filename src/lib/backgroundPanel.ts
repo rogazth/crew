@@ -108,35 +108,26 @@ export function stoppableOf(command: BackgroundCommand, live: boolean): boolean 
 /** The panel's id for a board command, from the command's own. */
 export const commandEntryId = (commandId: string): string => `command:${commandId}`;
 
-const SHELL_LABEL_MAX = 60;
-
 /**
  * A shell's name for a header or a row: what the model said it is for, else
- * the command's first line without the `cd dir &&` it opens with, cut short.
- * The whole command is in the thread's body.
+ * just "Shell". Commands run long; the whole one is in the thread's body.
  */
-export function shellLabel(command: Pick<BackgroundCommand, "command" | "description">): string {
-  const said = command.description?.trim();
-  if (said) return said;
-  let line = (command.command.split("\n").find((l) => l.trim()) ?? "").trim();
-  for (let bare = line.replace(CD_PREFIX, ""); bare !== line; bare = line.replace(CD_PREFIX, "")) line = bare;
-  line = line.replace(/\s+/g, " ");
-  return line.length > SHELL_LABEL_MAX ? `${line.slice(0, SHELL_LABEL_MAX - 1).trimEnd()}…` : line || command.command;
+export function shellLabel(command: Pick<BackgroundCommand, "description">): string {
+  return command.description?.trim() || "Shell";
 }
-
-const CD_PREFIX = /^\(?\s*cd\s+\S+\s*&&\s*/;
 
 function fromCommand(command: BackgroundCommand, live: boolean, provider: string): PanelEntry {
   const kind = BOARD_KIND[command.kind];
   const shell = kind === "shell";
   const said = shell && !!command.description?.trim();
+  // A shell with no name of its own keeps its command for the row's tooltip.
   return {
     id: commandEntryId(command.id),
     kind,
     origin: "native",
     writable: false,
     title: shell ? shellLabel(command) : command.command,
-    detail: said ? "" : (command.description ?? ""),
+    detail: said ? "" : shell ? command.command : (command.description ?? ""),
     state: BOARD_STATE[command.state],
     startedAt: command.startedAt,
     ...present({

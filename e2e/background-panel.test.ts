@@ -308,7 +308,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   const texts = (await rows().allTextContents()).join("\n");
   assert.match(texts, /Explore the repo.*Subagent · stopped/, texts);
   assert.match(texts, /billing-ui.*Session ·/, texts);
-  assert.match(texts, /npm test.*Shell · \d+s/, texts);
+  assert.match(texts, /Shell.*Shell · \d+s/, texts);
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "work-sheet.png") });
 });
 
@@ -346,14 +346,14 @@ test("a native subagent opens with no composer and a read-only footer, and x sto
 
 test("a shell opens in place under the same header, with its output and no composer", async () => {
   await openWorkSheet();
-  await rows().filter({ hasText: /npm test.*Shell/ }).first().click();
+  await rows().filter({ hasText: /Shell.*Shell/ }).first().click();
   await sheet().waitFor({ state: "detached" });
 
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   await page.locator("[data-background-output]").waitFor();
   assert.equal(await page.locator("textarea").count(), 0);
-  assert.match(await page.locator("[data-thread-header]").innerText(), /npm test/);
+  assert.match(await page.locator("[data-thread-header]").innerText(), /^Shell/);
   assert.match((await page.locator("[data-thread-header] [title]").first().getAttribute("title")) ?? "", /Shell/);
   assert.match(await page.locator("[data-background-command]").innerText(), /^\$ npm test/);
   assert.match(await page.locator("[data-thread-footer]").innerText(), /Output of a shell/);
