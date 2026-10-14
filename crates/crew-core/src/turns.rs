@@ -3738,6 +3738,18 @@ impl TurnHost {
                 let call = self.background.read(session_id, |board| board.command(&task).and_then(|row| row.tool_call_id.clone()));
                 call.flatten().map(|call| (task, call))
             });
+        // A finished shell the transcript already draws: its row is marked
+        // "Sent to the background" and says how it ended, so what woke the
+        // model needs no line of its own.
+        let drawn = (rec.get("subtype").and_then(Value::as_str) == Some("task_notification"))
+            .then(|| string_field(Some(&rec), "task_id"))
+            .flatten()
+            .and_then(|task| {
+                self.background.read(session_id, |board| {
+                    board.command(&task).is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
+                })
+            })
+            .unwrap_or(false);
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -3791,18 +3803,6 @@ impl TurnHost {
                     .filter(|(id, _)| live.init_id.as_deref() == Some(id.as_str()))
                     .and_then(|(_, result)| result.ok());
                 if answer.is_some() {
-        // A finished shell the transcript already draws: its row is marked
-        // "Sent to the background" and says how it ended, so what woke the
-        // model needs no line of its own.
-        let drawn = (rec.get("subtype").and_then(Value::as_str) == Some("task_notification"))
-            .then(|| string_field(Some(&rec), "task_id"))
-            .flatten()
-            .and_then(|task| {
-                self.background.read(session_id, |board| {
-                    board.command(&task).is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
-                })
-            })
-            .unwrap_or(false);
                     live.init_id = None;
                 }
                 let skills = (subtype.as_deref() == Some("init")).then(|| rec.get("skills")).flatten();
