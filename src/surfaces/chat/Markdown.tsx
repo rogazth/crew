@@ -13,6 +13,7 @@ import { createMathPlugin } from "@streamdown/math";
 import "katex/dist/katex.min.css";
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown, useIsCodeFenceIncomplete, type Components, type ControlsConfig, type StreamdownProps } from "streamdown";
 import "streamdown/styles.css";
+import { FileRef } from "../../chrome/FileRef";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
@@ -38,7 +39,7 @@ type CodeProps = ComponentProps<"code"> & { node?: unknown; metastring?: string;
 function Code({ className, children, node: _node, metastring, ...rest }: CodeProps) {
   const text = codeText(children);
   if ("data-block" in rest) return <Fence code={text} className={className} meta={metastring} />;
-  if (isPathLike(text) && extensionOf(text)) return <FileChip path={text} />;
+  if (isPathLike(text) && extensionOf(text)) return <InlineFile path={text} />;
   return <code className="crew-inline-code">{children}</code>;
 }
 
@@ -60,15 +61,9 @@ function Fence({ code, className, meta }: { code: string; className: string | un
   );
 }
 
-function FileChip({ path }: { path: string }) {
+function InlineFile({ path }: { path: string }) {
   const { openPath } = useChatActions();
-  const name = path.split("/").pop() ?? path;
-  return (
-    <button type="button" onClick={() => openPath(path)} title={path} className="crew-file-chip">
-      <FileTypeIcon name={name} className="size-3" />
-      <span>{path}</span>
-    </button>
-  );
+  return <FileRef path={path} full onOpen={openPath} />;
 }
 
 type LinkProps = ComponentProps<"a"> & { node?: unknown };

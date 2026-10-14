@@ -86,7 +86,7 @@ function FileChip({ file, onRemove, onInk }: { file: AttachedFile; onRemove?: ()
   return (
     <span
       title={file.path}
-      className={`inline-flex h-6 max-w-[200px] items-center gap-1.5 rounded-md px-2 text-[12px] leading-4 ${onInk ? "crew-chip-on-ink" : "bg-card"}`}
+      className={`inline-flex h-6 max-w-[200px] items-center gap-1.5 rounded-md px-2 text-[12px] leading-4 shadow-[inset_0_0_0_1px_var(--color-hairline)] ${onInk ? "crew-chip-on-ink" : "bg-card"}`}
     >
       <FileTypeIcon name={file.name} className="size-3.5" />
       <span className="min-w-0 truncate">{file.name}</span>

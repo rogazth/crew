@@ -3,7 +3,7 @@ import { Tooltip } from "../../chrome/kit";
 import { ChevronRightIcon, ImagesIcon, InfoIcon } from "lucide-react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState } from "react";
-import { FileTypeIcon } from "../../chrome/FileTypeIcon";
+import { FileRef } from "../../chrome/FileRef";
 import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
@@ -113,16 +113,7 @@ function MentionText({ text }: { text: string }) {
       {segments.map((segment, index) =>
         segment.kind === "mention" ? (
           // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
-          <button
-            key={index}
-            type="button"
-            title={segment.path}
-            onClick={() => openPath(segment.path)}
-            className="crew-mention-pill"
-          >
-            <FileTypeIcon name={segment.path.split("/").pop() ?? segment.path} className="size-3" />
-            {segment.path.split("/").pop()}
-          </button>
+          <FileRef key={index} path={segment.path} onOpen={openPath} />
         ) : (
           <span key={index}>{segment.text}</span>
         ),
