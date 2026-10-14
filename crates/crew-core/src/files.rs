@@ -13,6 +13,10 @@ use crate::providers::InlineImage;
 const MAX_PROJECT_FILES: usize = 20_000;
 const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TEMP_FILE_BYTES: usize = 32 * 1024 * 1024;
+/// A file sent in pieces: far past what one message carries, still a bound.
+const MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// The most one `read_range` hands back, so a caller cannot ask for the disk at once.
+const MAX_RANGE_BYTES: u64 = 16 * 1024 * 1024;
 const SKIPPED_DIRS: &[&str] = &[
     "node_modules", ".git", "target", "dist", "build", ".next", ".venv", "vendor",
 ];
@@ -490,6 +494,58 @@ pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, Stri
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// A file that arrives in pieces, in order. The name comes from `id` and the
+/// extension, both reduced to safe characters, so a caller cannot walk out of
+/// the dir. A piece must start where the last one ended; the first starts over.
+pub fn write_chunk(id: &str, extension: &str, offset: u64, base64_contents: &str) -> Result<String, String> {
+    use std::io::Write as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_contents.as_bytes())
+        .map_err(|e| format!("Upload data is not valid base64: {e}"))?;
+    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
+    if id.is_empty() {
+        return Err("Upload needs an id".into());
+    }
+    if offset + bytes.len() as u64 > MAX_UPLOAD_BYTES {
+        return Err("File is too large to upload".into());
+    }
+    let dir = std::env::temp_dir().join("crew");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{id}.{}", safe_extension(extension)));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if offset == 0 {
+        options.create(true).truncate(true);
+    }
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    let have = file.metadata().map_err(|e| e.to_string())?.len();
+    if have != offset {
+        return Err(format!("Upload is out of order: {have} bytes arrived, the next piece starts at {offset}"));
+    }
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct FileRangeBytes {
+    pub size: u64,
+    pub data: String,
+}
+
+/// A slice of a file, base64, and the whole file's size: how a big file leaves
+/// this machine without ever being in memory at once.
+pub fn read_range(path: &str, offset: u64, length: u64) -> Result<FileRangeBytes, String> {
+    use std::io::{Read as _, Seek as _};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    let want = length.min(MAX_RANGE_BYTES).min(size.saturating_sub(offset));
+    file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    let mut buffer = vec![0u8; want as usize];
+    file.read_exact(&mut buffer).map_err(|e| e.to_string())?;
+    Ok(FileRangeBytes { size, data: base64::engine::general_purpose::STANDARD.encode(buffer) })
+}
+
 /// A pasted or dropped image saved next to a note. Parent folders are created;
 /// an existing file is an error, so a name clash can never eat someone's image.
 pub fn create_base64(path: &str, base64_contents: &str) -> Result<(), String> {
@@ -534,6 +590,21 @@ mod tests {
         assert_eq!(safe_extension("png"), "png");
         assert_eq!(safe_extension("../../etc/passwd"), "etcpassw");
         assert_eq!(safe_extension(""), "bin");
+    }
+
+    #[test]
+    fn chunks_land_in_order_and_range_reads_them_back() {
+        use base64::Engine as _;
+        let enc = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let id = format!("t-{}", uuid::Uuid::new_v4());
+        let path = super::write_chunk(&id, "psd", 0, &enc(b"hello ")).unwrap();
+        assert!(super::write_chunk(&id, "psd", 99, &enc(b"x")).is_err());
+        super::write_chunk(&id, "psd", 6, &enc(b"world")).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello world");
+        let range = super::read_range(&path, 6, 100).unwrap();
+        assert_eq!(range.size, 11);
+        assert_eq!(range.data, enc(b"world"));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

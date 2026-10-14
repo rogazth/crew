@@ -7,10 +7,14 @@ import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useMarkSeen } from "../hooks/useMarkSeen";
 import { useThread } from "../hooks/useThread";
+import { useUploads } from "../hooks/useUploads";
 import { onAgentRequest, peekAgentRequest, takeAgentRequest } from "../lib/agentRoute";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
 import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
+import { focusEnv } from "../lib/client/registry";
+import { LOCAL } from "../lib/client/route";
+import { extensionFor, pathSource, upload } from "../lib/upload";
 import { markedCalls, turnTray } from "../lib/background";
 import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
@@ -176,19 +180,36 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     field.current?.focus();
   }, []);
 
-  const attach = useCallback(async () => addPaths(await pickFiles()), [addPaths]);
+  const { uploads, start: startUploads, dismiss: dismissUpload, busy: uploading } = useUploads(addPaths);
 
-  // A pasted screenshot has no path; it gets one in the temp dir, like the terminal does.
-  const pasteFiles = useCallback(
-    (pasted: File[]) => {
-      void Promise.all(pasted.map((file) => writeTempFile(file).catch(() => null))).then((paths) =>
-        addPaths(paths.filter((path): path is string => path !== null)),
+  // A file the machine in front cannot read from this Mac's disk goes to its temp dir first, with how far it got.
+  const uploadFiles = useCallback(
+    (list: File[]) => {
+      const env = focusEnv();
+      startUploads(
+        list.map((file) => ({
+          name: file.name || "pasted file",
+          size: file.size,
+          run: (onProgress) => writeTempFile(file, env, onProgress),
+        })),
       );
     },
-    [addPaths],
+    [startUploads],
   );
 
-  const over = useFileDrop(pane, addPaths);
+  const attach = useCallback(async () => {
+    const paths = await pickFiles();
+    const env = focusEnv();
+    if (env === LOCAL) return addPaths(paths);
+    // The picker names files on this Mac; a remote workspace needs them on its own machine.
+    for (const path of paths) {
+      const source = await pathSource(path).catch(() => null);
+      if (!source) continue;
+      startUploads([{ name: source.name, size: source.size, run: (onProgress) => upload(source, env, extensionFor(source.name), onProgress) }]);
+    }
+  }, [addPaths, startUploads]);
+
+  const over = useFileDrop(pane, addPaths, uploadFiles);
 
   // Nobody has talked to a session of the user's yet: it can still be another provider's CLI.
   const fresh = session.kind === "terminal" && ready && held.length === 0 && pending.length === 0 && !working;
@@ -213,7 +234,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const submit = useCallback(
     (mode?: "steer" | "queue") => {
       const text = draft.trim();
-      if ((!text && files.length === 0) || !ready) return;
+      if ((!text && files.length === 0) || !ready || uploading) return;
       // A message while it works goes into the turn or after it; a bot takes none.
       if (working && !(mode && whileWorking)) return;
       const attached = files;
@@ -231,7 +252,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", asked);
       else void send(session, cwd, text, attached, asked);
     },
-    [actions, cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
+    [actions, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);
@@ -375,8 +396,10 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               work={work}
               {...(whileWorking ? { whileWorking, queue } : {})}
               onAttach={() => void attach()}
-              onPasteFiles={pasteFiles}
+              onPasteFiles={uploadFiles}
               onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
+              uploads={uploads}
+              onDismissUpload={dismissUpload}
               onApprove={approve}
               onAnswer={reply}
               onOptions={changeOptions}

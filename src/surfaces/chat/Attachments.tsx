@@ -3,22 +3,26 @@ import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useImageSrc } from "../../hooks/useImageSrc";
+import type { Upload } from "../../hooks/useUploads";
 import { formatBytes, isImage } from "../../lib/attachments";
 import type { AttachedFile } from "../../lib/blocks";
 
 type Props = {
   files: AttachedFile[];
   onRemove?: (path: string) => void;
+  /** Files still travelling to another machine, in the composer only. */
+  uploads?: Upload[];
+  onDismissUpload?: (id: number) => void;
   /** Inside the ink bubble chips are a lighter ink, not a darker card. */
   onInk?: boolean;
 };
 
 /** Images as thumbnails that open a viewer; other files as chips. One strip for the composer and the sent turn. */
-export function AttachmentStrip({ files, onRemove, onInk }: Props) {
+export function AttachmentStrip({ files, onRemove, onInk, uploads = [], onDismissUpload }: Props) {
   const images = files.filter(isImage);
   const others = files.filter((file) => !isImage(file));
   const [open, setOpen] = useState<number | null>(null);
-  if (files.length === 0) return null;
+  if (files.length === 0 && uploads.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5">
       {images.map((file, index) => (
@@ -32,6 +36,9 @@ export function AttachmentStrip({ files, onRemove, onInk }: Props) {
       ))}
       {others.map((file) => (
         <FileChip key={file.path} file={file} onInk={onInk === true} {...(onRemove ? { onRemove: () => onRemove(file.path) } : {})} />
+      ))}
+      {uploads.map((upload) => (
+        <UploadChip key={upload.id} upload={upload} {...(onDismissUpload ? { onDismiss: () => onDismissUpload(upload.id) } : {})} />
       ))}
       {open !== null && images.length > 0 && (
         <Lightbox images={images} index={Math.min(open, images.length - 1)} onIndex={setOpen} onClose={() => setOpen(null)} />
@@ -77,6 +84,37 @@ function Thumbnail({
         >
           <XIcon className="size-2.5" />
         </button>
+      )}
+    </span>
+  );
+}
+
+/** A file on its way to a remote machine: how far it is, or why it stopped. */
+function UploadChip({ upload, onDismiss }: { upload: Upload; onDismiss?: () => void }) {
+  const failed = upload.error !== undefined;
+  const percent = upload.size > 0 ? Math.min(100, Math.round((upload.sent / upload.size) * 100)) : 0;
+  return (
+    <span
+      title={failed ? upload.error : `${upload.name}: ${formatBytes(upload.sent)} of ${formatBytes(upload.size)}`}
+      className="relative inline-flex h-6 max-w-[240px] items-center gap-1.5 overflow-hidden rounded-md bg-card px-2 text-[12px] leading-4 shadow-[inset_0_0_0_1px_var(--color-hairline)]"
+    >
+      <FileTypeIcon name={upload.name} className="size-3.5" />
+      <span className="min-w-0 truncate">{upload.name}</span>
+      <span className={`shrink-0 tabular-nums ${failed ? "text-danger" : "opacity-60"}`}>{failed ? "Failed" : `${percent}%`}</span>
+      {onDismiss && failed && (
+        <button
+          type="button"
+          aria-label={`Dismiss ${upload.name}`}
+          onClick={onDismiss}
+          className="-mr-0.5 flex size-4 items-center justify-center rounded text-text-muted transition-colors hover:text-text"
+        >
+          <XIcon className="size-3" />
+        </button>
+      )}
+      {!failed && (
+        <span aria-hidden className="absolute inset-x-0 bottom-0 h-0.5 bg-hairline">
+          <span className="block h-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
+        </span>
       )}
     </span>
   );

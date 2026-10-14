@@ -29,6 +29,8 @@ export function DefaultChatSurface({
   onAttach,
   onPasteFiles,
   onRemoveFile,
+  uploads,
+  onDismissUpload,
   onApprove,
   onAnswer,
   loading = false,
@@ -89,6 +91,8 @@ export function DefaultChatSurface({
             onAttach={onAttach}
             onPasteFiles={onPasteFiles}
             onRemoveFile={onRemoveFile}
+            uploads={uploads}
+            onDismissUpload={onDismissUpload}
             onSend={onSend}
             onStop={onStop}
             {...(whileWorking ? { whileWorking } : {})}

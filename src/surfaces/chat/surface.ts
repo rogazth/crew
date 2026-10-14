@@ -1,3 +1,4 @@
+import type { Upload } from "../../hooks/useUploads";
 import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { AgentChoice } from "../../lib/providers";
@@ -30,6 +31,9 @@ export type ChatSurfaceProps = {
   onAttach: () => void;
   onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
+  /** Files still on their way to a remote machine, and the one the user gave up on. */
+  uploads: Upload[];
+  onDismissUpload: (id: number) => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
   /** What Enter does with a message while a turn runs; absent, it waits for the turn to end. */

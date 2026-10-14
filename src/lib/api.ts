@@ -1,6 +1,7 @@
 import { client } from "./client";
 import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
+import { base64OfFile, extensionFor, fileSource, upload } from "./upload";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BackgroundList,
@@ -36,6 +37,9 @@ import type {
   TurnStarted,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
+
+/** Up to here a file travels in one message. */
+const SINGLE_CALL = 4 * 1024 * 1024;
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -345,26 +349,29 @@ export const listedModels = (provider: string): Promise<ListedModel[]> =>
 export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
   client.request("read_file_base64", { path });
 
-async function base64Of(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  // fromCharCode takes the array as arguments, so a whole screenshot blows the stack.
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
-/** Clipboard files have no path; the CLIs Crew hosts only take paths. */
 /** Clipboard and drops have no path yet. On a remote workspace the bytes land on that machine. */
-export async function writeTempFile(file: File, envId = focusEnv()): Promise<string> {
-  const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
-  return client.request("write_temp_file", { extension, base64Contents: await base64Of(file) }, envId);
+export async function writeTempFile(
+  file: File,
+  envId = focusEnv(),
+  onProgress?: (sent: number) => void,
+): Promise<string> {
+  const extension = extensionFor(file.name, file.type);
+  // A small one is a single call, which a daemon from before pieces still answers.
+  if (file.size <= SINGLE_CALL) {
+    const path = await client.request<string>(
+      "write_temp_file",
+      { extension, base64Contents: await base64OfFile(file) },
+      envId,
+    );
+    onProgress?.(file.size);
+    return path;
+  }
+  return upload(fileSource(file), envId, extension, onProgress);
 }
 
 /** A new file at `path`, parent folders included. Fails rather than overwrite. */
 export async function createFile(path: string, file: File): Promise<void> {
-  return client.request("create_file_base64", { path, base64Contents: await base64Of(file) });
+  return client.request("create_file_base64", { path, base64Contents: await base64OfFile(file) });
 }
 
 /** A committed main-frame navigation. The daemon drops anything that is not http(s). */

@@ -1642,6 +1642,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let TempFile { extension, base64_contents } = parse(params)?;
             json(block(move || files::write_temp(&extension, &base64_contents)).await?)
         }
+        "upload_chunk" => {
+            let proto::UploadChunk { id, extension, offset, base64_contents } = parse(params)?;
+            json(block(move || files::write_chunk(&id, &extension, offset, &base64_contents)).await?)
+        }
+        "read_file_range" => {
+            let proto::FileRange { path, offset, length } = parse(params)?;
+            json(block(move || files::read_range(&path, offset, length)).await?)
+        }
         "ping" => Ok(Value::Null),
         "remote_list" => {
             let store = hosts.store.clone();

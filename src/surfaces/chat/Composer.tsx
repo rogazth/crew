@@ -45,6 +45,7 @@ import {
 } from "../../lib/slashCommands";
 import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
+import type { Upload } from "../../hooks/useUploads";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
 import { McpSegment } from "./Mcp";
@@ -70,6 +71,8 @@ type Props = {
   /** Files pasted from the clipboard (screenshots); they have no path yet. */
   onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
+  uploads: Upload[];
+  onDismissUpload: (id: number) => void;
   /** `mode` is how a message written while a turn runs goes: absent when no turn runs. */
   onSend: (mode?: "steer" | "queue") => void;
   onStop: () => void;
@@ -121,6 +124,8 @@ export function Composer({
   onAttach,
   onPasteFiles,
   onRemoveFile,
+  uploads,
+  onDismissUpload,
   onSend,
   onStop,
   whileWorking,
@@ -135,7 +140,9 @@ export function Composer({
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
   const { files: projectFiles, confirm, resolvePath } = useChatActions();
-  const canSend = ready && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
+  // A file still travelling has no path to send yet.
+  const uploading = uploads.some((upload) => upload.error === undefined);
+  const canSend = ready && !uploading && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
 
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
@@ -321,9 +328,9 @@ export function Composer({
           <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
         )}
         {queue && queue.items.some((message) => !message.steering) && <QueueChips queue={queue} />}
-        {files.length > 0 && (
+        {(files.length > 0 || uploads.length > 0) && (
           <div className="mb-2">
-            <AttachmentStrip files={files} onRemove={onRemoveFile} />
+            <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />
           </div>
         )}
         <div className="relative">

@@ -391,6 +391,11 @@ export type FileBytes = { mime: string, data: string, };
 
 export type FileMatches = { path: string, relative: string, lines: Array<LineMatch>, };
 
+/**
+ * `length` bytes of the file at `path`, from `offset`.
+ */
+export type FileRange = { path: string, offset: number, length: number, };
+
 export type FileSearchResult = { files: Array<FileMatches>, 
 /**
  * Every match found, across `files`.
@@ -1360,6 +1365,12 @@ delivery?: "started" | "steered" | "queued",
 letterId?: string, };
 
 export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
+
+/**
+ * One piece of a file too big for a single message. `id` names the upload,
+ * `offset` is where the piece starts; the first piece (offset 0) begins the file.
+ */
+export type UploadChunk = { id: string, extension: string, offset: number, base64Contents: string, };
 
 export type UrlKey = { urlKey: string, };
 

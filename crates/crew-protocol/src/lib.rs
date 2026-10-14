@@ -505,6 +505,31 @@ pub struct TempFile {
     pub base64_contents: String,
 }
 
+/// One piece of a file too big for a single message. `id` names the upload,
+/// `offset` is where the piece starts; the first piece (offset 0) begins the file.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct UploadChunk {
+    pub id: String,
+    pub extension: String,
+    #[ts(type = "number")]
+    pub offset: u64,
+    pub base64_contents: String,
+}
+
+/// `length` bytes of the file at `path`, from `offset`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct FileRange {
+    pub path: String,
+    #[ts(type = "number")]
+    pub offset: u64,
+    #[ts(type = "number")]
+    pub length: u64,
+}
+
 /// Bytes for a new file at `path`; the daemon never overwrites one that exists.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]

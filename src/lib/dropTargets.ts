@@ -6,6 +6,8 @@ import { onDragDrop } from "./host";
 type Target = {
   el: () => HTMLElement | null;
   onDrop: (paths: string[]) => void;
+  /** A remote workspace's drop, before it has a path there: the target uploads it, and can show how far. */
+  onUpload?: (files: File[]) => boolean;
   onOver: (over: boolean) => void;
 };
 
@@ -59,6 +61,7 @@ async function deliver(target: Target, files: File[], paths: string[]) {
     return;
   }
   // A remote workspace cannot read this Mac's disk: the bytes go to its machine first.
+  if (files.length > 0 && target.onUpload?.(files)) return;
   const results = await Promise.allSettled(files.map((file) => writeTempFile(file)));
   const uploaded: string[] = [];
   for (const result of results) {
