@@ -115,6 +115,14 @@ export function ShellOutput({ sessionId, command, live }: { sessionId: string; c
         {error && <p className="mb-2 px-1 text-[12px] text-danger">{error}</p>}
         <pre
           data-selectable
+          data-background-command={command.id}
+          className="mb-2 rounded-xl border border-border bg-card px-4 py-2.5 font-mono text-[12.5px] leading-[19px] break-words whitespace-pre-wrap text-text"
+        >
+          <span className="text-text-muted select-none">$ </span>
+          {command.command}
+        </pre>
+        <pre
+          data-selectable
           className="overflow-x-auto rounded-xl border border-border bg-sidebar px-4 py-3 font-mono text-[12.5px] leading-[19px] whitespace-pre-wrap text-text"
         >
           {text || (output ? <span className="text-text-muted">No output yet.</span> : <span className="text-text-muted">Reading…</span>)}

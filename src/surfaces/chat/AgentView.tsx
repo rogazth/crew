@@ -171,7 +171,7 @@ export function AgentView({
   const state = entry.state[0]!.toUpperCase() + entry.state.slice(1);
   const branch = worktree ? worktree.split('/').pop() : null;
   const meta: ReactNode[] = [KIND_LABEL[entry.kind]];
-  if (entry.kind === 'shell') meta.push(entry.title);
+  if (entry.kind === 'shell') meta.push(command?.command ?? entry.title);
   else {
     if (entry.kind === 'session') meta.push('yours');
     else if (entry.model) meta.push(entry.effort ? `${entry.model} · ${entry.effort}` : entry.model);

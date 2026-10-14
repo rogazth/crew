@@ -12,6 +12,7 @@ import {
   stoppableOf,
   tokensLabel,
   tokensTitle,
+  shellLabel,
   visibleEntries,
   type PanelEntry,
   type PanelKind,
@@ -490,5 +491,27 @@ describe("clearing finished entries", () => {
 
     expect(visibleEntries([running, board("done")], cleared)).toHaveLength(2);
     expect(finishedKeys([running, board("done"), board("failed")])).toEqual([]);
+  });
+});
+
+describe("shellLabel", () => {
+  it("prefers what the model said the shell is for", () => {
+    expect(shellLabel({ command: "npm run dev", description: " Start the app " })).toBe("Start the app");
+  });
+
+  it("drops the cd it opens with, even inside a subshell", () => {
+    const long = "cd /home/agent/furry/app && (cd apps/api && php artisan serve --host=127.0.0.1 --port=8000 --no-interaction) > /tmp/api.log 2>&1 &";
+    const label = shellLabel({ command: long });
+    expect(label.startsWith("php artisan serve")).toBe(true);
+    expect(label.length).toBeLessThanOrEqual(60);
+    expect(label.endsWith("…")).toBe(true);
+  });
+
+  it("keeps a short command as it is, first line only", () => {
+    expect(shellLabel({ command: "npm test\nnpm run lint" })).toBe("npm test");
+  });
+
+  it("falls back to the command when only a cd is there", () => {
+    expect(shellLabel({ command: "cd /tmp &&" })).toBe("cd /tmp &&");
   });
 });

@@ -355,6 +355,7 @@ test("a shell opens in place under the same header, with its output and no compo
   assert.equal(await page.locator("textarea").count(), 0);
   assert.match(await page.locator("[data-thread-header]").innerText(), /npm test/);
   assert.match((await page.locator("[data-thread-header] [title]").first().getAttribute("title")) ?? "", /Shell/);
+  assert.match(await page.locator("[data-background-command]").innerText(), /^\$ npm test/);
   assert.match(await page.locator("[data-thread-footer]").innerText(), /Output of a shell/);
   await shoot("thread-shell");
   await crew.window.keyboard.press("Escape");
