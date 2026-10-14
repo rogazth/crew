@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { callsOfEntry } from "../lib/subagent";
 import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
 import { useCommands } from "../hooks/useCommands";
+import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useMarkSeen } from "../hooks/useMarkSeen";
 import { useThread } from "../hooks/useThread";
@@ -191,9 +192,12 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
 
   // Nobody has talked to a session of the user's yet: it can still be another provider's CLI.
   const fresh = session.kind === "terminal" && ready && held.length === 0 && pending.length === 0 && !working;
+  const { update: remember } = useDefaultAgent();
   // Each turn starts its CLI from the row: the next one runs what the chips say.
+  // A pick is also what the next new session starts with.
   const changeOptions = useCallback(
     (next: AgentChoice) => {
+      remember(next);
       const options = {
         model: next.model,
         effort: next.effort,
@@ -203,7 +207,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       if (next.provider === session.provider) void setSessionOptions(session.id, options).catch(() => {});
       else if (fresh) void switchSessionProvider(session.id, { provider: next.provider, ...options }).catch(() => {});
     },
-    [fresh, session.id, session.provider],
+    [fresh, remember, session.id, session.provider],
   );
 
   const submit = useCallback(

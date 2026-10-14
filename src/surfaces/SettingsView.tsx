@@ -4,14 +4,12 @@ import { BotAvatar } from "../chrome/BotAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Kbd } from "../chrome/Kbd";
 import { Button, Select, Toggle, type Option } from "../chrome/kit";
-import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useBotAvatar } from "../hooks/useBotAvatar";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import { useListedModels } from "../hooks/useListedModels";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
 import { BOT_AVATARS } from "../lib/botAvatar";
@@ -20,21 +18,9 @@ import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/perm
 import { COLOR_MODES } from "../lib/colorMode";
 import { describeCli, type CliResult, type CliStatus } from "../lib/cli";
 import { bindingGroups } from "../lib/commandGroups";
-import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
 import { cliHost } from "../lib/host";
-import {
-  ACCESSES,
-  EFFORT_LABELS,
-  PROVIDERS,
-  accessesOf,
-  effortsOf,
-  fastChoice,
-  fitChoice,
-  setFast,
-  tiersOf,
-  type Effort,
-} from "../lib/providers";
+import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
 import type { TabScope } from "../lib/worktrees";
@@ -302,68 +288,9 @@ function SitePermissionsSettings() {
 }
 
 function Providers() {
-  const { preferred, installed, update } = useDefaultAgent();
-  useListedModels(preferred.provider);
-  const fastModel = preferred.model || fitChoice(preferred).model;
-  const fast = fastChoice(preferred.provider, fastModel);
+  const { installed } = useDefaultAgent();
   return (
     <>
-      <SettingsSection title="New sessions">
-        <SettingsRow
-          label="Default agent"
-          description={`What ${commandKeys("new-session")} and Home open.`}
-        >
-          <div className="w-72">
-            <ModelPicker
-              provider={preferred.provider}
-              model={preferred.model}
-              onChange={(provider, model) => update(fitChoice({ ...preferred, provider, model }))}
-            />
-          </div>
-        </SettingsRow>
-        {effortsOf(preferred.provider, preferred.model).length > 0 && (
-          <SettingsRow label="Effort" description="How hard the model thinks.">
-            <Select
-              label="Effort"
-              className="w-40"
-              value={fitChoice(preferred).effort}
-              onChange={(effort) => update(fitChoice({ ...preferred, effort: effort as Effort }))}
-              options={effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))}
-            />
-          </SettingsRow>
-        )}
-        {fast.available && (
-          <Toggle
-            label="Fast"
-            description="A faster run of this model."
-            checked={fast.on}
-            onChange={(on) => update(fitChoice({ ...preferred, model: setFast(preferred.provider, fastModel, on) }))}
-          />
-        )}
-        {tiersOf(preferred.provider, preferred.model).length > 0 && (
-          <SettingsRow label="Speed" description="How quickly Codex serves this model.">
-            <Select
-              label="Speed"
-              className="w-40"
-              value={fitChoice(preferred).serviceTier || "default"}
-              onChange={(serviceTier) => update(fitChoice({ ...preferred, serviceTier }))}
-              options={[
-                { value: "default", label: "Standard" },
-                ...tiersOf(preferred.provider, preferred.model).map((tier) => ({ value: tier.id, label: tier.label })),
-              ]}
-            />
-          </SettingsRow>
-        )}
-        <SettingsRow label="Access" description={ACCESSES.find((a) => a.id === preferred.access)?.description ?? ""}>
-          <Select
-            label="Access"
-            className="w-40"
-            value={preferred.access}
-            onChange={(access) => update({ ...preferred, access })}
-            options={ACCESSES.filter((a) => accessesOf(preferred.provider).includes(a.id)).map((a) => ({ value: a.id, label: a.label }))}
-          />
-        </SettingsRow>
-      </SettingsSection>
       <SettingsSection title="Installed">
         {PROVIDERS.map((provider) => {
           const found = installed.includes(provider);

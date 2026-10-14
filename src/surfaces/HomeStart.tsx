@@ -21,13 +21,11 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Write a shell one-l
  * Home with no tab open: a composer in the middle of the page. What is sent
  * starts a session in home's folder with that message, in the model, effort
  * and access the chips say; the tab it opens is the session's, chat or
- * terminal as Settings say. The chips open on the default Settings keep; a
- * pick here is for this message only and leaves that default as it is.
+ * terminal as Settings say. The chips open on the last pick, and a pick here
+ * becomes it.
  */
 export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
-  const { effective } = useDefaultAgent();
-  const [picked, setPicked] = useState<AgentChoice | null>(null);
-  const choice = picked ?? effective;
+  const { effective: choice, update: setPicked } = useDefaultAgent();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
 
