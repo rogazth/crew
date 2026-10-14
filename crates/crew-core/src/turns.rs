@@ -3526,7 +3526,14 @@ impl TurnHost {
             params.cwd.clone(),
             // Minted once, with the process: the token is in its environment
             // and its MCP server's, and a later mint would cut both off.
-            Some(self.agent_env(&session_id)),
+            // `CLAUDE_CODE_ARTIFACT`: in stream-json the CLI withholds its
+            // Artifact tools unless asked for them ("sdk_default_off"), and a
+            // terminal session has them.
+            Some({
+                let mut env = self.agent_env(&session_id);
+                env.insert("CLAUDE_CODE_ARTIFACT".into(), "1".into());
+                env
+            }),
         )?;
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
