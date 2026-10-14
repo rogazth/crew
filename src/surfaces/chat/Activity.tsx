@@ -15,7 +15,7 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { AttachmentStrip } from "./Attachments";
@@ -177,10 +177,10 @@ function useFold(live: boolean): [boolean | null, (next: boolean) => void] {
 }
 
 /**
- * A long run of thinking and calls behind one line. Folded from the start,
- * while the agent is still in it too: the line says what it has done and what
- * it is on now. It opens by itself only for something waiting on an answer or
- * a row the reader was sent to; a click pins it either way.
+ * A long run of thinking and calls behind one line. Open while the agent is
+ * still in it, folded once it is over: the line says what it has done and what
+ * it is on now. A finished run opens by itself only for something waiting on
+ * an answer or a row the reader was sent to; a click pins it either way.
  */
 function RunShell({
   blocks,
@@ -195,14 +195,16 @@ function RunShell({
   marked: string | null;
   children: ReactNode;
 }) {
-  const waiting = blocks.some(isOpen);
+  // A running call waits on the agent, not the reader: it may not open the run
+  // only to shut it again a moment later.
+  const waiting = blocks.some(awaitsUser);
   const failed = blocks.some((block) => block.tool?.status === "failed");
   // A row nobody can see is a row nobody can be sent to, and the mark outlives
   // the request, so the run stays open after the reader has been taken there.
   const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
   const holds = sent(focusId) || sent(marked);
   const [pinned, setPinned] = useFold(live);
-  const open = waiting || (pinned ?? holds);
+  const open = waiting || (pinned ?? (live || holds));
   const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
   const now = live ? currentActivity(blocks) : null;
 
