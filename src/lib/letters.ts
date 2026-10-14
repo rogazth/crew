@@ -133,6 +133,13 @@ export function resolveParty(party: Party, sessions: readonly Session[], parentI
   return child ? { ...party, id: child.id } : party;
 }
 
+const STEERING = "steering-";
+
+/** A queued block a running turn has taken and not read yet: it goes in at the turn's next step. */
+export function isSteering(block: Block): boolean {
+  return block.id.startsWith(STEERING);
+}
+
 /**
  * Letters waiting in a session's box, as the queued blocks the transcript
  * groups at its foot. One a turn already carries (`letterId` in the
@@ -143,7 +150,7 @@ export function queuedLetters(letters: readonly ThreadLetter[], blocks: readonly
   return letters
     .filter((letter) => !shown.has(letter.id))
     .map((letter) => ({
-      id: `queued-${letter.id}`,
+      id: `${letter.queue === "steering" ? STEERING : "queued-"}${letter.id}`,
       role: "user",
       text: letter.text,
       at: letter.at,

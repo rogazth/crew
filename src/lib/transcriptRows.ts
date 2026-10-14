@@ -7,7 +7,7 @@
  * decisions live here where they can be checked.
  */
 import { type Block, type TurnUsage } from "./blocks";
-import { isLetter, isRefused, letterIdOf } from "./letters";
+import { isLetter, isRefused, isSteering, letterIdOf } from "./letters";
 import { controlOf, isReportLetter, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
 
@@ -387,7 +387,8 @@ export function turnStart(blocks: readonly Block[]): number | undefined {
   let ended: number | undefined;
   const sent: number[] = [];
   for (const block of blocks) {
-    if (block.at === undefined) continue;
+    // A steer is part of the turn already running: it never starts one.
+    if (block.at === undefined || isSteering(block)) continue;
     if (isQueued(block)) sent.push(block.at);
     else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
     else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);
@@ -409,7 +410,7 @@ export function underway(blocks: readonly Block[], working: boolean): Block | un
   let ended: number | undefined;
   const queued: Block[] = [];
   for (const block of blocks) {
-    if (block.at === undefined) continue;
+    if (block.at === undefined || isSteering(block)) continue;
     if (isQueued(block) && !block.fromBot) queued.push(block);
     else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
     else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);

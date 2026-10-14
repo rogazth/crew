@@ -298,7 +298,7 @@ export function Composer({
         {slashResults.length > 0 && (
           <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
         )}
-        {queue && queue.items.length > 0 && <QueueChips queue={queue} />}
+        {queue && queue.items.some((message) => !message.steering) && <QueueChips queue={queue} />}
         {files.length > 0 && (
           <div className="mb-2">
             <AttachmentStrip files={files} onRemove={onRemoveFile} />

@@ -17,18 +17,21 @@ function when(message: QueuedMessage, working: boolean) {
   return working ? "after this turn" : "held — goes with your next message";
 }
 
-/** One chip per message above the field: where it goes, its text, and a way to drop it. */
+/**
+ * One chip per message waiting for the next turn, above the field: its text
+ * and a way to drop it. A steer is the running turn's already: the
+ * transcript shows it, at its foot.
+ */
 export function QueueChips({ queue }: { queue: QueueScope }) {
   return (
     <div className="mb-2 flex flex-wrap gap-1.5">
-      {queue.items.map((message) => (
-        <span key={message.id} className="flex h-7 max-w-full items-center gap-1.5 rounded-full bg-card pr-1 pl-2.5 text-[12px]">
-          <span className="shrink-0 text-[11px] text-text-muted">{message.steering ? "this turn" : "next turn"}</span>
-          {message.files.length > 0 && <PaperclipIcon className="size-3 shrink-0 text-icon" />}
-          <span className="max-w-[260px] truncate">{message.text}</span>
-          {message.steering ? (
-            <span className="w-1" />
-          ) : (
+      {queue.items
+        .filter((message) => !message.steering)
+        .map((message) => (
+          <span key={message.id} className="flex h-7 max-w-full items-center gap-1.5 rounded-full bg-card pr-1 pl-2.5 text-[12px]">
+            <span className="shrink-0 text-[11px] text-text-muted">next turn</span>
+            {message.files.length > 0 && <PaperclipIcon className="size-3 shrink-0 text-icon" />}
+            <span className="max-w-[260px] truncate">{message.text}</span>
             <button
               type="button"
               aria-label="Remove from the queue"
@@ -38,9 +41,8 @@ export function QueueChips({ queue }: { queue: QueueScope }) {
             >
               <XIcon className="size-3" />
             </button>
-          )}
-        </span>
-      ))}
+          </span>
+        ))}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { botLabel } from "../../lib/botNames";
 import type { Block } from "../../lib/blocks";
-import { refusalOf, USER, type Party } from "../../lib/letters";
+import { isSteering, refusalOf, USER, type Party } from "../../lib/letters";
 import type { Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
 import { useLetterScope } from "./context";
@@ -45,6 +45,14 @@ export const RefusedRow = memo(function RefusedRow({ block }: { block: Block }) 
  * What waits for the next turn: the user's own messages as their bubbles,
  * dimmed, and letters from others as one line each, under one label for all.
  */
+/** A steer goes in at the turn's next step; anything else waits for the turn to end. */
+function queuedLabel(blocks: Block[]) {
+  const steers = blocks.filter(isSteering).length;
+  if (steers === blocks.length) return "At its next step";
+  if (steers === 0) return blocks.length > 1 ? `${blocks.length} queued` : "Queued";
+  return `${steers} at its next step · ${blocks.length - steers} queued`;
+}
+
 export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block[] }) {
   const { sessions } = useLetterScope();
   return (
@@ -71,7 +79,7 @@ export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block
           </div>
         ),
       )}
-      <span className="text-[11px] text-text-muted">{blocks.length > 1 ? `${blocks.length} queued` : "Queued"}</span>
+      <span className="text-[11px] text-text-muted">{queuedLabel(blocks)}</span>
     </div>
   );
 });

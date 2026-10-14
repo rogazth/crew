@@ -18,7 +18,7 @@ import { queuedLetters, sessionParty } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
-import { moved, othersPending, userQueue, whileWorkingOf } from "../lib/queue";
+import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
 import { BackgroundContext, WorkContext, ChatContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
@@ -68,10 +68,10 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const actions = useChatActions();
   const { files: projectFiles, openSession, processes, openProcessRun } = actions;
   const letters = useChatLetters(session, sessions, held);
-  // What waits in its box for the next turn: others' letters under the turn
-  // that is running, the user's own above the composer.
+  // What waits in its box: others' letters and the user's steers under the
+  // turn that is running, the user's messages for the next turn above the composer.
   const pending = usePending(session.id, true);
-  const blocks = useMemo(() => [...held, ...queuedLetters(othersPending(pending), held)], [held, pending]);
+  const blocks = useMemo(() => [...held, ...queuedLetters(transcriptPending(pending), held)], [held, pending]);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
   const whileWorking = whileWorkingOf(session.kind, session.provider);
   const panel = useBackgroundPanel(session, sessions, processes);

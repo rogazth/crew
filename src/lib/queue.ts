@@ -37,9 +37,13 @@ export function userQueue(pending: readonly ThreadLetter[], blocks: readonly Blo
   return [...own.filter((message) => message.steering), ...own.filter((message) => !message.steering)];
 }
 
-/** Everyone else's letters still in the box: they stay in the transcript, as queued bubbles. */
-export function othersPending(pending: readonly ThreadLetter[]): ThreadLetter[] {
-  return pending.filter((letter) => letter.from.kind !== "user");
+/**
+ * The letters the transcript draws as queued bubbles at its foot: everyone
+ * else's, and the user's steers, which the running turn has taken and reads
+ * at its next step. The user's waiting messages sit above the composer.
+ */
+export function transcriptPending(pending: readonly ThreadLetter[]): ThreadLetter[] {
+  return pending.filter((letter) => letter.from.kind !== "user" || letter.queue === "steering");
 }
 
 /** The waiting ids after moving `id` one place up (-1) or down (1); steers keep their place. */
