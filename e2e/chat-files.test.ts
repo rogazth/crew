@@ -1,0 +1,88 @@
+// Files in the chat: a file a reply names is a chip only when it is there,
+// looked for in the session's folder and in the folders the reply names; an
+// `@` reaches folders, and into large ones git ignores.
+import assert from "node:assert/strict";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import type { Workspace } from "../src/lib/types.ts";
+import { composerOf, launchCrew, newSession, sendInChat, stripTabIds, waitFor, type Crew } from "./harness.ts";
+
+let crew: Crew;
+let workspace: Workspace;
+
+before(async () => {
+  crew = await launchCrew();
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  const repo = await crew.makeRepo("files", { ".gitignore": "reference/\n", "README.md": "# files\n" });
+  // More than the index takes of a folder git ignores.
+  for (const name of ["t3code", "zeron"]) {
+    const dir = path.join(repo, "reference", name);
+    await mkdir(dir, { recursive: true });
+    await Promise.all(Array.from({ length: 700 }, (_, i) => writeFile(path.join(dir, `f${i}.ts`), "")));
+  }
+  workspace = await crew.addWorkspace(repo);
+});
+
+after(async () => {
+  await crew?.close();
+});
+
+test("a bare file name is a chip when the folder the reply names holds it, and plain code when nothing does", async () => {
+  const shots = path.join(crew.home, "shots");
+  await mkdir(shots, { recursive: true });
+  await writeFile(path.join(shots, "a.png"), "");
+  await newSession(crew, workspace.id);
+
+  await sendInChat(crew, `shots in \`${shots}/\`: \`a.png\` and \`missing.png\``);
+  const reply = crew.window.locator(".crew-md").filter({ hasText: "Reply 1:" });
+  const chip = reply.locator(".crew-file-ref").filter({ hasText: "a.png" });
+  await chip.waitFor();
+  await reply.locator("code.crew-inline-code").filter({ hasText: "missing.png" }).waitFor();
+  assert.equal(await reply.locator(".crew-file-ref").count(), 1, "only the file that is there is a chip");
+
+  await chip.click();
+  await waitFor(async () => (await stripTabIds(crew)).some((id) => id.includes(path.join(shots, "a.png"))), {
+    message: "the chip opens the file in the folder the reply named",
+  });
+});
+
+test("`@` offers a folder git ignores, and the message sends it", async () => {
+  const session = await newSession(crew, workspace.id);
+  const field = composerOf(crew, session);
+  await field.fill("look at @refer");
+  const menu = crew.window.getByRole("listbox", { name: "Files" });
+  const folder = menu.getByRole("option").filter({ hasText: "reference/" }).first();
+  await folder.waitFor();
+  await folder.click();
+  assert.equal(await field.inputValue(), "look at @reference/");
+  // Into the folder: what it holds, read from disk.
+  await menu.getByRole("option").filter({ hasText: "t3code/" }).first().waitFor();
+  await field.press("End");
+  await field.pressSequentially(" please");
+  await waitFor(async () => (await menu.count()) === 0, { message: "the menu closes past the mention" });
+  await sendInChat(crew, await field.inputValue());
+
+  const cwd = workspace.path;
+  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${session.id}.jsonl`);
+  await waitFor(async () => (await readFile(file, "utf8").catch(() => "")).includes(path.join(cwd, "reference")), {
+    message: "the folder goes with the message",
+  });
+});
+
+test("a folder mentioned in a sent message opens in the explorer", async () => {
+  const session = await newSession(crew, workspace.id);
+  const field = composerOf(crew, session);
+  await field.fill("look at @refer");
+  await crew.window.getByRole("listbox", { name: "Files" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
+  await field.pressSequentially(" now");
+  await sendInChat(crew, await field.inputValue());
+
+  await crew.window.locator('.crew-file-ref[title="reference/"]').filter({ visible: true }).last().click();
+  const explorer = crew.window.getByRole("complementary", { name: "Explorer" });
+  await explorer.getByText("t3code", { exact: true }).waitFor();
+  await explorer.getByText("zeron", { exact: true }).waitFor();
+});

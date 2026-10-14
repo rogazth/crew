@@ -15,6 +15,7 @@ import { Explorer } from "./chrome/explorer/Explorer";
 import { useBotSheet } from "./hooks/useBotSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useBlankSessions } from "./hooks/useBlankSessions";
+import { showFolder } from "./hooks/useFileTree";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
@@ -469,6 +470,12 @@ export function App() {
               hasWorkspace={active !== null}
               onCreateWorkspace={envs.openWorkspace}
               onOpenFile={nav.openFile}
+              onOpenFolder={(path) => {
+                if (!treePath || !path.startsWith(`${treePath}/`)) return;
+                closePage();
+                explorer.setMode("files");
+                void showFolder(treePath, path);
+              }}
               onOpenFileInBrowser={nav.openFileInBrowser}
               onOpenSession={nav.openSessionById}
               onPatchBrowser={tabs.patchBrowser}

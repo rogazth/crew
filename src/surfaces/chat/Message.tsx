@@ -106,14 +106,14 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
 
 /** `@path` runs become pills that open the file; the rest is the text as typed. */
 function MentionText({ text }: { text: string }) {
-  const { openPath } = useChatActions();
+  const { openPath, openFolder } = useChatActions();
   const segments = splitMentions(text);
   return (
     <>
       {segments.map((segment, index) =>
         segment.kind === "mention" ? (
           // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
-          <FileRef key={index} path={segment.path} onOpen={openPath} />
+          <FileRef key={index} path={segment.path} onOpen={segment.path.endsWith("/") ? openFolder : openPath} />
         ) : (
           <span key={index}>{segment.text}</span>
         ),

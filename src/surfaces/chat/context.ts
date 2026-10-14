@@ -10,6 +10,10 @@ import type { ProjectFile, Session } from "../../lib/types";
 export type ChatActions = {
   /** Workspace-relative or absolute; opens a file tab. */
   openPath: (path: string) => void;
+  /** Shows a folder (workspace-relative or absolute) in the explorer, opened. */
+  openFolder: (path: string) => void;
+  /** Where a path a reply names sits on the session's machine: absolute, or null with no folder to read it from. */
+  resolvePath: (path: string) => string | null;
   /** Opens a bot's tab: the name on a message from one is a link. */
   openSession: (sessionId: string) => void;
   /**
@@ -32,6 +36,8 @@ export type ChatActions = {
 
 export const ChatContext = createContext<ChatActions>({
   openPath: () => undefined,
+  openFolder: () => undefined,
+  resolvePath: () => null,
   openSession: () => undefined,
   openAgent: () => undefined,
   files: [],

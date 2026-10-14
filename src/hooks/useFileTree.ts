@@ -8,6 +8,8 @@ type Snapshot = {
   expanded: ReadonlySet<string>;
   /** Why the root could not be listed, in the daemon's words. */
   error: string | null;
+  /** A folder asked to be shown from outside the tree (a chat's `@folder/`): the tree selects it and scrolls to it. */
+  shown?: { path: string; token: number };
 };
 
 /**
@@ -95,6 +97,13 @@ class Tree {
       if (!this.snapshot.children.has(dir)) await this.load(dir);
     }
   }
+
+  /** Opens `dir` and the folders down to it, and has the tree select it. */
+  async show(dir: string): Promise<void> {
+    await this.reveal(dir);
+    this.toggle(dir, true);
+    this.set({ shown: { path: dir, token: (this.snapshot.shown?.token ?? 0) + 1 } });
+  }
 }
 
 const trees = new Map<string, Tree>();
@@ -106,6 +115,11 @@ function treeFor(root: string): Tree {
     trees.set(root, tree);
   }
   return tree;
+}
+
+/** Opens `dir` in the tree of `root`, whether or not the explorer shows it yet. */
+export function showFolder(root: string, dir: string): Promise<void> {
+  return treeFor(root).show(dir);
 }
 
 const EMPTY: Snapshot = { children: new Map(), expanded: new Set(), error: null };
@@ -153,5 +167,11 @@ export function useFileTree(root: string | null, live: boolean) {
     [tree],
   );
 
-  return { rows, loaded: root !== null && snapshot.children.has(root), error: snapshot.error, ...actions };
+  return {
+    rows,
+    loaded: root !== null && snapshot.children.has(root),
+    error: snapshot.error,
+    shown: snapshot.shown,
+    ...actions,
+  };
 }

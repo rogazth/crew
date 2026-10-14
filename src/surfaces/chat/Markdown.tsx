@@ -18,7 +18,7 @@ import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
-import { isPathLike, localPath } from "../../lib/localLink";
+import { isPathLike, localPath, namedDirs } from "../../lib/localLink";
 import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
@@ -26,6 +26,7 @@ import { Blockquote } from "./Alert";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
 import { SiteIcon } from "./SiteIcon";
+import { MessageDirs, useFileOnDisk } from "./useFileOnDisk";
 
 type Props = { text: string; streaming?: boolean };
 
@@ -39,7 +40,7 @@ type CodeProps = ComponentProps<"code"> & { node?: unknown; metastring?: string;
 function Code({ className, children, node: _node, metastring, ...rest }: CodeProps) {
   const text = codeText(children);
   if ("data-block" in rest) return <Fence code={text} className={className} meta={metastring} />;
-  if (isPathLike(text) && extensionOf(text)) return <InlineFile path={text} />;
+  if (isPathLike(text) && extensionOf(text)) return <InlineFile path={text}>{children}</InlineFile>;
   return <code className="crew-inline-code">{children}</code>;
 }
 
@@ -61,9 +62,16 @@ function Fence({ code, className, meta }: { code: string; className: string | un
   );
 }
 
-function InlineFile({ path }: { path: string }) {
+/** A chip only for a file that is there: a name that opens nothing stays code. */
+function InlineFile({ path, children }: { path: string; children: ReactNode }) {
   const { openPath } = useChatActions();
-  return <FileRef path={path} full onOpen={openPath} />;
+  const { ref, file } = useFileOnDisk(path);
+  if (file) return <FileRef path={path} full onOpen={() => openPath(file)} />;
+  return (
+    <code ref={ref} className="crew-inline-code">
+      {children}
+    </code>
+  );
 }
 
 type LinkProps = ComponentProps<"a"> & { node?: unknown };
@@ -74,19 +82,21 @@ function Link({ href, children, node: _node, ...rest }: LinkProps) {
   // A footnote's ref and backref are `#ids` into this same message, not the web.
   const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
   const file = localPath(href);
+  const { ref: probe, file: found } = useFileOnDisk(file ?? "");
   const url = href && anchor === undefined && !href.startsWith("streamdown:") ? href : undefined;
   const web = url && /^https?:\/\//i.test(url) ? url : undefined;
   const { prefs } = useBrowserPrefs();
-  if (file) {
+  if (file && !found) return <span ref={probe}>{children}</span>;
+  if (file && found) {
     return (
       <a
         {...rest}
         href={href}
-        title={file}
+        title={found}
         data-streamdown="link"
         onClick={(event) => {
           event.preventDefault();
-          openPath(file);
+          openPath(found);
         }}
       >
         <FileTypeIcon name={file.split("/").pop() ?? file} className="crew-site-icon" />
@@ -170,9 +180,13 @@ function runClass(kind: "prose" | "wide", text: string): string {
  */
 export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   const runs = useMemo(() => groupRuns(text), [text]);
+  // Joined, so a streaming reply that names no new folder keeps the same list.
+  const dirsKey = useMemo(() => namedDirs(text).join("\n"), [text]);
+  const dirs = useMemo(() => (dirsKey ? dirsKey.split("\n") : []), [dirsKey]);
   const last = runs.length - 1;
   const host = useVeilCadence(text, streaming === true);
   return (
+    <MessageDirs value={dirs}>
     <div ref={host} className="crew-md">
       {runs.map((run, index) => (
         // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- runs only grow at the end while streaming; a content key would remount every chunk
@@ -185,6 +199,7 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
         />
       ))}
     </div>
+    </MessageDirs>
   );
 });
 

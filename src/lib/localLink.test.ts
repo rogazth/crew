@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPathLike, localPath } from "./localLink";
+import { isPathLike, localPath, namedDirs } from "./localLink";
 
 describe("localPath", () => {
   it("reads absolute, relative and file:// links as files", () => {
@@ -42,5 +42,17 @@ describe("isPathLike", () => {
     expect(isPathLike("/usr/bin")).toBe(false);
     expect(isPathLike("~/.zshrc x")).toBe(false);
     expect(isPathLike("https://example.com/a.js")).toBe(false);
+  });
+});
+
+describe("namedDirs", () => {
+  it("collects the folders a message names, in order and once", () => {
+    const text = "Shots in `/home/a/shots/`, also `/home/a/out/x.png` and `/home/a/shots`: `a.png`, `b.png`.";
+    expect(namedDirs(text)).toEqual(["/home/a/shots", "/home/a/out"]);
+  });
+
+  it("takes relative folders and leaves plain code alone", () => {
+    expect(namedDirs("see `docs/screens/` and `npm run x` and `a.png`")).toEqual(["docs/screens"]);
+    expect(namedDirs("no code /here/at/all")).toEqual([]);
   });
 });

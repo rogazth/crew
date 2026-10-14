@@ -123,7 +123,7 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     ] as const) {
       // The image before took the pane: back to the chat.
       await sessionTab(crew, chat).click();
-      await page.getByRole("button", { name: chip, exact: true }).last().click();
+      await page.locator(`.crew-file-ref[title="${chip}"]`).last().click();
       const opened = page.getByRole("img", { name: file });
       await waitFor(() => opened.evaluate((img: HTMLImageElement) => img.naturalWidth === 2), { message: `${chip} loads` });
       assert.ok(

@@ -18,7 +18,20 @@ import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
 import { accessesOf, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextAccess } from "../../lib/sessionOptions";
-import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
+import {
+  completeMention,
+  folderChoices,
+  foldersOf,
+  mentionAt,
+  mentionFolder,
+  mergeChoices,
+  rememberMention,
+  searchFiles,
+  splitMentions,
+  type MentionChoice,
+} from "../../lib/mentions";
+import { listFolder } from "../../lib/api";
+import type { FolderEntry } from "../../lib/protocol";
 import type { CommandEntry } from "../../lib/protocol";
 import {
   completeSlash,
@@ -121,18 +134,25 @@ export function Composer({
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
-  const { files: projectFiles, confirm } = useChatActions();
+  const { files: projectFiles, confirm, resolvePath } = useChatActions();
   const canSend = ready && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
 
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
   const [active, setActive] = useState(0);
   const mention = mentionAt(draft, cursor);
-  const results = useMemo(
-    () => (mention ? searchFiles(mention.query, projectFiles) : []),
-    [mention?.query, projectFiles], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const known = useMemo(() => new Set(projectFiles.map((file) => file.relative)), [projectFiles]);
+  const root = useMemo(() => resolvePath("./")?.replace(/\/+$/, "") ?? "", [resolvePath]);
+  const indexed = useMemo<MentionChoice[]>(() => [...projectFiles, ...foldersOf(projectFiles, root)], [projectFiles, root]);
+  // The folder being typed into is read from disk, once per folder: the index leaves out large folders git ignores.
+  const typedFolder = mention ? mentionFolder(mention.query) : null;
+  const listing = useFolderListing(typedFolder?.folder ?? null, resolvePath);
+  const results = useMemo(() => {
+    if (!mention || !typedFolder) return [];
+    const listed = listing ? folderChoices(listing, typedFolder.folder, typedFolder.rest) : [];
+    return mergeChoices(listed, searchFiles(mention.query, indexed));
+  }, [mention?.query, indexed, listing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [picked, setPicked] = useState<readonly string[]>([]);
+  const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...picked]), [indexed, picked]);
 
   // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
   const entries = useCommands(session.id)?.entries ?? NO_ENTRIES;
@@ -191,6 +211,8 @@ export function Composer({
     if (!el) return;
     const next = completeMention(draft, el.selectionStart, file);
     if (!next) return;
+    rememberMention(file.path);
+    setPicked((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
     onDraft(next.text);
     setActive(0);
     place(next.cursor);
@@ -458,3 +480,21 @@ export function Composer({
   );
 }
 
+/** What `folder` (relative to the session's) holds, read when it is first typed; null until it is read. */
+function useFolderListing(folder: string | null, resolvePath: (path: string) => string | null): FolderEntry[] | null {
+  const [listing, setListing] = useState<{ folder: string; entries: FolderEntry[] } | null>(null);
+  useEffect(() => {
+    if (folder === null) return;
+    const path = resolvePath(folder || "./")?.replace(/\/+$/, "");
+    if (!path) return;
+    let live = true;
+    listFolder(path).then(
+      (entries) => live && setListing({ folder, entries }),
+      () => live && setListing({ folder, entries: [] }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [folder, resolvePath]);
+  return listing && listing.folder === folder ? listing.entries : null;
+}

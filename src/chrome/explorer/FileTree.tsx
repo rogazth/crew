@@ -24,7 +24,7 @@ const INDENT = 12;
 /** The workspace's folders, opened a level at a time, like VS Code's. */
 export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
-  const { rows, loaded, error, toggle, reveal } = tree;
+  const { rows, loaded, error, toggle, reveal, shown } = tree;
   const { start, end, total, scrollToIndex } = useVirtualRows(scroller, rows.length, ROW);
   // The keyboard's row, by path: rows come and go under it as folders open.
   const [cursor, setCursor] = useState<string | null>(null);
@@ -41,6 +41,13 @@ export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: P
       cancelled = true;
     };
   }, [active, root, live, reveal]);
+
+  // A folder a chat asked for: selected, and scrolled to below.
+  const [shownToken, setShownToken] = useState<number | undefined>(undefined);
+  if (shown && shown.token !== shownToken) {
+    setShownToken(shown.token);
+    setCursor(shown.path);
+  }
 
   useEffect(() => {
     if (at >= 0) scrollToIndex(at);

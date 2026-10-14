@@ -32,6 +32,8 @@ type Props = {
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
   onOpenFile: (file: ProjectFile) => void;
+  /** Shows an absolute folder in the explorer, opened. */
+  onOpenFolder: (path: string) => void;
   /** An HTML or SVG file rendered in a page tab. */
   onOpenFileInBrowser: (file: { path: string; relative: string }) => void;
   onOpenSession: (sessionId: string) => void;
@@ -63,6 +65,7 @@ export function WorkspacePanes({
   hasWorkspace,
   onCreateWorkspace,
   onOpenFile,
+  onOpenFolder,
   onOpenFileInBrowser,
   onOpenSession,
   onPatchBrowser,
@@ -113,6 +116,16 @@ export function WorkspacePanes({
         const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
         onOpenFile({ path: absolute, relative, name: relative.split('/').pop() ?? relative });
       },
+      openFolder: (path) => {
+        if (!cwd) return;
+        onOpenFolder(resolvePath(path, cwd, homeFor(cwd) ?? homePath()).replace(/\/+$/, ''));
+      },
+      resolvePath: (path) => {
+        if (!cwd) return null;
+        const home = homeFor(cwd) ?? homePath();
+        if (path.startsWith("~/") && !home) return null;
+        return resolvePath(path, cwd, home);
+      },
       openSession: onOpenSession,
       openAgent: onOpenSession,
       files,
@@ -121,7 +134,7 @@ export function WorkspacePanes({
       openSignIn: onOpenSignIn,
       confirm: onConfirm,
     }),
-    [cwd, onOpenFile, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onConfirm],
+    [cwd, onOpenFile, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onConfirm],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

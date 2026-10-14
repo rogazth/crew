@@ -16,7 +16,7 @@ import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgro
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
-import { mentionedFiles } from "../lib/mentions";
+import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
@@ -218,6 +218,11 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       if (working && !(mode && whileWorking)) return;
       const attached = files;
       const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
+      // A folder, or a file the index leaves out, goes too when it was picked from the menu.
+      for (const token of mentionTokens(text)) {
+        const path = actions.resolvePath(token)?.replace(/\/+$/, "");
+        if (path && wasPicked(path) && !mentions.includes(path)) mentions.push(path);
+      }
       const { command, skills } = dispatchOf(text, menu?.entries ?? []);
       const asked = { mentions, ...(command ? { command } : {}), skills };
       setDraft("");
@@ -226,7 +231,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", asked);
       else void send(session, cwd, text, attached, asked);
     },
-    [cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
+    [actions, cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);
