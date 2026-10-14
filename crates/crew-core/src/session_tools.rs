@@ -6753,7 +6753,8 @@ time.sleep(600)
     /// The user's turn ends at its answer with work left in the background:
     /// the process stays up with it, pinned, and the turn the CLI starts by
     /// itself when the work reports is the session's, with no message of the
-    /// user's, its reply in the transcript, and the entry done.
+    /// user's, its reply in the transcript, and the entry done: the entry's
+    /// row says it ended, so no line says what woke it.
     #[test]
     fn a_users_claude_turn_ends_at_its_answer_and_the_turn_the_cli_starts_when_its_work_reports_is_adopted() {
         use crew_protocol::BackgroundState;
@@ -6774,7 +6775,7 @@ time.sleep(600)
         assert_eq!(w.settle(&mine.id).status, "done");
         assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Completed);
         assert_eq!(users_lines(&w, &mine.id), ["BACKGROUND 0.5"], "the CLI's turn was given a message");
-        assert!(says(&w, &mine.id, "Background command completed (exit code 0)"), "nothing says what woke it");
+        assert!(!says(&w, &mine.id, "Background command completed (exit code 0)"), "its row says it ended, not a line");
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1);
         assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
         w.turns.release(&mine.id);

@@ -3791,6 +3791,18 @@ impl TurnHost {
                     .filter(|(id, _)| live.init_id.as_deref() == Some(id.as_str()))
                     .and_then(|(_, result)| result.ok());
                 if answer.is_some() {
+        // A finished shell the transcript already draws: its row is marked
+        // "Sent to the background" and says how it ended, so what woke the
+        // model needs no line of its own.
+        let drawn = (rec.get("subtype").and_then(Value::as_str) == Some("task_notification"))
+            .then(|| string_field(Some(&rec), "task_id"))
+            .flatten()
+            .and_then(|task| {
+                self.background.read(session_id, |board| {
+                    board.command(&task).is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
+                })
+            })
+            .unwrap_or(false);
                     live.init_id = None;
                 }
                 let skills = (subtype.as_deref() == Some("init")).then(|| rec.get("skills")).flatten();
@@ -3880,7 +3892,7 @@ impl TurnHost {
                         // Only what wakes the model is what woke it.
                         if wakes_the_model(string_field(Some(&rec), "status").as_deref()) {
                             live.wakes = true;
-                            let summary = notice.or_else(|| string_field(Some(&rec), "summary"));
+                            let summary = notice.or_else(|| string_field(Some(&rec), "summary")).filter(|_| !drawn);
                             if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
                                 let summary = summary.trim().to_string();
                                 if !live.woken_by.contains(&summary) {

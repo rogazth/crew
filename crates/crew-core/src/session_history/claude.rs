@@ -328,8 +328,21 @@ impl ClaudeDecoder {
                 at_ms,
             });
         }
+        // A finished shell is said on its own row, marked as sent to the
+        // background, so it adds nothing to the line; one that woke the model
+        // alone leaves none.
+        let said: Vec<&str> = text
+            .split("<task-notification>")
+            .skip(1)
+            .filter(|notification| {
+                !tag(notification, "tool-use-id").is_some_and(|call| self.tools.get(call.trim()).is_some_and(|(name, _)| name == "Bash"))
+            })
+            .collect();
+        if said.is_empty() {
+            return;
+        }
         let wake = self.woken.get_or_insert(Wake { summaries: Vec::new(), at_ms });
-        for notification in text.split("<task-notification>").skip(1) {
+        for notification in said {
             let Some(summary) = tag(notification, "summary").map(str::trim).filter(|s| !s.is_empty()) else {
                 continue;
             };
@@ -1068,6 +1081,30 @@ mod tests {
             blocks[0].text,
             "Agent \"A\" finished · Agent \"B\" finished · Background command \"Build\" completed (exit code 0) · Monitor event: \"tick\""
         );
+    }
+
+    #[test]
+    fn a_finished_shell_wakes_the_model_without_a_line_and_leaves_the_rest_on_it() {
+        let bash = record(serde_json::json!({
+            "type": "assistant",
+            "message": { "id": "m1", "content": [{ "type": "tool_use", "id": "toolu_b", "name": "Bash",
+                "input": { "command": "make", "description": "Build", "run_in_background": true } }] },
+        }));
+        let shell = "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_b</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed (exit code 0)</summary>\n</task-notification>";
+        let woke = |text: String| {
+            record(serde_json::json!({
+                "type": "user",
+                "origin": { "kind": "task-notification", "producer": "session-task" },
+                "message": { "role": "user", "content": text },
+            }))
+        };
+        let alone = blocks_of(&[bash.clone(), woke(shell.to_string()), reply("built", "2026-10-05T10:00:04Z")]);
+        assert!(alone.iter().all(|block| block.role != BlockRole::System), "{:?}", roles(&alone));
+
+        let monitor = "<task-notification>\n<summary>Monitor event: \"tick\"</summary>\n</task-notification>";
+        let both = blocks_of(&[bash, woke(format!("{shell}\n{monitor}")), reply("built", "2026-10-05T10:00:04Z")]);
+        let notes: Vec<&str> = both.iter().filter(|block| block.role == BlockRole::System).map(|block| block.text.as_str()).collect();
+        assert_eq!(notes, ["Monitor event: \"tick\""]);
     }
 
     #[test]

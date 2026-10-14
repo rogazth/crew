@@ -2124,6 +2124,40 @@ mod tests {
         assert!(notes[0].0 < first_said);
     }
 
+    /// A shell sent to the background is drawn on its own row, which says how
+    /// it ended: the model it wakes takes no line for it.
+    #[test]
+    fn a_finished_shell_on_its_row_wakes_the_model_without_a_line() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines = [
+            json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_b", "name": "Bash",
+                    "input": { "command": "make", "description": "Build", "run_in_background": true } }] },
+                "parent_tool_use_id": null, "session_id": "x"
+            }),
+            json!({ "type": "system", "subtype": "task_started", "task_id": "b1", "tool_use_id": "toolu_b",
+                    "description": "Build", "task_type": "local_bash", "is_backgrounded": true, "session_id": "x" }),
+            json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_b",
+                    "status": "completed", "output_file": "/tmp/out",
+                    "summary": "Background command \"Build\" completed (exit code 0)", "session_id": "x" }),
+            json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "Built." }] },
+                "parent_tool_use_id": null, "session_id": "x"
+            }),
+        ];
+        for line in lines {
+            host.handle_claude_line("s", &line.to_string());
+        }
+        assert_eq!(host.background_list("s").commands.len(), 1, "the shell has its row");
+        let events = cap.take();
+        assert!(events.iter().any(|event| matches!(event, HarnessEvent::MessageDelta { .. } | HarnessEvent::MessageCompleted { .. })));
+        assert!(!events.iter().any(|event| matches!(event, HarnessEvent::SessionNote { .. })), "{events:?}");
+    }
+
     #[test]
     fn a_bash_call_carries_its_command() {
         assert_eq!(
