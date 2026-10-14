@@ -300,6 +300,13 @@ fn start(
     crew_core::agent_groups::sweep(&groups);
     let agents = AgentHost::with_registry(groups);
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
+    // Before anything reads a transcript: a session from before migration 38
+    // has its history only in its CLI's files.
+    match crew_core::history_import::import_all(&store, &crew_core::history_import::Sources::from_env()) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("[crewd] brought the history of {n} sessions into the chat"),
+        Err(e) => eprintln!("[crewd] history import: {e}"),
+    }
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
     let handle = serve_on(

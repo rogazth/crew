@@ -1124,6 +1124,18 @@ pub fn opencode_db() -> Option<PathBuf> {
     Some(data.join("opencode/opencode.db"))
 }
 
+/// Where cursor-agent wrote chat `id`'s transcript: under a folder hashed from
+/// the cwd, so the id alone finds it.
+pub fn cursor_transcript(id: &str) -> Option<PathBuf> {
+    if !is_chat_id(id) {
+        return None;
+    }
+    sorted_dirs(&home()?.join(".cursor/projects"))
+        .into_iter()
+        .map(|project| project.join("agent-transcripts").join(id).join(format!("{id}.jsonl")))
+        .find(|path| path.is_file())
+}
+
 fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|entries| entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
