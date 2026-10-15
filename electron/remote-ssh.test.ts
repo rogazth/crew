@@ -1,5 +1,9 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isTailnetIp, linuxArch, remoteLayout, serviceUnit, swapBinary } from "./remote-ssh";
+import { isTailnetIp, linuxArch, remoteLayout, serviceUnit, swapBinary, writeLayoutCommand } from "./remote-ssh";
 
 describe("linux installer", () => {
   it("maps uname to the builds Crew ships", () => {
@@ -45,5 +49,33 @@ describe("linux installer", () => {
     expect(isTailnetIp("100.64.0.1")).toBe(true);
     expect(isTailnetIp("100.128.0.1")).toBe(false);
     expect(isTailnetIp("163.192.102.220")).toBe(false);
+  });
+});
+
+describe("the layout a remote data dir is given", () => {
+  const written = (layout: ReturnType<typeof remoteLayout>) => {
+    const home = mkdtempSync(path.join(tmpdir(), "crew-remote-home-"));
+    mkdirSync(path.join(home, layout.home, "data"), { recursive: true });
+    const run = () => execFileSync("sh", ["-c", writeLayoutCommand(layout)], { env: { ...process.env, HOME: home } });
+    run();
+    const file = path.join(home, layout.home, "data", "layout.json");
+    return { home, file, run, json: JSON.parse(readFileSync(file, "utf8")) };
+  };
+
+  it("keeps the release's folders where they always were", () => {
+    const { home, json } = written(remoteLayout("release"));
+    expect(json).toEqual({ workDir: `${home}/.crew`, homeFolder: `${home}/Crew` });
+  });
+
+  it("gives a dev build's worktrees its own folder", () => {
+    const { home, json } = written(remoteLayout("dev"));
+    expect(json).toEqual({ workDir: `${home}/.crew-dev` });
+  });
+
+  it("never replaces a layout the data dir already has", () => {
+    const { file, run } = written(remoteLayout("release"));
+    writeFileSync(file, '{"workDir":"/kept"}\n');
+    run();
+    expect(readFileSync(file, "utf8")).toBe('{"workDir":"/kept"}\n');
   });
 });

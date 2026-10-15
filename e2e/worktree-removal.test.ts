@@ -35,7 +35,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
   const page = crew.window;
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-late");
+  const tree = path.join(crew.worktrees, "app/feat-late");
 
   await newWorktree(crew, "feat/late");
   await waitFor(async () => (await gitWorktrees(crew, workspace.path)).some((entry) => entry.path === tree), {
@@ -90,7 +90,7 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-gone");
+  const tree = path.join(crew.worktrees, "app/feat-gone");
 
   await newWorktree(crew, "feat/gone");
   await worktreeHeader(crew, "feat/gone").and(currentWorktree(crew)).waitFor();

@@ -135,7 +135,7 @@ fn ask_claude(child: &mut Child, description: &str) -> Result<String, String> {
 /// `--disable` of an unknown feature fails the run, so a version without
 /// either still names.
 pub fn codex_name(binary: &Path, description: &str) -> Result<String, String> {
-    let dir = std::env::temp_dir().join("crew-titles");
+    let dir = crate::paths::tmp("titles");
     std::fs::create_dir_all(&dir).map_err(|e| format!("codex title: {e}"))?;
     let instructions = dir.join("instructions.md");
     std::fs::write(&instructions, "You write short titles for chats.\n").map_err(|e| format!("codex title: {e}"))?;

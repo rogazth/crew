@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -28,6 +28,7 @@ import { openExternal } from "./external";
 import { release, sha } from "./build-info";
 import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
+import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
 import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
@@ -313,6 +314,26 @@ async function stopDaemon(): Promise<void> {
 }
 
 // Kept by main, not crewd, so the window opens in the mode before the renderer loads.
+/** `layout.json` in a data dir that has none (crew_core::paths). */
+function writeLayout(isRelease: boolean): void {
+  const layout = layoutFor({
+    release: isRelease,
+    local: app.isPackaged && !release,
+    home: homedir(),
+    userData: process.env.CREW_USER_DATA,
+    workDir: process.env.CREW_WORK_DIR,
+  });
+  const dir = app.getPath("userData");
+  const file = path.join(dir, LAYOUT_FILE);
+  if (!layout || existsSync(file)) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, `${JSON.stringify(layout, null, 2)}\n`);
+  } catch (error) {
+    console.error(`[crew] ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 const colorModeFile = () => path.join(app.getPath("userData"), "color-mode");
 
 function readColorMode(): ColorMode {
@@ -427,12 +448,20 @@ registerFileScheme();
 // worktree removes its database. The release ignores it: started from a dev
 // terminal, it would open that checkout's data.
 const local = app.isPackaged && !release;
+const refused = refusal(e2e, process.env.CREW_USER_DATA);
+if (refused) {
+  console.error(refused);
+  app.exit(1);
+}
 app.setName(local ? "Crew Local" : "Crew");
 if (!(app.isPackaged && release))
   app.setPath(
     "userData",
     process.env.CREW_USER_DATA || path.join(app.getPath("appData"), local ? "Crew Local" : "Crew Dev"),
   );
+// Before crewd reads it, and only once: the folders a data dir works in are
+// part of the environment, fixed when it is made.
+writeLayout(app.isPackaged && release);
 // One window per userData, so dev, local and release builds each run once. A
 // second launch on the same data would start a second crewd there; it only
 // brings the first one forward. crewd refuses a folder in use as well.

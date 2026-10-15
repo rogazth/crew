@@ -90,6 +90,20 @@ WantedBy=default.target
 `;
 }
 
+/**
+ * Writes the data dir's layout.json (crew_core::paths) unless it has one: the
+ * worktrees go in the build's own folder, and the release's Home is `~/Crew`,
+ * as it always was. Builds of every channel then keep apart on the machine.
+ */
+export function writeLayoutCommand(layout: RemoteLayout = RELEASE): string {
+  const file = `"$HOME/${layout.home}/data/layout.json"`;
+  const json =
+    layout.unit === RELEASE.unit
+      ? `'{"workDir":"%s","homeFolder":"%s"}\\n' "$HOME/${layout.home}" "$HOME/Crew"`
+      : `'{"workDir":"%s"}\\n' "$HOME/${layout.home}"`;
+  return `[ -e ${file} ] || printf ${json} > ${file}`;
+}
+
 export async function installDaemon(opts: {
   target: SshTarget;
   port?: number;
@@ -123,6 +137,7 @@ export async function installDaemon(opts: {
     if (!binary) throw new Error(`Crew has no Linux build for ${arch}`);
     await step(report, "upload", async () => {
       await ssh(opts.target, `mkdir -p "$HOME/${home}/bin" "$HOME/${home}/data" "$HOME/.config/systemd/user"`, control);
+      await ssh(opts.target, writeLayoutCommand(layout), control);
       await sshStream(
         opts.target,
         `cat > "$HOME/${home}/bin/crewd.new" && chmod 755 "$HOME/${home}/bin/crewd.new"`,

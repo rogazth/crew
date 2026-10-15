@@ -23,7 +23,7 @@ pub fn set_dir(dir: PathBuf) {
 }
 
 fn dir() -> PathBuf {
-    DIR.get().cloned().unwrap_or_else(|| std::env::temp_dir().join("crew").join("media"))
+    DIR.get().cloned().unwrap_or_else(|| crate::paths::layout().data.join("media"))
 }
 
 /// The images in a result's content blocks, saved. Reads the shapes the

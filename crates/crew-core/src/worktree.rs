@@ -2,8 +2,10 @@
 //! checkout comes first, as git lists it; a folder outside git is its own
 //! single, branchless worktree.
 //!
-//! Worktrees Crew makes live under `~/.crew/worktrees/<repo>/<branch>`, out of
-//! the repo, so no tool that walks the checkout trips over a second copy of it.
+//! Worktrees Crew makes live under the environment's work dir
+//! (`crate::paths::worktrees`, `~/.crew/worktrees/<repo>/<branch>` for the
+//! installed app), out of the repo, so no tool that walks the checkout trips
+//! over a second copy of it.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -163,8 +165,7 @@ pub fn shortstat(line: &str) -> (u32, u32) {
 /// branch checked out if it exists, made to track a remote's branch of that name
 /// if only a remote has it, otherwise made from the main checkout's HEAD.
 pub fn add(path: &str, branch: &str) -> Result<Worktree, String> {
-    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty()).ok_or("HOME is not set")?;
-    add_under(&Path::new(&home).join(".crew").join("worktrees"), path, branch)
+    add_under(&crate::paths::worktrees(), path, branch)
 }
 
 pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, String> {

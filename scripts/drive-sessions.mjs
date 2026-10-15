@@ -57,11 +57,10 @@ function installed(provider) {
 // --- the daemon -------------------------------------------------------------
 
 const dataDir = mkdtempSync(join(tmpdir(), "crew-sl-"));
-// Named apart from every other run: Crew keeps the worktrees it makes under
-// ~/.crew/worktrees/<repo name>, and this run removes its own when it ends.
 const repoName = `drive-sessions-${Math.random().toString(36).slice(2, 8)}`;
 const repo = join(dataDir, repoName);
-const worktreesHome = join(homedir(), ".crew", "worktrees", repoName);
+// The data dir has no layout.json, so the worktrees crewd makes stay inside it.
+const worktreesHome = join(dataDir, "work", "worktrees", repoName);
 mkdirSync(repo);
 const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString().trim();
 git("init", "-q", "-b", "main");

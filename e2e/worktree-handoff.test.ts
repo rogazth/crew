@@ -59,7 +59,7 @@ test("a session in the main checkout hands its task to a new session on a worktr
   const tree = trees.find((row) => row.path === handed.worktree);
   assert.ok(tree, `git does not list ${handed.worktree}: ${JSON.stringify(trees)}`);
   assert.equal(tree.branch, "refs/heads/feat/handoff");
-  assert.ok(handed.worktree.startsWith(path.join(crew.home, ".crew/worktrees/")), handed.worktree);
+  assert.ok(handed.worktree.startsWith(crew.worktrees + path.sep), handed.worktree);
 
   // The session works in it; the caller stays in the main checkout.
   const rows = await sessions(crew, main.id);

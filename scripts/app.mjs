@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createConnection, createServer } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import electron from "electron";
 import { compileElectron } from "./compile-electron.mjs";
@@ -25,6 +26,10 @@ const linked = git("--git-dir") !== git("--git-common-dir");
 const PORT = Number(process.env.CREW_PORT) || (linked ? await freePort() : 1420);
 const env = { ...process.env, CREW_PORT: String(PORT) };
 if (linked && !env.CREW_USER_DATA) env.CREW_USER_DATA = path.join(git("--show-toplevel"), ".crew-dev");
+// Its worktrees go beside the other dev builds' rather than inside the checkout,
+// where every tool that walks it would meet a second copy of the repo.
+if (linked && !env.CREW_WORK_DIR)
+  env.CREW_WORK_DIR = path.join(os.homedir(), ".crew-dev", "checkouts", path.basename(git("--show-toplevel")));
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

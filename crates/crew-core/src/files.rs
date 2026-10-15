@@ -487,7 +487,7 @@ pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, Stri
     if bytes.len() > MAX_TEMP_FILE_BYTES {
         return Err("Pasted file is too large".into());
     }
-    let dir = std::env::temp_dir().join("crew");
+    let dir = crate::paths::tmp("files");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(extension)));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
@@ -509,7 +509,7 @@ pub fn write_chunk(id: &str, extension: &str, offset: u64, base64_contents: &str
     if offset + bytes.len() as u64 > MAX_UPLOAD_BYTES {
         return Err("File is too large to upload".into());
     }
-    let dir = std::env::temp_dir().join("crew");
+    let dir = crate::paths::tmp("files");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.{}", safe_extension(extension)));
     let mut options = std::fs::OpenOptions::new();

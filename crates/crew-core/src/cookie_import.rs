@@ -175,8 +175,8 @@ struct Snapshot {
 
 impl Snapshot {
     fn take(db: &Path) -> Result<Self, String> {
-        let dir = std::env::temp_dir().join(format!("crew-cookies-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&dir).map_err(|e| e.to_string())?;
+        let dir = crate::paths::tmp("cookies").join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let snapshot = Snapshot { path: dir.join("Cookies"), dir };
         fs::copy(db, &snapshot.path).map_err(|e| format!("Couldn't copy the cookie database: {e}"))?;
         for suffix in ["-wal", "-journal"] {

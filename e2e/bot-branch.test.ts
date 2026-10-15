@@ -35,7 +35,7 @@ after(async () => {
 async function snapshot() {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const folder = path.join(crew.home, ".crew/worktrees/app");
+  const folder = path.join(crew.worktrees, "app");
   return {
     worktrees: await gitWorktrees(crew, workspace.path),
     branches: await gitBranches(crew, workspace.path),
@@ -83,7 +83,7 @@ async function refused(branch: string, name: string): Promise<void> {
 test("W6: a bot made on a new branch gets its own worktree and works in it", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-bot-work");
+  const tree = path.join(crew.worktrees, "app/feat-bot-work");
 
   const sheet = await botOnBranch("Builder", "feat/bot-work");
   await create(sheet);

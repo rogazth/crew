@@ -62,6 +62,8 @@ export type Crew = {
   home: string;
   /** Electron's userData, where crewd keeps its database and socket. */
   userData: string;
+  /** Where crewd makes worktrees: the sandbox's data dir has no layout.json, so its work dir is inside it. */
+  worktrees: string;
   /** Workspaces seeded at launch, in order; the first is the active one. */
   workspaces: Workspace[];
   /**
@@ -261,6 +263,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
       root,
       home,
       userData,
+      worktrees: path.join(userData, "work", "worktrees"),
       workspaces,
       request,
       reload,

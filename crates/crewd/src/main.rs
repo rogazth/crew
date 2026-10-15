@@ -207,6 +207,9 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure
     // Before the socket, the database or anything else in the folder. Held
     // until `run` returns, after everything below has stopped.
     let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
+    // Before anything writes a file: where this environment keeps what is not
+    // in the data dir itself.
+    crew_core::paths::init(crew_core::paths::Layout::read(dir).map_err(Failure::Permanent)?);
     // The folder terminal sessions' hooks once dropped their records in.
     let _ = std::fs::remove_dir_all(dir.join("claude-bind"));
     // Before anything else is opened: a daemon already serving this data dir
