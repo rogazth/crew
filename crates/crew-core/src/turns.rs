@@ -604,6 +604,11 @@ struct ClaudeLive {
     /// task id. While any is open, a child's `result` is not the end of its
     /// turn: the CLI carries on when they finish.
     background: HashSet<String>,
+    /// Tasks that run in the foreground, by task id: a long command of the
+    /// agent's, and every one a subagent runs, which the CLI reports in the
+    /// agent's stream too. Their end wakes nobody, so it says nothing of what
+    /// woke the model.
+    foreground: HashSet<String>,
     /// What the background work that finished says of itself, held until the
     /// model speaks again: then it goes in as one note, the marker of what
     /// woke it, as the history decoder writes it from the CLI's own file.
@@ -655,6 +660,7 @@ impl ClaudeLive {
             stderr: Vec::new(),
             steers: Vec::new(),
             background: HashSet::new(),
+            foreground: HashSet::new(),
             woken_by: Vec::new(),
             approvals: HashMap::new(),
             questions: HashMap::new(),
@@ -4016,17 +4022,22 @@ impl TurnHost {
             }
             if type_name.as_deref() == Some("system") {
                 match subtype.as_deref() {
-                    Some("task_started") if rec.get("is_backgrounded").and_then(Value::as_bool) == Some(true) => {
+                    Some("task_started") => {
                         if let Some(task) = string_field(Some(&rec), "task_id") {
-                            live.background.insert(task);
+                            if rec.get("is_backgrounded").and_then(Value::as_bool) == Some(true) {
+                                live.background.insert(task);
+                            } else {
+                                live.foreground.insert(task);
+                            }
                         }
                     }
                     Some("task_notification") => {
-                        if let Some(task) = string_field(Some(&rec), "task_id") {
+                        let foreground = string_field(Some(&rec), "task_id").is_some_and(|task| {
                             live.background.remove(&task);
-                        }
+                            live.foreground.remove(&task)
+                        });
                         // Only what wakes the model is what woke it.
-                        if wakes_the_model(string_field(Some(&rec), "status").as_deref()) {
+                        if !foreground && wakes_the_model(string_field(Some(&rec), "status").as_deref()) {
                             live.wakes = true;
                             let summary = notice.or_else(|| string_field(Some(&rec), "summary")).filter(|_| !drawn);
                             if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
@@ -4041,11 +4052,21 @@ impl TurnHost {
                         let status =
                             rec.get("patch").and_then(|patch| patch.get("status")).and_then(Value::as_str);
                         let done = status.is_some_and(|status| matches!(status, "completed" | "failed" | "killed" | "stopped"));
+                        let sent_back = rec
+                            .get("patch")
+                            .and_then(|patch| patch.get("is_backgrounded"))
+                            .and_then(Value::as_bool)
+                            == Some(true);
+                        if let (true, Some(task)) = (sent_back, string_field(Some(&rec), "task_id")) {
+                            // Sent to the background while it ran: its end
+                            // wakes the model after all.
+                            live.foreground.remove(&task);
+                        }
                         if let (true, Some(task)) = (done, string_field(Some(&rec), "task_id")) {
                             live.background.remove(&task);
                             // Said before its notification: a held turn must
                             // not end in between on work that is to wake it.
-                            live.wakes |= wakes_the_model(status);
+                            live.wakes |= !live.foreground.contains(&task) && wakes_the_model(status);
                         }
                     }
                     _ => {}

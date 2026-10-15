@@ -1972,7 +1972,9 @@ mod tests {
         assert!(steps.iter().any(|step| step.contains("Cristalira")), "{steps:?}");
         assert_eq!(thread.as_deref(), Some("ab19f83e8d09a8136"));
         let notes = said(&blocks, crew_protocol::BlockRole::System);
-        assert_eq!(notes.iter().filter(|note| note.contains("Describir ciudad inventada")).count(), 2, "{notes:?}");
+        // The first call ran in the foreground, answered in its result: only
+        // the resumed one, in the background, woke the agent.
+        assert_eq!(notes.iter().filter(|note| note.contains("Describir ciudad inventada")).count(), 1, "{notes:?}");
 
         let list = host.background_list("s");
         assert_eq!(list.commands.len(), 1, "one entry for the one subagent");
@@ -2122,6 +2124,51 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].1, "Agent \"Backend\" finished · Agent \"UI\" finished");
         assert!(notes[0].0 < first_said);
+    }
+
+    /// The CLI reports in the agent's stream each long command a background
+    /// subagent runs, as a foreground task of its own named by the command.
+    /// Its end wakes nobody: what woke the agent is the subagent's report.
+    #[test]
+    fn a_background_subagents_commands_say_nothing_of_what_woke_the_agent() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines = [
+            json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_a", "name": "Agent",
+                    "input": { "description": "Echo work", "prompt": "Run them", "run_in_background": true } }] },
+                "parent_tool_use_id": null, "session_id": "x"
+            }),
+            json!({ "type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "toolu_a",
+                    "description": "Echo work", "task_type": "local_agent", "is_backgrounded": true, "session_id": "x" }),
+            json!({ "type": "system", "subtype": "task_started", "task_id": "b1", "owned_by_subagent": true,
+                    "tool_use_id": "toolu_bash", "description": "cd /tmp && echo one; sleep 20", "is_backgrounded": false,
+                    "parent_task_id": "a1", "task_type": "local_bash", "session_id": "x" }),
+            json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_bash",
+                    "status": "completed", "output_file": "", "summary": "cd /tmp && echo one; sleep 20", "session_id": "x" }),
+            json!({ "type": "system", "subtype": "task_updated", "task_id": "a1", "patch": { "status": "completed" }, "session_id": "x" }),
+            json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "tool_use_id": "toolu_a",
+                    "status": "completed", "output_file": "/tmp/out", "summary": "done", "session_id": "x" }),
+            json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "It is done." }] },
+                "parent_tool_use_id": null, "session_id": "x"
+            }),
+        ];
+        for line in lines {
+            host.handle_claude_line("s", &line.to_string());
+        }
+        let notes: Vec<String> = cap
+            .take()
+            .into_iter()
+            .filter_map(|event| match event {
+                HarnessEvent::SessionNote { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, ["Agent \"Echo work\" finished"]);
     }
 
     /// A shell sent to the background is drawn on its own row, which says how
