@@ -302,3 +302,56 @@ fn fs_serves_files_under_the_root_and_nothing_else() {
     );
     assert_eq!(get(served.addr(), "/elsewhere", &auth).status, 404);
 }
+
+/// A daemon a test started outside any supervisor (the launchd stand-in, a
+/// detached `serve`) stops with the process it was told to outlive no longer,
+/// however that process ended.
+#[test]
+fn a_daemon_stops_once_the_pid_it_was_to_outlive_is_gone() {
+    let dir = temp("owner");
+    let mut owner = Command::new("sleep").arg("300").spawn().expect("sleep");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        .args(["serve", "--listen", "127.0.0.1:0", "--exit-with-pid", &owner.id().to_string(), "--data-dir"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        // A pipe, as an e2e harness gives it, that is closed by the time the
+        // owner goes: the way out must not depend on writing there.
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().expect("stdout")).read_line(&mut line).expect("url line");
+    assert!(line.contains("url"), "crewd did not come up: {line:?}");
+    drop(child.stderr.take());
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(child.try_wait().expect("wait").is_none(), "crewd stopped while its owner was alive");
+
+    owner.kill().expect("kill owner");
+    owner.wait().expect("reap owner");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "crewd outlived its owner");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_pid_that_is_not_one_is_refused() {
+    let dir = temp("owner-bad");
+    let status = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        .args(["serve", "--listen", "127.0.0.1:0", "--exit-with-pid", "self", "--data-dir"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run");
+    assert!(!status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}

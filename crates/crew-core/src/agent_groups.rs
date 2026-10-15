@@ -1,5 +1,7 @@
-//! The process groups `AgentHost` started, kept on disk so a `crewd` that
-//! crashed (or was SIGKILLed) can kill what its agents left behind.
+//! The process groups `crewd` started (agents, terminals, supervised
+//! processes), kept on disk so a `crewd` that crashed (or was SIGKILLed) can
+//! kill what they left behind. One registry per daemon: the hosts share it,
+//! since each write replaces the whole file.
 //!
 //! An environment marker cannot find them: `npm exec` rewrites its command
 //! line and hides its environment from `ps`. A group id is the one handle that
@@ -39,14 +41,14 @@ const START_SLACK: i64 = 1;
 
 /// The live groups, mirrored to `path` on every change. Writes happen under
 /// the mutex so two threads cannot interleave a stale list over a fresh one.
-pub(crate) struct Registry {
+pub struct Registry {
     path: PathBuf,
     boot: i64,
     groups: Mutex<BTreeMap<u32, i64>>,
 }
 
 impl Registry {
-    pub(crate) fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         let registry = Self {
             path,
             boot: boot_time().unwrap_or(0),

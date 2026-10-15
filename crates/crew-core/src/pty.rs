@@ -207,6 +207,9 @@ struct Inner {
     /// done, so no exit is announced for them. A window that finds them gone
     /// once a daemon answers again starts them over.
     closing: AtomicBool,
+    /// Where each terminal's process group is recorded while it has members,
+    /// so the next `crewd` can end what a crashed one left running.
+    registry: Option<Arc<crate::agent_groups::Registry>>,
 }
 
 #[derive(Clone)]
@@ -222,6 +225,15 @@ impl Default for PtyHost {
 
 impl PtyHost {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// Like `new`, recording every terminal's process group in `registry`.
+    pub fn with_registry(registry: Arc<crate::agent_groups::Registry>) -> Self {
+        Self::build(Some(registry))
+    }
+
+    fn build(registry: Option<Arc<crate::agent_groups::Registry>>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spawning: Mutex::new(()),
@@ -230,6 +242,7 @@ impl PtyHost {
                 next_stream: AtomicU32::new(1),
                 events: Mutex::new(None),
                 closing: AtomicBool::new(false),
+                registry,
             }),
         }
     }
@@ -652,6 +665,12 @@ fn spawn_unix(
     };
     close_fd(slave);
     let pid = child.id();
+    // setsid() made the child its own group. Recorded before anything can fail,
+    // and dropped only once nobody is left in it.
+    let registry = host.inner.registry.clone();
+    if let Some(registry) = &registry {
+        registry.add(pid);
+    }
 
     let dups = dup_fd(master).and_then(|reader| match dup_fd(master) {
         Ok(writer) => Ok((reader, writer)),
@@ -669,6 +688,7 @@ fn spawn_unix(
             close_fd(master);
             thread::spawn(move || {
                 let _ = child.wait();
+                forget_group_when_empty(registry, pid);
             });
             return Err(err);
         }
@@ -723,6 +743,7 @@ fn spawn_unix(
     let wait_host = host.clone();
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        forget_group_when_empty(registry, pid);
         if sink.is_some() {
             // The child's last words are still in the master: the exit must
             // not reach the log, or a viewer, ahead of them.
@@ -851,6 +872,20 @@ fn default_shell() -> (String, Vec<String>) {
 
 fn apply_path(cmd: &mut std::process::Command) {
     cmd.env("PATH", crate::shell_path::joined());
+}
+
+/// Drops a terminal's group from the registry once nobody is left in it. A
+/// member the leader left running is not killed here: the user may have
+/// meant it to outlive the shell. It stays listed, for a later sweep to end
+/// if `crewd` itself goes down first.
+fn forget_group_when_empty(registry: Option<Arc<crate::agent_groups::Registry>>, pid: u32) {
+    let Some(registry) = registry else { return };
+    thread::spawn(move || {
+        while unsafe { libc::kill(-(pid as i32), 0) } == 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+        registry.remove(pid);
+    });
 }
 
 /// The child was started with setsid(), so its pid is also its process group.
@@ -1564,5 +1599,36 @@ mod tests {
         assert!(host.get("term").is_some());
         assert!(host.remove_if_pid("term", 42).is_some());
         assert!(host.get("term").is_none());
+    }
+
+    fn listed(path: &std::path::Path) -> Vec<i64> {
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap_or_default()).unwrap_or_default();
+        json["groups"]
+            .as_array()
+            .map(|groups| groups.iter().filter_map(|g| g["pgid"].as_i64()).collect())
+            .unwrap_or_default()
+    }
+
+    /// A crashed `crewd` cannot end its terminals; the next one finds their
+    /// groups in the registry the agents share.
+    #[test]
+    fn a_terminal_is_on_the_registry_while_its_group_lives() {
+        let dir = std::env::temp_dir().join(format!("crew-pty-registry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("agent-groups.json");
+        let host = PtyHost::with_registry(Arc::new(crate::agent_groups::Registry::new(path.clone())));
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "exec sleep 300".to_string()];
+        host.spawn("t".into(), "/".into(), command, 80, 24, None).expect("spawn");
+        let pid = host.pid("t").expect("pid");
+
+        assert_eq!(listed(&path), vec![pid as i64]);
+        host.kill("t");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !listed(&path).is_empty() {
+            assert!(Instant::now() < deadline, "the group stayed on the list");
+            thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

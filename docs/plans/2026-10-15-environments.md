@@ -73,14 +73,21 @@ Existing worktrees stay where git has them, and an existing Home keeps its
 folder (it is stored by id).
 
 **2. Process ownership.**
-- `crewd --exit-with-pid <pid>`: the e2e launchd stand-in and scripts pass
-  their own pid; crewd stops when it is gone.
-- One registry of process groups for agents, PTYs, supervised processes and
-  title runs (today only agents have `agent-groups.json`); killed on exit,
-  swept at start.
-- Test fakes exit when their parent is gone, not only on SIGTERM.
-- The harness's `killStragglers` covers every fake and `crewd serve`, with a
-  SIGKILL after the grace.
+- `crewd --exit-with-pid <pid>`: the e2e launchd stand-in and the harness's
+  `crewd serve` pass the spec's pid; crewd stops when it is gone. The stop is
+  sent before anything is logged: stderr is often a pipe to the dead owner,
+  and `eprintln!` panics on a failed write (it kept the first version alive).
+- The e2e app exits with the same pid (`CREW_E2E_OWNER_PID`).
+- One registry of process groups for agents, terminals and supervised
+  processes (`agent-groups.json`, shared by the hosts); swept at start.
+- Python fakes written through `fakes::install` end when their parent is
+  gone, not only on SIGTERM or stdin EOF.
+- A sandbox names its spec (`owner.pid`); the next launch deletes the ones
+  whose spec is gone.
+- Verified: an agent-mode spec with a remote, SIGKILLed mid-test, leaves no
+  process; the next run deletes its sandbox.
+- Left: title runs (short, with a timeout) are not in the registry; crewd's
+  other `eprintln!`s still panic on a closed stderr.
 
 **3. Checks.**
 - After each e2e run: nothing new outside the sandbox (`~/.crew*`,
@@ -102,6 +109,6 @@ folder (it is stored by id).
 | Phase | State |
 |---|---|
 | 1. Layout | done |
-| 2. Process ownership | next |
+| 2. Process ownership | done |
 | 3. Checks | — |
 | 4. Smaller leaks | — |

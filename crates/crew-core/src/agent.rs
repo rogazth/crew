@@ -79,6 +79,11 @@ impl AgentHost {
         Self::build(Some(Arc::new(Registry::new(path))))
     }
 
+    /// Like `with_registry`, with the registry the daemon's other hosts write too.
+    pub fn with_shared_registry(registry: Arc<Registry>) -> Self {
+        Self::build(Some(registry))
+    }
+
     fn build(registry: Option<Arc<Registry>>) -> Self {
         Self {
             shared: Arc::new(Shared {

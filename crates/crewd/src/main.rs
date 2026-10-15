@@ -166,8 +166,18 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
         }
         _ => Listen::local(),
     };
+    // A test or script that starts crewd where nothing else would stop it
+    // (the launchd stand-in, a detached daemon) names itself here.
+    let owner = match flag(args, "--exit-with-pid").map(|pid| pid.parse::<i32>()) {
+        None => None,
+        Some(Ok(pid)) if pid > 1 => Some(pid),
+        Some(_) => {
+            eprintln!("--exit-with-pid takes the pid of a running process");
+            return ExitCode::FAILURE;
+        }
+    };
     let failed_starts = dir.join(FAILED_STARTS);
-    let failure = match run(&dir, supervisor, listen) {
+    let failure = match run(&dir, supervisor, listen, owner) {
         Ok(()) => return ExitCode::SUCCESS,
         Err(failure) => failure,
     };
@@ -193,12 +203,15 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure> {
+fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -> Result<(), Failure> {
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
     // cleanup as any stop, instead of killing crewd half started.
     let (stop, stopped) = mpsc::channel();
     watch_signals(stop.clone(), supervisor != Supervisor::Served).map_err(Failure::Transient)?;
+    if let Some(pid) = owner {
+        watch_owner(pid, stop.clone());
+    }
     if supervisor == Supervisor::Launchd {
         tidy_log_every(dir.join(crew_cli::launch_agent::LOG));
         eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
@@ -296,12 +309,14 @@ fn start(
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
     crew_core::provider_session::prewarm_claude_fast_mode();
-    let pty = PtyHost::new();
-    // Before the host: what a crashed `crewd` left running goes first, and the
-    // host then starts a fresh list.
+    // Before the hosts: what a crashed `crewd` left running goes first, and
+    // they then start a fresh list, one they share. The name is from when only
+    // agents were in it.
     let groups = dir.join("agent-groups.json");
     crew_core::agent_groups::sweep(&groups);
-    let agents = AgentHost::with_registry(groups);
+    let registry = std::sync::Arc::new(crew_core::agent_groups::Registry::new(groups));
+    let pty = PtyHost::with_registry(registry.clone());
+    let agents = AgentHost::with_shared_registry(registry);
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
     // Before anything reads a transcript: a session from before migration 38
     // has its history only in its CLI's files.
@@ -428,6 +443,26 @@ fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
 
 /// Blocks until something says stop: a signal (already watched), a
 /// `daemon_shutdown`, or, for the app's child, the end of stdin.
+/// Stops crewd, the way a signal does, once `pid` is gone: whatever started
+/// it ended without saying so, a test runner killed on a timeout among them.
+fn watch_owner(pid: i32, stop: mpsc::Sender<()>) {
+    let _ = thread::Builder::new().name("crewd-owner".into()).spawn(move || {
+        while owner_alive(pid) {
+            thread::sleep(Duration::from_millis(500));
+        }
+        let _ = stop.send(());
+        // Best effort, after the stop: stderr is often a pipe to the very
+        // process that is gone, and `eprintln!` panics when the write fails.
+        let _ = writeln!(io::stderr(), "[crewd] pid {pid}, which this daemon was to outlive no longer, is gone; stopping");
+    });
+}
+
+/// `kill(pid, 0)` succeeds on a live process, and fails with EPERM on one
+/// that exists but is not ours to signal.
+fn owner_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+}
+
 fn wait_for_exit(
     stop: mpsc::Sender<()>,
     stopped: mpsc::Receiver<()>,

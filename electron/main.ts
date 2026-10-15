@@ -29,6 +29,7 @@ import { release, sha } from "./build-info";
 import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
+import { watchOwner } from "./owner";
 import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
@@ -454,6 +455,9 @@ if (refused) {
   app.exit(1);
 }
 app.setName(local ? "Crew Local" : "Crew");
+// An e2e app outlives a spec killed on a timeout unless it watches for that.
+const owner = Number(process.env.CREW_E2E_OWNER_PID);
+if (e2e && owner > 1) watchOwner(owner, () => app.exit(1));
 if (!(app.isPackaged && release))
   app.setPath(
     "userData",
