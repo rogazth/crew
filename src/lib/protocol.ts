@@ -1389,6 +1389,11 @@ export type WorktreeAdd = { path: string, branch: string, };
 
 export type WorktreeRemove = { path: string, 
 /**
+ * Any checkout of the same repo, where git runs: a worktree whose folder
+ * is gone cannot be asked about itself. The path's own when absent.
+ */
+repo?: string, 
+/**
  * Discards uncommitted changes; without it a dirty worktree is refused.
  */
 force: boolean, };

@@ -8,6 +8,7 @@ import {
   removalCost,
   sessionPath,
   unlistedWorktrees,
+  worktreeLabel,
   worktreeOf,
 } from "./worktrees";
 
@@ -19,6 +20,7 @@ const tree = (path: string, branch: string | null, main = false): Worktree => ({
   add: 0,
   del: 0,
   dirty: 0,
+  locked: null,
 });
 const trees = [tree("/repo", "master", true), tree("/wt/feat", "feat/avatars")];
 const session = (worktree: string | null) => ({ worktree }) as Session;
@@ -89,9 +91,29 @@ describe("removing a worktree", () => {
     expect(removalCost(3, 2)).toBe("3 uncommitted changes are lost with the folder. 2 sessions end with it.");
   });
 
+  it("says a tool's lock is broken, with its reason when it gave one", () => {
+    expect(removalCost(0, 0, "")).toBe("A tool locked it; the lock is broken. The folder is deleted; the branch stays.");
+    expect(removalCost(0, 0, "claude agent")).toBe(
+      "A tool locked it (claude agent); the lock is broken. The folder is deleted; the branch stays.",
+    );
+  });
+
   it("tells crewd's refusal over uncommitted work from any other failure", () => {
     expect(isDirtyRefusal(new Error("/wt/feat has uncommitted changes"))).toBe(true);
     expect(isDirtyRefusal(new Error("The main checkout cannot be removed"))).toBe(false);
     expect(isDirtyRefusal("/wt/feat has uncommitted changes")).toBe(false);
+  });
+
+  it("asks again, forced, when crewd finds a lock", () => {
+    expect(isDirtyRefusal(new Error("/wt/agent is locked"))).toBe(true);
+    expect(isDirtyRefusal(new Error("/wt/agent is locked: claude session x (pid 9)"))).toBe(true);
+  });
+});
+
+describe("naming a worktree", () => {
+  it("names a detached one by its folder, so agents' worktrees tell apart", () => {
+    expect(worktreeLabel(tree("/wt/feat", "feat/avatars"))).toBe("feat/avatars");
+    expect(worktreeLabel(tree("/repo", null, true))).toBe("No branch");
+    expect(worktreeLabel(tree("/home/agent/worktrees/agent-a1b2/", null))).toBe("agent-a1b2");
   });
 });

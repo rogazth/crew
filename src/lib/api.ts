@@ -64,9 +64,12 @@ export const listWorktrees = (path: string): Promise<Worktree[]> =>
 export const addWorktree = (path: string, branch: string): Promise<Worktree> =>
   client.request("worktree_add", { path, branch });
 
-/** Refuses the main checkout, and uncommitted work unless forced. Its sessions go with it. */
-export const removeWorktree = (path: string, force: boolean): Promise<void> =>
-  client.request("worktree_remove", { path, force });
+/**
+ * Refuses the main checkout, and uncommitted work or a lock unless forced. Its sessions go with it.
+ * `repo` is the workspace's checkout, where git runs when the worktree's own folder is gone.
+ */
+export const removeWorktree = (repo: string, path: string, force: boolean): Promise<void> =>
+  client.request("worktree_remove", { path, repo, force });
 
 export const renameWorkspace = (id: string, name: string): Promise<void> =>
   client.request("workspace_rename", { id, name });

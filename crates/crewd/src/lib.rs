@@ -1587,14 +1587,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(block(move || worktree::add(&path, &branch)).await?)
         }
         "worktree_remove" => {
-            let WorktreeRemove { path, force } = parse(params)?;
+            let WorktreeRemove { path, repo, force } = parse(params)?;
             let store = hosts.store.clone();
             let processes = hosts.processes.clone();
             let doomed = block(move || {
                 // Before git: a dev server still writing into it could leave
                 // files behind that make the removal refuse.
                 processes.forget_worktree(&path);
-                let listed = worktree::remove(&path, force)?;
+                let listed = worktree::remove(repo.as_deref().unwrap_or(&path), &path, force)?;
                 if listed != path {
                     processes.forget_worktree(&listed);
                 }

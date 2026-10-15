@@ -485,6 +485,11 @@ pub struct WorktreeAdd {
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct WorktreeRemove {
     pub path: String,
+    /// Any checkout of the same repo, where git runs: a worktree whose folder
+    /// is gone cannot be asked about itself. The path's own when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<String>,
     /// Discards uncommitted changes; without it a dirty worktree is refused.
     #[serde(default)]
     pub force: bool,

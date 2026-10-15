@@ -2407,6 +2407,7 @@ while True:
                     add: 0,
                     del: 0,
                     dirty: 0,
+                    locked: None,
                 })
             }),
         ));
@@ -7924,7 +7925,7 @@ time.sleep(600)
                 // The workspace goes while the worktree is being made, so the
                 // session that was to run in it cannot be.
                 crate::workspace::delete(&store, workspace.clone())?;
-                Ok(Worktree { path: path.to_string_lossy().into_owned(), branch: Some(branch.to_string()), main: false, add: 0, del: 0, dirty: 0 })
+                Ok(Worktree { path: path.to_string_lossy().into_owned(), branch: Some(branch.to_string()), main: false, add: 0, del: 0, dirty: 0, locked: None })
             }),
         );
         let user = w.user();

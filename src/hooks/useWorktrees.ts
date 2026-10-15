@@ -6,7 +6,7 @@ import { asListed } from "../lib/worktrees";
 const activeKey = (workspaceId: string) => `worktree:${workspaceId}`;
 
 /** Until git answers, the workspace folder stands in as its only worktree. */
-const standIn = (path: string): Worktree => ({ path, branch: null, main: true, add: 0, del: 0, dirty: 0 });
+const standIn = (path: string): Worktree => ({ path, branch: null, main: true, add: 0, del: 0, dirty: 0, locked: null });
 
 /**
  * The workspace's worktrees as git lists them, and the one on screen. Read on
@@ -117,7 +117,7 @@ export function useWorktrees(workspace: Workspace | null) {
 
   const remove = useCallback(
     async (tree: Worktree, force: boolean) => {
-      await api.removeWorktree(tree.path, force);
+      await api.removeWorktree(path, tree.path, force);
       setListed((prev) =>
         prev[path] ? { ...prev, [path]: prev[path].filter((entry) => entry.path !== tree.path) } : prev,
       );
