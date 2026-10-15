@@ -538,6 +538,11 @@ impl AgentEvents for AgentFanout {
     }
 }
 
+/// A key that holds a tab strip, whose browser tabs main reports to the machines.
+fn is_strip(key: &str) -> bool {
+    key.starts_with("tabs:") && key != "tabs:scope"
+}
+
 pub fn serve(config: Config) -> Result<Handle, String> {
     serve_on(config, Listen::local())
 }
@@ -581,6 +586,8 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
     let leases = Leases::new();
     let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
+    // `crewd serve`: the browser is on whichever Macs connect, and says so when none is.
+    browser.relay().set_remote(listen.wait_for_addr);
     let to_client = hub.clone();
     browser
         .relay()
@@ -1075,11 +1082,43 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
     }
     // These speak for the connection itself, so they need to know which one it is.
     if request.method == "browser_host_register" {
+        let hello = parse::<proto::BrowserHostRegister>(request.params).unwrap_or_default();
         hub.hush(client_id);
-        hosts.browser.relay().register_host(client_id);
+        let hello = crew_core::browser_relay::Hello { name: hello.name, acks: hello.acks };
+        hosts.browser.relay().register_host(client_id, hello);
         let leases = hosts.browser.leases().list(app_state::now_millis());
         return Some(encode(&match json(leases) {
             Ok(value) => proto::ok(request.id, value),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
+    if request.method == "browser_ack" {
+        if let Ok(ack) = parse::<proto::BrowserAck>(request.params) {
+            hosts.browser.relay().ack(client_id, ack.call_id);
+        }
+        return None;
+    }
+    if request.method == "browser_host_focus" {
+        hosts.browser.relay().focus(client_id);
+        return Some(encode(&proto::ok(request.id, Value::Null)));
+    }
+    if request.method == "browser_host_pages" {
+        let result = parse::<proto::BrowserHostPages>(request.params).and_then(|list| {
+            let pages = list
+                .pages
+                .into_iter()
+                .map(|page| crew_core::browser::OpenPage {
+                    workspace_id: crew_core::browser::workspace_of(&page.context).to_string(),
+                    page_id: page.page_id,
+                    context: page.context,
+                    url: page.url,
+                    title: page.title,
+                })
+                .collect();
+            hosts.browser.relay().set_pages(client_id, pages)
+        });
+        return Some(encode(&match result {
+            Ok(()) => proto::ok(request.id, Value::Null),
             Err(error) => proto::err(request.id, error),
         }));
     }
@@ -1557,14 +1596,38 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "state_set" => {
             let KeyValue { key, value } = parse(params)?;
             let store = hosts.store.clone();
+            let strip = is_strip(&key);
             block(move || app_state::set(&store, key, value)).await?;
+            if strip {
+                hosts.hub.emit("browser-pages-changed", Value::Null);
+            }
             Ok(Value::Null)
         }
         "state_delete" => {
             let Key { key } = parse(params)?;
             let store = hosts.store.clone();
+            let strip = is_strip(&key);
             block(move || app_state::delete(&store, key)).await?;
+            if strip {
+                hosts.hub.emit("browser-pages-changed", Value::Null);
+            }
             Ok(Value::Null)
+        }
+        // Every browser tab in this Mac's strips, for main to tell each machine its own.
+        "browser_pages_list" => {
+            let store = hosts.store.clone();
+            let pages = block(move || crew_core::browser::open_pages(&store)).await?;
+            json(
+                pages
+                    .into_iter()
+                    .map(|page| proto::BrowserHostPage {
+                        page_id: page.page_id,
+                        context: page.context,
+                        url: page.url,
+                        title: page.title,
+                    })
+                    .collect::<Vec<_>>(),
+            )
         }
         "list_project_files" => {
             let ListProjectFiles { cwd } = parse(params)?;
@@ -1891,13 +1954,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "browser_leases_list" => json(hosts.browser.leases().list(app_state::now_millis())),
         // The user takes a tab back from the agent driving it.
         "browser_lease_release" => {
-            let proto::BrowserTabArg { tab } = parse(params)?;
+            let proto::BrowserTabArg { tab, .. } = parse(params)?;
             hosts.browser.leases().force_release(&tab, app_state::now_millis());
             Ok(Value::Null)
         }
         // The user closed a tab: no agent's next call may bring it back.
         "browser_tab_closed" => {
-            let proto::BrowserTabArg { tab } = parse(params)?;
+            let proto::BrowserTabArg { tab, .. } = parse(params)?;
             hosts.browser.tab_closed(&tab);
             Ok(Value::Null)
         }

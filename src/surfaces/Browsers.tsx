@@ -115,15 +115,16 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
   }, [hasPages]);
 
   // A closed tab's live state goes with it. Runs after the pane's own cleanup, which writes to it last.
-  const known = useRef(new Set<string>());
+  const known = useRef(new Map<string, string>());
   useEffect(() => {
-    const now = new Set(browsers.map((pane) => pane.tab.id));
-    for (const id of known.current) {
+    const now = new Map(browsers.map((pane) => [pane.tab.id, pane.workspaceId]));
+    for (const [id, workspaceId] of known.current) {
       if (now.has(id)) continue;
       pages.drop(id);
       // Closing a tab takes it back from whoever drives it, and it stops being
       // anyone's default: an agent's next call finds no tab rather than reopening it.
-      void api.browserTabClosed(id).catch(() => {});
+      // The daemon of its workspace holds that, a remote machine's included.
+      void api.browserTabClosed(id, workspaceId).catch(() => {});
     }
     known.current = now;
   });

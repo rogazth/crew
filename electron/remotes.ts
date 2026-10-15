@@ -10,6 +10,7 @@ import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote } from 
 import { setRemoteResolver } from "./browser/files";
 import { setMachines } from "./browser/guests";
 import type { Upstream } from "./browser/remote-proxy";
+import type { Machine } from "./browser/remote-hosts";
 import { release } from "./build-info";
 import { channelOf } from "./channel";
 import { daemonLogs, installDaemon, remoteLayout, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
@@ -27,6 +28,24 @@ const TAILSCALE = [
 ];
 
 type Daemon = { url: string; token: string };
+
+let machinesChanged: () => void = () => {};
+
+/** Told when a machine is added, paired again or removed, so the browser host dials it. */
+export function onMachinesChanged(listener: () => void): void {
+  machinesChanged = listener;
+}
+
+/** Every machine in the address book with a token, at the address a browser host dials. */
+export async function remoteMachines(getDaemon: () => Daemon | null): Promise<Machine[]> {
+  const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {});
+  const machines: Machine[] = [];
+  for (const row of rows) {
+    const token = await getToken(row.id);
+    if (token) machines.push({ id: row.id, name: row.name, url: originOf(row).replace(/^http:/, "ws:"), token });
+  }
+  return machines;
+}
 
 export function linuxBinary(arch: "x64" | "arm64"): string | null {
   const name = `crewd-linux-${arch}`;
@@ -102,6 +121,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
       ssh: target.destination,
     });
     await putToken(row.id, paired.token);
+    machinesChanged();
     return row;
   });
 
@@ -117,6 +137,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
       },
     }).then(async (paired) => {
       await putToken(row.id, paired.token);
+      machinesChanged();
     });
   });
 
@@ -136,6 +157,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
     }
     await dropToken(row.id);
     await localRpc(getDaemon, "remote_delete", { id: row.id });
+    machinesChanged();
     return { warning };
   });
 
@@ -159,6 +181,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
       ssh: input.ssh ?? "",
     });
     await putToken(row.id, input.token);
+    machinesChanged();
     return row;
   });
 

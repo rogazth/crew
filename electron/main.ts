@@ -34,7 +34,7 @@ import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
-import { registerRemoteIpc } from "./remotes";
+import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
 import { watchForUpdates } from "./update";
 
@@ -525,7 +525,11 @@ app.whenReady().then(async () => {
   // Crew works as before; the user only needs to know quitting stops things.
   if (notice && Notification.isSupported()) new Notification({ title: "Crew", body: notice }).show();
   // Agents drive pages through main, over its own connection; it follows crewd across restarts.
-  const browserHost = startBrowserHost(daemonInfo);
+  const browserHost = startBrowserHost({
+    info: daemonInfo,
+    machines: () => remoteMachines(daemonInfo),
+    onMachinesChanged,
+  });
   app.once("will-quit", () => browserHost.stop());
   watchForUpdates(() => {
     if (!win) createWindow();

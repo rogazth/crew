@@ -414,7 +414,7 @@ pub struct OpenPage {
 
 /// The workspace a strip key belongs to. A worktree's own strip is keyed
 /// `<workspace>@<path>`, the same split the window makes.
-fn workspace_of(context: &str) -> &str {
+pub fn workspace_of(context: &str) -> &str {
     context.split_once('@').map_or(context, |(workspace, _)| workspace)
 }
 

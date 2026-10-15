@@ -87,3 +87,8 @@ export function releaseUnleased(leased: ReadonlySet<string>): string[] {
   }
   return released;
 }
+
+/** Whether a tab has a live guest on this Mac. */
+export function hasGuest(tab: string): boolean {
+  return liveGuest(tab) !== null;
+}

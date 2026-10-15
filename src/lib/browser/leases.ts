@@ -13,11 +13,13 @@ export type LeaseStore = {
   /** Leased or summoned. The same set back until one of them changes. */
   held(): ReadonlySet<string>;
   /**
-   * Takes crewd's list, unless one numbered higher came first: an event can
-   * overtake the reply to a list request, and the older of the two would
-   * unpin a tab an agent has just taken. Unnumbered lists always apply.
+   * Takes one crewd's list, unless one numbered higher came first from it: an
+   * event can overtake the reply to a list request, and the older of the two
+   * would unpin a tab an agent has just taken. Unnumbered lists always apply.
+   * Each daemon (`source`) leases its own workspaces' tabs; the store holds
+   * them all.
    */
-  set(leases: readonly BrowserLease[], seq?: number): void;
+  set(leases: readonly BrowserLease[], seq?: number, source?: string): void;
   summon(tab: string): void;
   subscribe(cb: () => void): () => void;
 };
@@ -30,8 +32,9 @@ export function createLeaseStore(
   later: (fn: () => void, ms: number) => void = (fn, ms) => void setTimeout(fn, ms),
 ): LeaseStore {
   let leases = new Map<string, BrowserLease>();
+  const bySource = new Map<string, readonly BrowserLease[]>();
   // crewd numbers from its clock, so a restarted daemon's lists still count as newer.
-  let newest = Number.NEGATIVE_INFINITY;
+  const newest = new Map<string, number>();
   const summoned = new Map<string, number>();
   let held: ReadonlySet<string> = new Set();
   const listeners = new Set<() => void>();
@@ -51,16 +54,18 @@ export function createLeaseStore(
   return {
     get: (tab) => leases.get(tab) ?? null,
     held: () => held,
-    set: (list, seq) => {
+    set: (list, seq, source = "local") => {
       if (seq !== undefined) {
-        if (seq < newest) return;
-        newest = seq;
+        if (seq < (newest.get(source) ?? Number.NEGATIVE_INFINITY)) return;
+        newest.set(source, seq);
       }
+      bySource.set(source, list);
+      const all = [...bySource.values()].flat();
       const before = leases;
-      leases = new Map(list.map((lease) => [lease.tab, lease]));
+      leases = new Map(all.map((lease) => [lease.tab, lease]));
       const moved =
         before.size !== leases.size ||
-        list.some((lease) => {
+        all.some((lease) => {
           const old = before.get(lease.tab);
           return !old || old.holder !== lease.holder || old.sessionId !== lease.sessionId;
         });

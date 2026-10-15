@@ -173,3 +173,59 @@ async fn a_tab_the_window_closed_is_nobodys_default_any_more() {
     let refused = response(&mut window, 4).await;
     assert!(refused["error"].as_str().unwrap_or_default().starts_with("Name a tab"), "{refused}");
 }
+
+/// Two Macs on one machine: each reports its tabs, and a call goes to the one
+/// that shows the tab. A strip saved here is announced, and listed for main.
+#[tokio::test]
+async fn every_host_reports_its_tabs_and_a_call_goes_to_the_one_that_shows_it() {
+    let handle = daemon("hosts");
+    let mut window = connect(&handle).await;
+    let mut ada = connect(&handle).await;
+    let mut studio = connect(&handle).await;
+    send(&mut ada, 1, "browser_host_register", json!({ "name": "Ada's Mac", "acks": true })).await;
+    response(&mut ada, 1).await;
+    send(&mut studio, 1, "browser_host_register", json!({ "name": "Studio", "acks": true })).await;
+    response(&mut studio, 1).await;
+    let page = |id: &str| json!({ "pageId": id, "context": "w1", "url": "http://localhost:5173/", "title": id });
+    send(&mut ada, 2, "browser_host_pages", json!({ "pages": [page("browser:a")] })).await;
+    assert_eq!(response(&mut ada, 2).await["ok"], true);
+    send(&mut studio, 2, "browser_host_pages", json!({ "pages": [page("browser:s")] })).await;
+    response(&mut studio, 2).await;
+    // Only a host reports pages.
+    send(&mut window, 1, "browser_host_pages", json!({ "pages": [page("browser:w")] })).await;
+    assert_eq!(response(&mut window, 1).await["ok"], false);
+
+    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "list_tabs", "args": {} })).await;
+    let listed = response(&mut window, 2).await["result"][0]["text"].as_str().unwrap_or_default().to_string();
+    assert!(listed.contains("browser:a") && listed.contains("on Ada's Mac"), "{listed}");
+    assert!(listed.contains("browser:s") && listed.contains("on Studio"), "{listed}");
+
+    send(&mut window, 3, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:s" } })).await;
+    let call = event(&mut studio, "browser-call").await;
+    assert_eq!(call["tab"], "browser:s");
+    send(&mut studio, 3, "browser_ack", json!({ "callId": call["callId"] })).await;
+    send(&mut studio, 4, "browser_result", json!({ "callId": call["callId"], "ok": true, "result": [] })).await;
+    assert_eq!(response(&mut window, 3).await["ok"], true);
+
+    // Ada's Mac leaves: its tab says where it went.
+    ada.close(None).await.expect("close");
+    drop(ada);
+    let error = loop {
+        send(&mut window, 4, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } })).await;
+        let answer = response(&mut window, 4).await;
+        let error = answer["error"].as_str().unwrap_or_default().to_string();
+        if error.contains("no longer connected") {
+            break error;
+        }
+        // Not yet seen as gone: the call reached nobody who answers it.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(error.contains("browser:a was on Ada's Mac"), "{error}");
+
+    // A strip saved here is announced to every client, and listed for main.
+    send(&mut window, 5, "state_set", strip("browser:local")).await;
+    next_where(&mut studio, |v| v["event"] == "browser-pages-changed").await;
+    send(&mut window, 6, "browser_pages_list", json!({})).await;
+    let pages = response(&mut window, 6).await["result"].clone();
+    assert_eq!(pages, json!([{ "pageId": "browser:local", "context": "w1", "url": "http://localhost:5173/", "title": "App" }]));
+}
