@@ -82,6 +82,29 @@ pub fn tmp(name: &str) -> PathBuf {
     layout().data.join("tmp").join(name)
 }
 
+/// How long what `tmp/` holds is kept. A paste or an upload is read by the
+/// turn it was sent with; a chat that shows it later finds it gone, as it did
+/// when macOS cleared the system temp dir after three days.
+pub const TMP_KEEP: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+/// Deletes what `tmp/<use>/` holds that was last changed before `older_than`
+/// ago, and returns how many entries went. Run once at startup.
+pub fn sweep_tmp(older_than: std::time::Duration) -> usize {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(older_than) else { return 0 };
+    let uses = std::fs::read_dir(layout().data.join("tmp")).into_iter().flatten().flatten();
+    let mut gone = 0;
+    for entry in uses.flat_map(|dir| std::fs::read_dir(dir.path()).into_iter().flatten().flatten()) {
+        let old = entry.metadata().and_then(|meta| meta.modified()).is_ok_and(|changed| changed < cutoff);
+        if !old {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        gone += usize::from(removed.is_ok());
+    }
+    gone
+}
+
 /// Where the worktrees Crew makes go: `<work>/worktrees/<repo>/<branch>`.
 pub fn worktrees() -> PathBuf {
     layout().work.join("worktrees")
@@ -130,6 +153,27 @@ mod tests {
         let data = temp();
         std::fs::write(data.join(LAYOUT_FILE), "{ not json").unwrap();
         assert!(Layout::read(&data).is_err_and(|e| e.contains(LAYOUT_FILE)));
+    }
+
+    #[test]
+    fn what_tmp_held_for_a_week_goes_and_the_rest_stays() {
+        let old = tmp("files").join(format!("old-{}.png", uuid::Uuid::new_v4()));
+        let fresh = tmp("files").join(format!("fresh-{}.png", uuid::Uuid::new_v4()));
+        let old_run = tmp("opencode").join(format!("old-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&old_run).unwrap();
+        std::fs::create_dir_all(tmp("files")).unwrap();
+        std::fs::write(old_run.join("config.json"), "{}").unwrap();
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&fresh, "x").unwrap();
+        let week_ago = std::time::SystemTime::now() - TMP_KEEP - std::time::Duration::from_secs(60);
+        for path in [&old, &old_run] {
+            std::fs::File::open(path).unwrap().set_modified(week_ago).unwrap();
+        }
+
+        assert!(sweep_tmp(TMP_KEEP) >= 2);
+
+        assert!(!old.exists() && !old_run.exists());
+        assert!(fresh.exists());
     }
 
     #[test]

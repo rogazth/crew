@@ -807,6 +807,9 @@ fn pty_command(
         cmd.env("HOME", &home);
     }
     crate::child_env::scrub(&mut cmd);
+    // After the scrub: `crew` typed in a terminal reaches this daemon, not
+    // whichever one the installed app runs.
+    cmd.env("CREW_DATA_DIR", &crate::paths::layout().data);
     // The background as rxvt spells it (white 15, black 0). An OSC 11 reply has
     // to cross the network from the window, and CLIs that wait a few dozen ms
     // for it (Cursor waits 60) then guess dark without this.
@@ -1630,5 +1633,22 @@ mod tests {
             thread::sleep(Duration::from_millis(50));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `crew` typed in a terminal finds this environment's daemon, whatever
+    /// the app that opened the window was started with.
+    #[test]
+    fn a_terminal_names_its_daemons_data_dir() {
+        let out = std::env::temp_dir().join(format!("crew-pty-datadir-{}", uuid::Uuid::new_v4()));
+        let host = PtyHost::new();
+        let script = format!("printf %s \"$CREW_DATA_DIR\" > {:?}", out.to_string_lossy());
+        host.spawn("t".into(), "/".into(), vec!["/bin/sh".into(), "-c".into(), script], 80, 24, None).expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::read_to_string(&out).map_or(true, |text| text.is_empty()) {
+            assert!(Instant::now() < deadline, "the terminal never wrote");
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), crate::paths::layout().data.to_string_lossy());
+        let _ = std::fs::remove_file(&out);
     }
 }

@@ -223,6 +223,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
     // Before anything writes a file: where this environment keeps what is not
     // in the data dir itself.
     crew_core::paths::init(crew_core::paths::Layout::read(dir).map_err(Failure::Permanent)?);
+    crew_core::paths::sweep_tmp(crew_core::paths::TMP_KEEP);
     // The folder terminal sessions' hooks once dropped their records in.
     let _ = std::fs::remove_dir_all(dir.join("claude-bind"));
     // Before anything else is opened: a daemon already serving this data dir

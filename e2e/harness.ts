@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { chmod, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
@@ -143,7 +143,11 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   if (opts.dir === undefined) await sweepDeadSandboxes();
   // Resolved, as crewd and git spell it: /tmp is /private/tmp on macOS.
   const root = opts.dir ?? (await realpath(await mkdtemp("/tmp/ce-")));
-  if (opts.dir === undefined) await writeFile(path.join(root, OWNER_FILE), String(process.pid));
+  if (opts.dir === undefined) {
+    await writeFile(path.join(root, OWNER_FILE), String(process.pid));
+    // scripts/e2e.mjs checks, once the run ends, that nothing names it any more.
+    if (process.env.CREW_E2E_RUN_LOG) await appendFile(process.env.CREW_E2E_RUN_LOG, `${root}\n`);
+  }
   const home = path.join(root, "home");
   const config = path.join(root, "config");
   const repos = path.join(root, "repos");
@@ -344,6 +348,9 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     // The spec's own process: the app and every crewd it starts outside a
     // child's stdin end with it, even when the spec is killed mid-test.
     CREW_E2E_OWNER_PID: String(process.pid),
+    // crewd looks for CLIs only on this PATH: the machine's Homebrew and login
+    // shell hold the real codex and opencode.
+    CREW_SANDBOX: "1",
   };
 }
 

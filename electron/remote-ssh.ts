@@ -52,9 +52,10 @@ export function remoteLayout(channel: Channel): RemoteLayout {
     case "release":
       return { unit: "crewd", home: ".crew", port: DEFAULT_PORT };
     case "local":
-      return { unit: "crewd-local", home: ".crew-local", port: DEFAULT_PORT + 1 };
+      // Two apart: a daemon's SOCKS listener takes the port after its own.
+      return { unit: "crewd-local", home: ".crew-local", port: DEFAULT_PORT + 2 };
     case "dev":
-      return { unit: "crewd-dev", home: ".crew-dev", port: DEFAULT_PORT + 2 };
+      return { unit: "crewd-dev", home: ".crew-dev", port: DEFAULT_PORT + 4 };
   }
 }
 

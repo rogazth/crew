@@ -90,19 +90,36 @@ folder (it is stored by id).
   other `eprintln!`s still panic on a closed stderr.
 
 **3. Checks.**
-- After each e2e run: nothing new outside the sandbox (`~/.crew*`,
-  `$TMPDIR/crew*`, `Application Support/Crew*`, `~/Downloads`), and no live
-  process whose argv names the sandbox.
-- A test that fails on `temp_dir()`, `var("HOME")` or `os.tmpdir()` outside
-  `paths.rs` and an allowlist (provider state, tests).
+- After each e2e run (`scripts/e2e.mjs`, `scripts/e2e-leaks.mjs`): the
+  harness writes every sandbox it makes to `$CREW_E2E_RUN_LOG`; once the
+  specs end, the run fails if a live process names one (killed), one is still
+  on disk (deleted, unless `E2E_KEEP`), a real app's database has a workspace
+  in one, or a real build's worktree folder has a worktree of one. Only this
+  run's sandboxes count, so concurrent runs and the user's apps are never
+  taken for leaks. Verified with a spec that leaves a process: it passes, the
+  run fails, the process is killed.
+- `crates/crew-core/tests/own_files.rs` and `electron/own-files.test.ts`
+  fail on `temp_dir()`, `HOME`, `homedir()` or `tmpdir()` in production code
+  outside a list that gives each file's reason (provider state, the user's
+  install dirs, `~/.ssh/config`, …); a file that no longer needs its entry
+  fails too. Verified by adding a `temp_dir()` and a `tmpdir()`: both fail.
+- Not checked: `~/Downloads` and `$TMPDIR` (other activity on the machine
+  writes there); phase 4 moves e2e downloads into the sandbox instead.
 
 **4. Smaller leaks.**
-- crewd exports `CREW_DATA_DIR` into every PTY and process it starts.
-- Keychain name and `crew` link per build (`Crew Dev`, `crew-dev`).
-- Remote ports two apart.
-- e2e: its own downloads folder, and a CLI lookup without the fixed
-  Homebrew dirs.
-- `tmp/` swept by age at crewd start.
+- crewd exports `CREW_DATA_DIR` into every terminal and supervised process:
+  `crew` typed in the dev app reaches the dev daemon. e2e `cli-command`
+  checks it from a terminal with nothing set by hand (and fails without it).
+- Each build its own name: app `Crew` / `Crew Local` / `Crew Dev` (the
+  keychain item follows), `crew` / `crew-local` / `crew-dev` on the PATH
+  (`electron/channel.ts`). A dev data dir's remote tokens, sealed under the
+  old shared key, have to be paired again.
+- Remote ports two apart: 17877, 17879, 17881 (a daemon's SOCKS listener is
+  the port after it). Machines already set up keep their port until set up
+  again.
+- e2e: downloads under the sandbox's data dir; `CREW_SANDBOX` keeps crewd's
+  CLI lookup to the sandbox's PATH (no Homebrew, no login shell).
+- `<data>/tmp` swept at crewd start of what is over a week old.
 
 ## Status
 
@@ -110,5 +127,5 @@ folder (it is stored by id).
 |---|---|
 | 1. Layout | done |
 | 2. Process ownership | done |
-| 3. Checks | — |
-| 4. Smaller leaks | — |
+| 3. Checks | done |
+| 4. Smaller leaks | done |

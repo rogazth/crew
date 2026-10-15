@@ -30,6 +30,7 @@ import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./dae
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
 import { watchOwner } from "./owner";
+import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
@@ -454,7 +455,8 @@ if (refused) {
   console.error(refused);
   app.exit(1);
 }
-app.setName(local ? "Crew Local" : "Crew");
+// The name also keys the app's item in the login keychain: each build its own.
+app.setName(appName(channelOf(app.isPackaged, release)));
 // An e2e app outlives a spec killed on a timeout unless it watches for that.
 const owner = Number(process.env.CREW_E2E_OWNER_PID);
 if (e2e && owner > 1) watchOwner(owner, () => app.exit(1));
@@ -463,6 +465,8 @@ if (!(app.isPackaged && release))
     "userData",
     process.env.CREW_USER_DATA || path.join(app.getPath("appData"), local ? "Crew Local" : "Crew Dev"),
   );
+// What an e2e run's pages download stays in its sandbox.
+if (e2e) app.setPath("downloads", path.join(app.getPath("userData"), "Downloads"));
 // Before crewd reads it, and only once: the folders a data dir works in are
 // part of the environment, fixed when it is made.
 writeLayout(app.isPackaged && release);

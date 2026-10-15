@@ -32,8 +32,8 @@ describe("linux installer", () => {
     for (const key of ["unit", "home", "port"] as const) {
       expect(new Set(layouts.map((layout) => layout[key])).size).toBe(3);
     }
-    const dev = serviceUnit("100.127.204.79", 17879, remoteLayout("dev"));
-    expect(dev).toContain("ExecStart=%h/.crew-dev/bin/crewd serve --listen 100.127.204.79:17879 --data-dir %h/.crew-dev/data");
+    const dev = serviceUnit("100.127.204.79", 17881, remoteLayout("dev"));
+    expect(dev).toContain("ExecStart=%h/.crew-dev/bin/crewd serve --listen 100.127.204.79:17881 --data-dir %h/.crew-dev/data");
     expect(dev).not.toContain("%h/.crew/");
   });
 

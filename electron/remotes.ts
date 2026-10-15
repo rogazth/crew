@@ -11,6 +11,7 @@ import { setRemoteResolver } from "./browser/files";
 import { setMachines } from "./browser/guests";
 import type { Upstream } from "./browser/remote-proxy";
 import { release } from "./build-info";
+import { channelOf } from "./channel";
 import { daemonLogs, installDaemon, remoteLayout, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
 import { dropToken, getToken, putToken } from "./remote-tokens";
 import { sshHosts } from "./ssh-config";
@@ -35,7 +36,7 @@ export function linuxBinary(arch: "x64" | "arm64"): string | null {
 
 /** This app's crewd on a machine: the release's, or a dev or local build's own beside it. */
 function layout() {
-  return remoteLayout(app.isPackaged ? (release ? "release" : "local") : "dev");
+  return remoteLayout(channelOf(app.isPackaged, release));
 }
 
 export function registerRemoteIpc(getDaemon: () => Daemon | null): void {

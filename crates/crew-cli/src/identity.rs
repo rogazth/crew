@@ -60,8 +60,8 @@ pub fn in_session(env: &Env) -> bool {
 /// skips process approval and can stop the daemon under every other session.
 /// Only `--as-user` gets out, and it says what it does. Naming a data dir does
 /// not: an agent reaches for `--data-dir` to find its daemon, not to become
-/// someone else. `CREW_DATA_DIR` is not a way out either; the dev app exports
-/// it and its sessions inherit it.
+/// someone else. `CREW_DATA_DIR` is not a way out either: crewd exports its
+/// own into every terminal and process it starts, and its sessions inherit it.
 pub fn choose(global: &Global, env: &Env) -> Result<Source, CliError> {
     if global.as_user || !in_session(env) {
         return Ok(Source::User { data_dir: data_dir(global.data_dir.as_deref(), env)? });

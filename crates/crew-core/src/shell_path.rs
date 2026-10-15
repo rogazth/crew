@@ -34,6 +34,14 @@ pub fn search_dirs() -> Vec<PathBuf> {
 /// already moved past: opencode 1.x sits in `~/.opencode/bin`, while the shell
 /// finds 2.x through fnm.
 fn ordered_dirs(login_first: bool) -> Vec<PathBuf> {
+    // A sandbox (`CREW_SANDBOX`, set by the e2e harness) finds CLIs only where
+    // its own PATH says: the machine's Homebrew and its login shell hold the
+    // real ones, which a test must never start.
+    let sandboxed = std::env::var_os("CREW_SANDBOX").is_some_and(|value| !value.is_empty());
+    dirs_for(login_first, sandboxed)
+}
+
+fn dirs_for(login_first: bool, sandboxed: bool) -> Vec<PathBuf> {
     let mut fixed: Vec<PathBuf> = Vec::new();
     if let Some(home) = home_dir().map(PathBuf::from) {
         fixed.push(home.join(".local/bin"));
@@ -42,11 +50,13 @@ fn ordered_dirs(login_first: bool) -> Vec<PathBuf> {
         fixed.push(home.join(".cargo/bin"));
         fixed.push(home.join(".npm-global/bin"));
     }
-    fixed.push(PathBuf::from("/opt/homebrew/bin"));
-    fixed.push(PathBuf::from("/usr/local/bin"));
+    if !sandboxed {
+        fixed.push(PathBuf::from("/opt/homebrew/bin"));
+        fixed.push(PathBuf::from("/usr/local/bin"));
+    }
     fixed.push(PathBuf::from("/usr/bin"));
     fixed.push(PathBuf::from("/bin"));
-    let login = login_path().as_deref().map(split_path).unwrap_or_default();
+    let login = if sandboxed { Vec::new() } else { login_path().as_deref().map(split_path).unwrap_or_default() };
     let inherited = std::env::var("PATH").map(|path| split_path(&path)).unwrap_or_default();
     let mut dirs = if login_first { [login, fixed, inherited].concat() } else { [fixed, login, inherited].concat() };
     let mut seen = std::collections::HashSet::new();
@@ -257,5 +267,15 @@ mod tests {
         let started = Instant::now();
         assert_eq!(version_line_within(&hung, Duration::from_millis(300)), None);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_sandbox_looks_past_neither_homebrew_nor_the_login_shell() {
+        let dirs = dirs_for(false, true);
+        for real in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let inherited = std::env::var("PATH").unwrap_or_default().split(':').any(|dir| dir == real);
+            assert_eq!(dirs.contains(&PathBuf::from(real)), inherited, "{real}: {dirs:?}");
+        }
+        assert!(dirs_for(false, false).contains(&PathBuf::from("/opt/homebrew/bin")));
     }
 }
