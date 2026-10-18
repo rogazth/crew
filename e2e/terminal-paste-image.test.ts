@@ -8,7 +8,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { addRemote, launchCrew, MOD, pressChord, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, typeInTerminal, waitFor, withSystemClipboard, type Crew, type RemoteDaemon } from "./harness.ts";
 
 /** A 2×2 PNG, as a clipboard would hold a screenshot. */
 const PNG = Buffer.from(
@@ -21,15 +21,17 @@ async function pasteImageInto(crew: Crew, out: string): Promise<void> {
   // As a screenshot sits there: PNG data and nothing else.
   const png = path.join(crew.root, "clip.png");
   await writeFile(png, PNG);
-  await promisify(execFile)("osascript", ["-e", `set the clipboard to (read (POSIX file "${png}") as «class PNGf»)`]);
   await typeInTerminal(crew, "clear");
   await crew.window.keyboard.type("cp ");
-  // ⌘V is the Edit menu's paste, which a synthetic key press does not reach.
-  await crew.app.evaluate(({ BrowserWindow }) => {
-    for (const window of BrowserWindow.getAllWindows()) if (window.webContents.getURL().includes("index.html")) window.webContents.paste();
+  await withSystemClipboard(async () => {
+    await promisify(execFile)("osascript", ["-e", `set the clipboard to (read (POSIX file "${png}") as «class PNGf»)`]);
+    // ⌘V is the Edit menu's paste, which a synthetic key press does not reach.
+    await crew.app.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) if (window.webContents.getURL().includes("index.html")) window.webContents.paste();
+    });
+    // The path arrives once the bytes are written, after the keys typed so far.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   });
-  // The path arrives once the bytes are written, after the keys typed so far.
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
   await crew.window.keyboard.type(` ${out}`);
   await crew.window.keyboard.press("Enter");
   await waitFor(() => existsSync(out), { message: `the pasted image is copied to ${out}`, timeout: 10_000 });

@@ -21,13 +21,11 @@ const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/de
 
 let crew: Crew;
 let chat: Session;
-let cwd: string;
 
 before(async () => {
   crew = await launchCrew();
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  cwd = workspace.path;
   await crew.request("state_set", {
     key: "providers:default",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
@@ -102,7 +100,7 @@ test("what the session started is one line under the composer, and its sheet lis
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 2, texts.join("\n"));
   assert.match(texts[0]!, /web.*Process · \d+s/, "running work comes first");
-  assert.match(texts[1]!, /Lint pass.*Subagent · done after/, "then what ended");
+  assert.match(texts[1]!, /Lint pass.*Subagent · Ling 3\.0 Flash · done after/, "then what ended");
   assert.equal(await sheet().getByRole("button", { name: "Clear finished" }).count(), 1);
   await rows().nth(0).waitFor();
   assert.equal(await rows().nth(0).getAttribute("aria-selected"), "true");
@@ -275,11 +273,11 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   const row = rows().nth(0);
   await row.waitFor();
   const text = await row.textContent();
-  assert.match(text ?? "", /Explore the repo.*Subagent · \d+s · 41k tokens · Reading README\.md/, text ?? "");
+  assert.match(text ?? "", /Explore the repo.*Subagent · Opus 5\.5 · \d+s · 41k tokens · Reading README\.md/, text ?? "");
   assert.equal(await row.getByRole("button", { name: "Stop" }).count(), 1, "a subagent can be stopped alone");
 
   await crew.window.keyboard.press("x");
-  await rows().filter({ hasText: "Subagent · stopped" }).waitFor();
+  await rows().filter({ hasText: "Subagent · Opus 5.5 · stopped" }).waitFor();
   assert.ok((await controls()).includes("stop_task ag1"), (await controls()).join("\n"));
   const board = await crew.request<{ commands: { id: string; state: string; tokens?: number }[] }>("background_list", { sessionId: chat.id });
   assert.deepEqual([board.commands[0]?.id, board.commands[0]?.state, board.commands[0]?.tokens], ["ag1", "stopped", 41_300]);
@@ -306,7 +304,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   await sheet().waitFor();
   await waitFor(async () => (await rows().count()) >= 3, { message: "three entries are listed" });
   const texts = (await rows().allTextContents()).join("\n");
-  assert.match(texts, /Explore the repo.*Subagent · stopped/, texts);
+  assert.match(texts, /Explore the repo.*Subagent · Opus 5\.5 · stopped/, texts);
   assert.match(texts, /billing-ui.*Session ·/, texts);
   assert.match(texts, /Shell.*Shell · \d+s/, texts);
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "work-sheet.png") });
@@ -320,11 +318,11 @@ async function openWorkSheet(): Promise<void> {
 
 test("a native subagent opens with no composer and a read-only footer, and x stops it", async () => {
   const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
-  // The one the CLI ran before has ended: it runs another.
+  // It runs a third: the first was stopped, the second still runs, and the newest is listed first.
   await send("agent");
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
   await openWorkSheet();
-  await rows().filter({ hasText: /Explore the repo.*Subagent · \d+s/ }).first().click();
+  await rows().filter({ hasText: /Explore the repo.*Subagent · Opus 5\.5 · \d+s/ }).first().click();
   await sheet().waitFor({ state: "detached" });
 
   const page = crew.window.locator("[data-agent-view]");
@@ -338,7 +336,7 @@ test("a native subagent opens with no composer and a read-only footer, and x sto
 
   await crew.window.keyboard.press("x");
   await page.getByText("Stopped", { exact: true }).waitFor();
-  assert.ok((await controls()).includes("stop_task ag2"), (await controls()).join("\n"));
+  assert.ok((await controls()).includes("stop_task ag3"), (await controls()).join("\n"));
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
   await composer().waitFor();
@@ -375,8 +373,9 @@ test("a native subagent's call is one row and one card with the sheet's state, a
 
   // The sheet says the same of the same agent.
   await openWorkSheet();
-  const listed = flat((await rows().allInnerTexts()).join(" | "));
-  const state = /Subagent · (stopped|done|failed)/.exec(listed)?.[1] ?? "running";
+  // The sheet lists the newest subagent first: the one the card is.
+  const listed = flat((await rows().allInnerTexts()).find((text) => text.includes("Subagent ·")) ?? "");
+  const state = /Subagent · (?:[^·]+ · )?(stopped|done|failed)/.exec(listed)?.[1] ?? "running";
   assert.match(flat(await card.innerText()), /Look around.*41k tokens/);
   assert.ok(flat(await card.innerText()).includes(state === "running" ? "Reading README.md" : state), `${await card.innerText()} vs ${listed}`);
   await crew.window.keyboard.press("Escape");

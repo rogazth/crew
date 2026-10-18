@@ -207,9 +207,10 @@ function serve() {
 
   /** The subagents sent to the background, by task id, with the call that started each. */
   const agents = new Map();
+  let started = 0;
 
   function startAgent() {
-    const n = agents.size + 1;
+    const n = ++started;
     const task = `ag${n}`;
     const call = `toolu_ag${n}`;
     agents.set(task, call);

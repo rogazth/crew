@@ -627,6 +627,33 @@ export async function returnToWindow(crew: Crew): Promise<void> {
 
 type Truthy<T> = Exclude<T, null | undefined | false | 0 | "">;
 
+/**
+ * Runs `fn` while no other spec of this run writes the Mac's clipboard: there
+ * is one for the whole machine, and specs run three at a time. The lock is a
+ * folder beside the run's log, so it goes with the run.
+ */
+export async function withSystemClipboard<T>(fn: () => Promise<T>): Promise<T> {
+  const log = process.env.CREW_E2E_RUN_LOG;
+  if (!log) return fn();
+  const lock = path.join(path.dirname(log), "clipboard.lock");
+  const until = Date.now() + 120_000;
+  for (;;) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() >= until) throw new Error("another spec held the clipboard for two minutes");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
+}
+
 /** Polls until `fn` returns something truthy, retrying through throws. */
 export async function waitFor<T>(
   fn: () => T | Promise<T>,

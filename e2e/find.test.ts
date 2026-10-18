@@ -81,7 +81,7 @@ function lineOnScreen(text: string): Promise<boolean> {
 }
 
 async function shows(text: string, message: string): Promise<void> {
-  const ok = await waitFor(() => lineOnScreen(text), { timeout: 3000 }).catch(() => false);
+  const ok = await waitFor(() => lineOnScreen(text)).catch(() => false);
   assert.ok(ok, message);
 }
 
@@ -106,6 +106,17 @@ test("↵ in the code editor's search brings each next match on screen", async (
 
 test("⌘D brings the match it adds on screen", async () => {
   await editor().click();
+  // The search bar the test before closed can hold the keyboard a moment longer.
+  await waitFor(
+    () =>
+      editor().evaluate((el) => {
+        // The editor lives in a shadow root: the document's active element is its host.
+        let active = document.activeElement;
+        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        return el.contains(active);
+      }),
+    { message: "the editor has the keyboard" },
+  );
   await crew.window.keyboard.press(`${MOD}+ArrowUp`);
   await shows("needle = 1;", "the caret starts at the top");
   await crew.window.keyboard.press(`${MOD}+d`);

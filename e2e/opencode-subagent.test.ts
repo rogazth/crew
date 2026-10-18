@@ -99,7 +99,7 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
   await sheet().waitFor();
   const rows = await sheet().getByRole("option").allTextContents();
   assert.equal(rows.length, 1, rows.join("\n"));
-  assert.match(rows[0]!, /Reply with pong.*Subagent · done/s, rows[0]);
+  assert.match(rows[0]!, /Reply with pong.*Subagent · (?:[^·]+ · )?done/s, rows[0]);
   await shoot("work");
   await crew.window.keyboard.press("Escape");
   await sheet().waitFor({ state: "detached" });
@@ -107,8 +107,10 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
 
 test("Stop on a running subagent ends the child and not the parent's turn", async () => {
   const before = (await interrupts()).length;
+  // The card of the test before is there already: wait for this call's own.
+  const cards = await crew.window.locator("[data-agent-card]").count();
   await send("hold on SUBAGENT SLOW");
-  await card().waitFor({ timeout: 20_000 });
+  await waitFor(async () => (await crew.window.locator("[data-agent-card]").count()) > cards, { timeout: 20_000, message: "the call's card shows" });
   await card().click();
   await page().waitFor();
   await page().getByText("echo child").first().waitFor();
