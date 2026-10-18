@@ -282,9 +282,11 @@ F's `Hang`). Names of agents and bots are `PeerName`s (mark or face + name, in
 - **Can the user write to a native subagent?** Decided 2026-10-17: no, for
   any provider, now or later. A native subagent is its parent's to talk to;
   its thread has no composer.
-- **Should a session's x in the sheet interrupt or stop it?** Recommendation:
-  interrupt (decision 7). It is the user's session; ending its process is the
-  sidebar's job.
+- **Should a session's x in the sheet interrupt or stop it?** Decided
+  2026-10-17: interrupt (decision 7). It is the user's session; ending its
+  process is the sidebar's job. The sheet's Stop already sends `turn_stop`,
+  the same stop `interrupt_session` makes; `e2e/background-panel.test.ts`
+  holds it.
 - **Does an independent session opened in place need "Open in its tab"?**
   The user said never a new tab. Recommendation: no button; the sidebar row
   is the way to its own tab, and it is one click away.

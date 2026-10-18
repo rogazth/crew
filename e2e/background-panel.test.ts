@@ -389,3 +389,40 @@ test("a native subagent's call is one row and one card with the sheet's state, a
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
 });
+
+// Plan 2026-10-12 (decision 7): a session's x interrupts its turn and never
+// ends it. It is the user's session; ending its process is the sidebar's job.
+test("x on a session the chat launched interrupts its turn and leaves the session running", async () => {
+  if (await sheet().isVisible()) {
+    await crew.window.keyboard.press("Escape");
+    await sheet().waitFor({ state: "detached" });
+  }
+  const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
+  await run(CREW, ["sessions", "start", "--provider", "claude", "--name", "refunds-api", "--", "work 60"], { env: await sessionEnv() });
+  const launched = await waitFor(
+    async () => (await sessions(crew, chat.workspaceId)).find((row) => row.launchedBy === chat.id && row.name === "refunds-api"),
+    { timeout: 20_000, message: "the launched session reaches crewd" },
+  );
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: launched.id })).status === "working", {
+    timeout: 20_000,
+    message: "its turn runs",
+  });
+  const before = await interrupts();
+
+  await openWorkSheet();
+  const row = rows().filter({ hasText: "refunds-api" });
+  await row.waitFor();
+  await row.getByRole("button", { name: "Stop" }).click();
+
+  await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: launched.id })).status === "idle", {
+    timeout: 20_000,
+    message: "its turn ends",
+  });
+  const launch = (await crew.claudeLaunches()).find((one) => one.argv.includes(launched.id));
+  assert.ok(launch, "the session's CLI started");
+  assert.doesNotThrow(() => process.kill(launch.pid, 0), "the session's CLI is still alive");
+  assert.notEqual((await crew.request<Session>("session_get", { id: launched.id })).status, "exited");
+  await crew.window.keyboard.press("Escape");
+  await sheet().waitFor({ state: "detached" });
+});
