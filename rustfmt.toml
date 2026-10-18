@@ -1,0 +1,4 @@
+# Closest to how the code was written by hand (fewest lines moved when adopted).
+edition = "2021"
+max_width = 130
+use_small_heuristics = "Max"

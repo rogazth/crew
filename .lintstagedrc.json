@@ -1,3 +1,4 @@
 {
-  "src/**/*.{ts,tsx}": "eslint --fix"
+  "src/**/*.{ts,tsx}": "eslint --fix",
+  "crates/**/*.rs": "rustfmt"
 }
