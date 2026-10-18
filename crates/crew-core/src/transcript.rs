@@ -143,6 +143,15 @@ impl TranscriptHub {
         }
     }
 
+    /// `f` over the session's blocks, under the lock: for a reader that needs
+    /// a few of them, or one line from each, and not a copy of all of them.
+    /// Keep `f` short; every write to the transcript waits for it.
+    pub fn read<R>(&self, session_id: &str, f: impl FnOnce(&[Block]) -> R) -> R {
+        self.ensure(session_id);
+        let map = self.lock();
+        f(map.get(session_id).map(|row| row.blocks.as_slice()).unwrap_or_default())
+    }
+
     /// How many blocks the transcript holds: the cursor a child session's
     /// events are written at.
     pub fn len(&self, session_id: &str) -> usize {

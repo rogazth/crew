@@ -1249,11 +1249,7 @@ impl TurnHost {
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A session that
         // carries on its provider's own conversation is handed none.
-        let history = if carries {
-            None
-        } else {
-            working_set::history(&self.transcripts.window(&params.session_id, Some(working_set::TAIL_BLOCKS), None).blocks)
-        };
+        let history = if carries { None } else { self.transcripts.read(&params.session_id, working_set::history) };
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the

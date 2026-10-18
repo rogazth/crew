@@ -103,6 +103,6 @@ back on the one thing that always survived: their description.
 
 | Phase | State |
 |---|---|
-| 1. The trail | planned |
+| 1. The trail | done |
 | 2. One `read_session` | planned |
 | 3. Notes | planned |
