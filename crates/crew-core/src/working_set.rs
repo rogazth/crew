@@ -59,8 +59,9 @@ pub fn render(blocks: &[Block], budget: usize, harness: Harness) -> Option<Strin
         "## The conversation so far\n\nThis turn starts a new session, so what follows is your \
          own memory of it: what was said, and what you did about it.",
     );
-    // Something before the first line kept that the trail would have shown.
-    if blocks[..first].iter().any(|block| parts(block, false).is_some()) {
+    // Something before the first line kept; the model's own thinking is never
+    // shown, so that alone is not missing.
+    if blocks[..first].iter().rev().any(|block| block.role != BlockRole::Reasoning) {
         let read = harness.spell("read_session");
         out.push_str(&format!(
             " What came before block {} of this conversation is not here: {read} with a query finds it, and with \

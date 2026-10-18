@@ -1636,9 +1636,7 @@ mod tests {
         let names = listed(&store, &transcripts, &shell);
         assert_eq!(names, visible_names(CallerKind::Terminal));
         assert!(names.iter().any(|name| name == "create_bot"), "{names:?}");
-        for none in ["update_description"] {
-            assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
-        }
+        assert!(!names.iter().any(|name| name == "update_description"), "{names:?}");
     }
 
     #[test]

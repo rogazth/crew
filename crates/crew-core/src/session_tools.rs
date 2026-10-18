@@ -1508,6 +1508,10 @@ impl SessionTools {
         if read.tools && !roles.contains(&"tool") {
             roles.push("tool");
         }
+        // A question or an approval reads as a tool line, and is stored as itself.
+        if roles.contains(&"tool") {
+            roles.extend(["approval", "question"]);
+        }
         let found = crate::messages::find(
             &self.store,
             crew_protocol::SearchQuery {
@@ -1884,8 +1888,11 @@ impl Read<'_> {
         let mut spent: usize = lines.iter().map(|(_, line)| line.len() + 1).sum();
         while spent > self.budget && lines.len() > 1 {
             let (first, last) = (lines[0].0, lines[lines.len() - 1].0);
-            let (gone, edge) =
-                if index - first >= last - index { (lines.remove(0), true) } else { (lines.pop().unwrap_or_default(), false) };
+            let (gone, edge) = if index.abs_diff(first) >= last.abs_diff(index) {
+                (lines.remove(0), true)
+            } else {
+                (lines.pop().unwrap_or_default(), false)
+            };
             spent -= gone.1.len() + 1;
             if edge {
                 start = gone.0 + 1;
@@ -5429,6 +5436,11 @@ time.sleep(600)
         assert!(text.starts_with(&format!("#{} ", at - 1)) && text.contains("7731942"), "{around}");
         assert_eq!(around["start"], at - 2);
         assert_eq!(around["cursor"], at + 1);
+        // Filtered to lines that all come after the block asked for, and over
+        // budget: the farthest goes first, and the nearest stays.
+        let after = json!({ "around": 1, "window": 5, "roles": ["assistant"], "max_bytes": 10 });
+        let after = w.call(&bot, "read_session", after).expect("around, filtered");
+        assert_eq!(after["text"], "#3 [assistant] La encontré.", "{after}");
         let gone = w.call(&bot, "read_session", json!({ "around": 999 }));
         assert!(gone.is_err_and(|e| e.contains("no block #999")));
     }

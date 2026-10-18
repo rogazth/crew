@@ -105,4 +105,4 @@ back on the one thing that always survived: their description.
 |---|---|
 | 1. The trail | done |
 | 2. One `read_session` | done |
-| 3. Notes | planned |
+| 3. Notes | done |
