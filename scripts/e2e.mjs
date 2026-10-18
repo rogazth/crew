@@ -7,6 +7,7 @@
 //   E2E_SKIP_BUILD=1 npm run e2e       → reuse dist/ as it is
 //   E2E_KEEP=1 npm run e2e             → leave each run's data directory behind
 //   npm run e2e -- --test-concurrency=1  → one spec file at a time
+//   npm run e2e -- --test-timeout=0    → no per-test timeout (default 5 min)
 //
 // Other --flags go to `node --test` (e.g. --test-name-pattern=...).
 //
@@ -69,7 +70,16 @@ if (process.env.E2E_SKIP_BUILD !== "1") {
 const passedConcurrency = flags.some(
   (arg) => arg === "--test-concurrency" || arg.startsWith("--test-concurrency="),
 );
-const test = ["--test", ...(passedConcurrency ? [] : ["--test-concurrency=3"]), ...flags, ...files];
+// A test that hangs fails after five minutes instead of holding the run
+// forever; a --test-timeout already passed wins.
+const passedTimeout = flags.some((arg) => arg === "--test-timeout" || arg.startsWith("--test-timeout="));
+const test = [
+  "--test",
+  ...(passedConcurrency ? [] : ["--test-concurrency=3"]),
+  ...(passedTimeout ? [] : ["--test-timeout=300000"]),
+  ...flags,
+  ...files,
+];
 // Electron needs a display. xvfb-run's default screen is 640x480 at 8 bits,
 // smaller than the window's minimum size.
 const headless = process.platform === "linux" && !process.env.DISPLAY;
