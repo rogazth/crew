@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import { BotAvatar } from "../chrome/BotAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
@@ -28,23 +28,46 @@ import { EnvironmentSettings } from "./EnvironmentSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { SessionSettings } from "./SessionSettings";
 import { TerminalSettings } from "./TerminalSettings";
+import { useRedesign } from "../prototype/design-system/direction";
+
+// PROTOTYPE — throwaway: with a redesign direction on (dev only), the redesigned pages stand in.
+const RedesignedSettingsPage = lazy(() =>
+  import("../prototype/design-system/settings/SettingsPages").then((m) => ({ default: m.RedesignedSettingsPage })),
+);
 
 const TAB_SCOPES: Option<TabScope>[] = [
   { value: "worktree", label: "Per worktree" },
   { value: "all", label: "All together" },
 ];
 
-export function SettingsView({
-  section,
-  workspaces,
-  onConfirm,
-  onOpenTerminal,
-}: {
+type Props = {
   section: SettingsSectionId;
   workspaces: Workspace[];
   onConfirm: (confirm: Confirm) => void;
   onOpenTerminal: (envId: string) => Promise<void>;
-}) {
+};
+
+export function SettingsView(props: Props) {
+  const redesign = useRedesign();
+  return redesign ? <RedesignedSettings {...props} /> : <ClassicSettingsView {...props} />;
+}
+
+/** PROTOTYPE — throwaway: the redesign's page for the section, fed the real installed CLIs. */
+function RedesignedSettings({ section, workspaces, onOpenTerminal }: Props) {
+  const { installed } = useDefaultAgent();
+  return (
+    <Suspense fallback={<div className="h-full" />}>
+      <RedesignedSettingsPage
+        section={section}
+        workspaces={workspaces}
+        onOpenTerminal={onOpenTerminal}
+        installed={installed.map((provider) => provider.id)}
+      />
+    </Suspense>
+  );
+}
+
+function ClassicSettingsView({ section, workspaces, onConfirm, onOpenTerminal }: Props) {
   const meta = settingsSection(section);
   return (
     <div className="h-full overflow-y-auto">
@@ -58,7 +81,7 @@ export function SettingsView({
           {section === "notifications" && <NotificationSettings />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
-          {section === "browser" && <Browser />}
+          {section === "browser" && <BrowserSettings />}
           {section === "environments" && <EnvironmentSettings workspaces={workspaces} onOpenTerminal={onOpenTerminal} />}
           {section === "providers" && <Providers />}
           {section !== "general" &&
@@ -84,7 +107,7 @@ function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
       <SettingsSection title="Worktrees">
         <SettingsRow
           label="Tabs"
-          description="Per worktree, each worktree keeps its own tabs and switching swaps them. All together, one strip holds every worktree's tabs, each marked with its branch."
+          description="Tabs per worktree, or one strip for all, marked by branch."
         >
           <Select label="Tabs" className="w-40" value={tabs.scope} onChange={tabs.update} options={TAB_SCOPES} />
         </SettingsRow>
@@ -156,7 +179,7 @@ function Appearance() {
     <>
       {color.available && (
         <SettingsSection title="Theme">
-          <SettingsRow label="Mode" description="Light or dark for the app and its pages. System follows macOS.">
+          <SettingsRow label="Mode" description="System follows macOS.">
             <Select
               label="Mode"
               className="w-40"
@@ -168,7 +191,7 @@ function Appearance() {
         </SettingsSection>
       )}
       <SettingsSection title="Bots">
-        <SettingsRow label="Avatar style" description="Every bot gets its own face in this style, drawn from its id.">
+        <SettingsRow label="Avatar style" description="Each bot gets a unique face in this style.">
           <div className="flex items-center gap-3">
             <div className="flex gap-1" aria-hidden>
               {PREVIEW_SEEDS.map((seed) => (
@@ -189,7 +212,7 @@ function Appearance() {
   );
 }
 
-function Browser() {
+export function BrowserSettings() {
   const { prefs, update } = useBrowserPrefs();
   return (
     <>
@@ -198,15 +221,15 @@ function Browser() {
           label="Open links in Crew"
           description={
             prefs.openLinksInCrew
-              ? `Links in agent chats and terminals open as a new page here. ${BROWSER_CLICK}-click one to open it in your default browser instead.`
-              : "Links in agent chats and terminals open as a new page here. Off sends them to your default browser."
+              ? `Chat and terminal links open here. ${BROWSER_CLICK}-click for your browser.`
+              : "Chat and terminal links open in your browser."
           }
           checked={prefs.openLinksInCrew}
           onChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
         />
       </SettingsSection>
       <SettingsSection title="Pages">
-        <SettingsRow label="Search engine" description="Where the address bar sends anything that isn't an address.">
+        <SettingsRow label="Search engine" description="For address bar searches.">
           <Select
             label="Search engine"
             className="w-40"
@@ -217,7 +240,7 @@ function Browser() {
         </SettingsRow>
         <SettingsRow
           label="Background pages"
-          description="Hidden tabs that stay loaded for an instant switch back. Each one is a process; the rest reload when shown."
+          description="Hidden tabs kept loaded. Others reload when shown."
         >
           <Select
             label="Background pages"
@@ -234,7 +257,7 @@ function Browser() {
           description={
             prefs.askWhereToSave
               ? "Every download opens a save dialog first."
-              : "Files go straight to your Downloads folder. Right-click a link or an image to choose where instead."
+              : "Saves to Downloads. Right-click a link to choose."
           }
           checked={prefs.askWhereToSave}
           onChange={(checked) => update({ ...prefs, askWhereToSave: checked })}
@@ -253,8 +276,7 @@ function SitePermissionsSettings() {
     <SettingsSection title="Site permissions">
       {sites.length === 0 ? (
         <p className="py-3 text-[12px] text-text-muted">
-          Sites ask before they use your camera, microphone, location, notifications or clipboard. What you allow or
-          block for good shows up here.
+          No site permissions saved.
         </p>
       ) : (
         sites.map((site) => {
@@ -346,7 +368,7 @@ function Keybindings() {
           ))}
         </SettingsSection>
       ))}
-      {groups.length === 0 && <p className="px-2.5 text-text-muted">No keybinding matches “{query}”.</p>}
+      {groups.length === 0 && <p className="px-2.5 text-text-muted">No results for “{query}”</p>}
     </>
   );
 }
@@ -370,7 +392,7 @@ function Chord({ chord }: { chord: string }) {
 function Pending({ label }: { label: string }) {
   return (
     <SettingsSection>
-      <p className="py-4 text-text-muted">{label} settings are not built yet.</p>
+      <p className="py-4 text-text-muted">{label}: not built yet.</p>
     </SettingsSection>
   );
 }

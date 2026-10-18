@@ -5,6 +5,10 @@ import { modelLabel, providerLine, providerOf } from "../../lib/providers";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
 import type { ChatSurfaceProps } from "./surface";
+import { useMemo } from "react";
+import { useRedesign } from "../../prototype/design-system/direction";
+import { turnActivity } from "../../prototype/design-system/chat/ComposerParts";
+import { IntroHead, IntroWays } from "../../prototype/design-system/chat/SessionIntro";
 
 export function DefaultChatSurface({
   session,
@@ -41,9 +45,16 @@ export function DefaultChatSurface({
   inThread = false,
   readOnly = false,
 }: ChatSurfaceProps) {
+  // PROTOTYPE: with a direction on, the empty chat and the composer are the redesign's.
+  const redesign = useRedesign();
+  const activity = useMemo(() => (redesign ? turnActivity(blocks) : undefined), [redesign, blocks]);
+  const pickStarter = (text: string) => {
+    onDraft(text);
+    field.current?.focus();
+  };
   return (
     <>
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col" {...(redesign ? { "data-ds-chat": "" } : {})}>
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
             <span className="crew-ink rounded-full px-3 py-1 text-[12px] font-medium">
@@ -51,7 +62,11 @@ export function DefaultChatSurface({
             </span>
           </div>
         )}
-        {blocks.length === 0 ? (
+        {blocks.length === 0 && redesign ? (
+          <div className="flex min-h-0 flex-[4] flex-col items-center justify-end overflow-hidden">
+            {!loading && <IntroHead session={session} />}
+          </div>
+        ) : blocks.length === 0 ? (
           <div className="flex min-h-0 flex-[5] flex-col items-center justify-end">
             {!loading && (
               <Intro
@@ -101,9 +116,16 @@ export function DefaultChatSurface({
             {...(onOptions ? { onOptions } : {})}
             optionsPending={optionsPending}
             switchProvider={switchProvider}
+            {...(activity ? { activity } : {})}
           />
         )}
-        {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
+        {blocks.length === 0 && redesign ? (
+          <div className="min-h-0 flex-[6] overflow-y-auto">
+            {!loading && !readOnly && <IntroWays session={session} onPick={pickStarter} />}
+          </div>
+        ) : (
+          blocks.length === 0 && <div className="min-h-0 flex-[6]" />
+        )}
         {overlay}
       </div>
     </>

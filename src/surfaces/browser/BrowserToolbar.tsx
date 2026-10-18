@@ -93,7 +93,7 @@ export function BrowserToolbar({
       )}
       {incognito && (
         <span
-          title="Incognito: no history is kept, and sign-ins end when the last incognito tab closes"
+          title="No history; sign-ins end when the last incognito tab closes"
           className="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-selected px-1.5 text-[11px] text-text"
         >
           <HatGlassesIcon aria-hidden className="size-3.5" />

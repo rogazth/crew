@@ -186,7 +186,7 @@ export function AgentView({
     <SubagentTranscript calls={blocks} working={view.state === 'running'} active={active} />
   ) : (
     <div className="mx-auto w-full max-w-[840px] px-6 pt-8">
-      <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
+      <p className="py-0.5 text-[12.5px] text-text-muted">Steps are in the parent transcript.</p>
     </div>
   );
   const footer = !entry.writable && <ReadOnlyFooter entry={entry} parent={parent?.name ?? 'the session'} stoppable={stoppable} />;

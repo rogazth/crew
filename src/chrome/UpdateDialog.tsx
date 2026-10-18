@@ -81,20 +81,20 @@ function view(state: UpdateState, host: NonNullable<ReturnType<typeof updateHost
     case "idle":
       return null;
     case "checking":
-      return { title: "Checking for updates", body: <Working label="Asking GitHub for the latest release…" /> };
+      return { title: "Checking for updates", body: <Working label="Checking GitHub…" /> };
     case "latest":
-      return { title: `Crew ${state.version} is the latest version`, actions: ok };
+      return { title: `Crew ${state.version} is up to date`, actions: ok };
     case "unpackaged":
       return {
-        title: "Updates apply to the installed app",
-        body: "This window runs from the checkout, so there is nothing to replace.",
+        title: "Updates need the installed app",
+        body: "This window runs from the checkout.",
         actions: ok,
       };
     case "available": {
       const install = () => void host.install();
       return {
-        title: `Crew ${state.version} is available`,
-        body: `You are on ${state.current}. Crew will replace itself and reopen.`,
+        title: `Crew ${state.version} available`,
+        body: `You have ${state.current}. Crew restarts to update.`,
         hints: [["esc", "later"]],
         actions: (
           <>
@@ -128,11 +128,11 @@ function view(state: UpdateState, host: NonNullable<ReturnType<typeof updateHost
       };
     }
     case "installing":
-      return { title: `Installing Crew ${state.version}`, body: <Working label="Unpacking the new version…" /> };
+      return { title: `Installing Crew ${state.version}`, body: <Working label="Unpacking…" /> };
     case "restarting":
-      return { title: `Restarting into Crew ${state.version}`, body: <Working label="Closing sessions and reopening…" /> };
+      return { title: `Restarting into Crew ${state.version}`, body: <Working label="Reopening…" /> };
     case "error":
-      return { title: "Could not update Crew", body: state.message, actions: ok };
+      return { title: "Update failed", body: state.message, actions: ok };
   }
 }
 

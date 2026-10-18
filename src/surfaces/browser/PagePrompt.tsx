@@ -247,7 +247,7 @@ function SignIn({ prompt, onAnswer }: { prompt: Extract<Prompt, { kind: "auth" }
     <form onSubmit={submit} className="flex flex-col gap-3">
       <div className="flex flex-col gap-1 text-text-muted">
         {prompt.realm && <p className="break-words">The site says: “{prompt.realm}”</p>}
-        {!prompt.secure && <p className="text-text">This connection isn't private, so what you type here can be read on the way.</p>}
+        {!prompt.secure && <p className="text-text">Connection not private. What you type can be read.</p>}
       </div>
       <Field label="Username">
         <TextInput ref={username} autoFocus autoComplete="username" name="username" />

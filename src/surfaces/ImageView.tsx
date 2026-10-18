@@ -154,7 +154,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
               const image = event.currentTarget;
               setNatural({ width: image.naturalWidth, height: image.naturalHeight });
             }}
-            onError={() => setProblem("This image didn't load. It may be damaged, or in a format Chromium can't read.")}
+            onError={() => setProblem("Can't load this image. It may be damaged or unsupported.")}
             onClick={() => setZoom(zoom === null ? 1 : null)}
             style={
               shown

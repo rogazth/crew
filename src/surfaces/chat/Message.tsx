@@ -6,7 +6,8 @@ import { lazy, memo, Suspense, useState } from "react";
 import { FileRef } from "../../chrome/FileRef";
 import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
-import { AttachmentStrip } from "./Attachments";
+import { attachedFrom, imageMime } from "../../lib/attachments";
+import { AttachmentStrip, Lightbox } from "./Attachments";
 import { useChatActions } from "./context";
 import { CopyButton } from "./CopyButton";
 import { clock, duration } from "../../lib/time";
@@ -61,6 +62,7 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
       <Collapsible.Trigger
         className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] leading-[18px] ring-1 ring-hairline transition-colors hover:bg-hover"
         data-block={block.id}
+        data-letter-row
       >
         <BotAvatar seed={from.id} bare className="size-5" />
         {from.kind === "user" ? (
@@ -104,20 +106,27 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
   );
 }
 
-/** `@path` runs become pills that open the file; the rest is the text as typed. */
+/** `@path` runs become pills that open the file, an image in the viewer; the rest is the text as typed. */
 function MentionText({ text }: { text: string }) {
-  const { openPath, openFolder } = useChatActions();
+  const { openPath, openFolder, resolvePath } = useChatActions();
+  const [image, setImage] = useState<string | null>(null);
   const segments = splitMentions(text);
+  const open = (path: string) => {
+    if (path.endsWith("/")) return openFolder(path);
+    if (imageMime(path)) return setImage(resolvePath(path) ?? path);
+    openPath(path);
+  };
   return (
     <>
       {segments.map((segment, index) =>
         segment.kind === "mention" ? (
           // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
-          <FileRef key={index} path={segment.path} onOpen={segment.path.endsWith("/") ? openFolder : openPath} />
+          <FileRef key={index} path={segment.path} onOpen={open} />
         ) : (
           <span key={index}>{segment.text}</span>
         ),
       )}
+      {image && <Lightbox images={[attachedFrom(image)]} index={0} onIndex={() => {}} onClose={() => setImage(null)} />}
     </>
   );
 }

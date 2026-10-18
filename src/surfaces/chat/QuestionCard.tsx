@@ -1,7 +1,7 @@
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
-import { ChevronDownIcon, ChevronUpIcon, MessageCircleQuestionIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, MessageCircleQuestionIcon } from "lucide-react";
 import { Button } from "../../chrome/kit";
 import { Kbd } from "../../chrome/Kbd";
 import { useEffect, useRef, useState } from "react";
@@ -147,7 +147,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
               onClick={() => setStep(step - 1)}
               className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
             >
-              <ChevronUpIcon className="size-3.5" />
+              <ArrowLeftIcon className="size-3.5" />
             </button>
             {step + 1} / {questions.length}
             <button
@@ -157,7 +157,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
               onClick={() => setStep(step + 1)}
               className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
             >
-              <ChevronDownIcon className="size-3.5" />
+              <ArrowRightIcon className="size-3.5" />
             </button>
           </span>
         ) : null}

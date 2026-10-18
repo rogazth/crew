@@ -14,6 +14,8 @@ import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
+import { useRedesign } from "../prototype/design-system/direction";
+import { UpdateButton } from "../prototype/design-system/UpdateButton";
 
 type Props = {
   /** The projects, home aside. */
@@ -65,6 +67,7 @@ function loudest(sessions: Session[]): SessionStatus | null {
  * dragging, switched by ⌘1‥9 or the arrows. Routines and settings sit at its foot.
  */
 export function WorkspaceRail(props: Props) {
+  const redesign = useRedesign();
   const [menu, setMenu] = useState<Menu | null>(null);
   // A mark held still under the pointer for a beat says which workspace it is and where it lives.
   const [peek, setPeek] = useState<{ id: string; anchor: WorkspacePeekAnchor } | null>(null);
@@ -140,6 +143,9 @@ export function WorkspaceRail(props: Props) {
 
       <div className="flex-1" />
 
+      {/* PROTOTYPE — throwaway: the foot under a short rule, apart from the marks, and a simulated app update. */}
+      {redesign && <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />}
+      {redesign && <UpdateButton />}
       <RailButton
         icon={RefreshCwIcon}
         label="Routines"

@@ -238,7 +238,7 @@ function FileRow({ file, open }: { file: FileMatches; open: boolean }) {
       <ChevronRightIcon
         className={`ml-1.5 size-3.5 shrink-0 text-icon transition-transform duration-100 ${open ? "rotate-90" : ""}`}
       />
-      <FileTypeIcon name={name} />
+      <FileTypeIcon name={name} className="size-4" />
       <span className="shrink-0 truncate">{name}</span>
       <span className="min-w-0 flex-1 truncate text-[12px] text-text-muted" title={file.relative}>
         {folder}

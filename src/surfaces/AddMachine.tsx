@@ -263,8 +263,7 @@ export function AddMachine({ tailnet, links, onRefresh, onCancel, onInstalled, o
 
       <div className="flex items-center gap-2">
         <p className="min-w-0 flex-1 text-[12px] text-text-muted">
-          Crew signs in with your ssh and its config, and runs crewd there as a user service, reached over Tailscale. Agents keep
-          working while this Mac sleeps.
+          Installs crewd over SSH; Crew reaches it over Tailscale. Agents keep working while this Mac sleeps.
         </p>
         <Button variant="ghost" onClick={onCancel}>
           Cancel
@@ -394,10 +393,10 @@ function Ready({ env, clis, onOpenWorkspace, onClose }: { env: RemoteEnv; clis: 
           <span className="font-medium">{env.name} is ready</span>
           <span className="flex items-center gap-1 text-[12px] text-text-muted">
             {missing.length === 0 ? (
-              "Every agent CLI Crew knows is installed there."
+              "All agent CLIs installed."
             ) : found.size === 0 ? (
               <>
-                <CircleAlertIcon className="size-3 shrink-0 text-warning" /> No agent CLI found. Install one there and sign in to it.
+                <CircleAlertIcon className="size-3 shrink-0 text-warning" /> No agent CLI found. Install and sign in to one.
               </>
             ) : (
               <>

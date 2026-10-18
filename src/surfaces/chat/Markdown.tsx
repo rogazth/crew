@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ComponentProps,
   type ReactNode,
 } from "react";
@@ -16,7 +17,8 @@ import "streamdown/styles.css";
 import { FileRef } from "../../chrome/FileRef";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
-import { extensionOf } from "../../lib/attachments";
+import { attachedFrom, extensionOf, imageMime } from "../../lib/attachments";
+import { Lightbox } from "./Attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
 import { isPathLike, localPath, namedDirs } from "../../lib/localLink";
 import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
@@ -66,7 +68,15 @@ function Fence({ code, className, meta }: { code: string; className: string | un
 function InlineFile({ path, children }: { path: string; children: ReactNode }) {
   const { openPath } = useChatActions();
   const { ref, file } = useFileOnDisk(path);
-  if (file) return <FileRef path={path} full onOpen={() => openPath(file)} />;
+  const [image, setImage] = useState<string | null>(null);
+  // An image opens in the viewer over the chat, never in a tab of its own.
+  if (file)
+    return (
+      <>
+        <FileRef path={path} full onOpen={() => (imageMime(file) ? setImage(file) : openPath(file))} />
+        {image && <Lightbox images={[attachedFrom(image)]} index={0} onIndex={() => {}} onClose={() => setImage(null)} />}
+      </>
+    );
   return (
     <code ref={ref} className="crew-inline-code">
       {children}

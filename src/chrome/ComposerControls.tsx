@@ -97,7 +97,7 @@ function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next
     return (
       <FastToggle
         on={fast.on}
-        title={fast.on ? "Running the fast variant — click for standard" : "A faster run of this model"}
+        title={fast.on ? "Fast on — click for standard" : "Faster variant of this model"}
         onClick={() => onChange(fitChoice({ ...value, model: setFast(value.provider, value.model, !fast.on) }))}
       />
     );

@@ -1051,9 +1051,11 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   text-decoration: none;
   overflow-wrap: anywhere;
   /* Padded at rest so the hover pill costs no reflow; clone keeps a wrapped
-     link's second line inside the same shape. */
-  padding: 1px 5px;
-  margin: 0 -3px;
+     link's second line inside the same shape. No negative margin: the pill
+     would slide under the words beside it and read as cut. The extra pixel
+     below balances the text's descender room, so the label sits centred. */
+  padding: 0 6px 2px 5px;
+  margin: 0 1px;
   border-radius: 6px;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
@@ -1075,7 +1077,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   width: 15px;
   height: 15px;
   margin-right: 5px;
-  vertical-align: -3px;
+  vertical-align: -2.5px;
   object-fit: contain;
   color: var(--color-text);
 }

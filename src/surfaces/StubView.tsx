@@ -2,7 +2,7 @@ import { StubIcon } from "../chrome/StubIcon";
 import type { StubKind } from "../lib/types";
 
 const NOTES: Record<StubKind, string> = {
-  terminal: "A shell in the workspace directory. pty.rs is not wired yet.",
+  terminal: "A shell in the workspace. Not wired yet.",
   history: "Every page the browser has shown.",
   commands: "The workspace's dev servers and watchers.",
 };

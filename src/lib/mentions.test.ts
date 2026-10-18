@@ -93,7 +93,8 @@ describe("folders", () => {
 
   it("leaves a picked folder open so the menu goes on into it", () => {
     const folder = { name: "reference/", path: "/w/reference", relative: "reference/", dir: true };
-    expect(completeMention("see @refer", 10, folder)).toEqual({ text: "see @reference/", cursor: 15 });
+    expect(completeMention("see @refer", 10, folder, { into: true })).toEqual({ text: "see @reference/", cursor: 15 });
+    expect(completeMention("see @refer", 10, folder)).toEqual({ text: "see @reference/ ", cursor: 16 });
     expect(mentionTokens("@reference/ and @a.ts @a.ts")).toEqual(["reference/", "a.ts"]);
   });
 });

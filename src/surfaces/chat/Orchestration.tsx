@@ -51,6 +51,8 @@ import { useChatActions, useLetterScope, WorkContext } from "./context";
 import { Note, UserMessage } from "./Message";
 import { StateDot } from "./Panel";
 import type { Session } from "../../lib/types";
+import { useRedesign } from "../../prototype/design-system/direction";
+import { AgentRow } from "../../prototype/design-system/work/AgentRow";
 
 /** streamdown is half a megabyte: a long text loads it when it is first drawn. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -84,7 +86,7 @@ export function ToolLine({
 
 /** A card hanging under a row: indented to the row's text, hairline, the app's radius. */
 export function Hang({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
+  return <div data-hang className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
 }
 
 /** Who a name stands for: a bot is its face, an agent its CLI's mark. */
@@ -114,7 +116,7 @@ function usePeer(id: string | undefined, name: string, provider?: string): Peer 
 }
 
 /** A name inside a sentence: set off from the words before it, its mark a little apart from it, long names cut. */
-const PEER_CHIP = "ml-0.5 inline-flex h-[18px] max-w-[24em] items-center gap-1.5 align-top font-medium text-text";
+const PEER_CHIP = "crew-peer ml-0.5 inline-flex h-[18px] max-w-[24em] items-center gap-1.5 align-top font-medium text-text";
 
 /** The mark and the name, in `text-text`; a click opens that party (its thread, or a bot's chat). */
 export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
@@ -147,6 +149,7 @@ export function AgentLine({
   title,
   meta,
   peer,
+  entry,
   onOpen,
 }: {
   state: PanelState;
@@ -154,8 +157,19 @@ export function AgentLine({
   meta: string;
   /** Set when the line names the agent: a card of several lines. */
   peer?: Peer;
+  /** The work list's entry for it, when it has one. */
+  entry?: PanelEntry | undefined;
   onOpen?: (() => void) | undefined;
 }) {
+  const redesign = useRedesign();
+  const { sessions, owner } = useLetterScope();
+  if (redesign) {
+    const sessionId = entry?.id.startsWith("session:") ? entry.id.slice("session:".length) : peer?.id;
+    const session = sessionId ? sessions.find((row) => row.id === sessionId) : undefined;
+    // A native subagent wears its parent's mark.
+    const parent = sessions.find((row) => row.id === owner?.id)?.provider;
+    return <AgentRow state={state} title={title} meta={meta} peer={peer} entry={entry} session={session} fallback={parent} onOpen={onOpen} />;
+  }
   const body = (
     <>
       <StateDot state={state} />
@@ -275,6 +289,7 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
           state={state}
           title={firstLine(detail.prompt ?? "") || detail.description || "Subagent"}
           meta={meta}
+          entry={entry}
           onOpen={entry ? () => openAgent(entry.id) : undefined}
         />
       </Hang>
@@ -315,7 +330,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
         <ToolLine icon={MessagesSquareIcon} id={block.id} marked={marked}>
           {startedSessionsSentence(targets)}
         </ToolLine>
-        <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">They're yours: in the sidebar, and in Work while they run.</span>
+        <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">In your sidebar, and in Work while running.</span>
         <Hang className="divide-y divide-hairline">
           {targets.map((target, index) => {
             const peer = peerOf(target);
@@ -337,6 +352,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
                 title={peer.name}
                 meta={line.meta}
                 peer={peer}
+                entry={line.entry}
                 onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
               />
             );
@@ -363,6 +379,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
           state={line.state}
           title={firstLine(started.prompt) || peer.name}
           meta={line.meta}
+          entry={line.entry}
           onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
         />
       </Hang>
@@ -547,7 +564,7 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
   // A session's question names its tag only while its request is open.
   const tagged = tag && (!child || (ask && isOpen(ask)));
   return (
-    <div data-letter={block.letterId} className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
+    <div data-letter={block.letterId} data-letter-in className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
       <span className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-card">
         <PeerMark peer={peer} className="size-3.5" />
       </span>
@@ -565,7 +582,7 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
             <span className="font-medium text-text">{peer.name}</span>
           )}
           <span className="text-text-muted">{word}</span>
-          {tagged ? <span className="text-placeholder">· {tag}</span> : null}
+          {tagged ? <span data-letter-tag className="text-placeholder"><span data-sep>· </span>{tag}</span> : null}
         </div>
         <LongText text={exitedless(block)} fold={block.letterKind !== "started"} />
         {child && ask ? <ChildAsk child={child} ask={ask} by={by} onBy={onBy} /> : null}

@@ -206,7 +206,7 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
             />
           </Field>
 
-          <Field label="Description" hint="What it is for, and how it should work. It reads this every turn.">
+          <Field label="Description" hint="Its role and how to work. Read every turn.">
             <TextArea
               rows={3}
               value={draft.description}

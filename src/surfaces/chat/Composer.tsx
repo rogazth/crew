@@ -9,6 +9,7 @@ import {
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   type Ref,
 } from "react";
 import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
@@ -54,6 +55,54 @@ import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
 import { SlashPicker } from "./SlashPicker";
+import { useRedesign } from "../../prototype/design-system/direction";
+import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
+import {
+  ActivityStrip,
+  AttachMenu,
+  ContextRing,
+  SendButton,
+  SessionContextRow,
+  jumpToCard,
+  type TurnActivity,
+} from "../../prototype/design-system/chat/ComposerParts";
+
+/**
+ * PROTOTYPE: the redesigned overlay's runs. A `-`, `*` or `+` marker wears a bullet over it, an inline
+ * code span becomes one pill with its ticks hidden inside it as padding, and a mention its own pill.
+ * Every character stays in place, in the field's font, so the overlay never drifts from the caret.
+ */
+function overlayRuns(parts: readonly { kind: string; text: string }[]) {
+  const runs: ReactNode[] = [];
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index]!;
+    const code = parts[index + 1];
+    const close = parts[index + 2];
+    if (part.kind === "tick" && code?.kind === "code" && close?.kind === "tick") {
+      runs.push(
+        <span key={index} className="ds-code-run">
+          <span className="ds-code-tick">`</span>
+          {code.text}
+          <span className="ds-code-tick">`</span>
+        </span>,
+      );
+      index += 2;
+    } else if (part.kind === "marker") {
+      runs.push(
+        <span key={index} className={/^[-*+]$/.test(part.text) ? "ds-bullet" : "text-text-muted"}>
+          {part.text}
+        </span>,
+      );
+    } else if (part.kind === "mention") {
+      runs.push(
+        <mark key={index} className="crew-mention-run">
+          {part.text}
+        </mark>,
+      );
+    } else runs.push(<span key={index}>{part.text}</span>);
+  }
+  return runs;
+}
 
 type Props = {
   ref?: Ref<HTMLTextAreaElement>;
@@ -94,6 +143,8 @@ type Props = {
   switchProvider?: boolean;
   /** In a thread: Esc goes back one level and never stops the turn; the Stop button does. */
   escBack?: boolean;
+  /** PROTOTYPE: the turn in progress, for the redesign's activity strip. Unused by the shipped composer. */
+  activity?: TurnActivity;
 };
 
 /** What the session's row says it runs, as the chips show it. */
@@ -135,7 +186,9 @@ export function Composer({
   optionsPending = false,
   switchProvider = false,
   escBack = false,
+  activity,
 }: Props) {
+  const redesign = useRedesign();
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
@@ -213,10 +266,11 @@ export function Composer({
     });
   };
 
-  const pick = (file: ProjectFile) => {
+  // ↵ and a click finish the mention and close the menu; ⇥ on a folder goes into it instead.
+  const pick = (file: ProjectFile, into = false) => {
     const el = field.current;
     if (!el) return;
-    const next = completeMention(draft, el.selectionStart, file);
+    const next = completeMention(draft, el.selectionStart, file, { into });
     if (!next) return;
     rememberMention(file.path);
     setPicked((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
@@ -285,7 +339,7 @@ export function Composer({
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         const at = Math.min(active, choices - 1);
-        if (mention) pick(results[at]!);
+        if (mention) pick(results[at]!, event.key === "Tab");
         else pickSlash(slashResults[at]!);
         return;
       }
@@ -293,6 +347,29 @@ export function Composer({
         event.preventDefault();
         setCursor(-1);
         return;
+      }
+    }
+    // Lists carry on and indent as you type; the text stays plain markdown. Enter still sends, even on a
+    // list item: the key that writes a new line here is ⇧↵, so that is the one that continues the list
+    // (and ends it on an empty item). Making ↵ continue instead would change what ↵ means mid-message.
+    if (el && !event.nativeEvent.isComposing && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      const { value, selectionStart, selectionEnd } = el;
+      if (event.key === "Enter" && event.shiftKey) {
+        const edit = continueList(value, selectionStart, selectionEnd);
+        if (edit) {
+          event.preventDefault();
+          applyEdit(el, edit);
+          return;
+        }
+      }
+      // Tab indents a list item; ⇧Tab outdents one that is indented, and otherwise steps the access modes below.
+      if (event.key === "Tab" && (event.shiftKey ? onIndentedListLine(value, selectionStart) : onListLine(value, selectionStart))) {
+        const edit = indentList(value, selectionStart, selectionEnd, event.shiftKey ? -1 : 1);
+        if (edit) {
+          event.preventDefault();
+          applyEdit(el, edit);
+          return;
+        }
       }
     }
     // ⇧Tab steps through the access modes, the way it does in Claude's own terminal.
@@ -318,6 +395,204 @@ export function Composer({
   const stopping = working && draft.trim().length === 0 && files.length === 0;
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
 
+  // PROTOTYPE: the redesigned composer, while the dev bar has a direction on. Same state, same handlers.
+  if (redesign) {
+    // A mention is marked where it is typed, in the text; the row over the field never repeats it.
+    const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
+      part.kind === "token" ? [part] : splitMentions(part.text, known),
+    );
+    // What the plus menu types for you: an `@` or a `/` at the caret, so the pickers open as if typed.
+    const typeAtCaret = (mark: string) => {
+      const el = field.current;
+      const at = mark === "/" && draft.trim() === "" ? 0 : (el?.selectionStart ?? draft.length);
+      const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
+      const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
+      const text = `${before}${gap}${mark}${draft.slice(at)}`;
+      onDraft(text);
+      // The menu hands the focus back to its trigger as it closes: the caret goes in after that.
+      window.setTimeout(() => place(before.length + gap.length + 1), 40);
+    };
+    const queued = queue && queue.items.some((message) => !message.steering);
+    const placeholder = waiting
+      ? `Answer ${session.name} above, or write here`
+      : working
+        ? whileWorking === "steer"
+          ? "Add to the running turn…"
+          : whileWorking === "queue"
+            ? "Queue a message for the next turn…"
+            : `${session.name} is working…`
+        : centered
+          ? `Ask ${session.name} anything…`
+          : `Message ${session.name}…`;
+    return (
+      <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
+        <ActivityStrip
+          name={session.name}
+          working={working}
+          waiting={waiting}
+          activity={activity}
+          work={work}
+          escBack={escBack}
+          onStop={onStop}
+          onJump={() => jumpToCard(field.current)}
+          onShowWork={() => openWork(true)}
+        />
+        <form onSubmit={submit} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
+          {mention && (
+            <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
+          )}
+          {slashResults.length > 0 && (
+            <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
+          )}
+          {queued && (
+            <div className="px-1.5">
+              <QueueChips queue={queue} />
+            </div>
+          )}
+          <SessionContextRow session={session} hidePlace={centered} />
+          {(files.length > 0 || uploads.length > 0) && (
+            <div className="px-1.5">
+              <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />
+            </div>
+          )}
+          <div className="ds-composer-text">
+            <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
+              {overlayRuns(splitInlineCode(splitListMarkers(segments)))}
+              {"​"}
+            </div>
+            <textarea
+              ref={field}
+              rows={1}
+              value={draft}
+              placeholder={placeholder}
+              aria-label={`Message ${session.name}`}
+              spellCheck={false}
+              onChange={(event) => {
+                onDraft(event.target.value);
+                setCursor(event.target.selectionStart);
+                setActive(0);
+              }}
+              onSelect={syncCursor}
+              onKeyUp={syncCursor}
+              onClick={syncCursor}
+              onBlur={() => setCursor(-1)}
+              onScroll={(event) => {
+                if (overlay.current) overlay.current.scrollTop = event.currentTarget.scrollTop;
+              }}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              className="crew-composer-field crew-composer-input"
+            />
+          </div>
+          <div className="flex h-8 items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <AttachMenu onAttach={onAttach} onMention={() => typeAtCaret("@")} onCommand={() => typeAtCaret("/")} />
+              {onOptions && (
+                <div className="ds-model-group">
+                  <ModelControls
+                    lockProvider={!switchProvider}
+                    value={choiceOf(session)}
+                    onChange={onOptions}
+                    openers={{ model, effort }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {onOptions && (
+                <div className="ds-access" {...(session.autonomy === "full" ? { "data-risky": "" } : {})}>
+                  <AccessPicker
+                    ref={access}
+                    provider={session.provider}
+                    value={session.autonomy as Access}
+                    onChange={(next) => onOptions({ ...choiceOf(session), access: next })}
+                    hint="⇧Tab in the message box cycles them."
+                  />
+                </div>
+              )}
+              <ContextRing sessionId={session.id} provider={session.provider} mock={!centered} />
+              <SendButton
+                stopping={stopping}
+                canSend={canSend}
+                label={sendLabel}
+                title={sendTitle}
+                stopTitle={escBack ? "Stop the turn" : "Stop the turn (esc)"}
+                onStop={onStop}
+              />
+            </div>
+          </div>
+        </form>
+        <div data-status-line data-session={session.id} className="ds-status">
+          {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
+          {session.paused && <PausedSegment />}
+          {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
+          <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
+          <span className="flex-1" />
+          {optionsPending ? (
+            <span className="truncate text-info">
+              The new settings apply with your next message, which restarts {session.name} where it left off
+            </span>
+          ) : (
+            !centered && (
+              <span className="ds-hints">
+                {working ? (
+                  <>
+                    {whileWorking === "steer" && (
+                      <>
+                        <span>
+                          <kbd>↵</kbd>add to the turn
+                        </span>
+                        <span>
+                          <kbd>⌘↵</kbd>next turn
+                        </span>
+                      </>
+                    )}
+                    {whileWorking === "queue" && (
+                      <span>
+                        <kbd>↵</kbd>queue
+                      </span>
+                    )}
+                    {/* The strip over the composer already says how to stop. */}
+                    {escBack && (
+                      <span>
+                        <kbd>esc</kbd>back
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span>
+                      <kbd>↵</kbd>send
+                    </span>
+                    <span>
+                      <kbd>⇧↵</kbd>new line
+                    </span>
+                    <span>
+                      <kbd>@</kbd>file
+                    </span>
+                    <span>
+                      <kbd>/</kbd>command
+                    </span>
+                    {onOptions && (
+                      <span>
+                        <kbd>⇧⇥</kbd>access
+                      </span>
+                    )}
+                    {escBack && (
+                      <span>
+                        <kbd>esc</kbd>back
+                      </span>
+                    )}
+                  </>
+                )}
+              </span>
+            )
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
       <form onSubmit={submit} className="crew-composer relative">
@@ -335,17 +610,23 @@ export function Composer({
         )}
         <div className="relative">
           <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
-            {splitTokens(draft, entries)
-              .flatMap<{ kind: string; text: string }>((part) => (part.kind === "token" ? [part] : splitMentions(part.text, known)))
-              .map((segment, index) =>
-                segment.kind === "text" ? (
-                  <span key={index}>{segment.text}</span>
-                ) : (
-                  <mark key={index} className="crew-mention-run">
-                    {segment.text}
-                  </mark>
-                ),
-              )}
+            {splitListMarkers(
+              splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
+                part.kind === "token" ? [part] : splitMentions(part.text, known),
+              ),
+            ).map((segment, index) =>
+              segment.kind === "text" ? (
+                <span key={index}>{segment.text}</span>
+              ) : segment.kind === "marker" ? (
+                <span key={index} className="text-text-muted">
+                  {segment.text}
+                </span>
+              ) : (
+                <mark key={index} className="crew-mention-run">
+                  {segment.text}
+                </mark>
+              ),
+            )}
             {"​"}
           </div>
           <textarea
@@ -363,7 +644,7 @@ export function Composer({
                       : escBack
                         ? `${session.name} is working`
                         : `${session.name} is working — esc stops it`
-                  : `Ask ${session.name} anything — @ to mention a file, / for commands`
+                  : `Ask ${session.name} anything — @ files, / commands`
             }
             spellCheck={false}
             onChange={(event) => {

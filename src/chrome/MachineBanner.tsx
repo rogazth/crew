@@ -26,19 +26,19 @@ export function MachineBanner({ workspaceId }: { workspaceId: string | null }) {
       <span className="min-w-0 flex-1 truncate">
         {link.mismatch ? (
           <>
-            <b className="font-medium">{link.name} runs a crewd this app can't talk to.</b>{" "}
-            <span className="text-text-muted">Update it in Settings › Environments.</span>
+            <b className="font-medium">{link.name} runs an incompatible crewd.</b>{" "}
+            <span className="text-text-muted">Update it in Settings.</span>
           </>
         ) : connecting ? (
           <>
             <b className="font-medium">Connecting to {link.name}…</b>{" "}
-            <span className="text-text-muted">Its bots and terminals keep running there.</span>
+            <span className="text-text-muted">Bots keep running there.</span>
           </>
         ) : (
           <>
-            <b className="font-medium">{link.name} is offline.</b>{" "}
+            <b className="font-medium">{link.name} offline.</b>{" "}
             <span className="text-text-muted">
-              {link.error ? `${link.error}. ` : ""}Its bots keep running there, and Crew reconnects on its own.
+              {link.error ? `${link.error}. ` : ""}Bots keep running; reconnecting automatically.
             </span>
           </>
         )}

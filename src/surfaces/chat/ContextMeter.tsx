@@ -56,10 +56,10 @@ export function ContextMeter({ sessionId, provider }: { sessionId: string; provi
         </span>
         <span className="mt-2 block text-[11.5px] leading-4 text-text-muted">
           {stale
-            ? "Counted before the last compaction; the next answer counts it again."
+            ? "From before the last compaction. Updates on the next answer."
             : autoCompactAt
-              ? `Compacts on its own at ${tokenCount(autoCompactAt)}.`
-              : `${label} compacts on its own near the end.`}
+              ? `Auto-compacts at ${tokenCount(autoCompactAt)}.`
+              : `${label} auto-compacts near the limit.`}
         </span>
       </span>
     </span>

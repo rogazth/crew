@@ -46,7 +46,7 @@ export function SessionSettings({ onConfirm }: { onConfirm: (confirm: Confirm) =
     onConfirm({
       title: "Bypass permissions for every session?",
       description:
-        "Every agent, on every provider, will edit files and run commands without asking, whatever its own setting says. It applies from each session's next turn.",
+        "All agents will edit files and run commands without asking, from their next turn.",
       action: "Bypass",
       onConfirm: () => saveBypass(true),
     });
@@ -61,7 +61,7 @@ export function SessionSettings({ onConfirm }: { onConfirm: (confirm: Confirm) =
     const sessions = stale === 1 ? "1 session" : `${stale} sessions`;
     onConfirm({
       title: `Delete ${sessions}?`,
-      description: `${sessions} untouched for over ${days} days will be deleted with their messages, and later ones as they reach that age. Each provider keeps its own history of the conversation.`,
+      description: `Deletes ${sessions} idle over ${days} days, and others as they age. Provider history is kept.`,
       action: "Delete",
       onConfirm: async () => {
         await save(next);
@@ -74,7 +74,7 @@ export function SessionSettings({ onConfirm }: { onConfirm: (confirm: Confirm) =
     <SettingsSection title="Sessions">
       <SettingsRow
         label="Delete inactive sessions"
-        description="Sessions untouched this long are deleted. Ones that are working, unread, open in a tab or running a routine are kept."
+        description="Working, unread, open and scheduled sessions are kept."
       >
         <Select
           label="Delete inactive sessions"
@@ -86,7 +86,7 @@ export function SessionSettings({ onConfirm }: { onConfirm: (confirm: Confirm) =
       </SettingsRow>
       <Toggle
         label="Bypass permissions"
-        description="Every session runs tools without asking, on every provider, overriding each agent's own autonomy."
+        description="All sessions run tools without asking."
         checked={bypass}
         onChange={chooseBypass}
       />

@@ -202,12 +202,12 @@ export function EnvironmentSettings({ workspaces, onOpenTerminal }: Props) {
         ))}
 
       <SettingsSection title="Network">
-        <SettingsRow label="Tailscale" description="Crew reaches every machine over your tailnet, peer to peer. No Crew server sits in between.">
+        <SettingsRow label="Tailscale" description="Peer to peer over your tailnet. No Crew server.">
           <TailnetState tailnet={tailnet} available={host !== null} />
         </SettingsRow>
         <Toggle
           label="Warn about relayed connections"
-          description="Say so when a machine is only reachable through a Tailscale relay. It works, but typing lags."
+          description="Flag machines reached only through a relay."
           checked={warnRelay}
           onChange={(checked) => {
             setWarnRelay(checked);
@@ -216,7 +216,7 @@ export function EnvironmentSettings({ workspaces, onOpenTerminal }: Props) {
         />
         <Toggle
           label="Reconnect on wake"
-          description="Pick every machine back up the moment this Mac wakes, instead of on the next heartbeat."
+          description="Reconnect as soon as this Mac wakes."
           checked={wake}
           onChange={(checked) => {
             setWake(checked);
@@ -249,7 +249,7 @@ export function EnvironmentSettings({ workspaces, onOpenTerminal }: Props) {
             const { warning } = await host.remove(removing.id, wipe);
             await refreshRemotes();
             readTailnet();
-            setNotice(warning ? { tone: "error", text: warning } : { tone: "info", text: `${removing.name} was removed.` });
+            setNotice(warning ? { tone: "error", text: warning } : { tone: "info", text: `${removing.name} removed` });
           }}
         />
       )}
@@ -369,17 +369,17 @@ function MachineRow({
       {link.mismatch && (
         <Callout tone="warning">
           <span>
-            <b className="font-medium">{link.name} runs a crewd this app can't talk to.</b>{" "}
-            <span className="text-text-muted">Update it to open its workspaces.</span>
+            <b className="font-medium">Incompatible crewd.</b>{" "}
+            <span className="text-text-muted">Update it to open workspaces.</span>
           </span>
         </Callout>
       )}
       {relay && link.status === "online" && (
         <Callout tone="warning">
           <span>
-            <b className="font-medium">{link.name} goes through a Tailscale relay.</b>{" "}
+            <b className="font-medium">Relayed connection.</b>{" "}
             <span className="text-text-muted">
-              Typing in its terminals will lag. Open UDP 41641 on that network, or use a peer relay, to get a direct path.
+              Terminals will lag. Open UDP 41641 or use a peer relay.
             </span>
           </span>
         </Callout>
@@ -404,7 +404,7 @@ function Callout({ tone, children }: { tone: "danger" | "warning"; children: Rea
 function Health({ link }: { link: EnvLink }) {
   const info = link.info;
   if (!info) {
-    return <p className="ml-11 text-[12px] text-text-muted">Details show once {link.name} is connected.</p>;
+    return <p className="ml-11 text-[12px] text-text-muted">Connect to see details.</p>;
   }
   const installed = new Set(info.installed);
   return (
@@ -591,7 +591,7 @@ function EditDialog({ link, onClose, onSave }: { link: EnvLink; onClose: () => v
     }
   }
   return (
-    <Alert open onDismiss={onClose} title={`Edit ${link.name}`} description="crewd keeps listening on its tailnet address; SSH is only for installing, updating and logs." error={error}>
+    <Alert open onDismiss={onClose} title={`Edit ${link.name}`} description="SSH is only for installs, updates and logs." error={error}>
       <form
         className="flex flex-col gap-3 px-4 pb-4"
         onSubmit={(event) => {
@@ -599,7 +599,7 @@ function EditDialog({ link, onClose, onSave }: { link: EnvLink; onClose: () => v
           void save();
         }}
       >
-        <Field label="Name" hint="How the rail, ⌘O and notifications call it.">
+        <Field label="Name" hint="Shown in the rail, ⌘O and notifications.">
           <TextInput value={name} onChange={(event) => setName(event.target.value)} autoFocus onFocus={(event) => event.currentTarget.select()} />
         </Field>
         <div className="grid grid-cols-[1fr_8rem] gap-3">
@@ -645,8 +645,8 @@ function RemoveDialog({
       title={`Remove ${link.name}?`}
       description={
         <>
-          Crew stops crewd there and forgets the machine here.
-          {workspaces > 0 && ` Its ${plural(workspaces, "workspace")} leave the rail; the folders stay on the machine.`}
+          Stops crewd and removes it from Crew; files stay on the machine.
+          {workspaces > 0 && ` Its ${plural(workspaces, "workspace")} leave the rail.`}
         </>
       }
       error={error}
@@ -654,7 +654,7 @@ function RemoveDialog({
       <div className="mx-4 mb-3 rounded-lg bg-card px-3">
         <Toggle
           label="Also delete ~/.crew there"
-          description="Sessions, transcripts and routines stored on that machine. Can't be undone."
+          description="Sessions, transcripts and routines. Can't be undone."
           checked={wipe}
           onChange={setWipe}
         />

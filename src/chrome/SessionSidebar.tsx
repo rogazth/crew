@@ -867,6 +867,7 @@ function Row({
       title={`${session.name} — ${providerLine(session.provider, session.model)}${handed ? `\n${handed}` : ""}${session.worktree ? `\n${session.worktree}` : ""}`}
       aria-current={active ? "page" : undefined}
       aria-description={handed ?? undefined}
+      data-row="session"
       className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
     >
       <ProviderIcon provider={session.provider} className="size-4" />

@@ -145,17 +145,16 @@ export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: P
                 entry.ignored ? "text-text-muted" : ""
               } ${entry.path === active ? "bg-selected" : "hover:bg-hover group-focus-visible/tree:data-cursor:bg-hover"} group-focus-visible/tree:data-cursor:ring-1 group-focus-visible/tree:data-cursor:ring-border-strong`}
             >
-              {entry.dir ? (
-                row.loading ? (
-                  <LoaderIcon className="size-3.5 shrink-0 animate-spin text-icon" />
-                ) : (
-                  <ChevronRightIcon
-                    className={`size-3.5 shrink-0 text-icon transition-transform duration-100 ${row.expanded ? "rotate-90" : ""}`}
-                  />
-                )
+              {!entry.dir ? (
+                <span className="size-3.5 shrink-0" />
+              ) : row.loading ? (
+                <LoaderIcon className="size-3.5 shrink-0 animate-spin text-icon" />
               ) : (
-                <FileTypeIcon name={entry.name} />
+                <ChevronRightIcon
+                  className={`size-3.5 shrink-0 text-icon transition-transform duration-100 ${row.expanded ? "rotate-90" : ""}`}
+                />
               )}
+              <FileTypeIcon name={entry.name} dir={entry.dir} open={row.expanded} className="size-4" />
               <span className="min-w-0 truncate">{entry.name}</span>
             </div>
           );

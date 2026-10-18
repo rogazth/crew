@@ -81,11 +81,14 @@ impl BackgroundHost {
             }
         };
         let now = crate::store::now_millis();
+        // The seeded design profile keeps its running rows as seeded, as the
+        // store keeps its working sessions (`CREW_KEEP_STATUS`).
+        let keep = std::env::var_os("CREW_KEEP_STATUS").is_some();
         {
             let mut map = host.inner.lock().unwrap_or_else(|e| e.into_inner());
             for (session_id, rows) in saved {
                 let mut board = Board::restored(rows, hidden.remove(&session_id).unwrap_or_default());
-                if board.end(now, CREW_RESTARTED) {
+                if !keep && board.end(now, CREW_RESTARTED) {
                     host.persist(&session_id, &mut board);
                 }
                 map.insert(session_id, board);

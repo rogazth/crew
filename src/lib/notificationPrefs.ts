@@ -12,14 +12,14 @@ export type NotificationKind =
   | "connection";
 
 export const NOTIFICATION_KINDS: { id: NotificationKind; label: string; description: string }[] = [
-  { id: "needs-input", label: "Needs input", description: "A session stopped to ask you something." },
-  { id: "approval", label: "Needs approval", description: "A session wants your permission to run a command or use a tool." },
-  { id: "done", label: "Turn finished", description: "A session finished its turn while you were elsewhere." },
-  { id: "error", label: "Error", description: "A turn failed, or a session's CLI exited with an error." },
-  { id: "process", label: "Command crashed", description: "A command exited with an error, or kept crashing and was left stopped." },
-  { id: "mailbox", label: "Bot message", description: "A bot got a message from another bot or a terminal." },
-  { id: "bell", label: "Terminal bell", description: "A session's terminal rang its bell or sent a notification." },
-  { id: "connection", label: "Connection", description: "A machine lost its connection, or came back." },
+  { id: "needs-input", label: "Needs input", description: "A session asks you something." },
+  { id: "approval", label: "Needs approval", description: "A session needs permission to act." },
+  { id: "done", label: "Turn finished", description: "A turn finished while you were away." },
+  { id: "error", label: "Error", description: "A turn or its CLI failed." },
+  { id: "process", label: "Command crashed", description: "A command failed or kept crashing." },
+  { id: "mailbox", label: "Bot message", description: "A bot got a message." },
+  { id: "bell", label: "Terminal bell", description: "A terminal rang its bell." },
+  { id: "connection", label: "Connection", description: "A machine disconnected or reconnected." },
 ];
 
 /** `system` is the OS's own banner sound; `custom` is the file the user picked. */

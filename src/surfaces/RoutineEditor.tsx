@@ -7,6 +7,8 @@ import { isValidCron } from "../lib/cron";
 import { type RoutineDraft, type RoutineRun } from "../lib/routines";
 import { dayLabel, duration } from "../lib/time";
 import type { Session, Workspace } from "../lib/types";
+import { useRedesign } from "../prototype/design-system/direction";
+import { BotPicker } from "../prototype/design-system/routines/BotPicker";
 
 type Props = {
   initial: RoutineDraft;
@@ -31,6 +33,7 @@ export function RoutineEditor({
   onRunNow,
   onBack,
 }: Props) {
+  const redesign = useRedesign();
   const [draft, setDraft] = useState(initial);
   const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
   const [bots, setBots] = useState<Session[]>([]);
@@ -139,11 +142,25 @@ export function RoutineEditor({
             <TextArea
               rows={10}
               value={draft.prompt}
-              placeholder="What the bot should do every time this routine fires."
+              placeholder="What the bot should do each run"
               onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
             />
           </Field>
 
+          {/* PROTOTYPE: with a direction on, one picker for the bot and its workspace together. */}
+          {redesign ? (
+            <Group label="Runs as">
+              <BotPicker
+                workspaces={workspaces}
+                workspaceId={workspaceId}
+                sessionId={draft.sessionId}
+                onChange={(nextWorkspaceId, sessionId) => {
+                  setWorkspaceId(nextWorkspaceId);
+                  setDraft((prev) => ({ ...prev, sessionId }));
+                }}
+              />
+            </Group>
+          ) : (
           <div className="grid grid-cols-2 gap-4">
             <Group label="Workspace">
               <Select
@@ -168,11 +185,12 @@ export function RoutineEditor({
               )}
             </Group>
           </div>
+          )}
 
           <Card>
             <Toggle
               label="Enabled"
-              description="Off keeps the routine but stops the schedule. Run now still works"
+              description="Off pauses the schedule. Run now still works."
               checked={draft.enabled}
               onChange={(enabled) => setDraft({ ...draft, enabled })}
             />

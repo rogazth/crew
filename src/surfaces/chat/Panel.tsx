@@ -30,7 +30,7 @@ export type PanelScope = {
 export function PausedSegment() {
   return (
     <span
-      title="Messages and reports from other sessions still arrive, but no longer start a turn. Write here to resume it."
+      title="Messages still arrive but won't start a turn. Write to resume."
       className="flex h-6 items-center gap-1 px-1.5 text-warning"
     >
       <PauseIcon className="size-3" aria-hidden />
@@ -306,6 +306,7 @@ function EntryRow({
       role="option"
       aria-selected={selected}
       data-entry={entry.id}
+      data-attention={entry.attention}
       onMouseEnter={onSelect}
       onClick={onOpen}
       className={`group flex w-full cursor-default items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? "bg-hover" : ""}`}

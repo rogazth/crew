@@ -1389,19 +1389,24 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_update" => {
             let p: SessionUpdate = parse(params)?;
             let store = hosts.store.clone();
-            block(move || {
+            let row = block(move || {
                 session::update(
                     &store,
-                    p.id,
+                    p.id.clone(),
                     p.name,
                     p.provider,
                     p.model,
                     p.description,
                     p.notifications,
                     p.autonomy,
-                )
+                )?;
+                session::get(&store, p.id)
             })
             .await?;
+            // A bot moved to another CLI from its composer: every window shows the new chips.
+            if let Some(row) = row {
+                hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
+            }
             Ok(Value::Null)
         }
         "session_rename" => {

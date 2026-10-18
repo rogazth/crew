@@ -4,6 +4,8 @@ import { CrewGlyph } from "../chrome/CrewGlyph";
 import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import type { AgentChoice } from "../lib/providers";
+import { useRedesign } from "../prototype/design-system/direction";
+import { HomeIntro } from "../prototype/design-system/chat/HomeIntro";
 
 type Props = {
   /** No project is open yet: the page greets a new user and shows the way in. */
@@ -25,6 +27,7 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Write a shell one-l
  * becomes it.
  */
 export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
+  const redesign = useRedesign();
   const { effective: choice, update: setPicked } = useDefaultAgent();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
@@ -38,6 +41,24 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
     onAsk(text, choice);
   };
 
+  // PROTOTYPE: with a direction on, Home is laid out like a new session's first screen.
+  if (redesign) {
+    return (
+      <HomeIntro
+        firstRun={firstRun}
+        draft={draft}
+        setDraft={setDraft}
+        field={field}
+        choice={choice}
+        setChoice={setPicked}
+        send={send}
+        onOpenFolder={onOpenFolder}
+        onNewBot={onNewBot}
+        onOpenBrowser={onOpenBrowser}
+      />
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center px-6 py-10">
@@ -48,7 +69,7 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
           </h1>
           {firstRun && (
             <p className="mt-1.5 max-w-[460px] text-text-muted">
-              Ask anything to start, no project needed. Open a folder when you want your crew to work on code.
+              Ask anything. Open a folder for code.
             </p>
           )}
         </div>
@@ -111,9 +132,9 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
 
         {firstRun && (
           <div className="mt-10 grid grid-cols-3 gap-2">
-            <StartCard icon={FolderPlusIcon} title="Open a project folder" hint="Agents get its code, worktrees and commands" onClick={onOpenFolder} />
-            <StartCard icon={BotIcon} title="Meet your first bot" hint="A teammate with a name, a mailbox and a history" onClick={onNewBot} />
-            <StartCard icon={GlobeIcon} title="Drive a browser tab" hint="Agents can click, fill and screenshot for you" onClick={onOpenBrowser} />
+            <StartCard icon={FolderPlusIcon} title="Open a project folder" hint="Code, worktrees and commands" onClick={onOpenFolder} />
+            <StartCard icon={BotIcon} title="Meet your first bot" hint="A named agent with its own history" onClick={onNewBot} />
+            <StartCard icon={GlobeIcon} title="Drive a browser tab" hint="Agents click, fill and screenshot" onClick={onOpenBrowser} />
           </div>
         )}
       </div>

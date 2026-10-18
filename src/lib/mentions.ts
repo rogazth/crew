@@ -69,11 +69,12 @@ export function completeMention(
   text: string,
   cursor: number,
   file: ProjectFile,
+  { into = false }: { into?: boolean } = {},
 ): { text: string; cursor: number } | null {
   const active = mentionAt(text, cursor);
   if (!active) return null;
-  // A folder stays open: the menu goes on to what is in it.
-  const inserted = file.relative.endsWith("/") ? `@${file.relative}` : `@${file.relative} `;
+  // Going `into` a folder leaves it open, so the menu goes on to what is in it; otherwise the mention is done.
+  const inserted = into && file.relative.endsWith("/") ? `@${file.relative}` : `@${file.relative} `;
   const next = text.slice(0, active.start) + inserted + text.slice(active.end);
   return { text: next, cursor: active.start + inserted.length };
 }

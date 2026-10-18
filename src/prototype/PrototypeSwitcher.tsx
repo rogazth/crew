@@ -8,15 +8,19 @@ export function PrototypeSwitcher({
   variants,
   current,
   onChange,
+  keys = true,
 }: {
   variants: readonly { key: string; name: string }[];
   current: string;
   onChange: (key: string) => void;
+  /** Off over the real app, where ← and → already mean something. */
+  keys?: boolean;
 }) {
   const index = Math.max(0, variants.findIndex((v) => v.key === current));
   const step = (by: number) => onChange(variants[(index + by + variants.length) % variants.length]!.key);
 
   useEffect(() => {
+    if (!keys) return;
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;

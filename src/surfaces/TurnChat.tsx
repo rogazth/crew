@@ -10,7 +10,7 @@ import { useThread } from "../hooks/useThread";
 import { useUploads } from "../hooks/useUploads";
 import { onAgentRequest, peekAgentRequest, takeAgentRequest } from "../lib/agentRoute";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
-import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
+import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, updateSession, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { focusEnv } from "../lib/client/registry";
 import { LOCAL } from "../lib/client/route";
@@ -213,6 +213,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
 
   // Nobody has talked to a session of the user's yet: it can still be another provider's CLI.
   const fresh = session.kind === "terminal" && ready && held.length === 0 && pending.length === 0 && !working;
+  // A bot is an identity, not a CLI: between turns it moves to another provider, which starts it a new conversation.
+  const botSwitch = session.kind === "bot" && ready && !working;
   const { update: remember } = useDefaultAgent();
   // Each turn starts its CLI from the row: the next one runs what the chips say.
   // A pick is also what the next new session starts with.
@@ -227,8 +229,19 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       };
       if (next.provider === session.provider) void setSessionOptions(session.id, options).catch(() => {});
       else if (fresh) void switchSessionProvider(session.id, { provider: next.provider, ...options }).catch(() => {});
+      else if (botSwitch)
+        void updateSession(session.id, {
+          name: session.name,
+          provider: next.provider,
+          model: next.model,
+          description: session.description,
+          notifications: session.notifications,
+          autonomy: next.access,
+        })
+          .then(() => setSessionOptions(session.id, options))
+          .catch(() => {});
     },
-    [fresh, remember, session.id, session.provider],
+    [botSwitch, fresh, remember, session],
   );
 
   const submit = useCallback(
@@ -403,7 +416,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onApprove={approve}
               onAnswer={reply}
               onOptions={changeOptions}
-              switchProvider={fresh}
+              switchProvider={fresh || botSwitch}
               {...(embedded ? { inThread: true } : {})}
               readOnly={readOnly}
             />

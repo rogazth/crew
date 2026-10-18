@@ -1,39 +1,49 @@
-import { extensionOf } from "../lib/attachments";
+import { memo, useInsertionEffect } from "react";
+import sprite from "../assets/file-icons/sprite.svg?raw";
+import "../assets/file-icons/palette.css";
+import { fileIconId, folderIconId } from "../lib/fileIcons";
 
-/** Extension-coloured file glyph. A dot keeps the palette readable at 14px. */
-const COLORS: Record<string, string> = {
-  ts: "#3178c6", tsx: "#3178c6", js: "#f0db4f", jsx: "#f0db4f",
-  rs: "#dea584", py: "#3572a5", go: "#00add8", rb: "#cc342d",
-  php: "#777bb4", java: "#b07219", swift: "#f05138", kt: "#a97bff",
-  css: "#563d7c", scss: "#c6538c", html: "#e34c26", vue: "#41b883",
-  json: "#8a8a8f", yml: "#8a8a8f", yaml: "#8a8a8f", toml: "#8a8a8f",
-  md: "#519aba", sql: "#e38c00", sh: "#89e051", lock: "#8a8a8f",
-  png: "#a074c4", jpg: "#a074c4", jpeg: "#a074c4", svg: "#ffb13b",
-};
+/*
+ * File and folder icons from the Symbols theme (MIT, src/assets/file-icons). Every
+ * icon is a <symbol> in one hidden sprite, mounted into <body> once on the first
+ * render, so a row costs one <use> — cheap enough for the virtualized explorer.
+ * Colours come from the sprite's `--fi-*` variables, lifted in dark mode by
+ * palette.css. Rebuild with `npm run file-icons`.
+ */
 
-export function FileTypeIcon({
+const SPRITE_ID = "crew-file-icons";
+let mounted = false;
+
+function mountSprite() {
+  if (mounted) return;
+  mounted = true;
+  const holder = document.createElement("div");
+  holder.innerHTML = sprite;
+  const svg = holder.firstElementChild;
+  if (!svg) return;
+  svg.id = SPRITE_ID;
+  // A hot reload swaps the old sprite for the new one.
+  const stale = document.getElementById(SPRITE_ID);
+  if (stale) stale.replaceWith(svg);
+  else document.body.prepend(svg);
+}
+
+export const FileTypeIcon = memo(function FileTypeIcon({
   name,
   className = "size-3.5",
+  dir = false,
 }: {
   name: string;
   className?: string;
+  /** Draw `name` as a folder. */
+  dir?: boolean;
+  /** An expanded folder. Symbols draws folders the same open or closed, so it changes nothing yet. */
+  open?: boolean;
 }) {
-  const ext = extensionOf(name);
-  const color = COLORS[ext] ?? "#9a9aa0";
+  useInsertionEffect(mountSprite, []);
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className={`${className} shrink-0`}
-      fill="none"
-      stroke={color}
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M14 3v5h5" />
-      <path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z" />
-      <circle cx="12" cy="15" r="2" fill={color} stroke="none" />
+    <svg className={`${className} shrink-0`} aria-hidden>
+      <use href={`#${dir ? folderIconId(name) : fileIconId(name)}`} />
     </svg>
   );
-}
+});

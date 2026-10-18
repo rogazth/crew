@@ -466,6 +466,8 @@ export function FilterChip<T extends string>({
     <Menu.Root>
       <Menu.Trigger
         aria-label={label}
+        data-filter-chip
+        {...(lit ? { "data-lit": "" } : {})}
         className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
           lit ? "bg-card text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
         }`}

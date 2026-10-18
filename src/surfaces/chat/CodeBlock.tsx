@@ -1,4 +1,4 @@
-import { CodeXmlIcon, WorkflowIcon, WrapTextIcon } from "lucide-react";
+import { CodeXmlIcon, WorkflowIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
 import { highlightInline, resolveLang } from "../../lib/shiki";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
@@ -79,21 +79,17 @@ export function CodeLabel({ lang, title }: { lang: string | undefined; title: st
   );
 }
 
-/** What the head offers: diagram or source for mermaid, wrapping for code, copy for both. */
+/** What the head offers: diagram or source for mermaid, copy for both. */
 export function CodeControls({
   code,
   kind,
   source,
-  wrap,
   onSource,
-  onWrap,
 }: {
   code: string;
   kind: "code" | "diff" | "diagram" | "diagram-source";
   source: boolean;
-  wrap: boolean;
   onSource: () => void;
-  onWrap: () => void;
 }) {
   const mermaid = kind === "diagram" || kind === "diagram-source";
   return (
@@ -101,11 +97,6 @@ export function CodeControls({
       {mermaid ? (
         <HeadButton label={source ? "Show diagram" : "Show source"} pressed={false} onClick={onSource}>
           {source ? <WorkflowIcon className="size-3.5" /> : <CodeXmlIcon className="size-3.5" />}
-        </HeadButton>
-      ) : null}
-      {kind === "code" || kind === "diagram-source" ? (
-        <HeadButton label={wrap ? "Don't wrap lines" : "Wrap lines"} pressed={wrap} onClick={onWrap}>
-          <WrapTextIcon className="size-3.5" />
         </HeadButton>
       ) : null}
       <CopyButton text={code} />
@@ -123,7 +114,6 @@ function kindOf(lang: string | undefined, streaming: boolean, source: boolean) {
 
 /** One box: language (or the file it names) and its controls on top, code below. Plain text until shiki answers. */
 export const CodeBlock = memo(function CodeBlock({ code, lang, title, streaming }: Props) {
-  const [wrap, setWrap] = useState(false);
   const [source, setSource] = useState(false);
   const showSource = useCallback(() => setSource(true), []);
   const kind = kindOf(lang, streaming === true, source);
@@ -137,15 +127,13 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, title, streaming 
           code={code}
           kind={kind}
           source={source}
-          wrap={wrap}
           onSource={() => setSource((on) => !on)}
-          onWrap={() => setWrap((on) => !on)}
         />
       </div>
       {kind === "diff" ? <DiffFence code={code} /> : null}
       {kind === "diagram" ? <Mermaid code={code} onFail={showSource} /> : null}
       {kind === "code" || kind === "diagram-source" ? (
-        <pre className={`crew-code-body${wrap ? " is-wrapped" : ""}`}>
+        <pre className="crew-code-body">
           {html ? <code dangerouslySetInnerHTML={{ __html: html }} /> : <code>{code}</code>}
         </pre>
       ) : null}

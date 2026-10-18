@@ -2332,6 +2332,11 @@ impl TurnHost {
     /// it: the tray keeps the rows, stopped and saying so, until the user
     /// clears them.
     fn close_tray(&self, session_id: &str) {
+        // The seeded design profile keeps its running rows as seeded: no CLI
+        // ever ran them, so none going away ends them (`CREW_KEEP_STATUS`).
+        if std::env::var_os("CREW_KEEP_STATUS").is_some() {
+            return;
+        }
         let now = crate::store::now_millis();
         self.background.touch(session_id, |board| board.end(now, crate::background::CLI_EXITED));
     }

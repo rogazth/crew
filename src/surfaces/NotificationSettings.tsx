@@ -21,7 +21,7 @@ import { isSoundFile, type BannerState } from "../lib/notify";
 import { clock, dayName } from "../lib/time";
 
 const TEST_REASONS: Partial<Record<SkipReason, string>> = {
-  blocked: "macOS did not show it: notifications are off for Crew.",
+  blocked: "Not shown: notifications are off for Crew.",
   unsupported: "This system shows no notifications.",
 };
 
@@ -43,7 +43,7 @@ export function NotificationSettings() {
   const test = () => {
     setTested(null);
     void dispatchNotification({ source: "test", title: "Crew", body: "Notifications are working." }).then((result) => {
-      setTested(result.delivered ? "Sent. If no banner showed, check Focus and System Settings." : (TEST_REASONS[result.reason] ?? null));
+      setTested(result.delivered ? "Sent. No banner? Check Focus and System Settings." : (TEST_REASONS[result.reason] ?? null));
       refresh();
     });
   };
@@ -53,7 +53,7 @@ export function NotificationSettings() {
       <SettingsSection>
         <Toggle
           label="Notifications"
-          description="Banners and sounds when a session finishes, stops to ask, or fails."
+          description="When a session finishes, asks or fails."
           checked={prefs.enabled}
           onChange={(checked) => set("enabled", checked)}
         />
@@ -92,7 +92,7 @@ export function NotificationSettings() {
         </SettingsSection>
 
         <SettingsSection title="Sound">
-          <SettingsRow label="Volume" description="For Crew's own sounds. System follows the Mac's alert volume.">
+          <SettingsRow label="Volume" description="Crew's sounds. System uses the Mac's alert volume.">
             <Volume value={prefs.volume} onCommit={(volume) => set("volume", volume)} preview={prefs.kinds["needs-input"].sound} prefs={prefs} />
           </SettingsRow>
           <CustomSound path={prefs.customSound} onChange={(path) => set("customSound", path)} volume={prefs.volume} />
@@ -103,15 +103,15 @@ export function NotificationSettings() {
             label="Banners only when Crew is in the background"
             description={
               prefs.onlyWhenUnfocused
-                ? "With Crew in front, news of another session shows in the window instead."
-                : "Banners show for any session but the one on screen, Crew in front or not."
+                ? "With Crew in front, news shows in the window."
+                : "Banners for any session but the one on screen."
             }
             checked={prefs.onlyWhenUnfocused}
             onChange={(checked) => set("onlyWhenUnfocused", checked)}
           />
           <Toggle
             label="Show toasts"
-            description="A note in the corner for news of another session, with a button to open it."
+            description="News of other sessions, in the corner."
             checked={prefs.toasts}
             onChange={(checked) => set("toasts", checked)}
           />
@@ -120,13 +120,13 @@ export function NotificationSettings() {
         <SettingsSection title="Dock">
           <Toggle
             label="Badge"
-            description="Counts the sessions that finished or stopped to ask while Crew was in the background. Coming back to Crew clears it."
+            description="Sessions that finished or asked while you were away."
             checked={prefs.badge}
             onChange={(checked) => set("badge", checked)}
           />
           <Toggle
             label="Bounce"
-            description="The icon bounces once when that count goes up."
+            description="Bounce once when the badge goes up."
             checked={prefs.bounce}
             onChange={(checked) => set("bounce", checked)}
           />
@@ -172,8 +172,8 @@ function Blocked() {
       label="Banners are blocked"
       description={
         host
-          ? "macOS has notifications turned off for Crew. Sounds still play."
-          : "This browser blocks notifications for Crew. Sounds still play."
+          ? "Off for Crew in macOS. Sounds still play."
+          : "Blocked by this browser. Sounds still play."
       }
     >
       {host && (
@@ -276,7 +276,7 @@ function CustomSound({
     void open({}).then((picked) => {
       if (typeof picked !== "string") return;
       if (!isSoundFile(picked)) {
-        setError("That is not an audio file Crew can play: pick a WAV, MP3, M4A, AIFF, OGG or FLAC.");
+        setError("Unsupported file. Use WAV, MP3, M4A, AIFF, OGG or FLAC.");
         return;
       }
       setError(null);
@@ -289,7 +289,7 @@ function CustomSound({
   return (
     <SettingsRow
       label="Custom sound"
-      description={error ?? (name ? `${name}, for any event set to Custom.` : "An audio file of your own, for any event set to Custom.")}
+      description={error ?? (name ? `${name}, for any event set to Custom.` : "Your own audio file, for events set to Custom.")}
     >
       {path && (
         <>
