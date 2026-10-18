@@ -3972,6 +3972,11 @@ impl TurnHost {
                     }
                 }
                 drop(map);
+                // The turn after `/clear` opens on the CLI's new conversation:
+                // the session follows it, or a relaunch resumes the old one.
+                if let Some(id) = bind {
+                    self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: id });
+                }
                 if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some())
                 {
                     self.learn_commands(session_id, &cwd, entries, skills);

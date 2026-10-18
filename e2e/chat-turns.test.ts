@@ -253,16 +253,7 @@ test("the CLI's title names the row, the tab and crewd's session, on screen and 
   await sessionRow(crew, aside).waitFor({ timeout: 5000 });
 });
 
-// Skipped for an app bug: crewd learns the CLI's new conversation from the
-// `system/init` that opens the turn after `/clear` (TurnHost's Claude line
-// handler, crates/crew-core/src/turns.rs), updates the live process's id, and
-// returns from the init branch without applying `SessionProviderBound`. The
-// lines after it carry the id it already holds, so the binding never reaches
-// the session's row: providerSessionId stays the old conversation, and the
-// next launch (`/restart`, a setting only a launch sets, a crash) resumes the
-// conversation from before `/clear`. Applying `bind` before that branch's
-// `return`, as the subagent branch below it does, makes this test pass.
-test.skip("/clear moves the session to the CLI's new conversation: what follows goes there, a restart resumes it, and the session outlives its tab", async (t) => {
+test("/clear moves the session to the CLI's new conversation: what follows goes there, a restart resumes it, and the session outlives its tab", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
