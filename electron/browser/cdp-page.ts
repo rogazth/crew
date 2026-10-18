@@ -31,32 +31,20 @@ function push<T>(list: T[], item: T): boolean {
   return true;
 }
 
-type RemoteObject = { type?: string; value?: unknown; description?: string; unserializableValue?: string };
-
-function describe(arg: RemoteObject): string {
-  if (arg.value !== undefined) return typeof arg.value === "string" ? arg.value : JSON.stringify(arg.value);
-  return arg.unserializableValue ?? arg.description ?? arg.type ?? "";
+/**
+ * One line of the page's console, as Electron reports it to every app the way
+ * Chrome does. Not through the debugger: with Runtime enabled, Chrome
+ * serializes each console argument for it, and bot checks log an object with a
+ * getter to catch exactly that.
+ */
+function onConsole(session: Session, details: { level: string; message: string; sourceId: string; lineNumber: number }): void {
+  const level = details.level === "info" ? "log" : details.level;
+  const where = details.sourceId ? ` (${details.sourceId}:${details.lineNumber})` : "";
+  if (push(session.console, `[${level}] ${details.message}${where}`)) session.droppedConsole += 1;
 }
 
 function onMessage(session: Session, method: string, params: Record<string, unknown>): void {
   switch (method) {
-    case "Runtime.consoleAPICalled": {
-      const args = (params.args as RemoteObject[] | undefined) ?? [];
-      if (push(session.console, `[${String(params.type)}] ${args.map(describe).join(" ")}`)) session.droppedConsole += 1;
-      break;
-    }
-    case "Runtime.exceptionThrown": {
-      const details = params.exceptionDetails as { text?: string; exception?: RemoteObject } | undefined;
-      const line = details?.exception?.description ?? details?.text ?? "Uncaught error";
-      if (push(session.console, `[uncaught] ${line}`)) session.droppedConsole += 1;
-      break;
-    }
-    case "Log.entryAdded": {
-      const entry = params.entry as { level?: string; text?: string; url?: string } | undefined;
-      const where = entry?.url ? ` (${entry.url})` : "";
-      if (push(session.console, `[${entry?.level ?? "log"}] ${entry?.text ?? ""}${where}`)) session.droppedConsole += 1;
-      break;
-    }
     case "Network.requestWillBeSent": {
       const request = params.request as { method?: string; url?: string } | undefined;
       session.requests.set(String(params.requestId), {
@@ -197,14 +185,20 @@ export function cdpPage(guest: WebContents): Page {
     if (sessions.get(guest) === session) sessions.delete(guest);
     session.unhook();
   };
+  const logged = (details: { level: string; message: string; sourceId: string; lineNumber: number }) => {
+    if (sessions.get(guest) === session) onConsole(session, details);
+  };
   session.unhook = () => {
     guest.debugger.off("message", message);
     guest.debugger.off("detach", detached);
+    guest.off("console-message", logged);
   };
   guest.debugger.on("message", message);
   guest.debugger.on("detach", detached);
-  // The buffers need these; each is cheap and only runs while an agent drives the tab.
-  for (const domain of ["Runtime", "Log", "Network", "Page"]) {
+  guest.on("console-message", logged);
+  // The network buffer needs these; each is cheap and only runs while an agent drives the tab.
+  // Not Runtime: pages can tell when it is on (see onConsole). The console event already carries what Log would.
+  for (const domain of ["Network", "Page"]) {
     void guest.debugger.sendCommand(`${domain}.enable`).catch(() => {});
   }
   return page;
