@@ -1379,13 +1379,15 @@ impl SessionTools {
             return self.around(caller, &row, at as usize, window as usize, &read);
         }
         let since = args.get("since").and_then(Value::as_i64).map(|n| n.max(0) as usize);
-        let days = args.get("days").and_then(Value::as_u64).filter(|days| *days > 0);
+        let days = days(args);
         // A period without a query is read like a cursor from its first block,
-        // but it is a look back: what it reads is not marked seen.
+        // but it is a look back: what it reads is not marked seen. Nor is a
+        // read kept to some roles: the report or question it leaves out would
+        // be taken back unread.
         let (from, advances) = match (since, days) {
-            (Some(from), _) => (Some(ReadFrom::Cursor(from)), true),
-            (None, Some(days)) => (Some(ReadFrom::Time(now_millis() - days as i64 * 86_400_000)), false),
-            (None, None) => (None, true),
+            (Some(from), _) => (Some(ReadFrom::Cursor(from)), read.roles.is_none()),
+            (None, Some(days)) => (Some(ReadFrom::Time(now_millis() - days * 86_400_000)), false),
+            (None, None) => (None, read.roles.is_none()),
         };
         let running = matches!(row.status.as_str(), "starting" | "working" | "needs-input");
         let (text, start, end, total) = self.turns.transcripts().read(&row.id, |blocks| {
@@ -1502,7 +1504,7 @@ impl SessionTools {
     /// whole workspace. Each hit has the number its block reads as, so
     /// `around` scrolls to it; the best one comes with its neighbours.
     fn search(&self, caller: &Caller, row: Option<&Session>, query: &str, args: &Value, read: &Read) -> Result<Value, String> {
-        let days = args.get("days").and_then(Value::as_u64).filter(|days| *days > 0);
+        let days = days(args);
         let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(HITS_DEFAULT).clamp(1, HITS_MAX) as u32;
         let mut roles: Vec<&str> = read.roles.map(|roles| roles.to_vec()).unwrap_or_else(|| vec!["user", "assistant"]);
         if read.tools && !roles.contains(&"tool") {
@@ -1518,7 +1520,7 @@ impl SessionTools {
                 query: query.to_string(),
                 workspace_id: Some(caller.workspace_id()?.to_string()),
                 session_ids: row.map(|row| vec![row.id.clone()]).unwrap_or_default(),
-                from: days.map(|days| now_millis() - days as i64 * 86_400_000),
+                from: days.map(|days| now_millis() - days * 86_400_000),
                 to: None,
                 limit: Some(limit),
                 offset: None,
@@ -1915,6 +1917,12 @@ fn role_name(role: &BlockRole) -> &'static str {
     }
 }
 
+/// `days`, at most a century: further back is all of it, and a bigger number
+/// would overflow the cutoff.
+fn days(args: &Value) -> Option<i64> {
+    args.get("days").and_then(Value::as_u64).filter(|days| *days > 0).map(|days| days.min(36_500) as i64)
+}
+
 const ROLES: &[&str] = &["user", "assistant", "tool", "system", "reasoning"];
 
 /// `roles`, checked. `None` when not given.
@@ -2153,12 +2161,12 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "read_session",
-            description: "Read a conversation in this workspace as numbered lines (#12 is block 12): what was said, and each tool that ran as one line (include_tools adds their output). Without session: your own conversation; with an id, any session or bot here. What it reads: query searches it (words, not meaning) and answers hits, each with at, when, role and the words around the match (a short message whole), the best hit with its neighbours; around reads the blocks either side of a block number, to scroll from a hit or a line; since reads on from a cursor; days alone reads that many days back, oldest first; nothing reads the tail. Up to max_bytes (16 KB by default, 256 KB at most). cursor is where a read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, with since or the tail, so another session reading it never swallows a report. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
+            description: "Read a conversation in this workspace as numbered lines (#12 is block 12): what was said, and each tool that ran as one line (include_tools adds their output). Without session: your own conversation; with an id, any session or bot here. What it reads: query searches it (words, not meaning) and answers hits, each with at, when, role and the words around the match (a short message whole), the best hit with its neighbours; around reads the blocks either side of a block number, to scroll from a hit or a line; since reads on from a cursor; days alone reads that many days back, oldest first; nothing reads the tail. Up to max_bytes (16 KB by default, 256 KB at most). cursor is where a read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, with since or the tail and no roles, so another session reading it never swallows a report. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "session": { "type": "string", "description": "The session's or bot's id, from delegate, start_session or list_peers. Omit for your own conversation." },
-                    "query": { "type": "string", "description": "Words to look for: a name, an id, a number, what the user called it." },
+                    "query": { "type": "string", "description": "Words to look for: a name, an id, a number, what the user called it. Each word matches whole, but the last also matches as a prefix: end on a stem (permis) to find its forms." },
                     "around": { "type": "integer", "minimum": 1, "description": "A block number (a hit's at, or #N of a line): read the blocks either side of it." },
                     "window": { "type": "integer", "minimum": 1, "maximum": AROUND_MAX, "description": "With around: blocks either side. 5 by default." },
                     "since": { "type": "integer", "minimum": 0, "description": "A cursor from delegate or an earlier read." },
@@ -8786,6 +8794,10 @@ time.sleep(600)
             assert!(read["text"].as_str().unwrap().contains("first job"), "{read}");
         }
         assert_eq!(session_events::seen(store, &id).unwrap(), 0, "a stranger's read advanced seen");
+        // Kept to some roles, the parent's read skips what it leaves out (the
+        // report among them), so it is a look back and moves nothing.
+        w.call(&parent, "read_session", json!({ "session": id, "roles": ["tool"] })).expect("filtered");
+        assert_eq!(session_events::seen(store, &id).unwrap(), 0, "a filtered read advanced seen");
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("parent");
         assert_eq!(session_events::seen(store, &id).unwrap(), read["cursor"].as_i64().unwrap());
         // The user's read of a subagent of someone else does not move it either.
