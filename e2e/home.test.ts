@@ -32,7 +32,8 @@ const homeMark = () => crew.window.locator("[data-home-mark]");
 
 test("a fresh install lands in home, made with its folder", async () => {
   const made = await home();
-  assert.equal(made.path, path.join(crew.home, "Crew"));
+  // The sandbox's data dir has no layout.json, so Home's folder is inside it.
+  assert.equal(made.path, path.join(crew.userData, "work", "home"));
   assert.ok(existsSync(made.path), "home's folder was not made");
   await homeMark().and(crew.window.locator('[aria-current="true"]')).waitFor();
   await crew.window.getByRole("heading", { name: "Welcome to Crew" }).waitFor();

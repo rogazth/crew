@@ -472,16 +472,19 @@ test("a message sent while a turn works is steered into it: its bubble shows at 
   await idle(session);
 });
 
-test("a steer the turn has not read yet waits as a chip, and the bubble takes its place once it is read", async () => {
+test("a steer the turn has not read yet waits at the transcript's foot, and becomes its bubble once it is read", async () => {
   const { session, cwd } = await workingChat(8);
   // The fake reads a message that starts with "late " three seconds after it came.
   await sendWhileWorking("late check the logs", "steer");
-  await chips().filter({ hasText: "this turn" }).filter({ hasText: "late check the logs" }).waitFor();
-  // Taken into the turn: not a message that waits, so the status line counts none.
+  const pinned = crew.window.getByText("At its next step", { exact: true }).filter({ visible: true });
+  await pinned.waitFor();
+  await bubble("late check the logs").waitFor();
+  // Taken into the turn: no chip above the box, and the status line counts none.
+  assert.equal(await chips().count(), 0);
   assert.equal(await waiting(1).count(), 0);
   assert.deepEqual(await heard(cwd, session), ["work 8"]);
+  await pinned.waitFor({ state: "detached" });
   await bubble("late check the logs").waitFor();
-  await waitFor(async () => (await chips().count()) === 0, { message: "the chip is gone once the turn read it" });
   assert.deepEqual(await heard(cwd, session), ["work 8", "late check the logs"]);
   await said("Also: late check the logs").waitFor();
   await idle(session);

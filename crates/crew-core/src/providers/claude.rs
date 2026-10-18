@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use crew_protocol::{
-    ApprovalDecision, AttachedFile, EditHunk, HarnessEvent, McpServer, McpSignIn, McpState, Question, QuestionOption, SubagentState,
-    ToolDetail, ToolStatus, TurnUsage,
+    ApprovalDecision, AttachedFile, EditHunk, HarnessEvent, McpServer, McpSignIn, McpState, Question, QuestionOption,
+    SubagentState, ToolDetail, ToolStatus, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
 use super::runtime::{Autonomy, InlineImage};
 use super::{
-    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field,
-    subagent_report, todo_items,
+    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field, subagent_report,
+    todo_items,
 };
 
 pub use super::{parse_json_line, try_parse_json_record};
@@ -167,7 +167,6 @@ pub fn replayed_text(rec: &Map<String, Value>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-
 /// Claude takes its system prompt on argv and the turn on stdin, so the tail of
 /// the conversation rides in the user message, above what is being asked now.
 pub fn build_claude_user_message(
@@ -247,11 +246,7 @@ fn with_attached_paths(text: &str, files: &[String]) -> String {
     if files.is_empty() {
         return text.to_string();
     }
-    let list = files
-        .iter()
-        .map(|path| format!("- {path}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let list = files.iter().map(|path| format!("- {path}")).collect::<Vec<_>>().join("\n");
     let note = format!("Attached files. Read them if you need their contents:\n{list}");
     if text.is_empty() {
         note
@@ -337,16 +332,8 @@ pub fn to_permission_result(decision: ApprovalDecision, input: &Map<String, Valu
 }
 
 pub fn always_allow_rule(tool_name: &str, input: &Map<String, Value>) -> Value {
-    let command = if tool_name.eq_ignore_ascii_case("bash") {
-        string_field(Some(input), "command")
-    } else {
-        None
-    };
-    let program = command
-        .as_deref()
-        .map(str::trim)
-        .and_then(|cmd| cmd.split_whitespace().next())
-        .map(str::to_string);
+    let command = if tool_name.eq_ignore_ascii_case("bash") { string_field(Some(input), "command") } else { None };
+    let program = command.as_deref().map(str::trim).and_then(|cmd| cmd.split_whitespace().next()).map(str::to_string);
     let rule = if let Some(program) = program {
         json!({ "toolName": tool_name, "ruleContent": format!("{program}:*") })
     } else {
@@ -377,8 +364,7 @@ pub fn parse_questions(input: &Map<String, Value>) -> Vec<Question> {
                 .filter_map(|option| {
                     let opt = as_record(option)?;
                     let label = string_field(Some(opt), "label")?;
-                    let description = string_field(Some(opt), "description")
-                        .filter(|desc| desc != &label);
+                    let description = string_field(Some(opt), "description").filter(|desc| desc != &label);
                     Some(QuestionOption { label, description })
                 })
                 .collect();
@@ -405,12 +391,7 @@ pub fn to_question_result(input: &Map<String, Value>, answers: Option<&HashMap<S
             let mut updated = input.clone();
             updated.insert(
                 "answers".into(),
-                Value::Object(
-                    answers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                        .collect(),
-                ),
+                Value::Object(answers.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect()),
             );
             json!({
                 "behavior": "allow",
@@ -435,12 +416,9 @@ pub fn parse_control_request(rec: &Map<String, Value>) -> Option<ClaudeControlRe
         return None;
     }
     let nested = rec.get("request").and_then(as_record);
-    let request_id = string_field(Some(rec), "request_id")
-        .or_else(|| string_field(nested, "request_id"))
-        .filter(|id| !id.is_empty())?;
-    let subtype = string_field(nested, "subtype")
-        .or_else(|| string_field(Some(rec), "subtype"))
-        .filter(|id| !id.is_empty())?;
+    let request_id =
+        string_field(Some(rec), "request_id").or_else(|| string_field(nested, "request_id")).filter(|id| !id.is_empty())?;
+    let subtype = string_field(nested, "subtype").or_else(|| string_field(Some(rec), "subtype")).filter(|id| !id.is_empty())?;
     let tool_name = string_field(nested, "tool_name").or_else(|| string_field(Some(rec), "tool_name"));
     let tool_use_id = string_field(nested, "tool_use_id").or_else(|| string_field(Some(rec), "tool_use_id"));
     let input = nested
@@ -449,13 +427,7 @@ pub fn parse_control_request(rec: &Map<String, Value>) -> Option<ClaudeControlRe
         .or_else(|| nested.and_then(|row| row.get("tool_input")).and_then(as_record_owned))
         .or_else(|| rec.get("input").and_then(as_record_owned))
         .unwrap_or_default();
-    Some(ClaudeControlRequest {
-        request_id,
-        subtype,
-        tool_name,
-        input,
-        tool_use_id,
-    })
+    Some(ClaudeControlRequest { request_id, subtype, tool_name, input, tool_use_id })
 }
 
 pub fn parse_control_cancel_id(rec: &Map<String, Value>) -> Option<String> {
@@ -463,14 +435,12 @@ pub fn parse_control_cancel_id(rec: &Map<String, Value>) -> Option<String> {
     if type_name != "control_cancel_request" && type_name != "sdk_control_cancel_request" {
         return None;
     }
-    string_field(Some(rec), "request_id")
-        .or_else(|| string_field(rec.get("request").and_then(as_record), "request_id"))
+    string_field(Some(rec), "request_id").or_else(|| string_field(rec.get("request").and_then(as_record), "request_id"))
 }
 
 pub fn session_id_from_message(rec: &Map<String, Value>) -> Option<String> {
     let subtype = string_field(Some(rec), "subtype");
-    if string_field(Some(rec), "type").as_deref() == Some("system")
-        && subtype.as_deref().is_some_and(|s| s.starts_with("hook_"))
+    if string_field(Some(rec), "type").as_deref() == Some("system") && subtype.as_deref().is_some_and(|s| s.starts_with("hook_"))
     {
         return None;
     }
@@ -486,11 +456,7 @@ pub fn stream_text_delta(rec: &Map<String, Value>) -> Option<String> {
     if string_field(Some(delta), "type").as_deref() != Some("text_delta") {
         return None;
     }
-    delta
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
+    delta.get("text").and_then(Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -530,32 +496,19 @@ pub fn input_json_delta_from_event(rec: &Map<String, Value>) -> Option<(i64, Str
     if string_field(Some(delta), "type").as_deref() != Some("input_json_delta") {
         return None;
     }
-    let partial = delta
-        .get("partial_json")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let partial = delta.get("partial_json").and_then(Value::as_str).unwrap_or("").to_string();
     if partial.is_empty() {
         return None;
     }
-    Some((
-        event.get("index").and_then(Value::as_i64).unwrap_or(-1),
-        partial,
-    ))
+    Some((event.get("index").and_then(Value::as_i64).unwrap_or(-1), partial))
 }
 
 pub fn is_subagent_message(rec: &Map<String, Value>) -> bool {
-    rec.get("parent_tool_use_id")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty())
+    rec.get("parent_tool_use_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty())
 }
 
 pub fn assistant_text_blocks(rec: &Map<String, Value>) -> String {
-    let Some(content) = rec
-        .get("message")
-        .and_then(as_record)
-        .and_then(|msg| msg.get("content"))
-        .and_then(Value::as_array)
+    let Some(content) = rec.get("message").and_then(as_record).and_then(|msg| msg.get("content")).and_then(Value::as_array)
     else {
         return String::new();
     };
@@ -581,11 +534,7 @@ pub struct AssistantToolUse {
 }
 
 pub fn assistant_tool_uses(rec: &Map<String, Value>) -> Vec<AssistantToolUse> {
-    let Some(content) = rec
-        .get("message")
-        .and_then(as_record)
-        .and_then(|msg| msg.get("content"))
-        .and_then(Value::as_array)
+    let Some(content) = rec.get("message").and_then(as_record).and_then(|msg| msg.get("content")).and_then(Value::as_array)
     else {
         return Vec::new();
     };
@@ -617,11 +566,7 @@ pub struct ToolResult {
 }
 
 pub fn tool_results_from_user_message(rec: &Map<String, Value>) -> Vec<ToolResult> {
-    let Some(content) = rec
-        .get("message")
-        .and_then(as_record)
-        .and_then(|msg| msg.get("content"))
-        .and_then(Value::as_array)
+    let Some(content) = rec.get("message").and_then(as_record).and_then(|msg| msg.get("content")).and_then(Value::as_array)
     else {
         return Vec::new();
     };
@@ -793,8 +738,7 @@ pub fn mcp_servers(list: &Value) -> Vec<McpServer> {
 
 pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
     let subtype = string_field(Some(rec), "subtype");
-    let failed = rec.get("is_error") == Some(&Value::Bool(true))
-        || subtype.as_deref().is_some_and(|s| s != "success");
+    let failed = rec.get("is_error") == Some(&Value::Bool(true)) || subtype.as_deref().is_some_and(|s| s != "success");
     if !failed {
         return None;
     }
@@ -810,19 +754,11 @@ pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    errors
-        .into_iter()
-        .next()
-        .or_else(|| string_field(Some(rec), "result"))
-        .or_else(|| Some("Claude turn failed.".into()))
+    errors.into_iter().next().or_else(|| string_field(Some(rec), "result")).or_else(|| Some("Claude turn failed.".into()))
 }
 
 pub fn is_message_start(rec: &Map<String, Value>) -> bool {
-    rec.get("event")
-        .and_then(as_record)
-        .and_then(|event| string_field(Some(event), "type"))
-        .as_deref()
-        == Some("message_start")
+    rec.get("event").and_then(as_record).and_then(|event| string_field(Some(event), "type")).as_deref() == Some("message_start")
 }
 
 pub fn is_compact_boundary(rec: &Map<String, Value>) -> bool {
@@ -833,11 +769,7 @@ pub fn is_compact_boundary(rec: &Map<String, Value>) -> bool {
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     if let Some((verb_raw, input)) = name.strip_prefix("mcp__crew__").and(super::crew_call(name, input)) {
         let input: &Map<String, Value> = &input;
-        if !verb_raw.is_empty()
-            && verb_raw
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if !verb_raw.is_empty() && verb_raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             let verb = format!("Crew {}", super::crew_words(verb_raw, input));
             let subject = string_field(Some(input), "to")
                 .or_else(|| string_field(Some(input), "name"))
@@ -920,25 +852,13 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
         return Some(detail);
     }
     if let Some((server, tool)) = mcp_name(name) {
-        return Some(ToolDetail::Mcp {
-            server,
-            tool,
-            input: pretty_input(input),
-            output: None,
-        });
+        return Some(ToolDetail::Mcp { server, tool, input: pretty_input(input), output: None });
     }
     match name.to_ascii_lowercase().as_str() {
-        "bash" => Some(ToolDetail::Command {
-            command: string_field(Some(input), "command")?,
-            exit_code: None,
-            output: None,
-        }),
+        "bash" => Some(ToolDetail::Command { command: string_field(Some(input), "command")?, exit_code: None, output: None }),
         "read" => {
             let limit = input.get("limit").and_then(Value::as_u64);
-            let start = input
-                .get("offset")
-                .and_then(Value::as_u64)
-                .or_else(|| limit.map(|_| 1));
+            let start = input.get("offset").and_then(Value::as_u64).or_else(|| limit.map(|_| 1));
             Some(ToolDetail::File {
                 path: string_field(Some(input), "file_path")?,
                 line_start: start.map(|line| line as u32),
@@ -958,12 +878,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             path: string_field(Some(input), "file_path")?,
             added: Some(line_count(input, "content")),
             removed: None,
-            hunks: raw(input, "content").map(|after| {
-                vec![EditHunk {
-                    before: String::new(),
-                    after: after.to_string(),
-                }]
-            }),
+            hunks: raw(input, "content").map(|after| vec![EditHunk { before: String::new(), after: after.to_string() }]),
         }),
         "multiedit" => {
             let edits = input
@@ -971,10 +886,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
                 .and_then(Value::as_array)
                 .map(|rows| rows.iter().filter_map(as_record).collect::<Vec<_>>())
                 .unwrap_or_default();
-            let hunks = edits
-                .iter()
-                .filter_map(|edit| hunk(edit, "old_string", "new_string"))
-                .collect::<Vec<_>>();
+            let hunks = edits.iter().filter_map(|edit| hunk(edit, "old_string", "new_string")).collect::<Vec<_>>();
             let tally = |key: &str| edits.iter().map(|edit| line_count(edit, key)).sum::<u32>();
             Some(ToolDetail::Edit {
                 path: string_field(Some(input), "file_path")?,
@@ -989,24 +901,10 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             removed: None,
             hunks: None,
         }),
-        "glob" | "grep" => Some(ToolDetail::Search {
-            query: string_field(Some(input), "pattern")?,
-            matches: None,
-            output: None,
-        }),
-        "webfetch" => Some(ToolDetail::Fetch {
-            url: string_field(Some(input), "url")?,
-            title: None,
-            output: None,
-        }),
-        "websearch" => Some(ToolDetail::Search {
-            query: string_field(Some(input), "query")?,
-            matches: None,
-            output: None,
-        }),
-        "todowrite" => Some(ToolDetail::Todo {
-            items: todo_items(input.get("todos"))?,
-        }),
+        "glob" | "grep" => Some(ToolDetail::Search { query: string_field(Some(input), "pattern")?, matches: None, output: None }),
+        "webfetch" => Some(ToolDetail::Fetch { url: string_field(Some(input), "url")?, title: None, output: None }),
+        "websearch" => Some(ToolDetail::Search { query: string_field(Some(input), "query")?, matches: None, output: None }),
+        "todowrite" => Some(ToolDetail::Todo { items: todo_items(input.get("todos"))? }),
         "task" | "agent" => Some(ToolDetail::Agent {
             description: string_field(Some(input), "description").unwrap_or_else(|| "Subagent".into()),
             agent_type: string_field(Some(input), "subagent_type"),
@@ -1018,9 +916,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             steps: None,
             thread: None,
         }),
-        "exitplanmode" => Some(ToolDetail::Plan {
-            text: raw(input, "plan")?.to_string(),
-        }),
+        "exitplanmode" => Some(ToolDetail::Plan { text: raw(input, "plan")?.to_string() }),
         _ => None,
     }
 }
@@ -1045,22 +941,11 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
     }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
     match tool_detail(name, input) {
-        Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command {
-            command,
-            exit_code: None,
-            output: text(),
-        }),
-        Some(ToolDetail::File { path, line_start, line_end, .. }) => Some(ToolDetail::File {
-            path,
-            line_start,
-            line_end,
-            preview: text().map(|body| without_line_numbers(&body)),
-        }),
-        Some(ToolDetail::Search { query, matches, .. }) => Some(ToolDetail::Search {
-            query,
-            matches,
-            output: text(),
-        }),
+        Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command { command, exit_code: None, output: text() }),
+        Some(ToolDetail::File { path, line_start, line_end, .. }) => {
+            Some(ToolDetail::File { path, line_start, line_end, preview: text().map(|body| without_line_numbers(&body)) })
+        }
+        Some(ToolDetail::Search { query, matches, .. }) => Some(ToolDetail::Search { query, matches, output: text() }),
         Some(ToolDetail::Fetch { url, title, .. }) => Some(ToolDetail::Fetch { url, title, output: text() }),
         // A background subagent's call returns at once, saying only that it
         // started: its report comes later, with the notice that it finished.
@@ -1078,12 +963,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
                 thread: None,
             })
         }
-        Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp {
-            server,
-            tool,
-            input,
-            output: text(),
-        }),
+        Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp { server, tool, input, output: text() }),
         // An edit's result is "the file was updated"; a checklist's is "todos
         // modified"; a plan's is the approval. The row already holds more.
         Some(_) => None,
@@ -1127,19 +1007,11 @@ fn raw<'a>(input: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 fn hunk(input: &Map<String, Value>, before: &str, after: &str) -> Option<EditHunk> {
     let before = raw(input, before).unwrap_or_default();
     let after = raw(input, after).unwrap_or_default();
-    (!before.is_empty() || !after.is_empty()).then(|| EditHunk {
-        before: before.to_string(),
-        after: after.to_string(),
-    })
+    (!before.is_empty() || !after.is_empty()).then(|| EditHunk { before: before.to_string(), after: after.to_string() })
 }
 
 fn line_count(input: &Map<String, Value>, key: &str) -> u32 {
-    input
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-        .map(|text| text.lines().count() as u32)
-        .unwrap_or(0)
+    input.get(key).and_then(Value::as_str).filter(|text| !text.is_empty()).map(|text| text.lines().count() as u32).unwrap_or(0)
 }
 
 fn pretty_tool(name: &str) -> String {
@@ -1354,7 +1226,8 @@ impl Subagents {
             "task_updated" => {
                 let patch = rec.get("patch").and_then(as_record);
                 let state = string_field(patch, "status").as_deref().and_then(subagent_state);
-                let background = (patch.and_then(|patch| patch.get("is_backgrounded")) == Some(&Value::Bool(true))).then_some(true);
+                let background =
+                    (patch.and_then(|patch| patch.get("is_backgrounded")) == Some(&Value::Bool(true))).then_some(true);
                 (state.is_some() || background.is_some()).then(|| update(state, None, None, background))
             }
             "task_notification" => {
@@ -1419,7 +1292,15 @@ mod tests {
         let command = build_claude_dispatch_message("s", None, "/compact keep the tests", &[], &[], Some("compact"), &[]);
         assert_eq!(blocks(&command), [text("/compact keep the tests")]);
 
-        let skill = build_claude_dispatch_message("s", None, "check this, then /lint src and /fmt", &[], &[], None, &skills(&["lint", "fmt"]));
+        let skill = build_claude_dispatch_message(
+            "s",
+            None,
+            "check this, then /lint src and /fmt",
+            &[],
+            &[],
+            None,
+            &skills(&["lint", "fmt"]),
+        );
         assert_eq!(blocks(&skill), [text("check this, then"), text("/lint src and /fmt")]);
 
         let leading = build_claude_dispatch_message("s", None, "/fmt then /lint", &[], &[], None, &skills(&["lint", "fmt"]));
@@ -1529,14 +1410,8 @@ mod tests {
     /// The two reloads carry nothing but their name, as 2.1.295 takes them.
     #[test]
     fn the_reload_requests_name_only_what_to_reload() {
-        assert_eq!(
-            build_control_request("ctrl-7", reload_plugins_request())["request"],
-            json!({ "subtype": "reload_plugins" })
-        );
-        assert_eq!(
-            build_control_request("ctrl-8", reload_skills_request())["request"],
-            json!({ "subtype": "reload_skills" })
-        );
+        assert_eq!(build_control_request("ctrl-7", reload_plugins_request())["request"], json!({ "subtype": "reload_plugins" }));
+        assert_eq!(build_control_request("ctrl-8", reload_skills_request())["request"], json!({ "subtype": "reload_skills" }));
     }
 
     // Shapes as Claude Code 2.1.290 declares them for its control channel.
@@ -1686,7 +1561,12 @@ mod tests {
 
     /// Feeds a capture's lines to a live Claude session and folds what came
     /// out into blocks, as the transcript does.
-    fn replay(host: &TurnHost, cap: &crate::turns::Applied, lines: &[&str], blocks: Vec<crew_protocol::Block>) -> Vec<crew_protocol::Block> {
+    fn replay(
+        host: &TurnHost,
+        cap: &crate::turns::Applied,
+        lines: &[&str],
+        blocks: Vec<crew_protocol::Block>,
+    ) -> Vec<crew_protocol::Block> {
         for line in lines {
             host.handle_claude_line("s", line);
         }
@@ -1694,7 +1574,9 @@ mod tests {
     }
 
     /// The one subagent call in `blocks`, and its detail.
-    fn subagent(blocks: &[crew_protocol::Block]) -> (crew_protocol::BlockTool, Vec<crew_protocol::Block>, Option<SubagentState>, Option<String>, Option<bool>) {
+    fn subagent(
+        blocks: &[crew_protocol::Block],
+    ) -> (crew_protocol::BlockTool, Vec<crew_protocol::Block>, Option<SubagentState>, Option<String>, Option<bool>) {
         let calls: Vec<_> = blocks.iter().filter_map(|block| block.tool.clone()).collect();
         assert_eq!(calls.len(), 1, "only the Agent call is the agent's own: {calls:?}");
         let call = calls[0].clone();
@@ -1733,10 +1615,7 @@ mod tests {
         assert_eq!(call.status, ToolStatus::Completed);
         assert_eq!(state, Some(SubagentState::Done));
         assert_eq!(background, None);
-        assert_eq!(
-            step_paths(&steps),
-            vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]
-        );
+        assert_eq!(step_paths(&steps), vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]);
         assert!(output.is_some_and(|report| report.contains("alpha") && !report.contains("[Subagent hand-back]")));
         assert!(said(&blocks, crew_protocol::BlockRole::User).is_empty(), "{blocks:?}");
         assert_eq!(
@@ -1796,10 +1675,7 @@ mod tests {
         let blocks = replay(&host, &cap, &lines[end..], blocks);
         let (_, steps, state, output, _) = subagent(&blocks);
         assert_eq!(state, Some(SubagentState::Done));
-        assert_eq!(
-            step_paths(&steps),
-            vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]
-        );
+        assert_eq!(step_paths(&steps), vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]);
         assert_eq!(said(&steps, crew_protocol::BlockRole::Assistant).len(), 2);
         assert!(output.is_some_and(|report| report.contains("beta")));
         let notes = said(&blocks, crew_protocol::BlockRole::System);
@@ -1824,7 +1700,8 @@ mod tests {
         let (call, steps, state, output, background) = subagent(&blocks);
         assert_eq!((call.status, state, background), (ToolStatus::Completed, Some(SubagentState::Done), None));
         assert!(output.is_some_and(|report| report.ends_with("Done.") && !report.contains("[Subagent hand-back]")));
-        let words: Vec<&str> = steps.iter().filter(|step| step.role == BlockRole::Assistant).map(|step| step.text.as_str()).collect();
+        let words: Vec<&str> =
+            steps.iter().filter(|step| step.role == BlockRole::Assistant).map(|step| step.text.as_str()).collect();
         assert_eq!(words.len(), 2, "{steps:?}");
         assert!(words[0].starts_with("Glob isn't available in this session"), "{words:?}");
         assert!(steps.iter().any(|step| step.tool.as_ref().is_some_and(|tool| tool.name == "Bash")), "its tools are steps too");
@@ -1833,7 +1710,10 @@ mod tests {
         assert_eq!(list.commands.len(), 1, "the agent's own tools are no entries: {list:?}");
         let row = &list.commands[0];
         assert_eq!((row.kind, row.state, row.foreground), (BackgroundKind::Subagent, BackgroundState::Completed, Some(true)));
-        assert_eq!((row.command.as_str(), row.tool_call_id.as_deref()), ("List markdown files", Some("toolu_014cr5Q3Xeq2gAaBzki7hzeE")));
+        assert_eq!(
+            (row.command.as_str(), row.tool_call_id.as_deref()),
+            ("List markdown files", Some("toolu_014cr5Q3Xeq2gAaBzki7hzeE"))
+        );
         assert_eq!((row.tokens, row.stoppable, row.activity.as_deref()), (Some(9561), Some(true), None));
         assert_eq!((row.model.as_deref(), row.window), (Some("claude-haiku-5-5"), Some(1_000_000)));
     }
@@ -1879,11 +1759,18 @@ mod tests {
         let lines: Vec<&str> = STOPPED.lines().collect();
         let blocks = replay(&host, &cap, &lines, Vec::new());
         let (call, _, state, _, _) = subagent(&blocks);
-        assert_eq!((call.status, state), (ToolStatus::Failed, Some(SubagentState::Stopped)), "the model was told the call was rejected");
+        assert_eq!(
+            (call.status, state),
+            (ToolStatus::Failed, Some(SubagentState::Stopped)),
+            "the model was told the call was rejected"
+        );
         let list = host.background_list("s");
         assert_eq!(list.commands.len(), 1, "{list:?}");
         let row = &list.commands[0];
-        assert_eq!((row.state, row.tokens, row.activity.as_deref(), row.stop_note.as_deref()), (BackgroundState::Stopped, Some(9012), None, None));
+        assert_eq!(
+            (row.state, row.tokens, row.activity.as_deref(), row.stop_note.as_deref()),
+            (BackgroundState::Stopped, Some(9012), None, None)
+        );
     }
 
     /// A subagent sent to the background goes on after the turn that started
@@ -1896,7 +1783,8 @@ mod tests {
         let cap = host.test_capture();
         host.test_install_claude("s");
         let lines: Vec<&str> = BACKGROUND_USAGE.lines().collect();
-        let position = |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("no {needle}"));
+        let position =
+            |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("no {needle}"));
         let end = position(r#""type":"result""#) + 1;
         replay(&host, &cap, &lines[..end], Vec::new());
         let row = host.background_list("s").commands.remove(0);
@@ -1905,7 +1793,10 @@ mod tests {
         let progress = position(r#""subtype":"task_progress""#) + 1;
         replay(&host, &cap, &lines[end..progress], Vec::new());
         let row = host.background_list("s").commands.remove(0);
-        assert_eq!((row.state, row.tokens, row.activity.as_deref()), (BackgroundState::Running, Some(7812), Some("Reading README.md")));
+        assert_eq!(
+            (row.state, row.tokens, row.activity.as_deref()),
+            (BackgroundState::Running, Some(7812), Some("Reading README.md"))
+        );
 
         replay(&host, &cap, &lines[progress..], Vec::new());
         let row = host.background_list("s").commands.remove(0);
@@ -1934,7 +1825,11 @@ mod tests {
         let said = steps.iter().find(|step| step.role == crew_protocol::BlockRole::Assistant).expect("its words");
         let kept = said.text.split("\n…").next().unwrap_or_default();
         assert_eq!(kept.len(), crew_protocol::STEP_TEXT_LIMIT);
-        assert!(said.text.ends_with("more bytes") && said.text.starts_with("word word"), "{:?}", &said.text[said.text.len() - 40..]);
+        assert!(
+            said.text.ends_with("more bytes") && said.text.starts_with("word word"),
+            "{:?}",
+            &said.text[said.text.len() - 40..]
+        );
     }
 
     /// A `SendMessage` that resumes a subagent is a call to it of its own: it
@@ -1991,9 +1886,8 @@ mod tests {
         let mut subagents = Subagents::default();
         let rec = |value: Value| value.as_object().expect("record").clone();
         let call = |id: &str| {
-            (id == "toolu_agent").then(|| {
-                ("Agent".to_string(), rec(json!({ "description": "Run 40-second sleep", "subagent_type": "Explore" })))
-            })
+            (id == "toolu_agent")
+                .then(|| ("Agent".to_string(), rec(json!({ "description": "Run 40-second sleep", "subagent_type": "Explore" }))))
         };
         let started = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "toolu_agent",
             "description": "Run 40-second sleep", "task_type": "local_agent", "is_backgrounded": false }));
@@ -2005,11 +1899,13 @@ mod tests {
         let nested = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "b1", "owned_by_subagent": true,
             "tool_use_id": "toolu_bash", "description": "Sleep", "task_type": "local_bash", "parent_task_id": "a1" }));
         assert!(subagents.task(&nested, |_| Some(("Bash".to_string(), Map::new()))).is_empty());
-        let nested_end = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_bash",
+        let nested_end =
+            rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_bash",
             "status": "stopped", "summary": "Sleep" }));
         assert!(subagents.task(&nested_end, call).is_empty(), "its tool's task ends no subagent");
 
-        let stopped = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "tool_use_id": "toolu_agent",
+        let stopped =
+            rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "tool_use_id": "toolu_agent",
             "status": "stopped", "summary": "Run 40-second sleep" }));
         let Some(HarnessEvent::SubagentUpdated { state, output, .. }) = subagents.task(&stopped, call).pop() else {
             panic!("a stop is an update");
@@ -2028,9 +1924,7 @@ mod tests {
         cap.take()
             .into_iter()
             .filter_map(|event| match event {
-                HarnessEvent::ToolStarted { detail, .. } | HarnessEvent::ToolUpdated { detail, .. } => {
-                    Some(detail)
-                }
+                HarnessEvent::ToolStarted { detail, .. } | HarnessEvent::ToolUpdated { detail, .. } => Some(detail),
                 _ => None,
             })
             .collect()
@@ -2201,7 +2095,9 @@ mod tests {
         }
         assert_eq!(host.background_list("s").commands.len(), 1, "the shell has its row");
         let events = cap.take();
-        assert!(events.iter().any(|event| matches!(event, HarnessEvent::MessageDelta { .. } | HarnessEvent::MessageCompleted { .. })));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, HarnessEvent::MessageDelta { .. } | HarnessEvent::MessageCompleted { .. })));
         assert!(!events.iter().any(|event| matches!(event, HarnessEvent::SessionNote { .. })), "{events:?}");
     }
 
@@ -2209,27 +2105,16 @@ mod tests {
     fn a_bash_call_carries_its_command() {
         assert_eq!(
             tool_details(&[tool_use("Bash", json!({ "command": CURL, "description": "Get HTTP status code" }))]),
-            vec![Some(ToolDetail::Command {
-                command: CURL.into(),
-                exit_code: None,
-                output: None,
-            })]
+            vec![Some(ToolDetail::Command { command: CURL.into(), exit_code: None, output: None })]
         );
     }
 
     #[test]
     fn a_bash_result_puts_the_output_on_the_command() {
-        let got = tool_details(&[
-            tool_use("Bash", json!({ "command": CURL })),
-            tool_result("200"),
-        ]);
+        let got = tool_details(&[tool_use("Bash", json!({ "command": CURL })), tool_result("200")]);
         assert_eq!(
             got.last().cloned().flatten(),
-            Some(ToolDetail::Command {
-                command: CURL.into(),
-                exit_code: None,
-                output: Some("200".into()),
-            })
+            Some(ToolDetail::Command { command: CURL.into(), exit_code: None, output: Some("200".into()) })
         );
     }
 
@@ -2242,12 +2127,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                Some(ToolDetail::File {
-                    path: "/w/src/lib.rs".into(),
-                    line_start: Some(40),
-                    line_end: Some(51),
-                    preview: None,
-                }),
+                Some(ToolDetail::File { path: "/w/src/lib.rs".into(), line_start: Some(40), line_end: Some(51), preview: None }),
                 Some(ToolDetail::File {
                     path: "/w/src/lib.rs".into(),
                     line_start: Some(40),
@@ -2313,11 +2193,7 @@ mod tests {
         let got = tool_details(&[start, delta, tool_result("2 passing\n")]);
         assert_eq!(
             got.last().cloned().flatten(),
-            Some(ToolDetail::Command {
-                command: "npm test".into(),
-                exit_code: None,
-                output: Some("2 passing\n".into()),
-            }),
+            Some(ToolDetail::Command { command: "npm test".into(), exit_code: None, output: Some("2 passing\n".into()) }),
             "the streamed command was lost; the row fell back to raw output"
         );
     }
@@ -2345,19 +2221,10 @@ mod tests {
             },
             "session_id": "s"
         });
-        let got = tool_details(&[
-            start,
-            delta,
-            tool_use("Bash", json!({ "command": "npm test" })),
-            tool_result("2 passing\n"),
-        ]);
+        let got = tool_details(&[start, delta, tool_use("Bash", json!({ "command": "npm test" })), tool_result("2 passing\n")]);
         assert_eq!(
             got.last().cloned().flatten(),
-            Some(ToolDetail::Command {
-                command: "npm test".into(),
-                exit_code: None,
-                output: Some("2 passing\n".into()),
-            }),
+            Some(ToolDetail::Command { command: "npm test".into(), exit_code: None, output: Some("2 passing\n".into()) }),
             "the assistant frame did not restore the command"
         );
     }
@@ -2376,10 +2243,7 @@ mod tests {
                 path: "/w/a.ts".into(),
                 added: Some(3),
                 removed: None,
-                hunks: Some(vec![EditHunk {
-                    before: String::new(),
-                    after: "one\ntwo\nthree".into(),
-                }]),
+                hunks: Some(vec![EditHunk { before: String::new(), after: "one\ntwo\nthree".into() }]),
             })
         );
     }
@@ -2434,10 +2298,7 @@ mod tests {
                 output: Some("[\n  {\"uid\": 1}\n]".into()),
             })
         );
-        assert_eq!(
-            tool_label("mcp__chrome-devtools__take_snapshot", &Map::new()),
-            "chrome-devtools · take snapshot"
-        );
+        assert_eq!(tool_label("mcp__chrome-devtools__take_snapshot", &Map::new()), "chrome-devtools · take snapshot");
         assert_eq!(tool_label("mcp__claude_ai_Notion__notion-fetch", &Map::new()), "Notion · notion fetch");
     }
 
@@ -2484,14 +2345,8 @@ mod tests {
 
     #[test]
     fn an_unrecognized_tool_falls_back_to_its_result_text() {
-        let got = tool_details(&[
-            tool_use("mcp__crew__list_agents", json!({})),
-            tool_result("Ada, Grace"),
-        ]);
-        assert_eq!(
-            got.last().cloned().flatten(),
-            Some(ToolDetail::Output { text: "Ada, Grace".into() })
-        );
+        let got = tool_details(&[tool_use("mcp__crew__list_agents", json!({})), tool_result("Ada, Grace")]);
+        assert_eq!(got.last().cloned().flatten(), Some(ToolDetail::Output { text: "Ada, Grace".into() }));
     }
 
     #[test]
@@ -2574,25 +2429,14 @@ mod tests {
             "questions": [{ "question": "Q", "options": [{ "label": "A", "description": "Do the A thing" }] }]
         });
         let questions = parse_questions(input.as_object().unwrap());
-        assert_eq!(
-            questions[0].options[0],
-            QuestionOption {
-                label: "A".into(),
-                description: Some("Do the A thing".into()),
-            }
-        );
+        assert_eq!(questions[0].options[0], QuestionOption { label: "A".into(), description: Some("Do the A thing".into()) });
         assert_eq!(questions[0].header, "Q");
     }
 
     #[test]
     fn is_not_a_question_without_options() {
         assert!(parse_questions(json!({ "command": "ls" }).as_object().unwrap()).is_empty());
-        assert!(parse_questions(
-            json!({ "questions": [{ "question": "Q", "options": [] }] })
-                .as_object()
-                .unwrap()
-        )
-        .is_empty());
+        assert!(parse_questions(json!({ "questions": [{ "question": "Q", "options": [] }] }).as_object().unwrap()).is_empty());
     }
 
     #[test]
@@ -2667,9 +2511,6 @@ mod tests {
     fn a_message_keeps_its_detail_when_the_result_lands() {
         // The result arrives without the input that started it, which is when
         // the row used to lose the message and show the receipt instead.
-        assert_eq!(
-            tool_result_detail("mcp__crew__message_agent", &Map::new(), "{\"delivered\": true}", false),
-            None
-        );
+        assert_eq!(tool_result_detail("mcp__crew__message_agent", &Map::new(), "{\"delivered\": true}", false), None);
     }
 }

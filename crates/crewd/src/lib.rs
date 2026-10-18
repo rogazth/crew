@@ -14,15 +14,15 @@ use crew_core::file_search;
 use crew_core::files;
 use crew_core::mailbox;
 use crew_core::messages;
-use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
 use crew_core::process_tools::ProcessTools;
-use crew_core::session_tools::SessionTools;
+use crew_core::provider_session;
 use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
+use crew_core::session_tools::SessionTools;
 use crew_core::store::{self as app_state, Store};
 use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
@@ -32,10 +32,9 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionOptions, SessionUpdated, SessionUpdate, SessionsDeleted,
-    SessionsRetention, TempFile,
-    SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
-    TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
+    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId, SessionOptions,
+    SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail, TurnAnswer,
+    TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -89,11 +88,7 @@ pub struct Listen {
 impl Listen {
     /// The window's own daemon: loopback, any port, a token for this run.
     pub fn local() -> Self {
-        Self {
-            addr: "127.0.0.1:0".into(),
-            token: random_token(),
-            wait_for_addr: false,
-        }
+        Self { addr: "127.0.0.1:0".into(), token: random_token(), wait_for_addr: false }
     }
 }
 
@@ -221,33 +216,20 @@ impl Hub {
     fn subscribe(&self) -> (u64, mpsc::Receiver<Outgoing>) {
         let (tx, rx) = mpsc::channel(OUT_CAP);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        self.clients
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, tx);
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(id, tx);
         (id, rx)
     }
 
     fn watch_pty(&self, id: u64, stream_id: u32) {
-        self.pty_attached
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(id)
-            .or_default()
-            .insert(stream_id);
+        self.pty_attached.lock().unwrap_or_else(|e| e.into_inner()).entry(id).or_default().insert(stream_id);
     }
 
     fn unsubscribe(&self, id: u64) {
-        self.clients
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         let orphaned: Vec<u32> = {
             let mut attached = self.pty_attached.lock().unwrap_or_else(|e| e.into_inner());
             let mine = attached.remove(&id).unwrap_or_default();
-            mine.into_iter()
-                .filter(|stream| !attached.values().any(|streams| streams.contains(stream)))
-                .collect()
+            mine.into_iter().filter(|stream| !attached.values().any(|streams| streams.contains(stream))).collect()
         };
         self.quiet.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         if let Some(unwatch) = self.unwatch.get() {
@@ -278,12 +260,7 @@ impl Hub {
     }
 
     fn send(&self, id: u64, msg: Outgoing) {
-        let tx = self
-            .clients
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&id)
-            .cloned();
+        let tx = self.clients.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned();
         let Some(tx) = tx else {
             return;
         };
@@ -299,9 +276,7 @@ impl Hub {
     }
 
     fn send_wait(&self, tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
-        let send = async {
-            tokio::time::timeout(SEND_WAIT, tx.send(msg)).await
-        };
+        let send = async { tokio::time::timeout(SEND_WAIT, tx.send(msg)).await };
         let result = if tokio::runtime::Handle::try_current().is_ok() {
             tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(send))
         } else {
@@ -380,32 +355,16 @@ impl ProcessEvents for Hub {
     }
 
     fn removed(&self, workspace_id: &str, id: &str) {
-        self.emit(
-            "process-removed",
-            proto::ProcessRemoved { workspace_id: workspace_id.to_string(), id: id.to_string() },
-        );
+        self.emit("process-removed", proto::ProcessRemoved { workspace_id: workspace_id.to_string(), id: id.to_string() });
     }
 }
 
 impl TranscriptEvents for Hub {
     fn apply(&self, session_id: &str, seq: u64, event: &crew_protocol::HarnessEvent) {
-        self.emit(
-            "transcript-apply",
-            TranscriptApply {
-                session_id: session_id.to_string(),
-                seq,
-                event: event.clone(),
-            },
-        );
+        self.emit("transcript-apply", TranscriptApply { session_id: session_id.to_string(), seq, event: event.clone() });
     }
 
-    fn status(
-        &self,
-        session_id: &str,
-        status: &str,
-        provider_session_id: Option<&str>,
-        updated_at: i64,
-    ) {
+    fn status(&self, session_id: &str, status: &str, provider_session_id: Option<&str>, updated_at: i64) {
         self.emit(
             "session-status",
             proto::SessionStatusEvent {
@@ -443,7 +402,6 @@ struct ToolDispatch {
     toolbox: Toolbox,
     exit: std_mpsc::Sender<()>,
 }
-
 
 impl ToolHost for ToolDispatch {
     fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String> {
@@ -538,6 +496,11 @@ impl AgentEvents for AgentFanout {
     }
 }
 
+/// A key that holds a tab strip, whose browser tabs main reports to the machines.
+fn is_strip(key: &str) -> bool {
+    key.starts_with("tabs:") && key != "tabs:scope"
+}
+
 pub fn serve(config: Config) -> Result<Handle, String> {
     serve_on(config, Listen::local())
 }
@@ -561,12 +524,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     }));
     let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
     transcripts.set_events(hub.clone());
-    let turns = TurnHost::new(
-        config.agents.clone(),
-        config.store.clone(),
-        transcripts.clone(),
-        config.bridge.clone(),
-    );
+    let turns = TurnHost::new(config.agents.clone(), config.store.clone(), transcripts.clone(), config.bridge.clone());
     // What a turn left running in the background reaches every window.
     let tray = hub.clone();
     turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
@@ -581,36 +539,37 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
     let leases = Leases::new();
     let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
+    // `crewd serve`: the browser is on whichever Macs connect, and says so when none is.
+    browser.relay().set_remote(listen.wait_for_addr);
     let to_client = hub.clone();
-    browser
-        .relay()
-        .set_sender(Arc::new(move |client, event, payload| to_client.send_event(client, event, payload)));
+    browser.relay().set_sender(Arc::new(move |client, event, payload| to_client.send_event(client, event, payload)));
     let to_all = hub.clone();
     leases.set_on_change(move |all| to_all.emit("browser-leases", all));
     config.pty.set_events(hub.clone());
     let _ = hub.unwatch.set(Box::new(config.pty.unwatcher()));
-    config.agents.set_events(Arc::new(AgentFanout {
-        turns: turns.clone(),
-    }));
+    config.agents.set_events(Arc::new(AgentFanout { turns: turns.clone() }));
     let scheduler = Scheduler::new(config.store.clone(), turns.clone());
     scheduler.set_events(hub.clone());
     // Tool families register here, with the host handles they need.
     let toolbox = turns.toolbox();
     let (exit_tx, exit_rx) = std_mpsc::channel();
     let made = hub.clone();
-    let children = Arc::new(SessionTools::new(
-        turns.clone(),
-        Arc::new(move |created: &crew_core::session::Session| {
-            // A terminal it makes is a handoff (`start_session` with owner
-            // user): the window opens its tab and starts its CLI on the prompt.
-            made.emit("session-created", SessionCreated { session: proto_session(created), open: created.kind == "terminal" });
-        }),
-    )
-    .with_processes(config.processes.clone()));
+    let children = Arc::new(
+        SessionTools::new(
+            turns.clone(),
+            Arc::new(move |created: &crew_core::session::Session| {
+                // A terminal it makes is a handoff (`start_session` with owner
+                // user): the window opens its tab and starts its CLI on the prompt.
+                made.emit(
+                    "session-created",
+                    SessionCreated { session: proto_session(created), open: created.kind == "terminal" },
+                );
+            }),
+        )
+        .with_processes(config.processes.clone()),
+    );
     toolbox.register(children.clone());
-    toolbox.register(Arc::new(
-        ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone()),
-    ));
+    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
     toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
@@ -688,10 +647,7 @@ async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
         match TcpListener::bind(&listen.addr).await {
             Err(error)
                 if listen.wait_for_addr
-                    && matches!(
-                        error.kind(),
-                        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse
-                    ) =>
+                    && matches!(error.kind(), std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse) =>
             {
                 eprintln!("[crewd] {}: {error}; trying again in {wait:?}", listen.addr);
                 tokio::time::sleep(wait).await;
@@ -867,13 +823,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         let _ = sink.close().await;
         return;
     }
-    let hello = proto::event(
-        "hello",
-        proto::Hello {
-            protocol: proto::PROTOCOL,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        },
-    );
+    let hello = proto::event("hello", proto::Hello { protocol: proto::PROTOCOL, version: env!("CARGO_PKG_VERSION").to_string() });
     let Ok(hello) = hello.and_then(|event| serde_json::to_string(&event)) else {
         return;
     };
@@ -1020,12 +970,7 @@ fn enqueue_pty_input(
     });
 }
 
-async fn drain_pty_input(
-    host: PtyHost,
-    hub: Arc<Hub>,
-    stream_id: u32,
-    mut rx: mpsc::Receiver<Vec<u8>>,
-) {
+async fn drain_pty_input(host: PtyHost, hub: Arc<Hub>, stream_id: u32, mut rx: mpsc::Receiver<Vec<u8>>) {
     while let Some(data) = rx.recv().await {
         let writer = host.clone();
         let result = tokio::task::spawn_blocking(move || writer.write_stream(stream_id, &data)).await;
@@ -1040,9 +985,7 @@ async fn drain_pty_input(
 }
 
 fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<String>) {
-    let id = host
-        .session_of_stream(stream_id)
-        .unwrap_or_else(|| stream_id.to_string());
+    let id = host.session_of_stream(stream_id).unwrap_or_else(|| stream_id.to_string());
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
 }
 
@@ -1075,11 +1018,43 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
     }
     // These speak for the connection itself, so they need to know which one it is.
     if request.method == "browser_host_register" {
+        let hello = parse::<proto::BrowserHostRegister>(request.params).unwrap_or_default();
         hub.hush(client_id);
-        hosts.browser.relay().register_host(client_id);
+        let hello = crew_core::browser_relay::Hello { name: hello.name, acks: hello.acks };
+        hosts.browser.relay().register_host(client_id, hello);
         let leases = hosts.browser.leases().list(app_state::now_millis());
         return Some(encode(&match json(leases) {
             Ok(value) => proto::ok(request.id, value),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
+    if request.method == "browser_ack" {
+        if let Ok(ack) = parse::<proto::BrowserAck>(request.params) {
+            hosts.browser.relay().ack(client_id, ack.call_id);
+        }
+        return None;
+    }
+    if request.method == "browser_host_focus" {
+        hosts.browser.relay().focus(client_id);
+        return Some(encode(&proto::ok(request.id, Value::Null)));
+    }
+    if request.method == "browser_host_pages" {
+        let result = parse::<proto::BrowserHostPages>(request.params).and_then(|list| {
+            let pages = list
+                .pages
+                .into_iter()
+                .map(|page| crew_core::browser::OpenPage {
+                    workspace_id: crew_core::browser::workspace_of(&page.context).to_string(),
+                    page_id: page.page_id,
+                    context: page.context,
+                    url: page.url,
+                    title: page.title,
+                })
+                .collect();
+            hosts.browser.relay().set_pages(client_id, pages)
+        });
+        return Some(encode(&match result {
+            Ok(()) => proto::ok(request.id, Value::Null),
             Err(error) => proto::err(request.id, error),
         }));
     }
@@ -1117,10 +1092,7 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     let result = block(move || {
         host.attach(&id, from, |attached, stream_id, tail| {
             hub_c.watch_pty(client_id, stream_id);
-            let value = match serde_json::to_value(PtyAttached {
-                start: attached.start,
-                emitted: attached.emitted,
-            }) {
+            let value = match serde_json::to_value(PtyAttached { start: attached.start, emitted: attached.emitted }) {
                 Ok(value) => value,
                 Err(error) => {
                     hub_c.send(client_id, Outgoing::Text(encode(&proto::err(req_id, error.to_string()))));
@@ -1142,12 +1114,8 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
-async fn block<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|e| e.to_string())?
+async fn block<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(work).await.map_err(|e| e.to_string())?
 }
 
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
@@ -1324,32 +1292,41 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_create" => {
             let p: SessionCreate = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || {
-                let mut row = session::create_in_worktree(
-                    &store,
-                    p.workspace_id,
-                    p.kind,
-                    p.name,
-                    p.provider,
-                    p.model,
-                    p.description,
-                    p.autonomy,
-                    p.worktree,
-                )?;
-                let effort = p.effort.clone().unwrap_or_default();
-                let tier = p.service_tier.clone().unwrap_or_default();
-                if !effort.is_empty() || !tier.is_empty() {
-                    session::set_options(&store, row.id.clone(), row.model.clone(), effort.clone(), tier.clone(), row.autonomy.clone())?;
-                    if !effort.is_empty() {
-                        row.effort = effort;
+            json(
+                block(move || {
+                    let mut row = session::create_in_worktree(
+                        &store,
+                        p.workspace_id,
+                        p.kind,
+                        p.name,
+                        p.provider,
+                        p.model,
+                        p.description,
+                        p.autonomy,
+                        p.worktree,
+                    )?;
+                    let effort = p.effort.clone().unwrap_or_default();
+                    let tier = p.service_tier.clone().unwrap_or_default();
+                    if !effort.is_empty() || !tier.is_empty() {
+                        session::set_options(
+                            &store,
+                            row.id.clone(),
+                            row.model.clone(),
+                            effort.clone(),
+                            tier.clone(),
+                            row.autonomy.clone(),
+                        )?;
+                        if !effort.is_empty() {
+                            row.effort = effort;
+                        }
+                        if !tier.is_empty() {
+                            row.service_tier = tier;
+                        }
                     }
-                    if !tier.is_empty() {
-                        row.service_tier = tier;
-                    }
-                }
-                Ok::<_, String>(row)
-            })
-            .await?)
+                    Ok::<_, String>(row)
+                })
+                .await?,
+            )
         }
         "session_set_options" => {
             let p: SessionOptions = parse(params)?;
@@ -1390,16 +1367,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let p: SessionUpdate = parse(params)?;
             let store = hosts.store.clone();
             let row = block(move || {
-                session::update(
-                    &store,
-                    p.id.clone(),
-                    p.name,
-                    p.provider,
-                    p.model,
-                    p.description,
-                    p.notifications,
-                    p.autonomy,
-                )?;
+                session::update(&store, p.id.clone(), p.name, p.provider, p.model, p.description, p.notifications, p.autonomy)?;
                 session::get(&store, p.id)
             })
             .await?;
@@ -1523,17 +1491,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let p: RoutineUpsert = parse(params)?;
             let store = hosts.store.clone();
             let row = block(move || {
-                routine::upsert(
-                    &store,
-                    p.id,
-                    p.session_id,
-                    p.name,
-                    p.enabled,
-                    p.prompt,
-                    p.schedule,
-                    p.next_run_at,
-                    p.created_by,
-                )
+                routine::upsert(&store, p.id, p.session_id, p.name, p.enabled, p.prompt, p.schedule, p.next_run_at, p.created_by)
             })
             .await?;
             let scheduler = hosts.scheduler.clone();
@@ -1562,14 +1520,38 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "state_set" => {
             let KeyValue { key, value } = parse(params)?;
             let store = hosts.store.clone();
+            let strip = is_strip(&key);
             block(move || app_state::set(&store, key, value)).await?;
+            if strip {
+                hosts.hub.emit("browser-pages-changed", Value::Null);
+            }
             Ok(Value::Null)
         }
         "state_delete" => {
             let Key { key } = parse(params)?;
             let store = hosts.store.clone();
+            let strip = is_strip(&key);
             block(move || app_state::delete(&store, key)).await?;
+            if strip {
+                hosts.hub.emit("browser-pages-changed", Value::Null);
+            }
             Ok(Value::Null)
+        }
+        // Every browser tab in this Mac's strips, for main to tell each machine its own.
+        "browser_pages_list" => {
+            let store = hosts.store.clone();
+            let pages = block(move || crew_core::browser::open_pages(&store)).await?;
+            json(
+                pages
+                    .into_iter()
+                    .map(|page| proto::BrowserHostPage {
+                        page_id: page.page_id,
+                        context: page.context,
+                        url: page.url,
+                        title: page.title,
+                    })
+                    .collect::<Vec<_>>(),
+            )
         }
         "list_project_files" => {
             let ListProjectFiles { cwd } = parse(params)?;
@@ -1592,14 +1574,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(block(move || worktree::add(&path, &branch)).await?)
         }
         "worktree_remove" => {
-            let WorktreeRemove { path, force } = parse(params)?;
+            let WorktreeRemove { path, repo, force } = parse(params)?;
             let store = hosts.store.clone();
             let processes = hosts.processes.clone();
             let doomed = block(move || {
                 // Before git: a dev server still writing into it could leave
                 // files behind that make the removal refuse.
                 processes.forget_worktree(&path);
-                let listed = worktree::remove(&path, force)?;
+                let listed = worktree::remove(repo.as_deref().unwrap_or(&path), &path, force)?;
                 if listed != path {
                     processes.forget_worktree(&listed);
                 }
@@ -1896,13 +1878,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "browser_leases_list" => json(hosts.browser.leases().list(app_state::now_millis())),
         // The user takes a tab back from the agent driving it.
         "browser_lease_release" => {
-            let proto::BrowserTabArg { tab } = parse(params)?;
+            let proto::BrowserTabArg { tab, .. } = parse(params)?;
             hosts.browser.leases().force_release(&tab, app_state::now_millis());
             Ok(Value::Null)
         }
         // The user closed a tab: no agent's next call may bring it back.
         "browser_tab_closed" => {
-            let proto::BrowserTabArg { tab } = parse(params)?;
+            let proto::BrowserTabArg { tab, .. } = parse(params)?;
             hosts.browser.tab_closed(&tab);
             Ok(Value::Null)
         }
@@ -1932,13 +1914,8 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
         }
         "process_create" => {
             let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_restart } = parse(params)?;
-            let spec = proto::ProcessSpec {
-                name,
-                command,
-                cwd: cwd.unwrap_or_default(),
-                env: env.unwrap_or_default(),
-                auto_restart,
-            };
+            let spec =
+                proto::ProcessSpec { name, command, cwd: cwd.unwrap_or_default(), env: env.unwrap_or_default(), auto_restart };
             json(block(move || host.create(&workspace_id, spec, None, false)).await?)
         }
         "process_update" => {
@@ -1965,11 +1942,7 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             let request = RunRequest { worktree, env, started_by: None };
             let restart = method == "process_restart";
             block(move || {
-                json(if restart {
-                    host.restart(&workspace_id, &id, request)?
-                } else {
-                    host.start(&workspace_id, &id, request)?
-                })
+                json(if restart { host.restart(&workspace_id, &id, request)? } else { host.start(&workspace_id, &id, request)? })
             })
             .await
         }
@@ -2043,15 +2016,9 @@ mod tests {
 
     async fn connect_authed(handle: &Handle) -> Ws {
         let (mut ws, _) = connect_async(handle.url()).await.expect("connect");
-        ws.send(Message::Text(
-            serde_json::to_string(&Auth {
-                auth: handle.token().to_string(),
-            })
-            .unwrap()
-            .into(),
-        ))
-        .await
-        .expect("auth");
+        ws.send(Message::Text(serde_json::to_string(&Auth { auth: handle.token().to_string() }).unwrap().into()))
+            .await
+            .expect("auth");
         ws
     }
 
@@ -2073,9 +2040,7 @@ mod tests {
     }
 
     async fn send_json(ws: &mut Ws, value: &impl serde::Serialize) {
-        ws.send(Message::Text(serde_json::to_string(value).unwrap().into()))
-            .await
-            .expect("send");
+        ws.send(Message::Text(serde_json::to_string(value).unwrap().into())).await.expect("send");
     }
 
     #[tokio::test]
@@ -2139,23 +2104,13 @@ mod tests {
             let pty = format!("t{round}");
             let req = round * 10;
             send_json(&mut ws, &spawn_req(req + 1, &pty)).await;
-            send_json(
-                &mut ws,
-                &Request {
-                    id: req + 2,
-                    method: "pty_kill".into(),
-                    params: serde_json::json!({ "id": pty }),
-                },
-            )
-            .await;
+            send_json(&mut ws, &Request { id: req + 2, method: "pty_kill".into(), params: serde_json::json!({ "id": pty }) })
+                .await;
             send_json(&mut ws, &spawn_req(req + 3, &pty)).await;
             let respawn = wait_response(&mut ws, req + 3).await;
             assert!(respawn.ok, "{}", respawn.error.unwrap_or_default());
-            let attach = Request {
-                id: req + 4,
-                method: "pty_attach".into(),
-                params: serde_json::json!({ "id": pty, "from": 0 }),
-            };
+            let attach =
+                Request { id: req + 4, method: "pty_attach".into(), params: serde_json::json!({ "id": pty, "from": 0 }) };
             send_json(&mut ws, &attach).await;
             let attached = wait_response(&mut ws, req + 4).await;
             assert!(attached.ok, "round {round}: the respawned terminal is gone: {}", attached.error.unwrap_or_default());
@@ -2173,30 +2128,13 @@ mod tests {
         assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
 
         let fifo = dir.join("block");
-        assert!(
-            std::process::Command::new("mkfifo")
-                .arg(&fifo)
-                .status()
-                .expect("mkfifo")
-                .success()
-        );
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().expect("mkfifo").success());
 
+        send_json(&mut ws, &Request { id: 2, method: "read_text_file".into(), params: serde_json::json!({ "path": fifo }) })
+            .await;
         send_json(
             &mut ws,
-            &Request {
-                id: 2,
-                method: "read_text_file".into(),
-                params: serde_json::json!({ "path": fifo }),
-            },
-        )
-        .await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 3,
-                method: "pty_ack".into(),
-                params: serde_json::json!({ "id": "t", "processed": 0 }),
-            },
+            &Request { id: 3, method: "pty_ack".into(), params: serde_json::json!({ "id": "t", "processed": 0 }) },
         )
         .await;
 
@@ -2215,16 +2153,10 @@ mod tests {
         let dir = test_dir("ping");
         let handle = test_serve(&dir);
         let mut ws = connect_authed(&handle).await;
-        ws.send(Message::Ping(b"crew".to_vec().into()))
-            .await
-            .expect("ping");
+        ws.send(Message::Ping(b"crew".to_vec().into())).await.expect("ping");
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("pong timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("pong timeout").expect("closed").expect("ws");
             if let Message::Pong(payload) = msg {
                 assert_eq!(payload.as_ref(), b"crew");
                 handle.shutdown();
@@ -2280,11 +2212,7 @@ mod tests {
         while refilled < 128 * 1024 {
             send_json(
                 &mut ws,
-                &Request {
-                    id: req,
-                    method: "pty_ack".into(),
-                    params: serde_json::json!({ "id": "t", "processed": processed }),
-                },
+                &Request { id: req, method: "pty_ack".into(), params: serde_json::json!({ "id": "t", "processed": processed }) },
             )
             .await;
             req += 1;
@@ -2302,10 +2230,7 @@ mod tests {
 
         // And once it stops acking, it is held to the window again.
         let extra = collect_bytes(&mut ws, std::time::Duration::from_secs(1)).await;
-        assert!(
-            extra <= 256 * 1024 + 64 * 1024,
-            "flow control disabled: extra={extra}"
-        );
+        assert!(extra <= 256 * 1024 + 64 * 1024, "flow control disabled: extra={extra}");
         handle.shutdown();
     }
 
@@ -2336,11 +2261,7 @@ mod tests {
 
         let mut ws = connect_authed(&handle).await;
         let attached = attach_pty(&mut ws, 1, "t", 0).await;
-        assert!(
-            attached.emitted > 1024 * 1024,
-            "the terminal stopped once its window went: emitted={}",
-            attached.emitted
-        );
+        assert!(attached.emitted > 1024 * 1024, "the terminal stopped once its window went: emitted={}", attached.emitted);
         handle.shutdown();
     }
 
@@ -2386,11 +2307,7 @@ mod tests {
         let mut req = 2u32;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while bytes.len() < 64 * 1024 {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("counter timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("counter timeout").expect("closed").expect("ws");
             if let Message::Binary(frame) = msg {
                 if frame.len() >= 4 {
                     let chunk = &frame[4..];
@@ -2533,7 +2450,10 @@ mod tests {
         assert!(reply["result"]["isError"].as_bool() != Some(true), "reply: {reply}");
         let event = wait_event(&mut ws, "session-updated").await;
         let updated: proto::SessionUpdated = serde_json::from_value(event.payload).expect("updated");
-        assert_eq!((updated.session.id.as_str(), updated.session.description.as_str()), (session_id.as_str(), "You keep the notes."));
+        assert_eq!(
+            (updated.session.id.as_str(), updated.session.description.as_str()),
+            (session_id.as_str(), "You keep the notes.")
+        );
         handle.shutdown();
     }
 
@@ -2667,7 +2587,11 @@ time.sleep(600)
             sessions.push(session.id);
         }
 
-        send_json(&mut ws, &Request { id: 4, method: "commands_list".into(), params: serde_json::json!({ "sessionId": sessions[0] }) }).await;
+        send_json(
+            &mut ws,
+            &Request { id: 4, method: "commands_list".into(), params: serde_json::json!({ "sessionId": sessions[0] }) },
+        )
+        .await;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         let (mut response, mut pushed) = (None, None);
         while response.is_none() || pushed.is_none() {
@@ -2874,7 +2798,8 @@ time.sleep(600)
             .expect("session"),
         )
         .expect("session");
-        let send = |text: &str, mode: &str| serde_json::json!({ "sessionId": session.id, "cwd": cwd, "text": text, "mode": mode });
+        let send =
+            |text: &str, mode: &str| serde_json::json!({ "sessionId": session.id, "cwd": cwd, "text": text, "mode": mode });
 
         let first: TurnStarted =
             serde_json::from_value(rpc(&mut ws, 3, "turn_start", send("SLEEP", "auto")).await.result.expect("started"))
@@ -3068,9 +2993,7 @@ time.sleep(600)
         use std::io::{BufRead, Write};
         writeln!(stream, "{payload}").expect("write");
         let mut reply = String::new();
-        std::io::BufReader::new(stream)
-            .read_line(&mut reply)
-            .expect("read");
+        std::io::BufReader::new(stream).read_line(&mut reply).expect("read");
         serde_json::from_str(&reply).expect("json")
     }
 
@@ -3230,11 +3153,7 @@ for line in sys.stdin:
     async fn seed_bot_provider(ws: &mut Ws, cwd: &str, provider: &str) -> String {
         send_json(
             ws,
-            &Request {
-                id: 1,
-                method: "workspace_create".into(),
-                params: serde_json::json!({ "name": "w", "path": cwd }),
-            },
+            &Request { id: 1, method: "workspace_create".into(), params: serde_json::json!({ "name": "w", "path": cwd }) },
         )
         .await;
         let workspace: proto::Workspace =
@@ -3294,10 +3213,7 @@ for line in sys.stdin:
             if !snap.working {
                 break snap;
             }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "turn still working after disconnect"
-            );
+            assert!(tokio::time::Instant::now() < deadline, "turn still working after disconnect");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         };
         assert!(snap.blocks.iter().any(|b| b.role == proto::BlockRole::Assistant && b.text.contains("hello")));
@@ -3329,11 +3245,7 @@ for line in sys.stdin:
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut request_id = None;
         while request_id.is_none() {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("approval timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("approval timeout").expect("closed").expect("ws");
             if let Message::Text(text) = msg {
                 if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
                     if event.event == "transcript-apply" {
@@ -3380,11 +3292,7 @@ for line in sys.stdin:
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut request_id = None;
         while request_id.is_none() {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("approval timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("approval timeout").expect("closed").expect("ws");
             if let Message::Text(text) = msg {
                 if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
                     if event.event == "transcript-apply" {
@@ -3413,15 +3321,8 @@ for line in sys.stdin:
         assert!(wait_response(&mut ws, 4).await.ok);
         wait_status(&mut ws, &session_id, "done").await;
         let snap = transcript_of(&mut ws, 5, &session_id).await;
-        let tool = snap
-            .blocks
-            .iter()
-            .find(|b| b.role == proto::BlockRole::Tool)
-            .expect("folded tool row");
-        assert_eq!(
-            tool.approval.as_ref().and_then(|row| row.decided.clone()),
-            Some(proto::ApprovalDecision::Allow)
-        );
+        let tool = snap.blocks.iter().find(|b| b.role == proto::BlockRole::Tool).expect("folded tool row");
+        assert_eq!(tool.approval.as_ref().and_then(|row| row.decided.clone()), Some(proto::ApprovalDecision::Allow));
         handle.shutdown();
     }
 
@@ -3445,11 +3346,7 @@ for line in sys.stdin:
     async fn wait_status(ws: &mut Ws, session_id: &str, want: &str) -> proto::SessionStatusEvent {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("status timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("status timeout").expect("closed").expect("ws");
             if let Some(status) = status_in(&msg, session_id, want) {
                 return status;
             }
@@ -3511,24 +3408,13 @@ for line in sys.stdin:
     }
 
     async fn transcript_of(ws: &mut Ws, id: u32, session_id: &str) -> proto::MessagePage {
-        send_json(
-            ws,
-            &Request {
-                id,
-                method: "transcript_tail".into(),
-                params: serde_json::json!({ "sessionId": session_id }),
-            },
-        )
-        .await;
+        send_json(ws, &Request { id, method: "transcript_tail".into(), params: serde_json::json!({ "sessionId": session_id }) })
+            .await;
         serde_json::from_value(wait_response(ws, id).await.result.expect("page")).expect("page")
     }
 
     fn system_errors(snap: &proto::MessagePage) -> Vec<&str> {
-        snap.blocks
-            .iter()
-            .filter(|b| b.role == proto::BlockRole::System)
-            .map(|b| b.text.as_str())
-            .collect()
+        snap.blocks.iter().filter(|b| b.role == proto::BlockRole::System).map(|b| b.text.as_str()).collect()
     }
 
     #[tokio::test]
@@ -3540,21 +3426,13 @@ for line in sys.stdin:
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
-        let stop = Request {
-            id: 4,
-            method: "turn_stop".into(),
-            params: serde_json::json!({ "sessionId": session_id }),
-        };
+        let stop = Request { id: 4, method: "turn_stop".into(), params: serde_json::json!({ "sessionId": session_id }) };
         assert!(request_until_status(&mut ws, &stop, &session_id, "idle").await.ok);
         let snap = transcript_of(&mut ws, 5, &session_id).await;
         assert_eq!(snap.status, "idle");
         assert!(!snap.working);
-        let systems: Vec<&str> = snap
-            .blocks
-            .iter()
-            .filter(|b| b.role == proto::BlockRole::System)
-            .map(|b| b.text.as_str())
-            .collect();
+        let systems: Vec<&str> =
+            snap.blocks.iter().filter(|b| b.role == proto::BlockRole::System).map(|b| b.text.as_str()).collect();
         assert_eq!(systems, vec!["Stopped"]);
         handle.shutdown();
     }
@@ -3604,11 +3482,8 @@ for line in sys.stdin:
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut saw_user = false;
         loop {
-            let msg = tokio::time::timeout_at(deadline, watcher.next())
-                .await
-                .expect("apply timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg =
+                tokio::time::timeout_at(deadline, watcher.next()).await.expect("apply timeout").expect("closed").expect("ws");
             let Message::Text(text) = msg else {
                 continue;
             };
@@ -3641,15 +3516,7 @@ for line in sys.stdin:
     }
 
     async fn attach_pty(ws: &mut Ws, id: u32, pty: &str, from: u64) -> proto::PtyAttached {
-        send_json(
-            ws,
-            &Request {
-                id,
-                method: "pty_attach".into(),
-                params: serde_json::json!({ "id": pty, "from": from }),
-            },
-        )
-        .await;
+        send_json(ws, &Request { id, method: "pty_attach".into(), params: serde_json::json!({ "id": pty, "from": from }) }).await;
         let response = wait_response(ws, id).await;
         assert!(response.ok, "{}", response.error.unwrap_or_default());
         serde_json::from_value(response.result.expect("attach result")).expect("PtyAttached")
@@ -3660,11 +3527,7 @@ for line in sys.stdin:
         let mut processed = 0u64;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         while got < want {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("drain timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("drain timeout").expect("closed").expect("ws");
             if let Message::Binary(bytes) = msg {
                 if bytes.len() >= 4 {
                     let n = bytes.len() - 4;
@@ -3710,11 +3573,7 @@ for line in sys.stdin:
     async fn next_binary(ws: &mut Ws) -> Vec<u8> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("binary timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("binary timeout").expect("closed").expect("ws");
             if let Message::Binary(bytes) = msg {
                 if bytes.len() >= 4 {
                     return bytes[4..].to_vec();
@@ -3749,11 +3608,7 @@ for line in sys.stdin:
     async fn wait_event(ws: &mut Ws, name: &str) -> proto::Event {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("event timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("event timeout").expect("closed").expect("ws");
             if let Message::Text(text) = msg {
                 if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
                     if event.event == name {
@@ -3771,11 +3626,7 @@ for line in sys.stdin:
     async fn wait_one_of(ws: &mut Ws, ids: &[u32]) -> proto::Response {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("rpc timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
             if let Message::Text(text) = msg {
                 if let Ok(response) = serde_json::from_str::<proto::Response>(text.as_ref()) {
                     if ids.contains(&response.id) {
@@ -3790,11 +3641,7 @@ for line in sys.stdin:
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut acc = Vec::new();
         loop {
-            let msg = tokio::time::timeout_at(deadline, ws.next())
-                .await
-                .expect("stream timeout")
-                .expect("closed")
-                .expect("ws");
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("stream timeout").expect("closed").expect("ws");
             if let Message::Binary(bytes) = msg {
                 if bytes.len() >= 4 {
                     acc.extend_from_slice(&bytes[4..]);
@@ -3840,11 +3687,7 @@ for line in sys.stdin:
         // The client never got a turn, so it replays the same Enter.
         send_json(&mut ws, &Request { id: 4, method: "turn_start".into(), params: send }).await;
         let retry = wait_response(&mut ws, 4).await;
-        assert!(
-            !retry.ok,
-            "the retry was answered with success ({:?}) although no turn ever ran",
-            retry.result
-        );
+        assert!(!retry.ok, "the retry was answered with success ({:?}) although no turn ever ran", retry.result);
     }
 
     #[tokio::test]
@@ -3896,7 +3739,11 @@ for line in sys.stdin:
             let done = processed.entry(pty).or_default();
             *done += (frame.len() - 4) as u64;
             req += 1;
-            send_json(&mut ws, &Request { id: req, method: "pty_ack".into(), params: serde_json::json!({ "id": pty, "processed": *done }) }).await;
+            send_json(
+                &mut ws,
+                &Request { id: req, method: "pty_ack".into(), params: serde_json::json!({ "id": pty, "processed": *done }) },
+            )
+            .await;
             if sent < 200 && req % 20 == 0 {
                 for (s, p) in &streams {
                     let tag = if *p == "a" { "xa" } else { "yb" };
@@ -3942,7 +3789,14 @@ for line in sys.stdin:
             let store = Store::open(dir.join("crew.sqlite3")).expect("store");
             let made = workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
             let session = session::create(
-                &store, made.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                &store,
+                made.id,
+                "terminal".into(),
+                "x".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "full".into(),
             )
             .expect("session");
             for (position, (id, state)) in [("done", "completed"), ("was-running", "running")].into_iter().enumerate() {
@@ -3964,10 +3818,7 @@ for line in sys.stdin:
         let listed = rpc(&mut ws, 1, "background_list", serde_json::json!({ "sessionId": session })).await;
         let list: proto::BackgroundList = serde_json::from_value(listed.result.expect("list")).expect("list");
         let states: Vec<_> = list.commands.iter().map(|row| (row.id.as_str(), row.state)).collect();
-        assert_eq!(
-            states,
-            [("done", proto::BackgroundState::Completed), ("was-running", proto::BackgroundState::Stopped)]
-        );
+        assert_eq!(states, [("done", proto::BackgroundState::Completed), ("was-running", proto::BackgroundState::Stopped)]);
         assert_eq!(list.commands[1].stop_note.as_deref(), Some("Crew restarted"));
 
         // The push comes before the answer to the call that caused it.

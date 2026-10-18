@@ -323,7 +323,9 @@ export function launchdStandIn(crewd: string, dataDir: string): System {
       if (file === "/usr/bin/plutil" || verb === "print") throw new Error(`${path.basename(file)} ${args.join(" ")}: not found`);
       if (verb === "kickstart") {
         if (args.includes("-k")) await stop();
-        spawn(crewd, ["--supervised-by", "launchd", "--data-dir", dataDir], { detached: true, stdio: "ignore" }).unref();
+        // Nothing like launchd stops this one: it goes when the e2e spec does.
+        const owner = process.env.CREW_E2E_OWNER_PID ? ["--exit-with-pid", process.env.CREW_E2E_OWNER_PID] : [];
+        spawn(crewd, ["--supervised-by", "launchd", "--data-dir", dataDir, ...owner], { detached: true, stdio: "ignore" }).unref();
       }
       if (verb === "bootout") await stop();
       return "";

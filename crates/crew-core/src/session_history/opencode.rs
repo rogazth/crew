@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 use super::{Change, SessionHistory, Window, MAX_RECORD_BYTES};
 use crate::blocks::{apply_event, settle_turn};
 mod parts;
-use parts::{add_step_usage, parse_tool_call, step_failure, stream_error_message, text_part, turn_ended};
 use crate::providers::{as_record, string_field};
+use parts::{add_step_usage, parse_tool_call, step_failure, stream_error_message, text_part, turn_ended};
 
 /// Where a message sits in the session: opencode orders them by creation time,
 /// then by id (`message_session_time_created_id_idx`).
@@ -152,20 +152,12 @@ impl OpencodeHistory {
             return Ok(None);
         };
         let turn_ended = answering && !self.answering;
-        let first = before
-            .iter()
-            .zip(&self.blocks)
-            .position(|(old, new)| old != new)
-            .unwrap_or(before.len().min(self.blocks.len()));
+        let first =
+            before.iter().zip(&self.blocks).position(|(old, new)| old != new).unwrap_or(before.len().min(self.blocks.len()));
         if first == before.len() && first == self.blocks.len() && !turn_ended {
             return Ok(None);
         }
-        Ok(Some(Change {
-            from: self.base + first as i64,
-            blocks: self.blocks[first..].to_vec(),
-            turn_ended,
-            reset: false,
-        }))
+        Ok(Some(Change { from: self.base + first as i64, blocks: self.blocks[first..].to_vec(), turn_ended, reset: false }))
     }
 
     pub fn window(&self, before: Option<i64>, limit: usize) -> Window {
@@ -316,10 +308,8 @@ impl OpencodeHistory {
 fn not_ready(err: &rusqlite::Error) -> bool {
     match err {
         rusqlite::Error::SqliteFailure(failure, message) => {
-            matches!(
-                failure.code,
-                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked | ErrorCode::CannotOpen
-            ) || message.as_deref().is_some_and(|text| text.starts_with("no such table"))
+            matches!(failure.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked | ErrorCode::CannotOpen)
+                || message.as_deref().is_some_and(|text| text.starts_with("no such table"))
         }
         _ => false,
     }
@@ -333,14 +323,7 @@ fn stamp(conn: &Connection, session: &str) -> rusqlite::Result<Stamp> {
            (SELECT count(*) FROM part WHERE session_id = ?1),
            (SELECT coalesce(max(time_updated), 0) FROM part WHERE session_id = ?1)",
         params![session],
-        |row| {
-            Ok(Stamp {
-                messages: row.get(0)?,
-                message_updated: row.get(1)?,
-                parts: row.get(2)?,
-                part_updated: row.get(3)?,
-            })
-        },
+        |row| Ok(Stamp { messages: row.get(0)?, message_updated: row.get(1)?, parts: row.get(2)?, part_updated: row.get(3)? }),
     )
 }
 
@@ -358,24 +341,14 @@ fn start_before(conn: &Connection, session: &str, end: Option<&Key>, n: usize) -
          ORDER BY time_created DESC, id DESC LIMIT ?4",
     )?;
     let keys = stmt
-        .query_map(params![session, created, id, n as i64 + 1], |row| {
-            Ok(Key {
-                created: row.get(0)?,
-                id: row.get(1)?,
-            })
-        })?
+        .query_map(params![session, created, id, n as i64 + 1], |row| Ok(Key { created: row.get(0)?, id: row.get(1)? }))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(if keys.len() > n { keys.into_iter().nth(n - 1) } else { None })
 }
 
 /// The messages in `[from, end)`, each with its parts in order. A part too
 /// big to be worth reading (a pasted image, inline) is left out unread.
-fn read_messages(
-    conn: &Connection,
-    session: &str,
-    from: Option<&Key>,
-    end: Option<&Key>,
-) -> rusqlite::Result<Vec<Message>> {
+fn read_messages(conn: &Connection, session: &str, from: Option<&Key>, end: Option<&Key>) -> rusqlite::Result<Vec<Message>> {
     let (from_created, from_id) = match from {
         Some(key) => (key.created, key.id.as_str()),
         None => (i64::MIN, ""),
@@ -393,15 +366,7 @@ fn read_messages(
            AND (NOT ?6 OR m.time_created < ?4 OR (m.time_created = ?4 AND m.id < ?5))
          ORDER BY m.time_created, m.id, p.id",
     )?;
-    let mut rows = stmt.query(params![
-        session,
-        from_created,
-        from_id,
-        end_created,
-        end_id,
-        bounded,
-        MAX_RECORD_BYTES as i64
-    ])?;
+    let mut rows = stmt.query(params![session, from_created, from_id, end_created, end_id, bounded, MAX_RECORD_BYTES as i64])?;
     let mut messages: Vec<Message> = Vec::new();
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
@@ -426,11 +391,7 @@ fn read_messages(
         let mut rec = Map::new();
         rec.insert("part".into(), Value::Object(data));
         if let Some(message) = messages.last_mut() {
-            message.parts.push(Part {
-                id: part_id,
-                created: row.get(5)?,
-                rec,
-            });
+            message.parts.push(Part { id: part_id, created: row.get(5)?, rec });
         }
     }
     Ok(messages)
@@ -456,9 +417,7 @@ fn turn_seed(conn: &Connection, session: &str, from: &Key, parent: &str) -> rusq
         rec.insert("part".into(), data);
         usage = Some(add_step_usage(usage.as_ref(), &rec));
     }
-    let started = conn
-        .query_row("SELECT time_created FROM message WHERE id = ?1", params![parent], |row| row.get(0))
-        .ok();
+    let started = conn.query_row("SELECT time_created FROM message WHERE id = ?1", params![parent], |row| row.get(0)).ok();
     Ok(Seed { usage, started })
 }
 
@@ -482,8 +441,7 @@ fn closed(data: &Map<String, Value>) -> bool {
 /// The answer is over: it failed, or its last step stopped for good rather
 /// than to run the tools it called.
 fn finished(data: &Map<String, Value>) -> bool {
-    message_error(data).is_some()
-        || (closed(data) && string_field(Some(data), "finish").as_deref() != Some("tool-calls"))
+    message_error(data).is_some() || (closed(data) && string_field(Some(data), "finish").as_deref() != Some("tool-calls"))
 }
 
 /// A text or reasoning part opencode has started and not yet closed.
@@ -503,11 +461,7 @@ struct Built {
 /// `live` says the range runs to the session's end, so its last message may
 /// still be being written.
 fn build(messages: &[Message], seed: Seed, live: bool) -> Built {
-    let mut out = Builder {
-        blocks: Vec::new(),
-        usage: seed.usage,
-        started: seed.started,
-    };
+    let mut out = Builder { blocks: Vec::new(), usage: seed.usage, started: seed.started };
     for (index, message) in messages.iter().enumerate() {
         let writing = live && index + 1 == messages.len() && !closed(&message.data);
         let start = out.blocks.len();
@@ -529,10 +483,7 @@ fn build(messages: &[Message], seed: Seed, live: bool) -> Built {
             Some("assistant") => !finished(&last.data),
             _ => false,
         });
-    Built {
-        blocks: out.blocks,
-        answering,
-    }
+    Built { blocks: out.blocks, answering }
 }
 
 struct Builder {
@@ -593,9 +544,7 @@ impl Builder {
             self.apply(&message.id, message.created, vec![event]);
         }
         for part in message.parts.iter().filter(|part| part.kind() == Some("compaction")) {
-            let note = HarnessEvent::SessionNote {
-                message: "Context compacted".into(),
-            };
+            let note = HarnessEvent::SessionNote { message: "Context compacted".into() };
             self.apply(&part.id, part.created, vec![note]);
         }
     }
@@ -630,11 +579,7 @@ impl Builder {
             let aborted = string_field(error.as_object(), "name").as_deref() == Some("MessageAbortedError");
             let mut rec = Map::new();
             rec.insert("error".into(), error.clone());
-            let message_text = if aborted {
-                "Interrupted".to_string()
-            } else {
-                stream_error_message(&rec)
-            };
+            let message_text = if aborted { "Interrupted".to_string() } else { stream_error_message(&rec) };
             let mut events = Vec::new();
             if let Some(usage) = self.end_turn(time_field(&message.data, "completed")) {
                 events.push(HarnessEvent::TurnCompleted { usage: Some(usage) });
@@ -672,12 +617,7 @@ impl Builder {
                 title: call.title,
                 detail: call.detail.clone(),
             },
-            HarnessEvent::ToolUpdated {
-                call_id: call.call_id,
-                title: None,
-                status: Some(status),
-                detail: call.detail,
-            },
+            HarnessEvent::ToolUpdated { call_id: call.call_id, title: None, status: Some(status), detail: call.detail },
         ];
         self.apply(&part.id, part.created, events);
     }
@@ -687,12 +627,8 @@ impl Builder {
         if !turn_ended(&part.rec) {
             return;
         }
-        let mut events = vec![
-            HarnessEvent::MessageCompleted {},
-            HarnessEvent::TurnCompleted {
-                usage: self.end_turn(Some(part.created)),
-            },
-        ];
+        let mut events =
+            vec![HarnessEvent::MessageCompleted {}, HarnessEvent::TurnCompleted { usage: self.end_turn(Some(part.created)) }];
         // A step can stop for a reason that is not success; the turn that died
         // mid-answer says so, as an agent turn does.
         if let Some(reason) = step_failure(&part.rec) {
@@ -942,10 +878,7 @@ mod tests {
         assert_eq!(
             shape(history.blocks()),
             [
-                (
-                    BlockRole::User,
-                    "\"Create a file named hello.txt containing hi, then say done\"".to_string()
-                ),
+                (BlockRole::User, "\"Create a file named hello.txt containing hi, then say done\"".to_string()),
                 (
                     BlockRole::System,
                     "Error from provider (Console): Upstream request failed: Endpoint is unavailable.".to_string()
@@ -965,10 +898,7 @@ mod tests {
         // opencode rewrites a prompt's row when it adds the turn's diff
         // summary: the rows moved, the blocks did not.
         db.conn()
-            .execute(
-                "UPDATE message SET time_updated = time_updated + 60000 WHERE id = 'msg_0e9a2376d001CK8HyA8pisNFf7'",
-                [],
-            )
+            .execute("UPDATE message SET time_updated = time_updated + 60000 WHERE id = 'msg_0e9a2376d001CK8HyA8pisNFf7'", [])
             .expect("touch");
         assert_eq!(history.poll().expect("poll"), None);
         let again: Vec<String> = history.blocks().iter().map(|block| block.id.clone()).collect();

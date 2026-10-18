@@ -11,11 +11,21 @@ const AT_FLOOR_MS: i64 = 1_000_000_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Schedule {
-    Interval { minutes: u32 },
-    Daily { hour: u32, minute: u32, days: Vec<u32> },
-    Cron { expression: String },
+    Interval {
+        minutes: u32,
+    },
+    Daily {
+        hour: u32,
+        minute: u32,
+        days: Vec<u32>,
+    },
+    Cron {
+        expression: String,
+    },
     /// One time, in epoch milliseconds. It fires once and is then switched off.
-    Once { at: i64 },
+    Once {
+        at: i64,
+    },
 }
 
 impl Schedule {
@@ -28,9 +38,7 @@ impl Schedule {
                     serde_json::to_string(days).unwrap_or_else(|_| "[]".into())
                 )
             }
-            Schedule::Cron { expression } => {
-                serde_json::json!({ "kind": "cron", "expression": expression }).to_string()
-            }
+            Schedule::Cron { expression } => serde_json::json!({ "kind": "cron", "expression": expression }).to_string(),
             Schedule::Once { at } => format!(r#"{{"kind":"once","at":{at}}}"#),
         }
     }
@@ -42,24 +50,21 @@ pub fn validate_schedule(input: &Value) -> Result<Schedule, String> {
     };
     match obj.get("kind").and_then(Value::as_str) {
         Some("interval") => {
-            let minutes = integer(obj.get("minutes")).ok_or_else(|| {
-                format!("minutes must be a whole number of at least 1. {SCHEDULE_HELP}")
-            })?;
+            let minutes = integer(obj.get("minutes"))
+                .ok_or_else(|| format!("minutes must be a whole number of at least 1. {SCHEDULE_HELP}"))?;
             if minutes < 1 {
                 return Err(format!("minutes must be a whole number of at least 1. {SCHEDULE_HELP}"));
             }
             Ok(Schedule::Interval { minutes })
         }
         Some("daily") => {
-            let hour = integer(obj.get("hour"))
-                .ok_or_else(|| format!("hour must be 0-23. {SCHEDULE_HELP}"))?;
+            let hour = integer(obj.get("hour")).ok_or_else(|| format!("hour must be 0-23. {SCHEDULE_HELP}"))?;
             if hour > 23 {
                 return Err(format!("hour must be 0-23. {SCHEDULE_HELP}"));
             }
             let minute = match obj.get("minute") {
                 None => 0,
-                Some(value) => integer(Some(value))
-                    .ok_or_else(|| format!("minute must be 0-59. {SCHEDULE_HELP}"))?,
+                Some(value) => integer(Some(value)).ok_or_else(|| format!("minute must be 0-59. {SCHEDULE_HELP}"))?,
             };
             if minute > 59 {
                 return Err(format!("minute must be 0-59. {SCHEDULE_HELP}"));
@@ -69,13 +74,10 @@ pub fn validate_schedule(input: &Value) -> Result<Schedule, String> {
                 Some(Value::Array(items)) => {
                     let mut days = Vec::new();
                     for item in items {
-                        let day = integer(Some(item)).ok_or_else(|| {
-                            format!("days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}")
-                        })?;
+                        let day = integer(Some(item))
+                            .ok_or_else(|| format!("days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}"))?;
                         if day > 6 {
-                            return Err(format!(
-                                "days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}"
-                            ));
+                            return Err(format!("days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}"));
                         }
                         days.push(day);
                     }
@@ -84,32 +86,20 @@ pub fn validate_schedule(input: &Value) -> Result<Schedule, String> {
                     days
                 }
                 Some(_) => {
-                    return Err(format!(
-                        "days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}"
-                    ));
+                    return Err(format!("days must be a list of 0-6 (Sunday to Saturday). {SCHEDULE_HELP}"));
                 }
             };
             Ok(Schedule::Daily { hour, minute, days })
         }
         Some("cron") => {
-            let expression = obj
-                .get("expression")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| {
-                    "expression must be five cron fields: minute hour day-of-month month day-of-week"
-                        .to_string()
+            let expression =
+                obj.get("expression").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| {
+                    "expression must be five cron fields: minute hour day-of-month month day-of-week".to_string()
                 })?;
             if !is_valid_cron(expression) {
-                return Err(
-                    "expression must be five cron fields: minute hour day-of-month month day-of-week"
-                        .into(),
-                );
+                return Err("expression must be five cron fields: minute hour day-of-month month day-of-week".into());
             }
-            Ok(Schedule::Cron {
-                expression: expression.to_string(),
-            })
+            Ok(Schedule::Cron { expression: expression.to_string() })
         }
         Some("once") => {
             let at = match obj.get("at") {
@@ -148,7 +138,12 @@ pub fn parse_time(text: &str) -> Option<i64> {
             (whole.parse::<i32>().ok()?, frac.parse::<i64>().ok()?)
         }
     };
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
         return None;
     }
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -246,20 +241,13 @@ fn describe_days(days: &[u32]) -> String {
     if days.is_empty() || days.len() == 7 {
         return "Every day".into();
     }
-    let joined = days
-        .iter()
-        .map(|d| d.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let joined = days.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(",");
     match joined.as_str() {
         "1,2,3,4,5" => "Weekdays".into(),
         "0,6" => "Weekends".into(),
         _ => {
             const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-            days.iter()
-                .map(|day| WEEKDAYS.get(*day as usize).copied().unwrap_or(""))
-                .collect::<Vec<_>>()
-                .join(", ")
+            days.iter().map(|day| WEEKDAYS.get(*day as usize).copied().unwrap_or("")).collect::<Vec<_>>().join(", ")
         }
     }
 }
@@ -431,17 +419,10 @@ mod tests {
 
     #[test]
     fn validate_schedule_matches_typescript() {
-        assert_eq!(
-            validate_schedule(&json!({ "kind": "interval", "minutes": 30 })).unwrap(),
-            Schedule::Interval { minutes: 30 }
-        );
+        assert_eq!(validate_schedule(&json!({ "kind": "interval", "minutes": 30 })).unwrap(), Schedule::Interval { minutes: 30 });
         assert_eq!(
             validate_schedule(&json!({ "kind": "daily", "hour": 9, "days": [5, 1, 1] })).unwrap(),
-            Schedule::Daily {
-                hour: 9,
-                minute: 0,
-                days: vec![1, 5],
-            }
+            Schedule::Daily { hour: 9, minute: 0, days: vec![1, 5] }
         );
         assert!(validate_schedule(&json!({ "kind": "daily", "hour": 24 })).is_err());
         assert!(validate_schedule(&json!({ "kind": "interval", "minutes": 0 })).is_err());

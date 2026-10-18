@@ -14,9 +14,7 @@ use std::time::Duration;
 
 use crew_protocol::TurnStart;
 
-use crate::routine::{
-    self, wake_prompt, Routine, RoutineRun, RunStatus, RunTrigger, ScheduledRoutine,
-};
+use crate::routine::{self, wake_prompt, Routine, RoutineRun, RunStatus, RunTrigger, ScheduledRoutine};
 use crate::schedule::{next_run, parse_schedule, Schedule};
 use crate::session::{self, Session};
 use crate::store::{now_millis, Store};
@@ -120,8 +118,7 @@ impl Scheduler {
         if self.stopped.load(Ordering::Relaxed) {
             return Err("The daemon is shutting down.".into());
         }
-        let row = routine::scheduled(&self.store, routine_id.clone())?
-            .ok_or_else(|| format!("No routine {routine_id}"))?;
+        let row = routine::scheduled(&self.store, routine_id.clone())?.ok_or_else(|| format!("No routine {routine_id}"))?;
         {
             // The same door a sweep goes through. Without it, Run now and a
             // tick that came due at the same moment both read a row nobody has
@@ -134,9 +131,7 @@ impl Scheduler {
     }
 
     fn tick(&self, generation: u64) {
-        if self.stopped.load(Ordering::Relaxed)
-            || self.generation.load(Ordering::Relaxed) != generation
-        {
+        if self.stopped.load(Ordering::Relaxed) || self.generation.load(Ordering::Relaxed) != generation {
             return;
         }
         // Before the sweep, not after it: a fire that never returns would
@@ -174,16 +169,8 @@ impl Scheduler {
         let started = now_millis();
         // An unreadable schedule reads as the app's default rather than as no
         // schedule at all, so a fired routine always gets a next time.
-        let schedule = parse_schedule(&row.routine.schedule).unwrap_or(Schedule::Daily {
-            hour: 9,
-            minute: 0,
-            days: Vec::new(),
-        });
-        let next = if row.routine.enabled {
-            next_run(&schedule, started)
-        } else {
-            None
-        };
+        let schedule = parse_schedule(&row.routine.schedule).unwrap_or(Schedule::Daily { hour: 9, minute: 0, days: Vec::new() });
+        let next = if row.routine.enabled { next_run(&schedule, started) } else { None };
         // The status now, not the one the tick's snapshot read: an earlier
         // routine in this same sweep may already have woken this bot.
         let busy = match session::get(&self.store, row.session.id.clone()) {
@@ -209,13 +196,7 @@ impl Scheduler {
         };
         // The clock moves either way — a routine left past due fires again on
         // the next tick, and the next — but "last run" is for runs that ran.
-        let moved = routine::record_run(
-            &self.store,
-            &row.routine.id,
-            if busy { None } else { Some(started) },
-            next,
-            &run,
-        );
+        let moved = routine::record_run(&self.store, &row.routine.id, if busy { None } else { Some(started) }, next, &run);
         // A once routine that ran has had its time: it is switched off rather
         // than deleted, so its run stays in the history and Run now still
         // works. Run now ahead of its time leaves it armed.
@@ -229,9 +210,7 @@ impl Scheduler {
         if moved.is_err() || busy {
             return;
         }
-        self.turns
-            .transcripts()
-            .append_system(&row.session.id, &format!("Routine · {}", row.routine.name));
+        self.turns.transcripts().append_system(&row.session.id, &format!("Routine · {}", row.routine.name));
         let text = wake_prompt(
             &row.routine.name,
             &schedule,
@@ -300,11 +279,7 @@ impl Scheduler {
     /// already written; a turn can outlast the row that started it, and the
     /// one the user saved in between is the one that stands.
     fn finish(&self, routine_id: &str, run: &RoutineRun, status: RunStatus) {
-        let done = RoutineRun {
-            finished_at: Some(now_millis()),
-            status,
-            ..run.clone()
-        };
+        let done = RoutineRun { finished_at: Some(now_millis()), status, ..run.clone() };
         let _ = routine::finish_run(&self.store, routine_id, &done);
         self.changed();
     }
@@ -319,10 +294,7 @@ impl Scheduler {
 
     /// None when the user or the bot itself wrote the routine.
     fn creator_name(&self, routine: &Routine, session: &Session) -> Option<String> {
-        let by = routine
-            .created_by
-            .as_deref()
-            .filter(|id| !id.is_empty() && *id != session.id)?;
+        let by = routine.created_by.as_deref().filter(|id| !id.is_empty() && *id != session.id)?;
         Some(
             session::get(&self.store, by.to_string())
                 .ok()
@@ -390,13 +362,8 @@ mod tests {
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).expect("dir");
         host.override_binary("opencode", fake_opencode(&dir));
-        let workspace = crate::workspace::create(
-            host.test_store(),
-            "w".into(),
-            dir.to_string_lossy().into_owned(),
-        )
-        .expect("workspace")
-        .id;
+        let workspace =
+            crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
         let scheduler = Scheduler::new(host.test_store().clone(), host.clone());
         World { scheduler, host, workspace }
     }
@@ -437,8 +404,7 @@ mod tests {
 
         /// The tick the armed timer would run, without waiting for the clock.
         fn tick(&self) {
-            self.scheduler
-                .tick(self.scheduler.generation.load(Ordering::Relaxed));
+            self.scheduler.tick(self.scheduler.generation.load(Ordering::Relaxed));
         }
 
         fn blocks(&self, session_id: &str) -> Vec<crew_protocol::Block> {
@@ -458,17 +424,12 @@ mod tests {
         }
 
         fn runs(&self, routine_id: &str) -> Vec<RoutineRun> {
-            let row = routine::scheduled(self.store(), routine_id.to_string())
-                .expect("scheduled")
-                .expect("routine");
+            let row = routine::scheduled(self.store(), routine_id.to_string()).expect("scheduled").expect("routine");
             routine::parse_runs(&row.routine.runs_json)
         }
 
         fn reload(&self, routine_id: &str) -> Routine {
-            routine::scheduled(self.store(), routine_id.to_string())
-                .expect("scheduled")
-                .expect("routine")
-                .routine
+            routine::scheduled(self.store(), routine_id.to_string()).expect("scheduled").expect("routine").routine
         }
 
         /// The tail of a fire runs on its own thread; wait for it to land.
@@ -505,15 +466,10 @@ mod tests {
 
         let blocks = world.blocks(&coder.id);
         assert!(
-            blocks
-                .iter()
-                .any(|block| block.role == BlockRole::System && block.text == "Routine · Standup"),
+            blocks.iter().any(|block| block.role == BlockRole::System && block.text == "Routine · Standup"),
             "the transcript does not say the routine woke it"
         );
-        let woke = blocks
-            .iter()
-            .find(|block| block.role == BlockRole::User)
-            .expect("no turn was started");
+        let woke = blocks.iter().find(|block| block.role == BlockRole::User).expect("no turn was started");
         assert_eq!(woke.hidden, Some(true), "the wake-up was not hidden");
         assert!(woke.text.contains("[routine] \"Standup\" is due (every 30 minutes)"), "{}", woke.text);
         assert!(woke.text.contains("check the board"), "{}", woke.text);
@@ -570,11 +526,7 @@ mod tests {
         assert!(run.finished_at.is_some_and(|at| at >= run.started_at));
         let after = world.reload(&routine.id);
         assert_eq!(after.last_run_at, Some(run.started_at));
-        assert!(
-            after.next_run_at.is_some_and(|at| at > due),
-            "next_run_at stayed at {:?}",
-            after.next_run_at
-        );
+        assert!(after.next_run_at.is_some_and(|at| at > due), "next_run_at stayed at {:?}", after.next_run_at);
     }
 
     fn once(world: &World, bot: &Session, at: i64) -> Routine {
@@ -693,9 +645,7 @@ mod tests {
         let world = world();
         let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
-        let row = routine::scheduled(world.store(), routine.id.clone())
-            .expect("scheduled")
-            .expect("routine");
+        let row = routine::scheduled(world.store(), routine.id.clone()).expect("scheduled").expect("routine");
         assert_eq!(row.session.status, "idle", "the snapshot should be the stale one");
         session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
 
@@ -719,13 +669,19 @@ mod tests {
         let ran_at = world.reload(&routine.id).last_run_at.expect("the first run");
 
         // Now it comes due again while the bot is busy with something else.
-        routine::record_run(world.store(), &routine.id, None, Some(due), &RoutineRun {
-            id: "seed".into(),
-            started_at: ran_at,
-            finished_at: Some(ran_at),
-            status: RunStatus::Ok,
-            trigger: RunTrigger::Schedule,
-        })
+        routine::record_run(
+            world.store(),
+            &routine.id,
+            None,
+            Some(due),
+            &RoutineRun {
+                id: "seed".into(),
+                started_at: ran_at,
+                finished_at: Some(ran_at),
+                status: RunStatus::Ok,
+                trigger: RunTrigger::Schedule,
+            },
+        )
         .expect("seed");
         session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
 
@@ -770,9 +726,7 @@ mod tests {
         let world = world();
         let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
-        let row = routine::scheduled(world.store(), routine.id.clone())
-            .expect("scheduled")
-            .expect("routine");
+        let row = routine::scheduled(world.store(), routine.id.clone()).expect("scheduled").expect("routine");
         routine::delete(world.store(), routine.id.clone()).expect("delete");
 
         world.scheduler.fire(row, RunTrigger::Schedule);
@@ -785,9 +739,7 @@ mod tests {
         let world = world();
         let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
-        let row = routine::scheduled(world.store(), routine.id.clone())
-            .expect("scheduled")
-            .expect("routine");
+        let row = routine::scheduled(world.store(), routine.id.clone()).expect("scheduled").expect("routine");
         routine::upsert(
             world.store(),
             Some(routine.id.clone()),
@@ -845,8 +797,7 @@ mod tests {
             status: RunStatus::Running,
             trigger: RunTrigger::Schedule,
         };
-        routine::record_run(world.store(), &routine.id, Some(run.started_at), Some(1), &run)
-            .expect("start");
+        routine::record_run(world.store(), &routine.id, Some(run.started_at), Some(1), &run).expect("start");
 
         // The user edits the routine mid-run: every two minutes from now.
         let saved = now_millis() + 120_000;
@@ -872,10 +823,7 @@ mod tests {
         assert_eq!(after.next_run_at, Some(saved), "the watcher wrote back the old schedule");
         let runs = world.runs(&routine.id);
         assert_eq!(runs.len(), 2, "the watcher dropped a run written while it waited");
-        assert_eq!(
-            runs.iter().find(|row| row.id == "run-1").map(|row| row.status),
-            Some(RunStatus::Ok)
-        );
+        assert_eq!(runs.iter().find(|row| row.id == "run-1").map(|row| row.status), Some(RunStatus::Ok));
     }
 
     /// A timer that arms for a row no tick will fire is a timer that arms
@@ -1018,10 +966,7 @@ mod tests {
         let run = world.settled_run(&routine.id);
         assert_eq!(run.trigger, RunTrigger::Manual);
         assert_eq!(run.status, RunStatus::Ok);
-        assert!(
-            wake_text(&world, &coder.id).contains("was run on demand"),
-            "the manual cue is missing"
-        );
+        assert!(wake_text(&world, &coder.id).contains("was run on demand"), "the manual cue is missing");
         world.scheduler.stop();
     }
 
@@ -1048,10 +993,7 @@ mod tests {
         assert_eq!(runs.len(), MAX_RUNS);
         assert_eq!(runs[0].id, run.id, "the newest run is not first");
         assert_eq!(runs[1].id, "old-0");
-        assert!(
-            !runs.iter().any(|row| row.id == format!("old-{}", MAX_RUNS - 1)),
-            "the oldest run survived the cap"
-        );
+        assert!(!runs.iter().any(|row| row.id == format!("old-{}", MAX_RUNS - 1)), "the oldest run survived the cap");
     }
 
     #[test]

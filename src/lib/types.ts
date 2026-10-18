@@ -76,6 +76,8 @@ export type Worktree = {
   del: number;
   /** Entries `git status` lists. */
   dirty: number;
+  /** Why a tool locked it, empty without a reason; null when it is not locked. */
+  locked: string | null;
 };
 
 export type ProjectFile = {

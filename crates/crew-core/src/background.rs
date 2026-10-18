@@ -245,11 +245,7 @@ impl Board {
 
     /// The ids of what still runs, for a stop of the whole turn.
     pub fn running(&self) -> Vec<String> {
-        self.commands
-            .iter()
-            .filter(|row| row.state == BackgroundState::Running)
-            .map(|row| row.id.clone())
-            .collect()
+        self.commands.iter().filter(|row| row.state == BackgroundState::Running).map(|row| row.id.clone()).collect()
     }
 
     /// The entries of a board read back from the table: not live, as nothing
@@ -316,9 +312,7 @@ impl Board {
     /// asked, since it would vanish from the list while its work goes on.
     pub fn clear(&mut self, ids: Option<&[String]>) -> bool {
         let before = self.commands.len();
-        let gone = |row: &BackgroundCommand| {
-            row.state != BackgroundState::Running && ids.is_none_or(|ids| ids.contains(&row.id))
-        };
+        let gone = |row: &BackgroundCommand| row.state != BackgroundState::Running && ids.is_none_or(|ids| ids.contains(&row.id));
         let cleared: Vec<String> = self.commands.iter().filter(|row| gone(row)).map(|row| row.id.clone()).collect();
         self.commands.retain(|row| !gone(row));
         for id in &cleared {
@@ -412,12 +406,7 @@ impl Board {
 
     /// One line of Claude's stream-json. `tool` finds a tool call by its id:
     /// the call that started a task says what it runs.
-    pub fn claude(
-        &mut self,
-        rec: &Value,
-        tool: impl Fn(&str) -> Option<(String, Map<String, Value>)>,
-        now: i64,
-    ) -> bool {
+    pub fn claude(&mut self, rec: &Value, tool: impl Fn(&str) -> Option<(String, Map<String, Value>)>, now: i64) -> bool {
         match rec.get("type").and_then(Value::as_str) {
             Some("system") => {}
             Some("result") => {
@@ -449,10 +438,9 @@ impl Board {
                 }
                 let tool_use_id = rec.get("tool_use_id").and_then(Value::as_str);
                 let call = tool_use_id.and_then(&tool);
-                let Some(kind) = claude_kind(
-                    rec.get("task_type").and_then(Value::as_str),
-                    call.as_ref().map(|(name, _)| name.as_str()),
-                ) else {
+                let Some(kind) =
+                    claude_kind(rec.get("task_type").and_then(Value::as_str), call.as_ref().map(|(name, _)| name.as_str()))
+                else {
                     return false;
                 };
                 let description = rec.get("description").and_then(Value::as_str).unwrap_or_default();
@@ -721,9 +709,7 @@ impl Board {
         if !completed {
             let command = item.get("command").and_then(Value::as_str).map(unwrap_shell).unwrap_or_default();
             let process_id = item.get("processId").and_then(Value::as_str).map(str::to_string);
-            self.codex_items
-                .entry(id.to_string())
-                .or_insert(CodexItem { command, process_id, started_at: now, yielded: false });
+            self.codex_items.entry(id.to_string()).or_insert(CodexItem { command, process_id, started_at: now, yielded: false });
             return false;
         }
         self.codex_items.remove(id);
@@ -814,6 +800,12 @@ impl Board {
         let before = self.commands[at].clone();
         if state == BackgroundState::Running {
             let row = &mut self.commands[at];
+            // Started again once it ended: a turn the parent's `sendInput`
+            // ran on it. It is the same entry, running anew.
+            if row.state != BackgroundState::Running {
+                row.started_at = now;
+                row.activity = None;
+            }
             row.state = state;
             row.ended_at = None;
             row.exit_code = None;
@@ -854,10 +846,8 @@ impl Board {
         if !self.codex_items.contains_key(item_id) && self.command(item_id).is_none() {
             return;
         }
-        let kept = self.outputs.entry(item_id.to_string()).or_insert(BackgroundOutput {
-            output: String::new(),
-            truncated: false,
-        });
+        let kept =
+            self.outputs.entry(item_id.to_string()).or_insert(BackgroundOutput { output: String::new(), truncated: false });
         kept.output.push_str(delta);
         if kept.output.len() > OUTPUT_TAIL {
             let cut = kept.output.len() - OUTPUT_TAIL;
@@ -960,11 +950,8 @@ fn claude_kind(task_type: Option<&str>, tool: Option<&str>) -> Option<Background
 fn exit_code(summary: &str) -> Option<i32> {
     let at = summary.find("exit code")?;
     let rest = summary[at + "exit code".len()..].trim_start();
-    let end = rest
-        .char_indices()
-        .find(|(i, c)| !(c.is_ascii_digit() || (*i == 0 && *c == '-')))
-        .map(|(i, _)| i)
-        .unwrap_or(rest.len());
+    let end =
+        rest.char_indices().find(|(i, c)| !(c.is_ascii_digit() || (*i == 0 && *c == '-'))).map(|(i, _)| i).unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -1055,12 +1042,7 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Vec<(String, Saved)>> 
         "SELECT session_id, entry_json, output, output_truncated FROM background_entries ORDER BY session_id, position",
     )?;
     let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, bool>(3)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, bool>(3)?))
     })?;
     let mut out: Vec<(String, Saved)> = Vec::new();
     for row in rows {
@@ -1278,7 +1260,10 @@ mod tests {
         // The live figure runs a little high: the notification's is what it used.
         assert!(board.claude(&agent_notified("a1", "completed", Some(9561)), none, 20));
         let row = board.command("a1").unwrap();
-        assert_eq!((row.state, row.tokens, row.activity.as_deref(), row.ended_at), (BackgroundState::Completed, Some(9561), None, Some(20)));
+        assert_eq!(
+            (row.state, row.tokens, row.activity.as_deref(), row.ended_at),
+            (BackgroundState::Completed, Some(9561), None, Some(20))
+        );
         assert!(board.running().is_empty());
     }
 
@@ -1344,8 +1329,12 @@ mod tests {
         assert!(!board.claude(&agent_answered("a1"), none, 4));
 
         // Another subagent, on a model the result already knew.
-        board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "a2", "tool_use_id": "toolu_a2",
-            "description": "Second", "task_type": "local_agent", "is_backgrounded": true }), none, 5);
+        board.claude(
+            &json!({ "type": "system", "subtype": "task_started", "task_id": "a2", "tool_use_id": "toolu_a2",
+            "description": "Second", "task_type": "local_agent", "is_backgrounded": true }),
+            none,
+            5,
+        );
         assert!(board.claude_subagent_model("toolu_a2", "claude-haiku-5-5"));
         assert_eq!(board.command("a2").unwrap().window, Some(1_000_000));
     }
@@ -1364,12 +1353,19 @@ mod tests {
     fn a_result_ends_the_subagent_the_turn_waited_on_and_leaves_the_ones_in_the_background() {
         let mut board = Board::default();
         board.claude(&agent_started("fg", false), none, 1);
-        board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "bg", "tool_use_id": "toolu_bg_agent",
-            "description": "Sent off", "task_type": "local_agent", "is_backgrounded": true }), none, 2);
+        board.claude(
+            &json!({ "type": "system", "subtype": "task_started", "task_id": "bg", "tool_use_id": "toolu_bg_agent",
+            "description": "Sent off", "task_type": "local_agent", "is_backgrounded": true }),
+            none,
+            2,
+        );
         board.claude(&agent_progress("fg", 9012, "Running Sleep", "Bash"), none, 3);
         assert!(board.claude(&turn_result("claude-haiku-5-5", 1_000_000), none, 4));
         let row = board.command("fg").unwrap();
-        assert_eq!((row.state, row.ended_at, row.stop_note.as_deref(), row.activity.as_deref()), (BackgroundState::Stopped, Some(4), Some(TURN_ENDED), None));
+        assert_eq!(
+            (row.state, row.ended_at, row.stop_note.as_deref(), row.activity.as_deref()),
+            (BackgroundState::Stopped, Some(4), Some(TURN_ENDED), None)
+        );
         assert_eq!(board.command("bg").unwrap().state, BackgroundState::Running);
         assert!(!board.claude(&turn_result("claude-haiku-5-5", 1_000_000), none, 5), "nothing more to end");
     }
@@ -1380,8 +1376,12 @@ mod tests {
         let mut board = Board::default();
         board.launch(0);
         board.claude(&started("b1", true), bash("sleep 120"), 1);
-        board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "b2", "tool_use_id": "x",
-            "description": "echo hi", "task_type": "local_bash", "is_backgrounded": true }), none, 1);
+        board.claude(
+            &json!({ "type": "system", "subtype": "task_started", "task_id": "b2", "tool_use_id": "x",
+            "description": "echo hi", "task_type": "local_bash", "is_backgrounded": true }),
+            none,
+            1,
+        );
         board.claude(&notified("b2", "completed", "done (exit code 0)"), none, 2);
         board
     }
@@ -1502,10 +1502,16 @@ mod tests {
     fn a_codex_agent_thread_is_a_row_its_turns_start_and_end_and_no_terminal_listing_settles() {
         let mut board = Board::default();
         assert!(board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), Some("low"), 5));
-        assert!(!board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), Some("low"), 6), "named twice");
+        assert!(
+            !board.agent_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), Some("low"), 6),
+            "named twice"
+        );
         let row = board.command("t2").unwrap();
         assert_eq!((row.kind, row.state, row.started_at), (BackgroundKind::Subagent, BackgroundState::Running, 5));
-        assert_eq!((row.thread_id.as_deref(), row.tool_call_id.as_deref(), row.stoppable), (Some("t2"), Some("call-1"), Some(true)));
+        assert_eq!(
+            (row.thread_id.as_deref(), row.tool_call_id.as_deref(), row.stoppable),
+            (Some("t2"), Some("call-1"), Some(true))
+        );
         assert!(!board.codex_running(), "an agent is not a command the app server lists");
         assert!(!board.codex_listed(&[], 7));
         assert_eq!(board.command("t2").unwrap().state, BackgroundState::Running);
@@ -1587,7 +1593,14 @@ mod tests {
         let store = Store::open(dir.join("crew.sqlite3")).expect("open");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
         let session = crate::session::create(
-            &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            &store,
+            ws.id,
+            "terminal".into(),
+            "x".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "full".into(),
         )
         .expect("session");
         (store, session.id)

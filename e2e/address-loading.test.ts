@@ -60,7 +60,9 @@ async function newTab(url: string): Promise<void> {
 async function typeAddress(url: string): Promise<void> {
   await address().click();
   await address().fill(url);
-  await crew.window.keyboard.press("Enter");
+  // A DOM keydown, not a key press: when a quick page loads while the press is
+  // under way, the window never acks the key and Playwright's press waits forever.
+  await address().dispatchEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
 }
 
 test("a tab opened at a slow page shows its address while it loads", async () => {

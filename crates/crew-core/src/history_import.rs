@@ -58,9 +58,7 @@ pub fn import_all(store: &Store, sources: &Sources) -> Result<usize, String> {
     // Before migration 38 there is nothing to bring in: the terminal view
     // still read the files.
     let Some(cutoff) = store.with(|conn| {
-        conn.query_row("SELECT MAX(applied_at) FROM schema_migrations WHERE version = 38", [], |row| {
-            row.get::<_, Option<i64>>(0)
-        })
+        conn.query_row("SELECT MAX(applied_at) FROM schema_migrations WHERE version = 38", [], |row| row.get::<_, Option<i64>>(0))
     })?
     else {
         return Ok(0);
@@ -142,10 +140,7 @@ fn read(store: &Store, sources: &Sources, row: &Session) -> Option<Vec<Block>> {
 /// finds it when that folder moved.
 fn claude_file(store: &Store, projects: &Path, row: &Session, id: &str) -> Option<PathBuf> {
     let name = format!("{id}.jsonl");
-    let cwd = row
-        .worktree
-        .clone()
-        .or_else(|| workspace::get(store, row.workspace_id.clone()).ok().flatten().map(|ws| ws.path));
+    let cwd = row.worktree.clone().or_else(|| workspace::get(store, row.workspace_id.clone()).ok().flatten().map(|ws| ws.path));
     if let Some(cwd) = cwd {
         let path = projects.join(crate::claude_title::project_slug(&cwd)).join(&name);
         if path.is_file() {
@@ -200,8 +195,17 @@ mod tests {
         let store = Store::open(dir.join("crew.sqlite3")).expect("open");
         let ws = workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let make = |name: &str| {
-            session::create(&store, ws.id.clone(), "terminal".into(), name.into(), "claude".into(), "m".into(), "".into(), "ask".into())
-                .expect("session")
+            session::create(
+                &store,
+                ws.id.clone(),
+                "terminal".into(),
+                name.into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "ask".into(),
+            )
+            .expect("session")
         };
         let (old, chat, used, missing) = (make("old"), make("chat"), make("used"), make("missing"));
         let projects = dir.join("projects");
@@ -217,7 +221,8 @@ mod tests {
         since.at = Some(crate::store::now_millis() + 1);
         write(&store, &used.id, &[since.clone()]);
 
-        let sources = Sources { claude_projects: Some(projects), codex_home: None, opencode_db: None, cursor_transcript: no_cursor };
+        let sources =
+            Sources { claude_projects: Some(projects), codex_home: None, opencode_db: None, cursor_transcript: no_cursor };
         assert_eq!(import_all(&store, &sources).expect("import"), 2);
 
         let history = stored(&store, &old.id);

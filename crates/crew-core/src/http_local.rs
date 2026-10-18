@@ -144,9 +144,8 @@ impl LocalClient {
     }
 
     fn request_in(&self, method: &str, path: &str, body: Option<&Value>, directory: Option<&str>) -> Result<Reply, HttpError> {
-        let payload = body
-            .map(|value| serde_json::to_vec(value).map_err(|error| HttpError::Protocol(error.to_string())))
-            .transpose()?;
+        let payload =
+            body.map(|value| serde_json::to_vec(value).map_err(|error| HttpError::Protocol(error.to_string()))).transpose()?;
         let directory = directory.map(encode_uri_component);
         let mut reader = self.start(method, path, "application/json", payload.as_deref(), directory.as_deref())?;
         let head = read_head(&mut reader)?;
@@ -227,10 +226,9 @@ impl Iterator for EventStream {
             return None;
         }
         match self.next_frame() {
-            Ok(data) => Some(
-                serde_json::from_str(&data)
-                    .map_err(|error| HttpError::Protocol(format!("event data is not JSON: {error}"))),
-            ),
+            Ok(data) => {
+                Some(serde_json::from_str(&data).map_err(|error| HttpError::Protocol(format!("event data is not JSON: {error}"))))
+            }
             Err(error) => {
                 self.finished = true;
                 Some(Err(error))
@@ -256,9 +254,8 @@ impl EventStream {
             if line.starts_with(':') {
                 continue;
             }
-            let (field, value) = line
-                .split_once(':')
-                .map_or((line, ""), |(field, value)| (field, value.strip_prefix(' ').unwrap_or(value)));
+            let (field, value) =
+                line.split_once(':').map_or((line, ""), |(field, value)| (field, value.strip_prefix(' ').unwrap_or(value)));
             if field == "data" {
                 match &mut data {
                     Some(buffer) => {
@@ -550,11 +547,7 @@ mod tests {
                 let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 return;
             }
-            let body: Value = if request.body.is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_slice(&request.body).unwrap()
-            };
+            let body: Value = if request.body.is_empty() { Value::Null } else { serde_json::from_slice(&request.body).unwrap() };
             reply(stream, 200, &json!({ "method": request.method(), "path": request.path(), "body": body }).to_string());
         });
         let client = client(port, Duration::from_secs(5));

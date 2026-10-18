@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{BotRef, ApprovalDecision, AttachedFile, HarnessEvent, Session};
+use crate::{ApprovalDecision, AttachedFile, BotRef, HarnessEvent, Session};
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]

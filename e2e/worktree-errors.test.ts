@@ -56,7 +56,7 @@ async function dismiss(input: Locator) {
 test("W8: a branch whose folder another branch took is refused, and git is left alone", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  // feat/a lives in ~/.crew/worktrees/app/feat-a; so would feat-a.
+  // feat/a lives in <worktrees>/app/feat-a; so would feat-a.
   const taken = await crew.request<Worktree>("worktree_add", { path: workspace.path, branch: "feat/a" });
   assert.equal(path.basename(taken.path), "feat-a");
   await returnToWindow(crew);
@@ -82,7 +82,7 @@ test("W8b: a workspace that is not a repo has one branchless line, and a worktre
   await mkdir(folder, { recursive: true });
   await writeFile(path.join(folder, "todo.md"), "- one\n");
   const notes = await crew.addWorkspace(folder);
-  const worktrees = path.join(crew.home, ".crew/worktrees");
+  const worktrees = crew.worktrees;
   const madeBefore = existsSync(worktrees) ? readdirSync(worktrees).sort() : [];
 
   // Git knows no worktrees there: the panel shows the folder alone, without a branch.

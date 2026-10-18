@@ -2,8 +2,8 @@
 
 Decided 2026-10-05, in a conversation that started from reviewing T3 Code's new
 orchestrator (`reference/t3code`, commit `de34391`, "feat(orchestrator):
-introduce new orchestrator", 2026-10-02) against Crew. Nothing here is
-implemented yet. The session prompt (§6) is a draft being polished with the
+introduce new orchestrator", 2026-10-02) against Crew. Implemented: see the
+status table at the end. The session prompt (§6) is a draft being polished with the
 user; the rest is agreed unless marked open. §7e (review of the plan against
 the code and the references, round 3) amends §1, §4, §7b and the UI
 decisions; where they disagree, §7e wins.
@@ -1074,7 +1074,7 @@ Built on `feat/orchestration-tools` (2026-10-06), phase by phase as in §8:
 | 6 | Prompts (`prompts.rs`), approvals to the parent (§7e.4b) | `532169d` |
 | 7 | Letters, pair threads, child state on the wire (v28), §7c-2; children, checkpoints, threads in the chat | `b82cbb1`, `ae6174a` |
 | 8 | Background commands (list, output, stop); live subagent steps (Claude) | `e4e73b6`, `712c7ac` |
-| 9 | §7c needs a release; §7c-2 fixed in phase 7 | release pending |
+| 9 | §7c released in v0.2.8; §7c-2 fixed in phase 7 | `da9f755` |
 | 10 | Prototype removed | `87bab75` |
 
 Also fixed on the way: a bot's rewritten description not reaching the

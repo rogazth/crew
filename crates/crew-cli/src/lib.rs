@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use serde_json::Value;
 
+mod app;
 pub mod args;
 mod bots;
-mod app;
 mod client;
 mod commands;
 mod daemon;
@@ -157,9 +157,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<ExitCode, CliError> {
 pub(crate) fn read_stdin() -> Result<String, CliError> {
     use std::io::Read;
     let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .map_err(|e| CliError::Failed(format!("stdin: {e}")))?;
+    std::io::stdin().read_to_string(&mut text).map_err(|e| CliError::Failed(format!("stdin: {e}")))?;
     Ok(text)
 }
 

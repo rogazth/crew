@@ -185,7 +185,9 @@ mod tests {
             data_dir: Some("/d".into()),
             session: false,
             daemon: Some(file(CLI_VERSION)),
-            caller: Some(json!({ "kind": "user", "label": "the user", "workspace": { "id": "w1", "name": "crew", "path": "/code/crew" } })),
+            caller: Some(
+                json!({ "kind": "user", "label": "the user", "workspace": { "id": "w1", "name": "crew", "path": "/code/crew" } }),
+            ),
             running: true,
             problem: None,
         };
@@ -216,7 +218,8 @@ mod tests {
 
     #[test]
     fn a_stopped_daemon_says_how_to_start_it() {
-        let status = Status { data_dir: Some("/d".into()), session: false, daemon: None, caller: None, running: false, problem: None };
+        let status =
+            Status { data_dir: Some("/d".into()), session: false, daemon: None, caller: None, running: false, problem: None };
         let text = output::pairs(&status.rows());
         assert!(text.contains("not running — open Crew or run `crew open`"), "{text}");
         assert!(!text.contains("caller"), "{text}");

@@ -26,6 +26,8 @@ export type BrowserCall = {
   page?: PageRef;
   /** Epoch ms past which crewd has told the caller the call failed. */
   deadline?: number;
+  /** The budget as sent, which main counts from when the call got here: another machine's clock is not this one's. */
+  timeoutMs?: number;
 };
 
 /** One live guest, as the tools need it. */

@@ -270,9 +270,7 @@ pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String>
 /// Every session in every workspace. The startup sweep needs it; screens do not.
 pub fn list_all(store: &Store) -> Result<Vec<Session>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {SESSION_COLUMNS} FROM {SESSIONS} ORDER BY s.created_at ASC"
-        ))?;
+        let mut stmt = conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM {SESSIONS} ORDER BY s.created_at ASC"))?;
         let rows = stmt.query_map([], |row| row_to_session(row, 0))?;
         rows.collect()
     })
@@ -302,10 +300,8 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
 /// report to it, so the session's process stays up for it.
 pub fn has_live_children(store: &Store, parent: &str) -> Result<bool, String> {
     store.with(|conn| {
-        conn.prepare_cached(
-            "SELECT EXISTS (SELECT 1 FROM sessions WHERE parent_id = ?1 AND status != 'exited')",
-        )?
-        .query_row(params![parent], |row| row.get(0))
+        conn.prepare_cached("SELECT EXISTS (SELECT 1 FROM sessions WHERE parent_id = ?1 AND status != 'exited')")?
+            .query_row(params![parent], |row| row.get(0))
     })
 }
 
@@ -380,9 +376,7 @@ pub fn create_child(
 
 /// Record that `by` launched the session.
 pub fn set_launched_by(store: &Store, id: &str, by: &str) -> Result<(), String> {
-    store.with(|conn| {
-        conn.prepare_cached("UPDATE sessions SET launched_by = ?2 WHERE id = ?1")?.execute(params![id, by])
-    })?;
+    store.with(|conn| conn.prepare_cached("UPDATE sessions SET launched_by = ?2 WHERE id = ?1")?.execute(params![id, by]))?;
     Ok(())
 }
 
@@ -637,10 +631,7 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     store.with(|conn| {
         let now = now_millis();
         conn.execute("UPDATE bots SET name = ?2, updated_at = ?3 WHERE id = ?1", params![id, name, now])?;
-        conn.execute(
-            "UPDATE sessions SET name = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, name, now],
-        )
+        conn.execute("UPDATE sessions SET name = ?2, updated_at = ?3 WHERE id = ?1", params![id, name, now])
     })?;
     Ok(())
 }
@@ -695,9 +686,7 @@ fn adopt_title(store: &Store, row: &Session, title: String) -> Result<Option<Str
 pub(crate) fn is_placeholder_name(name: &str, provider: &str) -> bool {
     match name.strip_prefix(provider) {
         Some("") => true,
-        Some(rest) => rest
-            .strip_prefix(' ')
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        Some(rest) => rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
         None => false,
     }
 }
@@ -724,16 +713,13 @@ pub fn in_worktree(store: &Store, worktree: &str) -> Result<Vec<String>, String>
     })
 }
 
-pub fn set_provider_session(
-    store: &Store,
-    id: String,
-    provider_session_id: String,
-) -> Result<(), String> {
+pub fn set_provider_session(store: &Store, id: String, provider_session_id: String) -> Result<(), String> {
     store.with(|conn| {
-        conn.prepare_cached(
-            "UPDATE sessions SET provider_session_id = ?2, updated_at = ?3 WHERE id = ?1",
-        )?
-        .execute(params![id, provider_session_id, now_millis()])
+        conn.prepare_cached("UPDATE sessions SET provider_session_id = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![
+            id,
+            provider_session_id,
+            now_millis()
+        ])
     })?;
     Ok(())
 }
@@ -745,8 +731,11 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
         return Err(format!("Unknown session status: {status}"));
     }
     store.with(|conn| {
-        conn.prepare_cached("UPDATE sessions SET status = ?2, updated_at = ?3 WHERE id = ?1")?
-            .execute(params![id, status, now_millis()])
+        conn.prepare_cached("UPDATE sessions SET status = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![
+            id,
+            status,
+            now_millis()
+        ])
     })?;
     Ok(())
 }
@@ -788,7 +777,9 @@ fn is_disposable_in(store: &Store, id: String, dirs: &ClaudeDirs) -> Result<bool
     let Ok(cwd) = cwd(store, &session) else {
         return Ok(false);
     };
-    Ok(disposable(&session, &cwd, dirs.home.as_deref()) && !has_transcript(store, &session.id)? && !awaits_cursor_note(store, &session.id)?)
+    Ok(disposable(&session, &cwd, dirs.home.as_deref())
+        && !has_transcript(store, &session.id)?
+        && !awaits_cursor_note(store, &session.id)?)
 }
 
 /// Whether anything was said in the session: Crew kept it, or its provider
@@ -868,10 +859,7 @@ pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
 pub const BYPASS_KEY: &str = "sessions:bypass-permissions";
 
 pub fn bypass_permissions(store: &Store) -> bool {
-    crate::store::get(store, BYPASS_KEY.into())
-        .ok()
-        .flatten()
-        .is_some_and(|raw| raw.trim() == "on")
+    crate::store::get(store, BYPASS_KEY.into()).ok().flatten().is_some_and(|raw| raw.trim() == "on")
 }
 
 /// The sessions last touched before `before`, less the ones deleting would
@@ -922,8 +910,7 @@ fn folders<'a>(session: &'a Session, cwd: &'a str) -> Vec<&'a str> {
 
 pub(crate) fn provider_title_of(store: &Store, id: &str) -> Result<Option<String>, String> {
     store.with(|conn| {
-        conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?
-            .query_row(params![id], |row| row.get(0))
+        conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?.query_row(params![id], |row| row.get(0))
     })
 }
 
@@ -931,9 +918,7 @@ pub(crate) fn provider_title_of(store: &Store, id: &str) -> Result<Option<String
 fn is_derived_name(name: &str, base: &str) -> bool {
     match name.strip_prefix(base) {
         Some("") => true,
-        Some(rest) => rest
-            .strip_prefix(' ')
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        Some(rest) => rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
         None => false,
     }
 }
@@ -961,22 +946,12 @@ mod tests {
         let store = Store::open(dir.join("crew.sqlite3")).expect("store");
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into())
-            .expect("workspace");
+        let workspace = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into()).expect("workspace");
         (store, workspace.id)
     }
 
     fn bot(store: &Store, workspace: &str, name: &str, autonomy: &str) -> Result<Session, String> {
-        create(
-            store,
-            workspace.to_string(),
-            "bot".into(),
-            name.into(),
-            "claude".into(),
-            "m".into(),
-            "".into(),
-            autonomy.into(),
-        )
+        create(store, workspace.to_string(), "bot".into(), name.into(), "claude".into(), "m".into(), "".into(), autonomy.into())
     }
 
     fn adopt(store: &Store, id: &str, title: &str) -> Option<String> {
@@ -1017,14 +992,32 @@ mod tests {
         set_options(&store, s.id.clone(), String::new(), String::new(), String::new(), "ask".into()).expect("options");
         let read = get(&store, s.id).expect("get").expect("row");
         assert_eq!((read.model.as_str(), read.effort.as_str(), read.service_tier.as_str()), ("claude-opus-5-5", "high", ""));
-        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
-            .expect("codex");
+        let new = create(
+            &store,
+            workspace.clone(),
+            "terminal".into(),
+            "codex 1".into(),
+            "codex".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("codex");
         assert_eq!(new.model, crate::tools::unnamed_model("codex"));
         assert_eq!(new.effort, crate::tools::unnamed_effort("codex"));
         assert_eq!(new.service_tier, crate::tools::unnamed_service_tier("codex"));
         assert!(!new.model.is_empty());
-        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into())
-            .expect("opencode");
+        let open = create(
+            &store,
+            workspace,
+            "terminal".into(),
+            "opencode 1".into(),
+            "opencode".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("opencode");
         assert_eq!(open.model, crate::tools::unnamed_model("opencode"));
         assert!(!open.model.is_empty());
     }
@@ -1065,15 +1058,18 @@ mod tests {
         terminal(&store, &workspace, "codex", "codex");
         let s = terminal(&store, &workspace, "claude 2", "claude");
         set_provider_session(&store, s.id.clone(), "claude-1".into()).expect("bind");
-        switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), String::new(), "full".into()).expect("switch");
+        switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), String::new(), "full".into())
+            .expect("switch");
         let read = get(&store, s.id.clone()).expect("get").expect("row");
         assert_eq!((read.provider.as_str(), read.name.as_str(), read.autonomy.as_str()), ("codex", "codex 2", "full"));
         assert_eq!(read.provider_session_id, None);
         // A name typed by hand stays whatever runs under it.
         rename(&store, s.id.clone(), "Mine".into()).expect("rename");
-        switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), String::new(), "ask".into()).expect("switch");
+        switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), String::new(), "ask".into())
+            .expect("switch");
         assert_eq!(name_of(&store, &s.id), "Mine");
-        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), String::new(), "ask".into()).is_err());
+        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), String::new(), "ask".into())
+            .is_err());
         let b = bot(&store, &workspace, "b", "ask").expect("bot");
         assert!(switch_provider(&store, b.id, "codex".into(), String::new(), String::new(), String::new(), "ask".into()).is_err());
     }
@@ -1098,8 +1094,7 @@ mod tests {
         set_provider_session(&store, b.id.clone(), "claude-2".into()).expect("bind");
 
         let edit = |provider: &str| {
-            update(&store, a.id.clone(), "a".into(), provider.into(), "".into(), "".into(), true, "ask".into())
-                .expect("update");
+            update(&store, a.id.clone(), "a".into(), provider.into(), "".into(), "".into(), true, "ask".into()).expect("update");
             get(&store, a.id.clone()).expect("get").expect("row").provider_session_id
         };
         assert_eq!(edit("claude").as_deref(), Some("claude-1"));
@@ -1170,9 +1165,7 @@ mod tests {
         let other = {
             let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
             std::fs::create_dir_all(&root).expect("root");
-            crate::workspace::create(&store, "other".into(), root.to_string_lossy().into())
-                .expect("workspace")
-                .id
+            crate::workspace::create(&store, "other".into(), root.to_string_lossy().into()).expect("workspace").id
         };
         bot(&store, &workspace, "Planner", "ask").expect("bot");
         bot(&store, &other, "Stranger", "ask").expect("bot");
@@ -1183,17 +1176,8 @@ mod tests {
     }
 
     fn terminal(store: &Store, workspace: &str, name: &str, provider: &str) -> Session {
-        create(
-            store,
-            workspace.to_string(),
-            "terminal".into(),
-            name.into(),
-            provider.into(),
-            "m".into(),
-            "".into(),
-            "ask".into(),
-        )
-        .expect("terminal")
+        create(store, workspace.to_string(), "terminal".into(), name.into(), provider.into(), "m".into(), "".into(), "ask".into())
+            .expect("terminal")
     }
 
     fn age(store: &Store, id: &str, updated_at: i64) {

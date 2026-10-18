@@ -4,7 +4,7 @@ import { fileTabId, newTerminalTab, sessionTabId, stubTabId, type TabState } fro
 import type { Session, Tab, Workspace, Worktree } from "./types";
 
 const workspace: Workspace = { id: "ws", name: "crew", path: "/repo", createdAt: 0 };
-const tree = (path: string, main = false): Worktree => ({ path, branch: path, main, add: 0, del: 0, dirty: 0 });
+const tree = (path: string, main = false): Worktree => ({ path, branch: path, main, add: 0, del: 0, dirty: 0, locked: null });
 const trees = [tree("/repo", true), tree("/wt/a"), tree("/wt/b")];
 const paths = trees.map((t) => t.path);
 const session = (id: string, worktree: string | null) => ({ id, worktree }) as Session;

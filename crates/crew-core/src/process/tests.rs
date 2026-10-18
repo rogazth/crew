@@ -36,13 +36,7 @@ fn fixture(name: &str, config: ProcessConfig) -> Fixture {
 }
 
 fn spec(name: &str, command: &str) -> ProcessSpec {
-    ProcessSpec {
-        name: name.into(),
-        command: command.into(),
-        cwd: String::new(),
-        env: BTreeMap::new(),
-        auto_restart: false,
-    }
+    ProcessSpec { name: name.into(), command: command.into(), cwd: String::new(), env: BTreeMap::new(), auto_restart: false }
 }
 
 impl Fixture {
@@ -112,9 +106,7 @@ fn backoff_doubles_to_the_cap_and_starts_over_after_a_stable_run() {
     let start = Instant::now();
     let delays: Vec<u64> = (0..8)
         .map(|i| {
-            plan_restart(&mut crashes, &mut backoff, start + Duration::from_millis(i), Duration::ZERO, &config)
-                .unwrap()
-                .as_secs()
+            plan_restart(&mut crashes, &mut backoff, start + Duration::from_millis(i), Duration::ZERO, &config).unwrap().as_secs()
         })
         .collect();
     assert_eq!(delays, vec![1, 2, 4, 8, 16, 30, 30, 30]);
@@ -243,10 +235,7 @@ fn shutdown_gives_every_process_one_shared_grace_to_exit() {
 }
 
 fn stat_of(pid: u32) -> String {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
@@ -264,7 +253,8 @@ fn pause_and_resume_stop_and_continue_the_group() {
     thread::sleep(Duration::from_millis(100));
     let after = stat_of(pid);
     // Stopping a paused process has to wake it for its SIGTERM.
-    let stopped = f.host.pause(&f.workspace, &process.id, None).and_then(|_| f.host.stop(&f.workspace, &process.id, None)).unwrap();
+    let stopped =
+        f.host.pause(&f.workspace, &process.id, None).and_then(|_| f.host.stop(&f.workspace, &process.id, None)).unwrap();
 
     assert_eq!(paused.main().state, ProcessState::Paused);
     assert!(while_paused.starts_with('T'), "paused stat {while_paused}");
@@ -360,10 +350,7 @@ fn wait_for_log_matches_times_out_and_notices_the_end() {
     let short = f.add("short", "sleep 0.2; exit 4");
     f.host.start(&f.workspace, &short.id, RunRequest::default()).unwrap();
     let ended = f.host.wait_for_log(&f.workspace, "short", None, "never", None, 10).unwrap();
-    assert!(
-        matches!(ended, LogWait::Ended { state: ProcessState::Exited, exit_code: Some(4), .. }),
-        "{ended:?}"
-    );
+    assert!(matches!(ended, LogWait::Ended { state: ProcessState::Exited, exit_code: Some(4), .. }), "{ended:?}");
 }
 
 #[test]
@@ -411,9 +398,7 @@ fn a_workspace_sees_only_its_own_processes() {
     let f = fixture("scope", fast());
     let other_dir = f.dir.join("other");
     std::fs::create_dir_all(&other_dir).unwrap();
-    let other = crate::workspace::create(&f.host.inner.store, "o".into(), other_dir.to_string_lossy().into())
-        .unwrap()
-        .id;
+    let other = crate::workspace::create(&f.host.inner.store, "o".into(), other_dir.to_string_lossy().into()).unwrap().id;
     let mine = f.add("web", "sleep 30");
     assert!(f.host.get(&other, &mine.id).is_err());
     assert!(f.host.get(&other, "web").is_err());
@@ -584,11 +569,7 @@ fn wait_for_log_answers_ended_at_once_for_a_process_that_is_not_up() {
 
 #[test]
 fn wait_for_log_in_a_backoff_waits_for_the_next_run_and_hears_a_stop() {
-    let config = ProcessConfig {
-        backoff_min: Duration::from_millis(600),
-        backoff_max: Duration::from_millis(600),
-        ..fast()
-    };
+    let config = ProcessConfig { backoff_min: Duration::from_millis(600), backoff_max: Duration::from_millis(600), ..fast() };
     let f = fixture("wait-backoff", config);
     let marker = f.dir.join("second");
     let command = format!(

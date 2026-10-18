@@ -57,10 +57,7 @@ pub fn search(request: &SearchFiles) -> Result<FileSearchResult, String> {
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
-                let mut searcher = SearcherBuilder::new()
-                    .binary_detection(BinaryDetection::quit(0))
-                    .line_number(true)
-                    .build();
+                let mut searcher = SearcherBuilder::new().binary_detection(BinaryDetection::quit(0)).line_number(true).build();
                 loop {
                     let Some(file) = files.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
                     if full.load(Ordering::Relaxed) || stale() {
@@ -97,20 +94,11 @@ pub fn search(request: &SearchFiles) -> Result<FileSearchResult, String> {
     let mut files: Vec<FileMatches> = results.into_inner().unwrap();
     files.sort_by(|a, b| a.relative.cmp(&b.relative));
     let matches = files.iter().flat_map(|file| &file.lines).map(|line| line.ranges.len()).sum::<usize>();
-    Ok(FileSearchResult {
-        files,
-        matches: matches as u32,
-        truncated: full.load(Ordering::Relaxed),
-        cancelled: stale(),
-    })
+    Ok(FileSearchResult { files, matches: matches as u32, truncated: full.load(Ordering::Relaxed), cancelled: stale() })
 }
 
 fn matcher(request: &SearchFiles) -> Result<RegexMatcher, String> {
-    let pattern = if request.regex.unwrap_or(false) {
-        request.query.clone()
-    } else {
-        regex::escape(&request.query)
-    };
+    let pattern = if request.regex.unwrap_or(false) { request.query.clone() } else { regex::escape(&request.query) };
     RegexMatcherBuilder::new()
         .case_insensitive(!request.case_sensitive.unwrap_or(false))
         .word(request.whole_word.unwrap_or(false))
@@ -136,11 +124,8 @@ fn globs(list: &str) -> Result<Option<GlobSet>, String> {
     let mut any = false;
     for pattern in list.split(',').map(str::trim).filter(|pattern| !pattern.is_empty()) {
         let pattern = pattern.trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
-        let rooted = if pattern.starts_with("**/") || pattern.contains('/') {
-            pattern.to_string()
-        } else {
-            format!("**/{pattern}")
-        };
+        let rooted =
+            if pattern.starts_with("**/") || pattern.contains('/') { pattern.to_string() } else { format!("**/{pattern}") };
         for glob in [rooted.clone(), format!("{rooted}/**")] {
             builder.add(Glob::new(&glob).map_err(|error| error.to_string())?);
         }
@@ -224,20 +209,12 @@ mod tests {
     }
 
     fn found(result: &FileSearchResult) -> Vec<(String, u32)> {
-        result
-            .files
-            .iter()
-            .flat_map(|file| file.lines.iter().map(|line| (file.relative.clone(), line.line)))
-            .collect()
+        result.files.iter().flat_map(|file| file.lines.iter().map(|line| (file.relative.clone(), line.line))).collect()
     }
 
     #[test]
     fn finds_text_in_order_and_skips_binaries() {
-        let dir = scratch(&[
-            ("b.ts", "one\nconst Deploy = 1;\n"),
-            ("a/c.md", "deploy the app\n"),
-            ("img.bin", "deploy\0binary"),
-        ]);
+        let dir = scratch(&[("b.ts", "one\nconst Deploy = 1;\n"), ("a/c.md", "deploy the app\n"), ("img.bin", "deploy\0binary")]);
         let result = search(&request(&dir, "deploy")).unwrap();
         assert_eq!(found(&result), [("a/c.md".into(), 1), ("b.ts".into(), 2)]);
         assert_eq!(result.matches, 2);

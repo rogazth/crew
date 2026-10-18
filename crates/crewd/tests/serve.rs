@@ -36,9 +36,7 @@ impl Served {
             .spawn()
             .expect("spawn");
         let mut line = String::new();
-        BufReader::new(child.stdout.take().expect("stdout"))
-            .read_line(&mut line)
-            .expect("url line");
+        BufReader::new(child.stdout.take().expect("stdout")).read_line(&mut line).expect("url line");
         let info: Value = serde_json::from_str(line.trim()).expect("json");
         assert!(info.get("token").is_none(), "the token must not reach stdout: {info}");
         let url = info["url"].as_str().expect("url").to_string();
@@ -50,10 +48,7 @@ impl Served {
     }
 
     fn terminate(&mut self) {
-        let status = Command::new("kill")
-            .args(["-TERM", &self.child.id().to_string()])
-            .status()
-            .expect("kill");
+        let status = Command::new("kill").args(["-TERM", &self.child.id().to_string()]).status().expect("kill");
         assert!(status.success());
         let start = Instant::now();
         loop {
@@ -81,12 +76,8 @@ fn token(dir: &Path) -> String {
 /// The first message after `auth`, or None when the daemon hung up instead.
 async fn authenticate(url: &str, token: &str) -> (Ws, Option<Value>) {
     let (mut ws, _) = connect_async(url).await.expect("connect");
-    ws.send(Message::Text(json!({ "auth": token }).to_string().into()))
-        .await
-        .expect("auth");
-    let first = tokio::time::timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("auth reply timeout");
+    ws.send(Message::Text(json!({ "auth": token }).to_string().into())).await.expect("auth");
+    let first = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("auth reply timeout");
     let hello = match first {
         Some(Ok(Message::Text(text))) => Some(serde_json::from_str(&text).expect("json")),
         _ => None,
@@ -98,11 +89,8 @@ async fn call(ws: &mut Ws, id: u32, method: &str, params: Value) -> Result<Value
     let request = json!({ "id": id, "method": method, "params": params }).to_string();
     ws.send(Message::Text(request.into())).await.expect("send");
     loop {
-        let message = tokio::time::timeout(Duration::from_secs(5), ws.next())
-            .await
-            .expect("rpc timeout")
-            .expect("closed")
-            .expect("ws");
+        let message =
+            tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
         let Message::Text(text) = message else { continue };
         let response: Value = serde_json::from_str(&text).expect("json");
         if response["id"] != id {
@@ -187,12 +175,7 @@ async fn daemon_info_and_dir_list() {
         .collect();
     assert_eq!(
         entries,
-        vec![
-            ("app".into(), true),
-            ("linked-target".into(), true),
-            ("Notes".into(), false),
-            ("wt".into(), true),
-        ]
+        vec![("app".into(), true), ("linked-target".into(), true), ("Notes".into(), false), ("wt".into(), true),]
     );
 
     let app = call(&mut ws, 3, "dir_list", json!({ "path": tree.join("app") })).await.expect("dir_list");
@@ -202,14 +185,10 @@ async fn daemon_info_and_dir_list() {
     assert!(call(&mut ws, 5, "dir_list", json!({ "path": tree.join("missing") })).await.is_err());
 
     assert_eq!(call(&mut ws, 6, "ping", json!({})).await.expect("ping"), Value::Null);
-    let saved = call(
-        &mut ws,
-        7,
-        "remote_upsert",
-        json!({ "id": "", "name": "VPS", "host": "100.1.1.1", "port": 7777, "user": "agent" }),
-    )
-    .await
-    .expect("upsert");
+    let saved =
+        call(&mut ws, 7, "remote_upsert", json!({ "id": "", "name": "VPS", "host": "100.1.1.1", "port": 7777, "user": "agent" }))
+            .await
+            .expect("upsert");
     assert!(!saved["id"].as_str().unwrap_or("").is_empty());
     let listed = call(&mut ws, 8, "remote_list", json!({})).await.expect("list");
     assert_eq!(listed.as_array().map(Vec::len), Some(1));
@@ -238,11 +217,7 @@ fn get(addr: &str, target: &str, headers: &[&str]) -> Reply {
     let split = raw.windows(4).position(|window| window == b"\r\n\r\n").expect("head");
     let head = String::from_utf8(raw[..split].to_vec()).expect("utf8");
     let status = head.split(' ').nth(1).expect("status").parse().expect("code");
-    Reply {
-        status,
-        headers: head.to_ascii_lowercase(),
-        body: raw[split + 4..].to_vec(),
-    }
+    Reply { status, headers: head.to_ascii_lowercase(), body: raw[split + 4..].to_vec() }
 }
 
 fn fs_target(root: &Path, path: &str) -> String {
@@ -296,9 +271,59 @@ fn fs_serves_files_under_the_root_and_nothing_else() {
     }
 
     assert_eq!(get(served.addr(), &fs_target(&root, "report"), &[]).status, 401);
-    assert_eq!(
-        get(served.addr(), &fs_target(&root, "report"), &["Authorization: Bearer wrong"]).status,
-        401
-    );
+    assert_eq!(get(served.addr(), &fs_target(&root, "report"), &["Authorization: Bearer wrong"]).status, 401);
     assert_eq!(get(served.addr(), "/elsewhere", &auth).status, 404);
+}
+
+/// A daemon a test started outside any supervisor (the launchd stand-in, a
+/// detached `serve`) stops with the process it was told to outlive no longer,
+/// however that process ended.
+#[test]
+fn a_daemon_stops_once_the_pid_it_was_to_outlive_is_gone() {
+    let dir = temp("owner");
+    let mut owner = Command::new("sleep").arg("300").spawn().expect("sleep");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        .args(["serve", "--listen", "127.0.0.1:0", "--exit-with-pid", &owner.id().to_string(), "--data-dir"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        // A pipe, as an e2e harness gives it, that is closed by the time the
+        // owner goes: the way out must not depend on writing there.
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().expect("stdout")).read_line(&mut line).expect("url line");
+    assert!(line.contains("url"), "crewd did not come up: {line:?}");
+    drop(child.stderr.take());
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(child.try_wait().expect("wait").is_none(), "crewd stopped while its owner was alive");
+
+    owner.kill().expect("kill owner");
+    owner.wait().expect("reap owner");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "crewd outlived its owner");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_pid_that_is_not_one_is_refused() {
+    let dir = temp("owner-bad");
+    let status = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        .args(["serve", "--listen", "127.0.0.1:0", "--exit-with-pid", "self", "--data-dir"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run");
+    assert!(!status.success());
+    let _ = std::fs::remove_dir_all(&dir);
 }

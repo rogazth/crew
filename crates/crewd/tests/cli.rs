@@ -50,22 +50,10 @@ fn prints_json_and_exits_on_stdin_eof() {
         .expect("spawn");
     let stdout = child.stdout.take().expect("stdout");
     let mut line = String::new();
-    BufReader::new(stdout)
-        .read_line(&mut line)
-        .expect("json line");
+    BufReader::new(stdout).read_line(&mut line).expect("json line");
     let info: serde_json::Value = serde_json::from_str(line.trim()).expect("json");
-    assert!(
-        info["url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("ws://127.0.0.1:")),
-        "{info}"
-    );
-    assert!(
-        info["token"]
-            .as_str()
-            .is_some_and(|token| !token.is_empty()),
-        "{info}"
-    );
+    assert!(info["url"].as_str().is_some_and(|url| url.starts_with("ws://127.0.0.1:")), "{info}");
+    assert!(info["token"].as_str().is_some_and(|token| !token.is_empty()), "{info}");
     assert!(dir.join("crew.sqlite3").exists());
     drop(child.stdin.take());
     wait_exit(&mut child, Duration::from_secs(5));
@@ -84,15 +72,9 @@ fn exits_on_sigterm() {
         .expect("spawn");
     let stdout = child.stdout.take().expect("stdout");
     let mut line = String::new();
-    BufReader::new(stdout)
-        .read_line(&mut line)
-        .expect("json line");
+    BufReader::new(stdout).read_line(&mut line).expect("json line");
     assert!(line.contains("ws://127.0.0.1:"), "{line}");
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(child.id().to_string())
-        .status()
-        .expect("kill");
+    let status = Command::new("kill").arg("-TERM").arg(child.id().to_string()).status().expect("kill");
     assert!(status.success());
     wait_exit(&mut child, Duration::from_secs(5));
 }
@@ -163,22 +145,12 @@ fn daemon_json_lives_as_long_as_the_daemon_and_speaks_as_the_user() {
 }
 
 fn alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    Command::new("kill").args(["-0", &pid.to_string()]).status().map(|status| status.success()).unwrap_or(false)
 }
 
 fn children_of(pid: u32) -> Vec<u32> {
-    let output = Command::new("pgrep")
-        .args(["-P", &pid.to_string()])
-        .output()
-        .expect("pgrep");
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .filter_map(|word| word.parse().ok())
-        .collect()
+    let output = Command::new("pgrep").args(["-P", &pid.to_string()]).output().expect("pgrep");
+    String::from_utf8_lossy(&output.stdout).split_whitespace().filter_map(|word| word.parse().ok()).collect()
 }
 
 fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
@@ -221,20 +193,14 @@ setInterval(() => {}, 1 << 30);
     let stdout = parent.stdout.take().expect("stdout");
     let mut lines = BufReader::new(stdout).lines();
     let pid_line = lines.next().expect("pid line").expect("pid line");
-    let crewd_pid: u32 = pid_line
-        .strip_prefix("crewd-pid ")
-        .expect("crewd-pid prefix")
-        .parse()
-        .expect("crewd pid");
+    let crewd_pid: u32 = pid_line.strip_prefix("crewd-pid ").expect("crewd-pid prefix").parse().expect("crewd pid");
     let handshake = lines.next().expect("handshake").expect("handshake");
     let info: serde_json::Value = serde_json::from_str(handshake.trim()).expect("json");
     let url = info["url"].as_str().expect("url").to_string();
     let token = info["token"].as_str().expect("token").to_string();
 
     let (mut ws, _) = connect_async(&url).await.expect("connect");
-    ws.send(Message::Text(format!(r#"{{"auth":"{token}"}}"#).into()))
-        .await
-        .expect("auth");
+    ws.send(Message::Text(format!(r#"{{"auth":"{token}"}}"#).into())).await.expect("auth");
     ws.send(Message::Text(
         format!(
             r#"{{"id":1,"method":"pty_spawn","params":{{"id":"t","cwd":"{}","command":["/bin/sleep","1000"],"cols":80,"rows":24}}}}"#,
@@ -263,15 +229,9 @@ setInterval(() => {}, 1 << 30);
     let sleep_pids = wait_until(Duration::from_secs(2), || !children_of(crewd_pid).is_empty())
         .then(|| children_of(crewd_pid))
         .expect("sleep child of crewd");
-    assert!(
-        sleep_pids.iter().any(|&pid| alive(pid)),
-        "sleep {sleep_pids:?} should be running"
-    );
+    assert!(sleep_pids.iter().any(|&pid| alive(pid)), "sleep {sleep_pids:?} should be running");
 
-    let status = Command::new("kill")
-        .args(["-9", &parent.id().to_string()])
-        .status()
-        .expect("sigkill parent");
+    let status = Command::new("kill").args(["-9", &parent.id().to_string()]).status().expect("sigkill parent");
     assert!(status.success());
     let _ = parent.wait();
 
@@ -381,13 +341,8 @@ fn a_start_that_cannot_succeed_is_not_retried_by_launchd() {
     let file = base.join("not-a-dir");
     std::fs::write(&file, "").expect("file");
     let dir = file.join("data");
-    let launchd = crewd()
-        .arg("--data-dir")
-        .arg(&dir)
-        .args(["--supervised-by", "launchd"])
-        .stdin(Stdio::null())
-        .output()
-        .expect("run");
+    let launchd =
+        crewd().arg("--data-dir").arg(&dir).args(["--supervised-by", "launchd"]).stdin(Stdio::null()).output().expect("run");
     assert!(launchd.status.success(), "{launchd:?}");
     assert!(String::from_utf8_lossy(&launchd.stderr).contains("won't be restarted"), "{launchd:?}");
     let child = crewd().arg("--data-dir").arg(&dir).stdin(Stdio::piped()).output().expect("run");

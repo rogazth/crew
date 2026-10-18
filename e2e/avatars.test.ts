@@ -91,9 +91,18 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
       }),
     { message: "the sidebar is back on screen" },
   );
-  // Forced: the sortable wrapper says aria-disabled while dragging is off.
-  await card(crew, "Scout").click({ button: "right", force: true });
-  await page.getByRole("menuitem", { name: "Bot Settings…" }).click();
+  // Forced: the sortable wrapper says aria-disabled while dragging is off. A
+  // right-click that lands while the card still moves opens no menu: again.
+  const item = page.getByRole("menuitem", { name: "Bot Settings…" });
+  await waitFor(
+    async () => {
+      if (await item.isVisible()) return true;
+      await card(crew, "Scout").click({ button: "right", force: true });
+      return item.waitFor({ timeout: 1000 }).then(() => true, () => false);
+    },
+    { message: "the bot's menu opens" },
+  );
+  await item.click();
   const settings = page.getByRole("dialog", { name: "Bot settings" });
   await settings.waitFor();
   const before = ((await stored(crew, "bot:faces")) ?? {}) as Faces;

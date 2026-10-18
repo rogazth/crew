@@ -2,8 +2,10 @@
 //! checkout comes first, as git lists it; a folder outside git is its own
 //! single, branchless worktree.
 //!
-//! Worktrees Crew makes live under `~/.crew/worktrees/<repo>/<branch>`, out of
-//! the repo, so no tool that walks the checkout trips over a second copy of it.
+//! Worktrees Crew makes live under the environment's work dir
+//! (`crate::paths::worktrees`, `~/.crew/worktrees/<repo>/<branch>` for the
+//! installed app), out of the repo, so no tool that walks the checkout trips
+//! over a second copy of it.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -23,6 +25,9 @@ pub struct Worktree {
     pub del: u32,
     /// Entries in `git status`: changed, staged and untracked files.
     pub dirty: u32,
+    /// Why git keeps it from being removed or pruned, empty when no reason was
+    /// given; `None` when it is not locked. Agents lock the worktrees they work in.
+    pub locked: Option<String>,
 }
 
 pub fn list(cwd: &str) -> Vec<Worktree> {
@@ -41,7 +46,7 @@ pub fn list(cwd: &str) -> Vec<Worktree> {
         git(&listed[0].path, &["worktree", "repair"]);
     }
     if listed.is_empty() {
-        return vec![Worktree { path: cwd.to_string(), branch: None, main: true, add: 0, del: 0, dirty: 0 }];
+        return vec![Worktree { path: cwd.to_string(), branch: None, main: true, add: 0, del: 0, dirty: 0, locked: None }];
     }
     let main_head = git(&listed[0].path, &["rev-parse", "HEAD"]).map(|out| out.trim().to_string());
     // A few git calls each; side by side the list costs the slowest worktree,
@@ -88,6 +93,7 @@ pub fn parse(porcelain: &str) -> Vec<Worktree> {
     for block in porcelain.split("\n\n") {
         let mut path = None;
         let mut branch = None;
+        let mut locked = None;
         let mut bare = false;
         for line in block.lines() {
             if let Some(rest) = line.strip_prefix("worktree ") {
@@ -96,11 +102,13 @@ pub fn parse(porcelain: &str) -> Vec<Worktree> {
                 branch = Some(rest.strip_prefix("refs/heads/").unwrap_or(rest).to_string());
             } else if line == "bare" {
                 bare = true;
+            } else if line == "locked" || line.starts_with("locked ") {
+                locked = Some(line["locked".len()..].trim().to_string());
             }
         }
         if let (Some(path), false) = (path, bare) {
             let main = out.is_empty();
-            out.push(Worktree { path, branch, main, add: 0, del: 0, dirty: 0 });
+            out.push(Worktree { path, branch, main, add: 0, del: 0, dirty: 0, locked });
         }
     }
     out
@@ -121,15 +129,11 @@ fn detached_from_repo(path: &str) -> bool {
 }
 
 fn count(tree: &mut Worktree, main_head: Option<&str>) {
-    tree.dirty = git(&tree.path, &["status", "--porcelain"])
-        .map(|out| out.lines().count() as u32)
-        .unwrap_or(0);
+    tree.dirty = git(&tree.path, &["status", "--porcelain"]).map(|out| out.lines().count() as u32).unwrap_or(0);
     let base = if tree.main {
         Some("HEAD".to_string())
     } else {
-        main_head
-            .and_then(|head| git(&tree.path, &["merge-base", "HEAD", head]))
-            .map(|out| out.trim().to_string())
+        main_head.and_then(|head| git(&tree.path, &["merge-base", "HEAD", head])).map(|out| out.trim().to_string())
     };
     if let Some(stat) = base.and_then(|base| git(&tree.path, &["diff", "--shortstat", &base])) {
         (tree.add, tree.del) = shortstat(&stat);
@@ -157,8 +161,7 @@ pub fn shortstat(line: &str) -> (u32, u32) {
 /// branch checked out if it exists, made to track a remote's branch of that name
 /// if only a remote has it, otherwise made from the main checkout's HEAD.
 pub fn add(path: &str, branch: &str) -> Result<Worktree, String> {
-    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty()).ok_or("HOME is not set")?;
-    add_under(&Path::new(&home).join(".crew").join("worktrees"), path, branch)
+    add_under(&crate::paths::worktrees(), path, branch)
 }
 
 pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, String> {
@@ -167,8 +170,7 @@ pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, Stri
         return Err("Branch name is required".into());
     }
     let main = main_checkout(path)?;
-    run(&main, &["check-ref-format", "--branch", branch])
-        .map_err(|_| format!("Not a valid branch name: {branch}"))?;
+    run(&main, &["check-ref-format", "--branch", branch]).map_err(|_| format!("Not a valid branch name: {branch}"))?;
     let repo = Path::new(&main).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let dir = root.join(repo).join(slug(branch));
     if dir.exists() {
@@ -194,18 +196,19 @@ pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, Stri
         .ok_or_else(|| format!("git made {target} but does not list it"))
 }
 
-/// Removes a linked worktree and returns its path as git lists it. The main
-/// checkout is the repo itself and is never removed; a worktree with changes
-/// nobody committed is removed only when `force` says to throw them away.
-pub fn remove(path: &str, force: bool) -> Result<String, String> {
-    let trees = run(path, &["worktree", "list", "--porcelain"])
+/// Removes a linked worktree and returns its path as git lists it. `repo` is
+/// any checkout of the same repo: git runs there, so a worktree whose folder
+/// is gone can still go. The main checkout is the repo itself and is never
+/// removed; a worktree with changes nobody committed, or one a tool locked,
+/// is removed only when `force` says to throw them away or break the lock.
+pub fn remove(repo: &str, path: &str, force: bool) -> Result<String, String> {
+    let trees = run(repo, &["worktree", "list", "--porcelain"])
+        .or_else(|_| run(path, &["worktree", "list", "--porcelain"]))
         .map(|out| parse(&out))
         .map_err(|_| format!("{path} is not a git worktree"))?;
     let wanted = canonical(path);
-    let tree = trees
-        .iter()
-        .find(|tree| canonical(&tree.path) == wanted)
-        .ok_or_else(|| format!("{path} is not a git worktree"))?;
+    let tree =
+        trees.iter().find(|tree| canonical(&tree.path) == wanted).ok_or_else(|| format!("{path} is not a git worktree"))?;
     if tree.main {
         return Err("The main checkout cannot be removed".into());
     }
@@ -213,8 +216,15 @@ pub fn remove(path: &str, force: bool) -> Result<String, String> {
     if dirty && !force {
         return Err(format!("{path} has uncommitted changes"));
     }
+    if let (Some(reason), false) = (&tree.locked, force) {
+        return Err(if reason.is_empty() { format!("{path} is locked") } else { format!("{path} is locked: {reason}") });
+    }
     let mut args = vec!["worktree", "remove"];
     if force {
+        args.push("--force");
+    }
+    // Git breaks a lock only when asked twice.
+    if force && tree.locked.is_some() {
         args.push("--force");
     }
     args.push(&tree.path);
@@ -224,21 +234,13 @@ pub fn remove(path: &str, force: bool) -> Result<String, String> {
 
 /// The main checkout of the repo `path` is in, whichever worktree `path` is.
 pub fn main_checkout(path: &str) -> Result<String, String> {
-    let out = run(path, &["worktree", "list", "--porcelain"])
-        .map_err(|_| format!("{path} is not a git repository"))?;
-    parse(&out)
-        .into_iter()
-        .next()
-        .map(|tree| tree.path)
-        .ok_or_else(|| format!("{path} has no checkout to branch from"))
+    let out = run(path, &["worktree", "list", "--porcelain"]).map_err(|_| format!("{path} is not a git repository"))?;
+    parse(&out).into_iter().next().map(|tree| tree.path).ok_or_else(|| format!("{path} has no checkout to branch from"))
 }
 
 /// A branch as one folder name: `feat/avatars` is `feat-avatars`.
 pub fn slug(branch: &str) -> String {
-    branch
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
-        .collect()
+    branch.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect()
 }
 
 fn has_ref(dir: &str, name: &str) -> bool {
@@ -251,10 +253,7 @@ fn remote_branch(dir: &str, branch: &str) -> Option<String> {
     let remotes = git(dir, &["remote"])?;
     let mut remotes: Vec<&str> = remotes.lines().map(str::trim).filter(|r| !r.is_empty()).collect();
     remotes.sort_by_key(|remote| *remote != "origin");
-    remotes
-        .into_iter()
-        .map(|remote| format!("refs/remotes/{remote}/{branch}"))
-        .find(|name| has_ref(dir, name))
+    remotes.into_iter().map(|remote| format!("refs/remotes/{remote}/{branch}")).find(|name| has_ref(dir, name))
 }
 
 fn canonical(path: &str) -> PathBuf {
@@ -294,7 +293,7 @@ mod tests {
     use super::*;
 
     fn row(path: &str, branch: Option<&str>, main: bool) -> Worktree {
-        Worktree { path: path.into(), branch: branch.map(Into::into), main, add: 0, del: 0, dirty: 0 }
+        Worktree { path: path.into(), branch: branch.map(Into::into), main, add: 0, del: 0, dirty: 0, locked: None }
     }
 
     fn temp(prefix: &str) -> PathBuf {
@@ -462,7 +461,7 @@ mod tests {
     #[test]
     fn the_main_checkout_is_never_removed() {
         let repo = repo();
-        let refused = remove(&at(&repo), true);
+        let refused = remove(&at(&repo), &at(&repo), true);
         assert!(refused.is_err_and(|e| e.contains("main checkout")));
         assert!(repo.join("notes.txt").is_file());
     }
@@ -474,11 +473,11 @@ mod tests {
         let path = add_under(&root, &at(&repo), "feat").expect("add").path;
         std::fs::write(Path::new(&path).join("notes.txt"), "changed\n").unwrap();
 
-        let kept = remove(&path, false);
+        let kept = remove(&at(&repo), &path, false);
         assert!(kept.is_err_and(|e| e.contains("uncommitted")), "unsaved work was thrown away");
         assert!(Path::new(&path).is_dir());
 
-        assert_eq!(remove(&path, true).expect("forced"), path);
+        assert_eq!(remove(&at(&repo), &path, true).expect("forced"), path);
         assert!(!Path::new(&path).exists());
         assert_eq!(list(&at(&repo)).len(), 1);
     }
@@ -489,7 +488,7 @@ mod tests {
         let root = temp("crew-wt-root");
         let path = add_under(&root, &at(&repo), "feat").expect("add").path;
 
-        remove(&path, false).expect("remove");
+        remove(&at(&repo), &path, false).expect("remove");
 
         assert!(!Path::new(&path).exists());
         sh(&repo, &["show-ref", "--verify", "--quiet", "refs/heads/feat"]);
@@ -498,7 +497,7 @@ mod tests {
     #[test]
     fn removing_what_is_not_a_worktree_says_so() {
         let plain = at(&temp("crew-plain"));
-        assert!(remove(&plain, false).is_err_and(|e| e.contains("not a git worktree")));
+        assert!(remove(&plain, &plain, false).is_err_and(|e| e.contains("not a git worktree")));
     }
 
     #[test]
@@ -529,7 +528,7 @@ mod tests {
         let listed = list(&at(&moved));
 
         assert_eq!(listed.iter().map(|t| t.path.clone()).collect::<Vec<_>>(), vec![at(&moved), tree.clone()]);
-        assert_eq!(remove(&tree, false).expect("remove"), tree);
+        assert_eq!(remove(&tree, &tree, false).expect("remove"), tree);
         assert!(!Path::new(&tree).exists());
     }
 
@@ -545,6 +544,50 @@ mod tests {
 
         let porcelain = run(&at(&repo), &["worktree", "list", "--porcelain"]).unwrap();
         assert!(porcelain.contains(&offline), "a locked worktree was pruned: {porcelain}");
+    }
+
+    /// Agents lock the worktrees they work in, often on a detached HEAD.
+    #[test]
+    fn a_locked_worktree_goes_only_when_forced_and_says_why_it_stayed() {
+        let repo = repo();
+        let root = temp("crew-wt-root");
+        let path = root.join("agent-1");
+        sh(&repo, &["worktree", "add", "-q", "--detach", &at(&path)]);
+        sh(&repo, &["worktree", "lock", "--reason", "claude agent", &at(&path)]);
+        let path = at(&path);
+
+        let listed = list(&at(&repo));
+        let agent = listed.iter().find(|t| t.path == path).expect("listed");
+        assert_eq!((agent.branch.as_deref(), agent.locked.as_deref()), (None, Some("claude agent")));
+
+        let kept = remove(&at(&repo), &path, false);
+        assert!(kept.is_err_and(|e| e.ends_with("is locked: claude agent")));
+        assert!(Path::new(&path).is_dir());
+
+        assert_eq!(remove(&at(&repo), &path, true).expect("forced"), path);
+        assert!(!Path::new(&path).exists());
+        assert_eq!(list(&at(&repo)).len(), 1);
+    }
+
+    #[test]
+    fn a_locked_worktree_whose_folder_is_gone_is_removed_from_the_repo() {
+        let repo = repo();
+        let root = temp("crew-wt-root");
+        let offline = add_under(&root, &at(&repo), "offline").expect("add").path;
+        sh(&repo, &["worktree", "lock", &offline]);
+        std::fs::remove_dir_all(&offline).unwrap();
+
+        assert!(remove(&at(&repo), &offline, false).is_err_and(|e| e.ends_with("is locked")));
+        assert_eq!(remove(&at(&repo), &offline, true).expect("forced"), offline);
+
+        assert_eq!(list(&at(&repo)).len(), 1);
+    }
+
+    #[test]
+    fn a_lock_and_its_reason_are_read_off_the_listing() {
+        let trees = parse("worktree /a\nHEAD 1\nbranch refs/heads/main\n\nworktree /b\nHEAD 2\ndetached\nlocked\n\nworktree /c\nHEAD 3\ndetached\nlocked claude session x (pid 9)\n");
+        let locks: Vec<_> = trees.iter().map(|t| t.locked.as_deref()).collect();
+        assert_eq!(locks, vec![None, Some(""), Some("claude session x (pid 9)")]);
     }
 
     #[test]

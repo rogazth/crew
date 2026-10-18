@@ -7,10 +7,17 @@
 //   E2E_SKIP_BUILD=1 npm run e2e       → reuse dist/ as it is
 //   E2E_KEEP=1 npm run e2e             → leave each run's data directory behind
 //   npm run e2e -- --test-concurrency=1  → one spec file at a time
+//   npm run e2e -- --test-timeout=0    → no per-test timeout (default 5 min)
 //
 // Other --flags go to `node --test` (e.g. --test-name-pattern=...).
-import { spawn } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+//
+// Once the specs end, the run fails if it left anything outside its
+// sandboxes: a process, a sandbox, a workspace in a real app's database, a
+// worktree in a real build's folder (scripts/e2e-leaks.mjs). A process is
+// killed and a sandbox deleted as they are reported.
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,11 +70,66 @@ if (process.env.E2E_SKIP_BUILD !== "1") {
 const passedConcurrency = flags.some(
   (arg) => arg === "--test-concurrency" || arg.startsWith("--test-concurrency="),
 );
-const test = ["--test", ...(passedConcurrency ? [] : ["--test-concurrency=3"]), ...flags, ...files];
+// A test that hangs fails after five minutes instead of holding the run
+// forever; a --test-timeout already passed wins.
+const passedTimeout = flags.some((arg) => arg === "--test-timeout" || arg.startsWith("--test-timeout="));
+const test = [
+  "--test",
+  ...(passedConcurrency ? [] : ["--test-concurrency=3"]),
+  ...(passedTimeout ? [] : ["--test-timeout=300000"]),
+  ...flags,
+  ...files,
+];
 // Electron needs a display. xvfb-run's default screen is 640x480 at 8 bits,
 // smaller than the window's minimum size.
 const headless = process.platform === "linux" && !process.env.DISPLAY;
+// Every sandbox the harness makes is written here, so what the run left
+// behind can be told from other runs and from the user's own apps.
+const runDir = mkdtempSync(path.join(tmpdir(), "crew-e2e-run-"));
+process.env.CREW_E2E_RUN_LOG = path.join(runDir, "sandboxes");
 const code = headless
   ? await run("xvfb-run", ["-a", "-s", "-screen 0 1920x1080x24", process.execPath, ...test])
   : await run(process.execPath, test);
-process.exit(code);
+const leaks = await checkLeaks();
+rmSync(runDir, { recursive: true, force: true });
+process.exit(code !== 0 ? code : leaks ? 1 : 0);
+
+/** Reports and ends what the run left outside its sandboxes. True when there was any. */
+async function checkLeaks() {
+  const { findLeaks, sandboxesIn } = await import("./e2e-leaks.mjs");
+  const { DatabaseSync } = await import("node:sqlite");
+  const roots = sandboxesIn(existsSync(process.env.CREW_E2E_RUN_LOG) ? readFileSync(process.env.CREW_E2E_RUN_LOG, "utf8") : "");
+  if (roots.length === 0) return false;
+  // A daemon the run left may still be stopping on its own: give it a moment.
+  const ps = () => execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  const settle = Date.now() + 5000;
+  const find = () =>
+    findLeaks({
+      roots,
+      ps: ps(),
+      home: homedir(),
+      appSupport: path.join(homedir(), "Library", "Application Support"),
+      keep: process.env.E2E_KEEP === "1",
+      open: (file) => new DatabaseSync(file, { readOnly: true }),
+    });
+  let found = find();
+  while (found.processes.length > 0 && Date.now() < settle) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    found = find();
+  }
+  const { processes, sandboxes, elsewhere } = found;
+  if (processes.length + sandboxes.length + elsewhere.length === 0) return false;
+  console.error("\ne2e: the run left these outside its sandboxes:");
+  for (const { pid, command } of processes) {
+    console.error(`  process ${pid}: ${command.slice(0, 200)} (killed)`);
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+  for (const root of sandboxes) {
+    console.error(`  sandbox ${root} (deleted)`);
+    rmSync(root, { recursive: true, force: true });
+  }
+  for (const line of elsewhere) console.error(`  ${line}`);
+  return true;
+}

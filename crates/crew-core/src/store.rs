@@ -57,18 +57,14 @@ impl Store {
         }
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         // WAL keeps reads from blocking the write that persists a turn.
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| e.to_string())?;
         // With WAL a NORMAL sync only loses the last transactions on power loss, never
         // integrity; FULL would fsync on every tab switch and status change.
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|e| e.to_string())?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "synchronous", "NORMAL").map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
         // 8 MiB instead of 2: browser history at its cap is just over the default,
         // and every suggestion scan re-read it from the OS.
-        conn.pragma_update(None, "cache_size", -8192)
-            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "cache_size", -8192).map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         // Letters a turn was carrying when the daemon stopped: that turn is
         // gone, so they are handed over again (`TurnHost::deliver_waiting`).
@@ -78,10 +74,7 @@ impl Store {
         if std::env::var_os("CREW_KEEP_STATUS").is_none() {
             settle_open_turns(&conn).map_err(|e| e.to_string())?;
         }
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-            listener: Arc::new(Mutex::new(None)),
-        })
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), listener: Arc::new(Mutex::new(None)) })
     }
 
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T, String> {
@@ -116,8 +109,7 @@ impl Store {
 }
 
 pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
-    conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
-        .exists(params![table, column])
+    conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?.exists(params![table, column])
 }
 
 const MIGRATION_REMOTES: &str = "CREATE TABLE IF NOT EXISTS remotes (
@@ -147,36 +139,21 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
          )",
         [],
     )?;
-    let current: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-        [],
-        |row| row.get(0),
-    )?;
+    let current: i64 = conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))?;
     if current < 1 {
         conn.execute_batch(MIGRATION_V1)?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?1)", params![now_millis()])?;
     }
     if current < 2 {
-        conn.execute_batch(
-            "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_path_idx ON workspaces (path);",
-        )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS workspaces_path_idx ON workspaces (path);")?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?1)", params![now_millis()])?;
     }
     if current < 3 {
         conn.execute_batch(
             "ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT '';
              ALTER TABLE sessions ADD COLUMN notifications INTEGER NOT NULL DEFAULT 1;",
         )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)", params![now_millis()])?;
     }
     if current < 4 {
         conn.execute_batch(
@@ -185,28 +162,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              ALTER TABLE workspaces ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
              UPDATE workspaces SET sort_order = created_at;",
         )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?1)", params![now_millis()])?;
     }
     if current < 5 {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle';",
-        )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle';")?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?1)", params![now_millis()])?;
     }
     if current < 6 {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'ask';",
-        )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'ask';")?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?1)", params![now_millis()])?;
     }
     if current < 7 {
         conn.execute_batch(
@@ -222,10 +186,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                updated_at  INTEGER NOT NULL
              );",
         )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?1)", params![now_millis()])?;
     }
     if current < 8 {
         // Several routines per bot, each with a name and a run history. SQLite
@@ -252,42 +213,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              ALTER TABLE routines_v8 RENAME TO routines;
              CREATE INDEX IF NOT EXISTS routines_session_idx ON routines (session_id);",
         )?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?1)", params![now_millis()])?;
     }
     if current < 9 {
         conn.execute("ALTER TABLE routines ADD COLUMN created_by TEXT", [])?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?1)", params![now_millis()])?;
     }
     if current < 10 {
         conn.execute_batch(crate::messages::MIGRATION_V10)?;
         // The transcripts that already exist are the ones worth searching.
         crate::messages::backfill(conn)?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (10, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (10, ?1)", params![now_millis()])?;
     }
     if current < 11 {
         conn.execute_batch(crate::mailbox::MIGRATION_V11)?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?1)", params![now_millis()])?;
     }
     if current < 12 {
         // No query ever used it: search is driven by the FTS match and every
         // other read goes by primary key. It was write amplification only.
         conn.execute_batch("DROP INDEX IF EXISTS messages_at_idx;")?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?1)", params![now_millis()])?;
     }
     if current < 13 {
         // The first destructive migration, so it is also the first that has to
@@ -303,10 +249,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 crate::messages::backfill_missing(conn)?;
                 conn.execute_batch("ALTER TABLE sessions DROP COLUMN blocks_json;")?;
             }
-            conn.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?1)",
-                params![now_millis()],
-            )?;
+            conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?1)", params![now_millis()])?;
             Ok(())
         })();
         match applied {
@@ -319,10 +262,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if current < 14 {
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_title TEXT;")?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?1)",
-            params![now_millis()],
-        )?;
+        conn.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?1)", params![now_millis()])?;
     }
     // From here on each step is all or nothing, like 13: dying between the
     // DDL and its version row must not leave a step applied but unrecorded.
@@ -330,19 +270,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if current < 15 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::browser::MIGRATION_V15)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 16 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::browser::MIGRATION_V16)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 17 {
@@ -352,29 +286,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(&tx, "sessions", "worktree")? {
             tx.execute_batch("ALTER TABLE sessions ADD COLUMN worktree TEXT;")?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 18 {
         // Machines the window connects to. Tokens stay in the keychain, not here.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(MIGRATION_REMOTES)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 19 {
         let tx = conn.unchecked_transaction()?;
         migrate_remotes_ssh(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 20 {
@@ -387,37 +312,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(&tx, "mailbox", "from_kind")? {
             tx.execute_batch(crate::mailbox::MIGRATION_FROM_KIND)?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 21 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::process::MIGRATION_PROCESSES)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 22 {
         let tx = conn.unchecked_transaction()?;
         crate::process::migrate_unique_names(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 23 {
         let tx = conn.unchecked_transaction()?;
         split_agents_from_sessions(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 24 {
@@ -426,19 +339,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(&tx, "sessions", "effort")? {
             tx.execute_batch("ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT '';")?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (24, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (24, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 25 {
         let tx = conn.unchecked_transaction()?;
         rename_agents_to_bots(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 26 {
@@ -448,36 +355,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // Who handed a session over to whom, and how far the user has read
         // it: kept for the phases that use them.
         if !has_column(&tx, "sessions", "handed_off_by")? && !has_column(&tx, "sessions", "launched_by")? {
-            tx.execute_batch(
-                "ALTER TABLE sessions ADD COLUMN handed_off_by TEXT REFERENCES sessions(id) ON DELETE SET NULL;",
-            )?;
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN handed_off_by TEXT REFERENCES sessions(id) ON DELETE SET NULL;")?;
         }
         if !has_column(&tx, "sessions", "user_seen")? {
             tx.execute_batch("ALTER TABLE sessions ADD COLUMN user_seen INTEGER NOT NULL DEFAULT 0;")?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 27 {
         let tx = conn.unchecked_transaction()?;
         cursor_children_to_acp(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 28 {
         let tx = conn.unchecked_transaction()?;
         // The threads, one per pair, read the mailbox by sender and by reader.
         tx.execute_batch(crate::mailbox::MIGRATION_V28)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 29 {
@@ -487,10 +383,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(&tx, "sessions", "service_tier")? {
             tx.execute_batch("ALTER TABLE sessions ADD COLUMN service_tier TEXT NOT NULL DEFAULT '';")?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 30 {
@@ -508,10 +401,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
               WHERE kind = 'terminal' AND provider IN ('claude', 'codex', 'opencode')
                 AND EXISTS (SELECT 1 FROM app_state WHERE key = 'sessions:view' AND value = 'chat');",
         )?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 31 {
@@ -519,30 +409,21 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // What a session's CLI left running in the background, kept for the
         // life of the session (see `background`).
         tx.execute_batch(crate::background::MIGRATION_V31)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 32 {
         let tx = conn.unchecked_transaction()?;
         // The command and skills the user picked for a letter in the box.
         crate::mailbox::migrate_dispatch(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (32, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (32, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 33 {
         let tx = conn.unchecked_transaction()?;
         // The children and process runs a session's panel was cleared of.
         tx.execute_batch(crate::background::MIGRATION_V33)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 34 {
@@ -552,20 +433,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if has_column(&tx, "sessions", "handed_off_by")? && !has_column(&tx, "sessions", "launched_by")? {
             tx.execute_batch("ALTER TABLE sessions RENAME COLUMN handed_off_by TO launched_by;")?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 35 {
         let tx = conn.unchecked_transaction()?;
         // What a starting tool made, under the caller's `request_id`.
         tx.execute_batch(crate::requests::MIGRATION_V35)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (35, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (35, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 36 {
@@ -574,10 +449,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(&tx, "sessions", "archived")? {
             tx.execute_batch(crate::session::MIGRATION_V36)?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 37 {
@@ -586,10 +458,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if has_column(&tx, "sessions", "archived")? {
             tx.execute_batch(crate::session::MIGRATION_V37)?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (37, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (37, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     if current < 38 {
@@ -598,10 +467,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         if has_column(&tx, "sessions", "view")? {
             tx.execute_batch(crate::session::MIGRATION_V38)?;
         }
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (38, ?1)",
-            params![now_millis()],
-        )?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (38, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     Ok(())
@@ -631,8 +497,7 @@ pub(crate) fn cursor_children_to_acp(conn: &Connection) -> rusqlite::Result<()> 
 }
 
 pub(crate) fn has_table(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
-    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
-        .exists(params![table])
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?.exists(params![table])
 }
 
 /// What Crew called an agent — a persistent identity: a name, a description,
@@ -732,9 +597,7 @@ pub(crate) fn split_agents_from_sessions(conn: &Connection) -> rusqlite::Result<
     if !has_column(conn, "sessions", "seen")? {
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;")?;
     }
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS sessions_parent_idx ON sessions (parent_id) WHERE parent_id IS NOT NULL;",
-    )?;
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS sessions_parent_idx ON sessions (parent_id) WHERE parent_id IS NOT NULL;")?;
     conn.execute_batch(crate::session_events::MIGRATION)
 }
 
@@ -766,9 +629,7 @@ pub fn write_state(conn: &Connection, key: &str, value: Option<&str>) -> rusqlit
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             )?
             .execute(params![key, value]),
-        None => conn
-            .prepare_cached("DELETE FROM app_state WHERE key = ?1")?
-            .execute(params![key]),
+        None => conn.prepare_cached("DELETE FROM app_state WHERE key = ?1")?.execute(params![key]),
     }
     .map(|_| ())
 }
@@ -808,26 +669,17 @@ fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
     for (id, kind) in rows {
-        let settled = crate::blocks::settle_turn(
-            crate::messages::all(conn, &id)?,
-            crew_protocol::ToolStatus::Interrupted,
-        );
+        let settled = crate::blocks::settle_turn(crate::messages::all(conn, &id)?, crew_protocol::ToolStatus::Interrupted);
         let mut prior = crate::messages::fingerprints(conn, &id)?;
         crate::messages::sync(conn, &id, &settled, &mut prior)?;
         let status = if kind == "child" { "starting" } else { "idle" };
-        conn.execute(
-            "UPDATE sessions SET status = ?3, updated_at = ?2 WHERE id = ?1",
-            params![id, now_millis(), status],
-        )?;
+        conn.execute("UPDATE sessions SET status = ?3, updated_at = ?2 WHERE id = ?1", params![id, now_millis(), status])?;
     }
     Ok(())
 }
 
 pub fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// A moment, written the way a model can do arithmetic on it: local time, and
@@ -839,14 +691,7 @@ pub fn stamp(ms: i64) -> String {
     unsafe {
         libc::localtime_r(&secs, &mut tm);
     }
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min
-    )
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min)
 }
 
 #[cfg(test)]
@@ -862,8 +707,7 @@ mod migration_tests {
         let path = dir.join("crew.sqlite3");
         let id = {
             let store = Store::open(path.clone()).expect("first open");
-            let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into())
-                .expect("workspace");
+            let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
             let session = crate::session::create(
                 &store,
                 workspace.id,
@@ -917,19 +761,29 @@ mod split_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let bot = crate::session::create(
-                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
-                "You keep the roadmap.".into(), "full".into(),
+                &store,
+                ws.id.clone(),
+                "bot".into(),
+                "Planner".into(),
+                "claude".into(),
+                "m".into(),
+                "You keep the roadmap.".into(),
+                "full".into(),
             )
             .expect("bot");
             let terminal = crate::session::create(
-                &store, ws.id.clone(), "terminal".into(), "Refactor".into(), "codex".into(), "".into(),
-                "".into(), "ask".into(),
+                &store,
+                ws.id.clone(),
+                "terminal".into(),
+                "Refactor".into(),
+                "codex".into(),
+                "".into(),
+                "".into(),
+                "ask".into(),
             )
             .expect("terminal");
             let blocks = vec![crate::blocks::new_block(crew_protocol::BlockRole::User, "what did we decide?")];
-            store
-                .with(|conn| crate::messages::sync(conn, &bot.id, &blocks, &mut Vec::new()))
-                .expect("transcript");
+            store.with(|conn| crate::messages::sync(conn, &bot.id, &blocks, &mut Vec::new())).expect("transcript");
             let from = crew_protocol::BotRef::bot(terminal.id.clone(), terminal.name.clone());
             crate::mailbox::enqueue(&store, &bot.id, &from, "a letter").expect("letter");
             // Back to v22: the identity on the session row, under the old
@@ -963,9 +817,7 @@ mod split_tests {
         assert_eq!((shell.kind.as_str(), shell.bot_id), ("terminal", None));
         let named: Vec<(String, String)> = store
             .with(|conn| {
-                conn.prepare("SELECT id, name FROM bots")?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .collect()
+                conn.prepare("SELECT id, name FROM bots")?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
             })
             .unwrap();
         assert_eq!(named, vec![(bot.clone(), "Planner".to_string())], "a terminal became a bot, or the bot was lost");
@@ -987,11 +839,25 @@ mod split_tests {
         let store = Store::open(path).expect("open");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let bot = crate::session::create(
-            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+            &store,
+            ws.id.clone(),
+            "bot".into(),
+            "Planner".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
         )
         .expect("bot");
         crate::session::update(
-            &store, bot.id.clone(), "Architect".into(), "codex".into(), "gpt".into(), "Design it.".into(), false, "full".into(),
+            &store,
+            bot.id.clone(),
+            "Architect".into(),
+            "codex".into(),
+            "gpt".into(),
+            "Design it.".into(),
+            false,
+            "full".into(),
         )
         .expect("update");
         crate::session::rename(&store, bot.id.clone(), "Lead".into()).expect("rename");
@@ -1004,7 +870,10 @@ mod split_tests {
                 )
             })
             .unwrap();
-        assert_eq!((name.as_str(), description.as_str(), autonomy.as_str(), notifications), ("Lead", "Design it.", "full", false));
+        assert_eq!(
+            (name.as_str(), description.as_str(), autonomy.as_str(), notifications),
+            ("Lead", "Design it.", "full", false)
+        );
         let row = crate::session::get(&store, bot.id.clone()).unwrap().unwrap();
         assert_eq!((row.name.as_str(), row.provider.as_str(), row.autonomy.as_str()), ("Lead", "codex", "full"));
 
@@ -1022,11 +891,25 @@ mod split_tests {
         let store = Store::open(path).expect("open");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
-            &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "full".into(),
+            &store,
+            ws.id.clone(),
+            "terminal".into(),
+            "Shell".into(),
+            "claude".into(),
+            "".into(),
+            "".into(),
+            "full".into(),
         )
         .expect("terminal");
         let child = crate::session::create_child(
-            &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+            &store,
+            ws.id.clone(),
+            "codex: fix".into(),
+            "codex".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            Some(parent.id.clone()),
         )
         .expect("child");
         assert_eq!((child.kind.as_str(), child.status.as_str()), ("child", "starting"));
@@ -1054,16 +937,36 @@ mod rename_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let bot = crate::session::create(
-                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
-                "You keep the roadmap.".into(), "full".into(),
+                &store,
+                ws.id.clone(),
+                "bot".into(),
+                "Planner".into(),
+                "claude".into(),
+                "m".into(),
+                "You keep the roadmap.".into(),
+                "full".into(),
             )
             .expect("bot");
             let terminal = crate::session::create(
-                &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+                &store,
+                ws.id.clone(),
+                "terminal".into(),
+                "Shell".into(),
+                "claude".into(),
+                "".into(),
+                "".into(),
+                "ask".into(),
             )
             .expect("terminal");
             let child = crate::session::create_child(
-                &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(bot.id.clone()),
+                &store,
+                ws.id.clone(),
+                "codex: fix".into(),
+                "codex".into(),
+                "m".into(),
+                "full".into(),
+                None,
+                Some(bot.id.clone()),
             )
             .expect("child");
             let mut letter = crate::blocks::new_block(crew_protocol::BlockRole::User, "the branch is green");
@@ -1138,13 +1041,21 @@ mod rename_tests {
             ("bot", Some(bot.as_str()), "Planner", "You keep the roadmap.")
         );
         let ran = crate::session::get(&store, child.clone()).unwrap().expect("the child survived");
-        assert_eq!((ran.kind.as_str(), ran.bot_id.as_deref(), ran.parent_id.as_deref()), ("child", Some(bot.as_str()), Some(bot.as_str())));
+        assert_eq!(
+            (ran.kind.as_str(), ran.bot_id.as_deref(), ran.parent_id.as_deref()),
+            ("child", Some(bot.as_str()), Some(bot.as_str()))
+        );
         assert_eq!(crate::session::get(&store, terminal).unwrap().expect("terminal").kind, "terminal");
 
         let transcript = store.with(|conn| crate::messages::all(conn, &child)).unwrap();
-        assert_eq!(transcript[0].from_bot.as_ref().map(|from| (from.id.as_str(), from.name.as_str())), Some((bot.as_str(), "Planner")));
+        assert_eq!(
+            transcript[0].from_bot.as_ref().map(|from| (from.id.as_str(), from.name.as_str())),
+            Some((bot.as_str(), "Planner"))
+        );
         let extra: String = store
-            .with(|conn| conn.query_row("SELECT extra_json FROM messages WHERE session_id = ?1", params![child], |row| row.get(0)))
+            .with(|conn| {
+                conn.query_row("SELECT extra_json FROM messages WHERE session_id = ?1", params![child], |row| row.get(0))
+            })
             .unwrap();
         assert!(!extra.contains("from_agent"), "{extra}");
 
@@ -1186,15 +1097,36 @@ mod lifecycle_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let bot = crate::session::create(
-                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                &store,
+                ws.id.clone(),
+                "bot".into(),
+                "Planner".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "full".into(),
             )
             .expect("bot");
             let shell = crate::session::create(
-                &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+                &store,
+                ws.id.clone(),
+                "terminal".into(),
+                "Shell".into(),
+                "claude".into(),
+                "".into(),
+                "".into(),
+                "ask".into(),
             )
             .expect("terminal");
             let child = crate::session::create_child(
-                &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(bot.id.clone()),
+                &store,
+                ws.id.clone(),
+                "codex: fix".into(),
+                "codex".into(),
+                "m".into(),
+                "full".into(),
+                None,
+                Some(bot.id.clone()),
             )
             .expect("child");
             crate::session_events::record(&store, &child.id, 4, "turn", "completed", "done", None).expect("event");
@@ -1218,9 +1150,27 @@ mod lifecycle_tests {
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     )?;
                     let mut letter = letter;
-                    letter.execute(params!["report", bot.id, child.id, "codex: fix", "Its turn ended.", at, "session", None::<i64>])?;
+                    letter.execute(params![
+                        "report",
+                        bot.id,
+                        child.id,
+                        "codex: fix",
+                        "Its turn ended.",
+                        at,
+                        "session",
+                        None::<i64>
+                    ])?;
                     letter.execute(params!["read", bot.id, shell.id, "Shell", "old news", at - 10, "terminal", Some(at - 5)])?;
-                    letter.execute(params!["waiting", bot.id, shell.id, "Shell", "tests pass", at + 1, "terminal", None::<i64>])?;
+                    letter.execute(params![
+                        "waiting",
+                        bot.id,
+                        shell.id,
+                        "Shell",
+                        "tests pass",
+                        at + 1,
+                        "terminal",
+                        None::<i64>
+                    ])?;
                     Ok(())
                 })
                 .expect("downgrade");
@@ -1228,9 +1178,8 @@ mod lifecycle_tests {
         };
 
         let store = Store::open(path).expect("reopen");
-        let version: i64 = store
-            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
-            .unwrap();
+        let version: i64 =
+            store.with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))).unwrap();
         assert!(version >= 26, "{version}");
         let rows: Vec<(String, String, Option<i64>, bool, bool, bool)> = store
             .with(|conn| {
@@ -1258,7 +1207,9 @@ mod lifecycle_tests {
                     conn.prepare(sql)?.query_map([], |row| row.get(0))?.collect()
                 };
                 Ok((
-                    names("SELECT name FROM pragma_table_info('sessions') WHERE name IN ('launched_by', 'user_seen') ORDER BY name")?,
+                    names(
+                        "SELECT name FROM pragma_table_info('sessions') WHERE name IN ('launched_by', 'user_seen') ORDER BY name",
+                    )?,
                     names("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'mailbox_%' ORDER BY name")?,
                 ))
             })
@@ -1266,9 +1217,7 @@ mod lifecycle_tests {
         assert_eq!(columns, ["launched_by", "user_seen"]);
         assert_eq!(index, ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"]);
         // The new reference holds: whoever handed a session over can go.
-        store
-            .with(|conn| conn.execute("UPDATE sessions SET launched_by = ?2 WHERE id = ?1", params![shell, child]))
-            .unwrap();
+        store.with(|conn| conn.execute("UPDATE sessions SET launched_by = ?2 WHERE id = ?1", params![shell, child])).unwrap();
         crate::session::delete(&store, child).unwrap();
         let handed: Option<String> = store
             .with(|conn| conn.query_row("SELECT launched_by FROM sessions WHERE id = ?1", params![shell], |row| row.get(0)))
@@ -1299,9 +1248,27 @@ mod acp_tests {
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let make = |kind: &str, provider: &str, bound: Option<&str>| {
                 let row = if kind == "child" {
-                    crate::session::create_child(&store, ws.id.clone(), format!("{provider}: x"), provider.into(), "m".into(), "full".into(), None, None)
+                    crate::session::create_child(
+                        &store,
+                        ws.id.clone(),
+                        format!("{provider}: x"),
+                        provider.into(),
+                        "m".into(),
+                        "full".into(),
+                        None,
+                        None,
+                    )
                 } else {
-                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into())
+                    crate::session::create(
+                        &store,
+                        ws.id.clone(),
+                        kind.into(),
+                        "x".into(),
+                        provider.into(),
+                        "m".into(),
+                        "".into(),
+                        "full".into(),
+                    )
                 }
                 .expect("session");
                 if let Some(bound) = bound {
@@ -1316,16 +1283,13 @@ mod acp_tests {
                 make("terminal", "cursor", Some("chat-3")),
                 make("child", "codex", Some("thread-1")),
             ];
-            store
-                .with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version >= 27;"))
-                .expect("downgrade");
+            store.with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version >= 27;")).expect("downgrade");
             ids
         };
 
         let store = Store::open(path.clone()).expect("reopen");
-        let version: i64 = store
-            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
-            .unwrap();
+        let version: i64 =
+            store.with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))).unwrap();
         assert!(version >= 27, "{version}");
         let bound = |id: &str| crate::session::get(&store, id.to_string()).unwrap().unwrap().provider_session_id;
         let noted = |id: &str| get(&store, format!("{CURSOR_ACP_NOTE}{id}")).unwrap();
@@ -1413,9 +1377,11 @@ mod view_tests {
         assert!(!store.with(|conn| has_column(conn, "sessions", "view")).unwrap());
         let mailbox: Vec<String> = store
             .with(|conn| {
-                conn.prepare("SELECT name FROM pragma_table_info('mailbox') WHERE name IN ('files_json', 'queue_order') ORDER BY name")?
-                    .query_map([], |row| row.get(0))?
-                    .collect()
+                conn.prepare(
+                    "SELECT name FROM pragma_table_info('mailbox') WHERE name IN ('files_json', 'queue_order') ORDER BY name",
+                )?
+                .query_map([], |row| row.get(0))?
+                .collect()
             })
             .unwrap();
         assert_eq!(mailbox, ["files_json", "queue_order"]);
@@ -1436,21 +1402,29 @@ mod view_tests {
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let make = |provider: &str, bound: &str, view: &str| {
                 let id = crate::session::create(
-                    &store, ws.id.clone(), "terminal".into(), provider.into(), provider.into(), "m".into(), "".into(), "full".into(),
+                    &store,
+                    ws.id.clone(),
+                    "terminal".into(),
+                    provider.into(),
+                    provider.into(),
+                    "m".into(),
+                    "".into(),
+                    "full".into(),
                 )
                 .expect("session")
                 .id;
                 store
                     .with(|conn| {
-                        conn.execute("UPDATE sessions SET provider_session_id = ?2, view = ?3 WHERE id = ?1", params![id, bound, view])
+                        conn.execute(
+                            "UPDATE sessions SET provider_session_id = ?2, view = ?3 WHERE id = ?1",
+                            params![id, bound, view],
+                        )
                     })
                     .expect("set");
                 id
             };
             store
-                .with(|conn| {
-                    conn.execute_batch("ALTER TABLE sessions ADD COLUMN view TEXT NOT NULL DEFAULT 'terminal';")
-                })
+                .with(|conn| conn.execute_batch("ALTER TABLE sessions ADD COLUMN view TEXT NOT NULL DEFAULT 'terminal';"))
                 .expect("view column");
             let ids = [
                 make("claude", "claude-1", "terminal"),
@@ -1466,10 +1440,8 @@ mod view_tests {
 
         let store = Store::open(path.clone()).expect("reopen");
         assert!(!store.with(|conn| has_column(conn, "sessions", "view")).unwrap());
-        let bound: Vec<Option<String>> = ids
-            .iter()
-            .map(|id| crate::session::get(&store, id.clone()).unwrap().expect("row").provider_session_id)
-            .collect();
+        let bound: Vec<Option<String>> =
+            ids.iter().map(|id| crate::session::get(&store, id.clone()).unwrap().expect("row").provider_session_id).collect();
         assert_eq!(
             bound,
             [Some("claude-1".into()), Some("rollout-1".into()), Some("ses_1".into()), None, Some("acp-chat".into())]
@@ -1506,23 +1478,30 @@ mod background_entries_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                &store,
+                ws.id,
+                "terminal".into(),
+                "x".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "full".into(),
             )
             .expect("session");
             store
-                .with(|conn| conn.execute_batch("DROP TABLE background_entries; DELETE FROM schema_migrations WHERE version >= 31;"))
+                .with(|conn| {
+                    conn.execute_batch("DROP TABLE background_entries; DELETE FROM schema_migrations WHERE version >= 31;")
+                })
                 .expect("downgrade");
             session.id
         };
 
         let store = Store::open(path.clone()).expect("reopen");
-        let version: i64 = store
-            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
-            .unwrap();
+        let version: i64 =
+            store.with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))).unwrap();
         assert!(version >= 31, "{version}");
-        let rows: i64 = store
-            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
-            .unwrap();
+        let rows: i64 =
+            store.with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0))).unwrap();
         assert_eq!(rows, 0);
 
         store
@@ -1535,14 +1514,12 @@ mod background_entries_tests {
             .expect("insert");
         drop(store);
         let store = Store::open(path).expect("third open");
-        let rows: i64 = store
-            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
-            .unwrap();
+        let rows: i64 =
+            store.with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0))).unwrap();
         assert_eq!(rows, 1, "opening again left the entries alone");
         crate::session::delete(&store, id).expect("delete");
-        let rows: i64 = store
-            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
-            .unwrap();
+        let rows: i64 =
+            store.with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0))).unwrap();
         assert_eq!(rows, 0, "the session took its entries with it");
     }
 
@@ -1557,22 +1534,30 @@ mod background_entries_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                &store,
+                ws.id,
+                "terminal".into(),
+                "x".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "full".into(),
             )
             .expect("session");
             crate::mailbox::enqueue(&store, &session.id, &crate::mailbox::user(), "before").expect("enqueue");
             store
                 .with(|conn| {
-                    conn.execute_batch("ALTER TABLE mailbox DROP COLUMN dispatch_json; DELETE FROM schema_migrations WHERE version >= 32;")
+                    conn.execute_batch(
+                        "ALTER TABLE mailbox DROP COLUMN dispatch_json; DELETE FROM schema_migrations WHERE version >= 32;",
+                    )
                 })
                 .expect("downgrade");
             session.id
         };
 
         let store = Store::open(path).expect("reopen");
-        let version: i64 = store
-            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
-            .unwrap();
+        let version: i64 =
+            store.with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))).unwrap();
         assert!(version >= 32, "{version}");
         let waiting = crate::mailbox::waiting(&store, &to).expect("waiting");
         assert_eq!((waiting.len(), waiting[0].dispatch.clone()), (1, None));
@@ -1606,7 +1591,14 @@ mod archived_column_tests {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let session = crate::session::create(
-                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                &store,
+                ws.id,
+                "terminal".into(),
+                "x".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "full".into(),
             )
             .expect("session");
             store

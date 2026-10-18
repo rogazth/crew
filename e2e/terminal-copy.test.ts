@@ -6,11 +6,10 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { launchCrew, MOD, pressChord, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, openLauncher, typeInTerminal, waitFor, withSystemClipboard, type Crew } from "./harness.ts";
 
 async function openShell(crew: Crew): Promise<void> {
-  await pressChord(crew, `${MOD}+t`);
-  await crew.window.getByLabel("Open a tab").waitFor();
+  await openLauncher(crew);
   await crew.window.keyboard.press("Enter");
 }
 
@@ -21,16 +20,18 @@ test("⌘C copies and never interrupts; OSC 52 reaches the clipboard", async () 
   try {
     const dir = crew.workspaces[0]!.path;
     await openShell(crew);
-    await crew.app.evaluate(({ clipboard }) => clipboard.writeText("before"));
+    await withSystemClipboard(async () => {
+      await crew.app.evaluate(({ clipboard }) => clipboard.writeText("before"));
 
-    // A program that took the mouse, still running when ⌘C comes.
-    await typeInTerminal(crew, "printf '\\033[?1002h\\033[?1006h'; sleep 2; touch survived");
-    await crew.window.keyboard.press("Meta+c");
-    await waitFor(() => existsSync(path.join(dir, "survived")), { message: "⌘C did not interrupt the command", timeout: 10_000 });
-    assert.equal(await clipboard(crew), "before");
+      // A program that took the mouse, still running when ⌘C comes.
+      await typeInTerminal(crew, "printf '\\033[?1002h\\033[?1006h'; sleep 2; touch survived");
+      await crew.window.keyboard.press("Meta+c");
+      await waitFor(() => existsSync(path.join(dir, "survived")), { message: "⌘C did not interrupt the command", timeout: 10_000 });
+      assert.equal(await clipboard(crew), "before");
 
-    await typeInTerminal(crew, "printf '\\033[?1002l\\033[?1006l\\033]52;c;%s\\a' \"$(printf 'from tmux' | base64)\"");
-    await waitFor(async () => (await clipboard(crew)) === "from tmux", { message: "OSC 52 writes the clipboard" });
+      await typeInTerminal(crew, "printf '\\033[?1002l\\033[?1006l\\033]52;c;%s\\a' \"$(printf 'from tmux' | base64)\"");
+      await waitFor(async () => (await clipboard(crew)) === "from tmux", { message: "OSC 52 writes the clipboard" });
+    });
   } finally {
     await crew.close();
   }

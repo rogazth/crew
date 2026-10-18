@@ -9,6 +9,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { app, dialog, ipcMain } from "electron";
 import { CLI_CHANNELS, type CliResult, type CliStatus } from "../src/lib/cli";
+import { release } from "./build-info";
+import { channelOf, cliLinkName } from "./channel";
 import {
   adminRemoveScript,
   adminScript,
@@ -23,6 +25,9 @@ import {
 
 // A slow .zshrc should not hang the settings row; past this the app's own PATH is used.
 const SHELL_TIMEOUT = 5000;
+
+/** `crew` for the release; a dev or local build links its own name beside it. */
+const LINK = cliLinkName(channelOf(app.isPackaged, release));
 
 function cliBinary(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crew");
@@ -74,7 +79,7 @@ async function writable(dir: string): Promise<boolean> {
 // Either place install could have chosen.
 async function ourLink(source: string): Promise<string | null> {
   for (const dir of [path.join(homedir(), ".local/bin"), SYSTEM_BIN]) {
-    const link = path.join(dir, "crew");
+    const link = path.join(dir, LINK);
     if ((await existing(link, source)) === "ours") return link;
   }
   return null;
@@ -115,7 +120,7 @@ export async function installCli(): Promise<CliResult> {
   const status = await cliStatus();
   if (status.state !== "absent") return { status };
   const source = cliBinary();
-  const link = path.join(status.dir, "crew");
+  const link = path.join(status.dir, LINK);
   const found = await existing(link, source);
   if (found !== "none") {
     const what = found === "file" ? "a file that is not Crew's" : "a link to another crew";

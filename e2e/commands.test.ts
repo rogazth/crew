@@ -20,7 +20,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const list = () => crew.request<Process[]>("process_list", { workspaceId: workspace.id });
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-web");
+  const tree = path.join(crew.worktrees, "app/feat-web");
 
   await crew.request("process_create", {
     workspaceId: workspace.id,

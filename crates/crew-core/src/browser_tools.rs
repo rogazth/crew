@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::browser::{self, OpenPage};
 use crate::browser_leases::{Holder, Leases};
-use crate::browser_relay::{BrowserRelay, NO_HOST};
+use crate::browser_relay::{gone_message, BrowserRelay};
 use crate::caller::Caller;
 use crate::store::{now_millis, Store};
 use crate::tools::{cli, Audience, Tool, ToolFamily, ToolOutput};
@@ -49,10 +49,7 @@ pub fn budget(tool: &str, args: &Value) -> Option<Duration> {
 }
 
 fn wait_secs(args: &Value) -> u64 {
-    args.get("timeout_s")
-        .and_then(Value::as_u64)
-        .unwrap_or(WAIT_DEFAULT_S)
-        .clamp(1, WAIT_MAX_S)
+    args.get("timeout_s").and_then(Value::as_u64).unwrap_or(WAIT_DEFAULT_S).clamp(1, WAIT_MAX_S)
 }
 
 fn tab_prop() -> Value {
@@ -224,18 +221,21 @@ pub struct BrowserTools {
     store: Store,
     relay: BrowserRelay,
     leases: Leases,
-    /// Tabs `open_tab` made, until the window's strip has them.
-    opened: Arc<Mutex<HashMap<String, (OpenPage, i64)>>>,
+    /// Tabs `open_tab` made, until the window's strip has them, and the host each went to.
+    opened: Arc<Mutex<HashMap<String, (Located, i64)>>>,
+}
+
+/// A page, and the host that shows it: `None` for one in this daemon's own
+/// strips, which the default host shows.
+#[derive(Clone, Debug)]
+struct Located {
+    page: OpenPage,
+    host: Option<u64>,
 }
 
 impl BrowserTools {
     pub fn new(store: Store, relay: BrowserRelay, leases: Leases) -> Self {
-        Self {
-            store,
-            relay,
-            leases,
-            opened: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { store, relay, leases, opened: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     pub fn relay(&self) -> &BrowserRelay {
@@ -264,9 +264,7 @@ impl BrowserTools {
             "browser_wait_for" => self.wait_for(workspace_id, holder, args),
             "browser_act" => self.act(workspace_id, holder, args),
             "browser_activity" => self.activity(workspace_id, holder, args),
-            "browser_snapshot" | "browser_screenshot" | "browser_evaluate" => {
-                self.drive(workspace_id, holder, tool, args)
-            }
+            "browser_snapshot" | "browser_screenshot" | "browser_evaluate" => self.drive(workspace_id, holder, tool, args),
             _ => Err(format!("Unknown browser tool \"{tool}\"")),
         }
     }
@@ -275,17 +273,22 @@ impl BrowserTools {
         let now = now_millis();
         let pages = self.pages_of(workspace_id, now)?;
         if pages.is_empty() {
+            if self.relay.is_remote() && !self.relay.has_host() {
+                return Ok(text(format!("No browser tabs here. {}", self.relay.no_host())));
+            }
             return Ok(text("No browser tabs in this workspace. open_tab makes one."));
         }
         let default = self.leases.last_tab(&holder.key);
+        // With more than one Mac, each tab says whose it is.
+        let named = self.relay.host_count() > 1;
         let lines: Vec<String> = pages
             .iter()
-            .map(|page| {
+            .map(|Located { page, host }| {
                 let title = if page.title.is_empty() { "(untitled)" } else { page.title.as_str() };
                 let url = if page.url.is_empty() { "about:blank" } else { page.url.as_str() };
                 let who = match self.leases.holder_of(&page.page_id, now) {
-                    Some(lease) if lease.session_id.as_deref() == holder.session_id.as_deref()
-                        && lease.holder == holder.label =>
+                    Some(lease)
+                        if lease.session_id.as_deref() == holder.session_id.as_deref() && lease.holder == holder.label =>
                     {
                         format!("yours for ~{} s", secs(lease.until - now))
                     }
@@ -293,10 +296,32 @@ impl BrowserTools {
                     None => "free".into(),
                 };
                 let mark = if default.as_deref() == Some(page.page_id.as_str()) { " (default)" } else { "" };
-                format!("{}{mark}  \"{title}\"  {url}  [{who}]", page.page_id)
+                let on = match host.and_then(|host| self.relay.host_name(host)) {
+                    Some(name) if named => format!("  on {name}"),
+                    _ => String::new(),
+                };
+                format!("{}{mark}  \"{title}\"  {url}  [{who}]{on}", page.page_id)
             })
             .collect();
-        Ok(text(lines.join("\n")))
+        Ok(text(match self.remote_note() {
+            Some(note) => format!("{note}\n{}", lines.join("\n")),
+            None => lines.join("\n"),
+        }))
+    }
+
+    /// On a remote machine, one line on what these tabs are: a Mac's, over the
+    /// network, so a browser of this machine's own is quicker when there is one.
+    fn remote_note(&self) -> Option<String> {
+        if !self.relay.is_remote() {
+            return None;
+        }
+        let at = match self.relay.default_host().and_then(|host| self.relay.host_name(host)) {
+            Some(name) if self.relay.host_count() == 1 => name,
+            _ => "the user's Macs".into(),
+        };
+        Some(format!(
+            "Crew's browser on {at}, over the network: slower than a browser on this machine; prefer one here unless the user asked for Crew's."
+        ))
     }
 
     pub fn open_tab(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
@@ -313,22 +338,37 @@ impl BrowserTools {
             url: url.to_string(),
             title: String::new(),
         };
+        // It opens on the Mac the user was at last.
+        let host = self.relay.default_host().ok_or_else(|| self.relay.no_host().to_string())?;
         // Taken before it exists, so the window pins it from the first moment.
         self.leases.claim(&tab, workspace_id, holder, now)?;
-        self.opened().insert(tab.clone(), (page.clone(), now));
-        match self.relay.call(&tab, "open_tab", json!({ "url": url }), Some(page_ref(&page)), LOAD_TIMEOUT) {
+        let located = Located { page: page.clone(), host: Some(host) };
+        self.opened().insert(tab.clone(), (located, now));
+        match self.relay.call(Some(host), &tab, "open_tab", json!({ "url": url }), Some(page_ref(&page)), LOAD_TIMEOUT) {
+            Ok(out) if self.relay.is_remote() => {
+                let name = self.relay.host_name(host).unwrap_or_else(|| "the Mac".into());
+                let note =
+                    format!("It is in Crew on {name}, over the network: each call is slower than a browser on this machine.");
+                Ok(match out {
+                    Value::Array(mut blocks) => {
+                        blocks.push(json!({ "type": "text", "text": note }));
+                        Value::Array(blocks)
+                    }
+                    other => other,
+                })
+            }
             Ok(out) => Ok(out),
             // No window heard of it, so there is no tab.
-            Err(error) if error == NO_HOST => {
+            Err(error) if error == self.relay.no_host() || !self.relay.is_host(host) => {
                 self.tab_closed(&tab);
                 Err(error)
             }
             // The window may have made the tab anyway, or be making it still:
             // it stays the caller's, and is named, so no tab is left open that
             // the agent never heard of.
-            Err(error) => Err(format!(
-                "{error} The tab is {tab} and it is yours; it may still come up: list_tabs shows whether it did."
-            )),
+            Err(error) => {
+                Err(format!("{error} The tab is {tab} and it is yours; it may still come up: list_tabs shows whether it did."))
+            }
         }
     }
 
@@ -402,10 +442,8 @@ impl BrowserTools {
     pub fn activity(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
         let kinds = || ACTIVITY.map(|(kind, _)| kind).join(" or ");
         let kind = arg(args, "kind").ok_or_else(|| format!("kind is required: {}", kinds()))?;
-        let (_, call) = ACTIVITY
-            .iter()
-            .find(|(name, _)| *name == kind)
-            .ok_or_else(|| format!("kind is {}, not {kind}", kinds()))?;
+        let (_, call) =
+            ACTIVITY.iter().find(|(name, _)| *name == kind).ok_or_else(|| format!("kind is {}, not {kind}", kinds()))?;
         self.drive(workspace_id, holder, call, args)
     }
 
@@ -422,10 +460,10 @@ impl BrowserTools {
     fn drive(&self, workspace_id: &str, holder: &Holder, tool: &str, args: &Value) -> Result<Value, String> {
         let now = now_millis();
         let tab = self.tab_for(holder, args)?;
-        let page = self.page(workspace_id, &tab, now)?;
+        let Located { page, host } = self.page(workspace_id, &tab, now)?;
         self.leases.claim(&tab, workspace_id, holder, now)?;
         let timeout = budget(tool, args).unwrap_or(CALL_TIMEOUT);
-        self.relay.call(&tab, tool, args.clone(), Some(page_ref(&page)), timeout)
+        self.relay.call(host, &tab, tool, args.clone(), Some(page_ref(&page)), timeout)
     }
 
     fn tab_for(&self, holder: &Holder, args: &Value) -> Result<String, String> {
@@ -437,28 +475,48 @@ impl BrowserTools {
 
     /// The page, if it is in the caller's workspace. A page elsewhere reads the
     /// same as one that does not exist: its URL is none of this caller's business.
-    fn page(&self, workspace_id: &str, tab: &str, now: i64) -> Result<OpenPage, String> {
-        let found = match browser::find_page(&self.store, tab)? {
+    fn page(&self, workspace_id: &str, tab: &str, now: i64) -> Result<Located, String> {
+        let saved = match browser::find_page(&self.store, tab)? {
+            Some(page) => Some(Located { page, host: None }),
+            None => self
+                .relay
+                .hosted_pages()
+                .into_iter()
+                .find(|hosted| hosted.page.page_id == tab)
+                .map(|hosted| Located { page: hosted.page, host: Some(hosted.host) }),
+        };
+        let found = match saved {
             // The strip has it now, and is the word on it from here: once the
             // user closes it there, it is gone.
-            Some(page) => {
+            Some(located) => {
                 self.opened().remove(tab);
-                Some(page)
+                Some(located)
             }
             None => self.fresh_opened(now).remove(tab),
         };
         match found {
-            Some(page) if page.workspace_id == workspace_id => Ok(page),
-            _ => Err(format!("There is no tab {tab} in this workspace. list_tabs shows the ones there are.")),
+            Some(located) if located.page.workspace_id == workspace_id => Ok(located),
+            // A tab of a Mac that went away: the agent hears why, not that it never was.
+            Some(_) => Err(format!("There is no tab {tab} in this workspace. list_tabs shows the ones there are.")),
+            None => match self.relay.gone_with(tab) {
+                Some(name) => Err(gone_message(tab, &name)),
+                None => Err(format!("There is no tab {tab} in this workspace. list_tabs shows the ones there are.")),
+            },
         }
     }
 
-    fn pages_of(&self, workspace_id: &str, now: i64) -> Result<Vec<OpenPage>, String> {
-        let mut pages = browser::workspace_pages(&self.store, workspace_id)?;
-        self.opened().retain(|id, _| !pages.iter().any(|known| &known.page_id == id));
-        for (id, page) in self.fresh_opened(now) {
-            if page.workspace_id == workspace_id && !pages.iter().any(|known| known.page_id == id) {
-                pages.push(page);
+    fn pages_of(&self, workspace_id: &str, now: i64) -> Result<Vec<Located>, String> {
+        let mut pages: Vec<Located> =
+            browser::workspace_pages(&self.store, workspace_id)?.into_iter().map(|page| Located { page, host: None }).collect();
+        for hosted in self.relay.hosted_pages() {
+            if hosted.page.workspace_id == workspace_id && !pages.iter().any(|known| known.page.page_id == hosted.page.page_id) {
+                pages.push(Located { page: hosted.page, host: Some(hosted.host) });
+            }
+        }
+        self.opened().retain(|id, _| !pages.iter().any(|known| &known.page.page_id == id));
+        for (id, located) in self.fresh_opened(now) {
+            if located.page.workspace_id == workspace_id && !pages.iter().any(|known| known.page.page_id == id) {
+                pages.push(located);
             }
         }
         Ok(pages)
@@ -467,13 +525,13 @@ impl BrowserTools {
     /// The tabs `open_tab` made recently enough that the window may not have
     /// saved them yet; older ones are dropped, since a strip that still lacks
     /// them has closed them.
-    fn fresh_opened(&self, now: i64) -> HashMap<String, OpenPage> {
+    fn fresh_opened(&self, now: i64) -> HashMap<String, Located> {
         let mut opened = self.opened();
         opened.retain(|_, (_, at)| now - *at < OPENED_GRACE_MS);
-        opened.iter().map(|(id, (page, _))| (id.clone(), page.clone())).collect()
+        opened.iter().map(|(id, (located, _))| (id.clone(), located.clone())).collect()
     }
 
-    fn opened(&self) -> std::sync::MutexGuard<'_, HashMap<String, (OpenPage, i64)>> {
+    fn opened(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Located, i64)>> {
         self.opened.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -502,11 +560,7 @@ impl ToolFamily for BrowserTools {
 }
 
 fn page_ref(page: &OpenPage) -> BrowserPageRef {
-    BrowserPageRef {
-        context: page.context.clone(),
-        url: page.url.clone(),
-        title: page.title.clone(),
-    }
+    BrowserPageRef { context: page.context.clone(), url: page.url.clone(), title: page.title.clone() }
 }
 
 fn secs(ms: i64) -> i64 {
@@ -560,7 +614,7 @@ mod tests {
             });
             true
         }));
-        relay.register_host(1);
+        relay.register_host(1, crate::browser_relay::Hello::default());
         (BrowserTools::new(store, relay, Leases::new()), seen)
     }
 
@@ -722,14 +776,13 @@ mod tests {
         let (tools, _) = tools(store);
         let ask = session("w1", "ask");
         let run = |caller: &Caller, name: &str, args: Value| ToolFamily::run(&tools, caller, name, &args).map(|_| ());
-        let error = run(&ask, "browser_evaluate", json!({ "tab": "browser:a", "expression": "document.cookie" }))
-            .expect_err("ask");
+        let error =
+            run(&ask, "browser_evaluate", json!({ "tab": "browser:a", "expression": "document.cookie" })).expect_err("ask");
         assert_eq!(error, EVALUATE_NEEDS_FULL);
         run(&ask, "browser_navigate", json!({ "tab": "browser:a", "url": "https://example.com" })).expect("navigates");
         run(&ask, "open_tab", json!({ "url": "https://example.com" })).expect("opens");
         tools.leases().release_all("s-ask", now_millis());
-        run(&session("w1", "full"), "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" }))
-            .expect("full autonomy");
+        run(&session("w1", "full"), "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" })).expect("full autonomy");
         tools.leases().release_all("s-full", now_millis());
         let me = Caller::User { workspace_id: Some("w1".into()) };
         run(&me, "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" })).expect("the user");
@@ -791,8 +844,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                "list_tabs", "open_tab", "release_tab", "browser_navigate", "browser_snapshot", "browser_act",
-                "browser_screenshot", "browser_wait_for", "browser_activity", "browser_evaluate",
+                "list_tabs",
+                "open_tab",
+                "release_tab",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_act",
+                "browser_screenshot",
+                "browser_wait_for",
+                "browser_activity",
+                "browser_evaluate",
             ]
         );
         assert!(catalog().iter().all(|tool| tool.audience == Audience::EVERYONE));
@@ -839,9 +900,8 @@ mod tests {
     #[test]
     fn the_user_without_a_workspace_is_told_to_name_one() {
         let (tools, _) = tools(store());
-        let error = ToolFamily::run(&tools, &Caller::User { workspace_id: None }, "list_tabs", &json!({}))
-            .err()
-            .expect("no workspace");
+        let error =
+            ToolFamily::run(&tools, &Caller::User { workspace_id: None }, "list_tabs", &json!({})).err().expect("no workspace");
         assert!(error.starts_with("No workspace"), "{error}");
     }
 
@@ -860,7 +920,7 @@ mod tests {
             });
             true
         }));
-        relay.register_host(1);
+        relay.register_host(1, crate::browser_relay::Hello::default());
         let family = BrowserTools::new(store.clone(), relay, Leases::new());
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(family));
@@ -877,5 +937,74 @@ mod tests {
         let out = crate::tools::handle(&host, &me, "tools/call", call).expect("call");
         assert_eq!(out["content"], json!([{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]));
         assert!(out.get("isError").is_none());
+    }
+
+    fn hosted(id: &str, workspace: &str, title: &str) -> OpenPage {
+        OpenPage {
+            page_id: id.into(),
+            context: workspace.into(),
+            workspace_id: workspace.into(),
+            url: "http://localhost:5173/".into(),
+            title: title.into(),
+        }
+    }
+
+    /// A remote machine's tools: no strips of its own, two Macs connected,
+    /// each answering a call with its own client id.
+    fn remote_tools() -> (BrowserTools, mpsc::Receiver<Value>) {
+        let (tools, seen) = answering(store(), |payload| Ok(json!([{ "type": "text", "text": payload["tab"] }])));
+        let relay = tools.relay().clone();
+        relay.set_remote(true);
+        relay.client_gone(1);
+        relay.register_host(7, crate::browser_relay::Hello { name: "Ada's Mac".into(), acks: false });
+        relay.register_host(9, crate::browser_relay::Hello { name: "Studio".into(), acks: false });
+        relay.set_pages(7, vec![hosted("browser:a", "w1", "App"), hosted("browser:x", "w2", "Other")]).unwrap();
+        relay.set_pages(9, vec![hosted("browser:b", "w1", "Docs")]).unwrap();
+        (tools, seen)
+    }
+
+    #[test]
+    fn a_remote_lists_and_drives_the_tabs_each_mac_reported() {
+        let (tools, seen) = remote_tools();
+        let ada = Holder::session("s-ada", "Ada");
+        let list = body(&tools.list_tabs("w1", &ada, &json!({})).unwrap()).to_string();
+        assert!(list.starts_with("Crew's browser on the user's Macs, over the network"), "{list}");
+        assert!(list.contains("browser:a") && list.contains("on Ada's Mac"), "{list}");
+        assert!(list.contains("browser:b") && list.contains("on Studio"), "{list}");
+        assert!(!list.contains("browser:x"), "another workspace's tab: {list}");
+        tools.snapshot("w1", &ada, &json!({ "tab": "browser:b" })).expect("drives b");
+        assert_eq!(seen.recv().unwrap()["tab"], "browser:b");
+        // Another workspace's tab is not there for this caller.
+        let error = tools.snapshot("w1", &ada, &json!({ "tab": "browser:x" })).unwrap_err();
+        assert!(error.contains("There is no tab browser:x"), "{error}");
+        // A new tab opens on the Mac the user was at last.
+        tools.relay().focus(7);
+        let out = tools.open_tab("w1", &ada, &json!({ "url": "http://localhost:3000/" })).expect("opened");
+        let opened = seen.recv().unwrap();
+        assert_eq!(opened["tool"], "open_tab");
+        // It says where the tab went, and that it is far.
+        let note = out.as_array().and_then(|blocks| blocks.last()).and_then(|block| block["text"].as_str()).unwrap_or_default();
+        assert!(note.starts_with("It is in Crew on Ada's Mac, over the network"), "{out}");
+    }
+
+    #[test]
+    fn a_tab_whose_mac_went_away_says_so() {
+        let (tools, _seen) = remote_tools();
+        let ada = Holder::session("s-ada", "Ada");
+        tools.relay().client_gone(7);
+        let error = tools.snapshot("w1", &ada, &json!({ "tab": "browser:a" })).unwrap_err();
+        assert!(error.contains("browser:a was on Ada's Mac, which is no longer connected"), "{error}");
+        // The other Mac's tab still works, and the list is down to it.
+        tools.snapshot("w1", &ada, &json!({ "tab": "browser:b" })).expect("b is still there");
+        let list = body(&tools.list_tabs("w1", &ada, &json!({})).unwrap()).to_string();
+        assert!(list.starts_with("Crew's browser on Studio, over the network"), "{list}");
+        assert!(!list.contains("browser:a") && !list.contains("  on "), "{list}");
+        tools.relay().client_gone(9);
+        let list = body(&tools.list_tabs("w1", &ada, &json!({})).unwrap()).to_string();
+        assert!(list.contains("No Mac with Crew open is connected"), "{list}");
+        let error = tools.open_tab("w1", &ada, &json!({ "url": "http://localhost:3000/" })).unwrap_err();
+        assert_eq!(error, crate::browser_relay::NO_HOST_REMOTE);
+        let held: Vec<String> = tools.leases().list(now_millis()).leases.into_iter().map(|lease| lease.tab).collect();
+        assert_eq!(held, ["browser:b"], "the failed open claimed nothing");
     }
 }

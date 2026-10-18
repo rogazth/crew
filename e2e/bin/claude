@@ -11,6 +11,9 @@
 //                 environment the CLI was given (CREW_SOCKET, CREW_TOKEN), as a
 //                 model's Bash tool would, then answers as any turn does
 //   late <text>   a message the running turn reads three seconds after it came
+//   ask           a turn that asks to run a command first, unless permissions
+//                 are skipped, and answers `Reply <n>: ask allowed` or `denied`
+//   /clear        moves the process to a new, empty conversation
 //   anything else a short turn that answers `Reply <n>: <message>`
 //
 // Every launch appends its argv, cwd and pid as one JSON line to
@@ -124,6 +127,20 @@ serve();
  *   `stopped`; the turn itself answers at once.
  * - `shell` is a turn that sends a shell, `npm test`, to the background
  *   (`sh1`) beside the subagents that run; it runs until the session ends.
+ * - `ask` is a turn that asks Crew, as a `can_use_tool` control request, to
+ *   run `touch asked` with Bash, and waits for the answer; its reply says
+ *   `Reply <n>: ask allowed` or `Reply <n>: ask denied`. In bypassPermissions
+ *   (`--dangerously-skip-permissions`) it does not ask and is allowed. Each
+ *   question is appended to $HOME/fake-claude-asks.log as `<tool> <mode>`.
+ * - `/clear` moves the process to a conversation of its own, as the real CLI
+ *   does over the protocol: a new session id, which the turn's `system/init`
+ *   and `result` carry, and no reply. What follows goes into the new
+ *   conversation's transcript; the old one is left as it was.
+ * - `generate_session_title` names a conversation whose description (its
+ *   first message) starts with `title `: the rest of its first line is the
+ *   title, answered and, with `persist`, written into the transcript as an
+ *   `ai-title`, as the real CLI does. Any other is left unnamed, so a
+ *   session keeps the name Crew gave it.
  * - `initialize` answers the `/` menu: the commands `cold-run`, `compact` and
  *   `context`, and `writing-for-agents`, which `reload_skills` names a skill
  *   (as `system/init`'s `skills` does each turn). `reload_plugins` answers
@@ -188,6 +205,14 @@ function serve() {
     if (subtype === "apply_flag_settings") detail = JSON.stringify(request.settings);
     if (subtype === "initialize") detail = ["perTaskStopAffordance", "forwardSubagentText"].filter((option) => request[option]).join(" ");
     if (subtype === "interrupt" && request.cancel_queued) detail = "cancel_queued";
+    if (subtype === "generate_session_title") {
+      const description = String(request.description || "").trim();
+      const title = description.startsWith("title ") ? description.slice("title ".length).split("\n")[0].trim() : "";
+      detail = title;
+      if (request.persist && title) record({ type: "ai-title", aiTitle: title });
+      fs.appendFileSync(path.join(HOME, "fake-claude-control.log"), `${subtype} ${detail}\n`);
+      return answer(rec.request_id, title ? { title } : {});
+    }
     if (subtype === "set_model") model = request.model || null;
     if (subtype === "set_permission_mode" && request.mode) mode = request.mode;
     fs.appendFileSync(path.join(HOME, "fake-claude-control.log"), `${subtype} ${detail}\n`);
@@ -205,11 +230,28 @@ function serve() {
     }
   }
 
+  /** Questions put to Crew and not answered yet, by request id. */
+  const asked = new Map();
+  let nextAsk = 0;
+
+  /** Asks Crew to run a tool, as the CLI's `--permission-prompt-tool stdio` does; resolves to its behavior. */
+  function askToRun(tool, input) {
+    fs.appendFileSync(path.join(HOME, "fake-claude-asks.log"), `${tool} ${mode}\n`);
+    const id = `perm-${++nextAsk}`;
+    emit({
+      type: "control_request",
+      request_id: id,
+      request: { subtype: "can_use_tool", tool_name: tool, input, tool_use_id: `toolu_${id}` },
+    });
+    return new Promise((resolve) => asked.set(id, resolve));
+  }
+
   /** The subagents sent to the background, by task id, with the call that started each. */
   const agents = new Map();
+  let started = 0;
 
   function startAgent() {
-    const n = agents.size + 1;
+    const n = ++started;
     const task = `ag${n}`;
     const call = `toolu_ag${n}`;
     agents.set(task, call);
@@ -374,6 +416,15 @@ function serve() {
       });
     const n = ++turns;
     turnStarted = Date.now();
+    if (text.trim() === "/clear") {
+      sessionId = randomUUID();
+      emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS, mcp_servers: servers() });
+      if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
+      current = null;
+      emit({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, total_cost_usd: 0, usage: {} });
+      next();
+      return;
+    }
     emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS, mcp_servers: servers() });
     if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
     record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
@@ -385,6 +436,11 @@ function serve() {
     if (command === "work") {
       await nap(Math.max(0, Number(seconds) || 1) * 1000);
       if (mine.stopped) return;
+    }
+    if (command === "ask") {
+      const behavior = mode === "bypassPermissions" ? "allow" : await askToRun("Bash", { command: "touch asked", description: "Touch a file" });
+      if (mine.stopped) return;
+      reply = `Reply ${n}: ask ${behavior === "allow" ? "allowed" : "denied"}`;
     }
     if (command === "agent") startAgent();
     if (command === "shell") startShell();
@@ -454,6 +510,15 @@ function serve() {
       return;
     }
     if (rec.type === "control_request") return control(rec);
+    if (rec.type === "control_response") {
+      const response = rec.response || {};
+      const resolve = asked.get(response.request_id);
+      if (resolve) {
+        asked.delete(response.request_id);
+        resolve((response.response && response.response.behavior) || "deny");
+      }
+      return;
+    }
     if (rec.type !== "user") return;
     const text = textOf(rec.message);
     if (current && !current.stopped) {

@@ -114,14 +114,9 @@ fn find<'a>(tools: &'a [Tool], group: &str, verb: &str) -> Option<(&'a Tool, &'a
 pub fn subcommands() -> Vec<Command> {
     let tools = every_tool();
     let top = top_level(&tools);
-    let mut commands: Vec<Command> = top
-        .iter()
-        .enumerate()
-        .map(|(order, (index, verb))| build_verb(verb, &tools[*index]).display_order(order))
-        .collect();
-    commands.extend(
-        GROUPS.iter().enumerate().map(|(order, group)| build_group(group, &tools).display_order(top.len() + order)),
-    );
+    let mut commands: Vec<Command> =
+        top.iter().enumerate().map(|(order, (index, verb))| build_verb(verb, &tools[*index]).display_order(order)).collect();
+    commands.extend(GROUPS.iter().enumerate().map(|(order, group)| build_group(group, &tools).display_order(top.len() + order)));
     commands
 }
 
@@ -250,9 +245,8 @@ fn schema_args(mut command: Command, tool: &Tool, verb: &CliVerb) -> Command {
     let properties = properties(tool);
     let required = required(tool);
     for (index, name) in verb.positional.iter().enumerate() {
-        let spec = properties
-            .get(*name)
-            .unwrap_or_else(|| panic!("crew {} {}: {} takes no {name}", verb.group, verb.verb, tool.name));
+        let spec =
+            properties.get(*name).unwrap_or_else(|| panic!("crew {} {}: {} takes no {name}", verb.group, verb.verb, tool.name));
         let last = index + 1 == verb.positional.len();
         let mut arg = Arg::new(*name)
             .value_name(name.to_uppercase())
@@ -273,10 +267,7 @@ fn schema_args(mut command: Command, tool: &Tool, verb: &CliVerb) -> Command {
         taken(tool, verb).into_iter().filter(|(name, _)| !verb.positional.contains(&name.as_str())).collect();
     flags.sort_by_key(|(name, _)| !required.contains(name));
     for (name, spec) in flags {
-        let arg = Arg::new(name.clone())
-            .long(name.replace('_', "-"))
-            .help(help(&spec))
-            .required(required.contains(&name));
+        let arg = Arg::new(name.clone()).long(name.replace('_', "-")).help(help(&spec)).required(required.contains(&name));
         command = command.arg(typed(arg, &spec));
     }
     command
@@ -496,7 +487,10 @@ mod tests {
             arguments(&matches, &tool, &verb).expect("args"),
             json!({ "action": "start", "process": "web", "env": { "PORT": "3001" } })
         );
-        assert!(root().try_get_matches_from(["crew", "processes", "stop", "web", "--env", "PORT=1"]).is_err(), "stop takes no env");
+        assert!(
+            root().try_get_matches_from(["crew", "processes", "stop", "web", "--env", "PORT=1"]).is_err(),
+            "stop takes no env"
+        );
         assert!(root().try_get_matches_from(["crew", "processes", "start", "web", "--action", "stop"]).is_err());
 
         let (_, _, matches) = parse(&["tabs", "fill", "--tab", "12", "4_9", "ada@example.com"]);
@@ -532,7 +526,16 @@ mod tests {
     /// A list of objects is given as one JSON flag per item.
     #[test]
     fn a_list_of_objects_takes_a_json_flag_per_item() {
-        let (_, _, matches) = parse(&["sessions", "start-many", "--sessions", r#"{"prompt":"a"}"#, "--sessions", r#"{"prompt":"b","worktree":"new"}"#, "--request-id", "r1"]);
+        let (_, _, matches) = parse(&[
+            "sessions",
+            "start-many",
+            "--sessions",
+            r#"{"prompt":"a"}"#,
+            "--sessions",
+            r#"{"prompt":"b","worktree":"new"}"#,
+            "--request-id",
+            "r1",
+        ]);
         let (verb, tool) = find("sessions", "start-many");
         assert_eq!(
             arguments(&matches, &tool, &verb).expect("args"),
@@ -550,7 +553,14 @@ mod tests {
         let matches = root().try_get_matches_from(["crew", "send", "Reviewer", "hi"]).expect("send");
         assert_eq!(matches.subcommand_name(), Some("send"));
         assert!(is_top_level("send") && is_top_level("peers") && !is_top_level("sessions"));
-        for gone in [&["bots", "continue"][..], &["bots", "send"], &["bots", "list"], &["sessions", "wait"], &["sessions", "list"], &["worktrees", "new"]] {
+        for gone in [
+            &["bots", "continue"][..],
+            &["bots", "send"],
+            &["bots", "list"],
+            &["sessions", "wait"],
+            &["sessions", "list"],
+            &["worktrees", "new"],
+        ] {
             let args = std::iter::once("crew").chain(gone.iter().copied()).chain(["x"]);
             assert!(root().try_get_matches_from(args).is_err(), "crew {gone:?} is still there");
         }
@@ -581,7 +591,8 @@ mod tests {
 
     #[test]
     fn an_object_with_fields_is_json() {
-        let (_, _, matches) = parse(&["routines", "set", "--name", "standup", "--schedule", r#"{"kind":"daily","hour":9}"#, "--enabled"]);
+        let (_, _, matches) =
+            parse(&["routines", "set", "--name", "standup", "--schedule", r#"{"kind":"daily","hour":9}"#, "--enabled"]);
         let (verb, tool) = find("routines", "set");
         assert_eq!(
             arguments(&matches, &tool, &verb).expect("args"),
@@ -601,7 +612,13 @@ mod tests {
 
     #[test]
     fn a_tool_only_a_session_can_run_says_so() {
-        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("create").expect("create").render_help().to_string();
+        let help = root()
+            .find_subcommand_mut("bots")
+            .expect("bots")
+            .find_subcommand_mut("create")
+            .expect("create")
+            .render_help()
+            .to_string();
         assert!(help.contains("From a Crew session only."), "{help}");
         let help = root().find_subcommand_mut("send").expect("send").render_help().to_string();
         assert!(!help.contains("session only"), "{help}");

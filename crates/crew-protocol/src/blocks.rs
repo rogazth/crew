@@ -167,13 +167,7 @@ pub enum LetterKind {
 /// one shape instead of four.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[ts(
-    export,
-    export_to = "../../../src/lib/protocol.ts",
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ToolDetail {
     /// A shell command. `exitCode` is absent while it runs.
     Command {
@@ -450,33 +444,21 @@ impl ToolDetail {
     /// `clipped`, to a limit of its own: a subagent's steps keep less.
     pub fn clipped_to(self, limit: usize) -> Self {
         match self {
-            ToolDetail::Command { command, exit_code, output } => ToolDetail::Command {
-                command: clip(&command, limit),
-                exit_code,
-                output: output.map(|text| clip(&text, limit)),
-            },
-            ToolDetail::File { path, line_start, line_end, preview } => ToolDetail::File {
-                path,
-                line_start,
-                line_end,
-                preview: preview.map(|text| clip(&text, limit)),
-            },
-            ToolDetail::Edit { path, added, removed, hunks } => ToolDetail::Edit {
-                path,
-                added,
-                removed,
-                hunks: hunks.filter(|hunks| fits(hunks, limit.min(EDIT_TEXT_LIMIT))),
-            },
-            ToolDetail::Search { query, matches, output } => ToolDetail::Search {
-                query,
-                matches,
-                output: output.map(|text| clip(&text, limit)),
-            },
-            ToolDetail::Fetch { url, title, output } => ToolDetail::Fetch {
-                url,
-                title,
-                output: output.map(|text| clip(&text, limit)),
-            },
+            ToolDetail::Command { command, exit_code, output } => {
+                ToolDetail::Command { command: clip(&command, limit), exit_code, output: output.map(|text| clip(&text, limit)) }
+            }
+            ToolDetail::File { path, line_start, line_end, preview } => {
+                ToolDetail::File { path, line_start, line_end, preview: preview.map(|text| clip(&text, limit)) }
+            }
+            ToolDetail::Edit { path, added, removed, hunks } => {
+                ToolDetail::Edit { path, added, removed, hunks: hunks.filter(|hunks| fits(hunks, limit.min(EDIT_TEXT_LIMIT))) }
+            }
+            ToolDetail::Search { query, matches, output } => {
+                ToolDetail::Search { query, matches, output: output.map(|text| clip(&text, limit)) }
+            }
+            ToolDetail::Fetch { url, title, output } => {
+                ToolDetail::Fetch { url, title, output: output.map(|text| clip(&text, limit)) }
+            }
             ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error } => ToolDetail::Message {
                 to,
                 text: clip(&text, limit),
@@ -487,13 +469,9 @@ impl ToolDetail {
                 delivery,
                 error: error.map(|text| clip(&text, limit)),
             },
-            ToolDetail::Crew { verb, targets, text, count, note } => ToolDetail::Crew {
-                verb,
-                targets,
-                text: text.map(|text| clip(&text, limit)),
-                count,
-                note,
-            },
+            ToolDetail::Crew { verb, targets, text, count, note } => {
+                ToolDetail::Crew { verb, targets, text: text.map(|text| clip(&text, limit)), count, note }
+            }
             ToolDetail::Todo { items } => ToolDetail::Todo {
                 items: items
                     .into_iter()
@@ -519,12 +497,8 @@ impl ToolDetail {
                 input: input.map(|text| clip(&text, limit)),
                 output: output.map(|text| clip(&text, limit)),
             },
-            ToolDetail::Plan { text } => ToolDetail::Plan {
-                text: clip(&text, limit),
-            },
-            ToolDetail::Output { text } => ToolDetail::Output {
-                text: clip(&text, limit),
-            },
+            ToolDetail::Plan { text } => ToolDetail::Plan { text: clip(&text, limit) },
+            ToolDetail::Output { text } => ToolDetail::Output { text: clip(&text, limit) },
         }
     }
 
@@ -885,12 +859,9 @@ mod tests {
 
     #[test]
     fn clipped_trims_command_output_but_keeps_the_exit_code() {
-        let detail = ToolDetail::Command {
-            command: "ls".into(),
-            exit_code: Some(0),
-            output: Some("x".repeat(TOOL_TEXT_LIMIT * 2)),
-        }
-        .clipped();
+        let detail =
+            ToolDetail::Command { command: "ls".into(), exit_code: Some(0), output: Some("x".repeat(TOOL_TEXT_LIMIT * 2)) }
+                .clipped();
         let ToolDetail::Command { output, exit_code, .. } = detail else {
             panic!("kind changed");
         };
@@ -900,22 +871,13 @@ mod tests {
 
     #[test]
     fn summary_is_the_first_line_of_a_command() {
-        let detail = ToolDetail::Command {
-            command: "git status\ngit log".into(),
-            exit_code: None,
-            output: None,
-        };
+        let detail = ToolDetail::Command { command: "git status\ngit log".into(), exit_code: None, output: None };
         assert_eq!(detail.summary(), "git status");
     }
 
     #[test]
     fn a_context_update_leaves_out_the_window_it_does_not_have() {
-        let event = HarnessEvent::ContextUpdated {
-            used: 12,
-            window: None,
-            auto_compact_at: Some(180_000),
-            stale: None,
-        };
+        let event = HarnessEvent::ContextUpdated { used: 12, window: None, auto_compact_at: Some(180_000), stale: None };
         let wire = serde_json::to_value(&event).unwrap();
         assert_eq!(wire, serde_json::json!({ "type": "context.updated", "used": 12, "autoCompactAt": 180000 }));
         assert_eq!(serde_json::from_value::<HarnessEvent>(wire).unwrap(), event);

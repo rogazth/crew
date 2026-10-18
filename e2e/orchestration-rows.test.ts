@@ -190,6 +190,7 @@ test("a child's question is answered from the parent's chat: options on the lett
   const keep = letter.getByRole("button", { name: "Keep the 90-day limit" });
   await keep.waitFor();
   assert.match(flat(await letter.innerText()), /You or .* can answer/);
+  assert.doesNotMatch(flat(await letter.innerText()), /Options:/, "the options are said once, as buttons");
   assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
   await letter.scrollIntoViewIfNeeded();
   await shoot("answer-from-parent");

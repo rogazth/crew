@@ -487,7 +487,7 @@ impl TurnHost {
 fn write_config(run_id: &str, config: &str) -> std::io::Result<std::path::PathBuf> {
     use std::io::Write as _;
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
-    let dir = std::env::temp_dir().join("crew-opencode");
+    let dir = crate::paths::tmp("opencode");
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
     let path = dir.join(format!("{run_id}.json"));
     let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;

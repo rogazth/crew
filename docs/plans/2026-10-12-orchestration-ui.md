@@ -145,7 +145,9 @@ transcript. The prototype is never committed.
     it once.
 13. **Esc goes back one level, always.** In a thread, Esc never stops the
     child's turn (the composer's Stop button does, and the hint line says
-    `esc back · ↵ add to its turn`). The thread's open sheet or picker takes
+    `esc back · ↵ add to its turn`; decided 2026-10-17: the key hints under
+    the composer show only while a turn runs, in a thread or a chat, and an
+    idle composer shows none). The thread's open sheet or picker takes
     Esc first, as the composer's sheets do today. Threads stack: an
     independent session opened in place may show its own subagents, and
     opening one makes the crumb `orchestrator / refunds-api / scout`; each
@@ -279,13 +281,14 @@ F's `Hang`). Names of agents and bots are `PeerName`s (mark or face + name, in
 
 ## Open questions
 
-- **Can the user write to a native subagent?** Claude's subagents take no
-  input once started; Codex's agent threads might (`turn/steer` on the child
-  thread). Recommendation: no composer for any native subagent in this
-  round; revisit per provider when one proves it, by flipping `writable`.
-- **Should a session's x in the sheet interrupt or stop it?** Recommendation:
-  interrupt (decision 7). It is the user's session; ending its process is the
-  sidebar's job.
+- **Can the user write to a native subagent?** Decided 2026-10-17: no, for
+  any provider, now or later. A native subagent is its parent's to talk to;
+  its thread has no composer.
+- **Should a session's x in the sheet interrupt or stop it?** Decided
+  2026-10-17: interrupt (decision 7). It is the user's session; ending its
+  process is the sidebar's job. The sheet's Stop already sends `turn_stop`,
+  the same stop `interrupt_session` makes; `e2e/background-panel.test.ts`
+  holds it.
 - **Does an independent session opened in place need "Open in its tab"?**
   The user said never a new tab. Recommendation: no button; the sidebar row
   is the way to its own tab, and it is one click away.

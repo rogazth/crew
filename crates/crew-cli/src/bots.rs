@@ -21,7 +21,11 @@ const PEER_COLUMNS: &[Column] = &[
 ];
 
 fn yes(value: &Value) -> String {
-    if value.as_bool() == Some(true) { "yes".into() } else { "no".into() }
+    if value.as_bool() == Some(true) {
+        "yes".into()
+    } else {
+        "no".into()
+    }
 }
 
 pub fn peers(ctx: &Ctx) -> Result<ExitCode, CliError> {
@@ -122,7 +126,9 @@ mod tests {
 
     #[test]
     fn the_peers_table_says_who_can_be_written_to() {
-        let rows = vec![json!({ "id": "a1", "name": "Lead", "kind": "bot", "status": "idle", "worktree": "main checkout", "write": true })];
+        let rows = vec![
+            json!({ "id": "a1", "name": "Lead", "kind": "bot", "status": "idle", "worktree": "main checkout", "write": true }),
+        ];
         let table = output::table(&rows, PEER_COLUMNS);
         assert_eq!(table.headers, ["NAME", "ID", "KIND", "STATUS", "WORKTREE", "WRITE"]);
         assert_eq!(table.rows[0], ["Lead", "a1", "bot", "idle", "main checkout", "yes"]);

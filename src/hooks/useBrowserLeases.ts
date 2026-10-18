@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import * as api from "../lib/api";
 import { leases } from "../lib/browser/leases";
 import { client } from "../lib/client";
+import { getLinks, LOCAL, subscribeLinks } from "../lib/client/registry";
 import type { BrowserLease, BrowserLeases } from "../lib/protocol";
 
 let watching = false;
@@ -10,14 +11,32 @@ let watching = false;
 function watch() {
   if (watching) return;
   watching = true;
-  const load = () =>
+  // Each daemon leases its own workspaces' tabs: a remote's agents drive this Mac's pages too.
+  const loadFrom = (env: string) =>
     void api
-      .browserLeasesList()
-      .then((all) => leases.set(all.leases, all.seq))
+      .browserLeasesList(env)
+      .then((all) => leases.set(all.leases, all.seq, env))
       .catch(() => {});
-  client.on("browser-leases", (payload) => {
+  const load = () => {
+    const envs = new Set([LOCAL]);
+    for (const link of getLinks()) if (link.status === "online") envs.add(link.id);
+    for (const env of envs) loadFrom(env);
+  };
+  client.on("browser-leases", (payload, env) => {
     const all = payload as BrowserLeases;
-    leases.set(all.leases, all.seq);
+    leases.set(all.leases, all.seq, env ?? LOCAL);
+  });
+  // A machine that comes online is asked for its list; one that goes away pins nothing.
+  const online = new Set<string>();
+  subscribeLinks(() => {
+    for (const link of getLinks()) {
+      if (link.status === "online" && !online.has(link.id)) {
+        online.add(link.id);
+        loadFrom(link.id);
+      } else if (link.status !== "online" && online.delete(link.id)) {
+        leases.set([], undefined, link.id);
+      }
+    }
   });
   // A daemon that restarted holds no leases; the list says so.
   client.onReconnect(load);

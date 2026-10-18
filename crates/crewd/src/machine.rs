@@ -30,9 +30,9 @@ pub fn info(agents_running: u32) -> MachineInfo {
     }
 }
 
-/// Home's folder: `~/Crew`, or `CREW_HOME_DIR` for a test that keeps it out of the real home.
+/// Home's folder, as the environment's layout says (`~/Crew` for the installed app).
 pub fn home_folder() -> PathBuf {
-    std::env::var_os("CREW_HOME_DIR").map_or_else(|| home().join("Crew"), PathBuf::from)
+    crew_core::paths::home_folder()
 }
 
 fn home() -> PathBuf {
@@ -75,11 +75,7 @@ pub fn dir_list(path: &str) -> Result<DirListing, String> {
         })
         .collect();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
-    Ok(DirListing {
-        repo: is_repo(&dir),
-        path: dir.to_string_lossy().into_owned(),
-        entries,
-    })
+    Ok(DirListing { repo: is_repo(&dir), path: dir.to_string_lossy().into_owned(), entries })
 }
 
 /// The token a daemon that outlives its clients keeps across restarts, so a

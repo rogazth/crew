@@ -59,8 +59,7 @@ impl Daemon {
         let (mut ws, _) = connect(self.url.as_str()).expect("connect");
         ws.send(Message::Text(json!({ "auth": self.token }).to_string().into())).expect("auth");
         let mut rpc = |id: u32, method: &str, params: Value| -> Value {
-            ws.send(Message::Text(json!({ "id": id, "method": method, "params": params }).to_string().into()))
-                .expect("send");
+            ws.send(Message::Text(json!({ "id": id, "method": method, "params": params }).to_string().into())).expect("send");
             loop {
                 let Message::Text(text) = ws.read().expect("read") else { continue };
                 let reply: Value = serde_json::from_str(&text).expect("json");
@@ -181,4 +180,3 @@ fn crew_says_when_crew_is_not_running() {
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(stdout(&out).contains("not running"), "{out:?}");
 }
-

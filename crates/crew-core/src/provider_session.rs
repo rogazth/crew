@@ -77,8 +77,7 @@ fn refresh_cursor_models() -> Vec<ListedModel> {
 }
 
 fn list_cursor_models() -> Result<Vec<ListedModel>, String> {
-    let binary = shell_path::resolve("cursor-agent")
-        .ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
+    let binary = shell_path::resolve("cursor-agent").ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
     let mut child = Command::new(binary)
         .arg("models")
         .env("PATH", shell_path::joined())
@@ -201,11 +200,8 @@ fn selection_of(value: &serde_json::Value) -> Option<(String, Vec<(String, Strin
         }
     }
     let id = value.get("model").and_then(|model| model.get("modelId")).and_then(|id| id.as_str())?;
-    let params = value
-        .get("modelParameters")
-        .and_then(|all| all.get(id))
-        .map(|rows| parameters_of(Some(rows)))
-        .unwrap_or_default();
+    let params =
+        value.get("modelParameters").and_then(|all| all.get(id)).map(|rows| parameters_of(Some(rows))).unwrap_or_default();
     Some((id.to_string(), params))
 }
 
@@ -298,9 +294,7 @@ struct ConfigCache {
 static CURSOR_CONFIG: Mutex<Option<ConfigCache>> = Mutex::new(None);
 
 fn cached_listed_ids() -> Vec<String> {
-    cached_cursor_models()
-        .map(|(_, models)| models.into_iter().map(|model| model.id).collect())
-        .unwrap_or_default()
+    cached_cursor_models().map(|(_, models)| models.into_iter().map(|model| model.id).collect()).unwrap_or_default()
 }
 
 /// The model cursor-agent has selected, as an id `--model` accepts. Missing
@@ -402,9 +396,7 @@ pub fn codex_selection(config: &str) -> Option<(String, String, String)> {
     let effort = top_level_toml_string(config, "model_reasoning_effort")
         .filter(|effort| CODEX_EFFORTS.contains(&effort.as_str()))
         .unwrap_or_default();
-    let tier = top_level_toml_string(config, "service_tier")
-        .map(|tier| normalize_service_tier(&tier))
-        .unwrap_or_default();
+    let tier = top_level_toml_string(config, "service_tier").map(|tier| normalize_service_tier(&tier)).unwrap_or_default();
     Some((model, effort, tier))
 }
 
@@ -418,10 +410,7 @@ struct CodexCache {
 static CODEX_CONFIG: Mutex<Option<CodexCache>> = Mutex::new(None);
 
 fn codex_fallback() -> (String, String) {
-    (
-        crate::tools::default_model("codex").to_string(),
-        crate::tools::default_effort("codex").to_string(),
-    )
+    (crate::tools::default_model("codex").to_string(), crate::tools::default_effort("codex").to_string())
 }
 
 fn codex_configured() -> (String, String, String) {
@@ -452,12 +441,8 @@ fn codex_configured() -> (String, String, String) {
             (model, effort, String::new())
         }
     };
-    *CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) = Some(CodexCache {
-        modified,
-        model: model.clone(),
-        effort: effort.clone(),
-        service_tier: tier.clone(),
-    });
+    *CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some(CodexCache { modified, model: model.clone(), effort: effort.clone(), service_tier: tier.clone() });
     (model, effort, tier)
 }
 
@@ -590,23 +575,12 @@ fn listed_codex_model(row: &serde_json::Value) -> Option<ListedModel> {
     if row.get("visibility").and_then(|v| v.as_str()) == Some("hide") {
         return None;
     }
-    let id = ["slug", "model", "id"]
-        .iter()
-        .find_map(|key| row.get(*key).and_then(|v| v.as_str()).filter(|id| !id.is_empty()))?;
+    let id = ["slug", "model", "id"].iter().find_map(|key| row.get(*key).and_then(|v| v.as_str()).filter(|id| !id.is_empty()))?;
     let label = ["display_name", "displayName", "name"]
         .iter()
-        .find_map(|key| {
-            row.get(*key)
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|label| !label.is_empty())
-        })
+        .find_map(|key| row.get(*key).and_then(|v| v.as_str()).map(str::trim).filter(|label| !label.is_empty()))
         .unwrap_or(id);
-    Some(ListedModel {
-        id: id.to_string(),
-        label: label.to_string(),
-        tiers: Some(codex_tiers(row)),
-    })
+    Some(ListedModel { id: id.to_string(), label: label.to_string(), tiers: Some(codex_tiers(row)) })
 }
 
 fn codex_tiers(row: &serde_json::Value) -> Vec<ListedTier> {
@@ -632,10 +606,7 @@ fn tier_of(item: &serde_json::Value) -> (Option<String>, Option<String>) {
     if let Some(id) = item.as_str() {
         return (Some(id.to_string()), None);
     }
-    let id = ["id", "slug"]
-        .iter()
-        .find_map(|key| item.get(*key).and_then(|v| v.as_str()))
-        .map(str::to_string);
+    let id = ["id", "slug"].iter().find_map(|key| item.get(*key).and_then(|v| v.as_str())).map(str::to_string);
     let name = ["name", "display_name", "displayName"]
         .iter()
         .find_map(|key| item.get(*key).and_then(|v| v.as_str()))
@@ -755,14 +726,9 @@ fn refresh_claude_fast_mode() {
 /// The answer that stands among several: one that rules fast out wins, then
 /// one that gives any reason, then the first.
 fn believed_fast_mode(answers: Vec<(Option<String>, Option<String>)>) -> Option<(Option<String>, Option<String>)> {
-    let refused = |answer: &(Option<String>, Option<String>)| {
-        answer.1.as_deref().is_some_and(|reason| HIDING_REASONS.contains(&reason))
-    };
-    let position = answers
-        .iter()
-        .position(refused)
-        .or_else(|| answers.iter().position(|answer| answer.1.is_some()))
-        .unwrap_or(0);
+    let refused =
+        |answer: &(Option<String>, Option<String>)| answer.1.as_deref().is_some_and(|reason| HIDING_REASONS.contains(&reason));
+    let position = answers.iter().position(refused).or_else(|| answers.iter().position(|answer| answer.1.is_some())).unwrap_or(0);
     answers.into_iter().nth(position)
 }
 
@@ -801,12 +767,10 @@ fn initialize_for_fast_mode(
     writeln!(stdin, "{request}").and_then(|_| stdin.flush()).map_err(|e| format!("claude fast mode: {e}"))?;
     let deadline = Instant::now() + MODELS_TIMEOUT;
     loop {
-        let line = lines
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|e| match e {
-                mpsc::RecvTimeoutError::Timeout => "claude fast mode did not answer".to_string(),
-                mpsc::RecvTimeoutError::Disconnected => "claude fast mode exited before answering".to_string(),
-            })?;
+        let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).map_err(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => "claude fast mode did not answer".to_string(),
+            mpsc::RecvTimeoutError::Disconnected => "claude fast mode exited before answering".to_string(),
+        })?;
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
         let Some((id, answer)) = parse_control_response(&record) else { continue };
         if id != "1" {
@@ -896,12 +860,10 @@ fn ask_claude_menu(stdin: &mut ChildStdin, lines: &mpsc::Receiver<String>) -> Re
     let mut commands: Option<Vec<crew_protocol::CommandEntry>> = None;
     let mut skills: Option<std::collections::HashSet<String>> = None;
     while commands.is_none() || skills.is_none() {
-        let line = lines
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|e| match e {
-                mpsc::RecvTimeoutError::Timeout => "claude commands did not answer".to_string(),
-                mpsc::RecvTimeoutError::Disconnected => "claude commands exited before answering".to_string(),
-            })?;
+        let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).map_err(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => "claude commands did not answer".to_string(),
+            mpsc::RecvTimeoutError::Disconnected => "claude commands exited before answering".to_string(),
+        })?;
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
         let Some((id, answer)) = parse_control_response(&record) else { continue };
         match id.as_str() {
@@ -1026,11 +988,7 @@ fn parse_cursor_models(out: &str) -> Vec<ListedModel> {
             if id.is_empty() || id.chars().any(char::is_whitespace) {
                 return None;
             }
-            let label = label
-                .replace('\u{200b}', "")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
+            let label = label.replace('\u{200b}', "").split_whitespace().collect::<Vec<_>>().join(" ");
             Some(ListedModel { id: id.to_string(), label, tiers: Some(Vec::new()) })
         })
         .collect()
@@ -1067,13 +1025,7 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
 /// Whether anything was said in the session `crew_id` of `provider`, run in
 /// `cwd`, as its provider kept it. A provider Crew cannot read counts as having spoken, so
 /// its sessions are never taken for empty.
-pub fn has_conversation(
-    home: Option<&Path>,
-    provider: &str,
-    crew_id: &str,
-    bound: Option<&str>,
-    cwd: &str,
-) -> bool {
+pub fn has_conversation(home: Option<&Path>, provider: &str, crew_id: &str, bound: Option<&str>, cwd: &str) -> bool {
     let Some(home) = home else { return true };
     match provider {
         // Crew's id until a `/clear` moves Claude on.
@@ -1323,10 +1275,7 @@ note
             {"providerID":"openai","modelID":"gpt-5.6-sol"}
         ]}"#;
         assert_eq!(opencode_selection(r#"{"model":"openai/gpt-5.6-sol"}"#, state).as_deref(), Some("openai/gpt-5.6-sol"));
-        assert_eq!(
-            opencode_selection(r#"{"mcp":{}}"#, state).as_deref(),
-            Some("opencode/muse-spark-1.3-contributor-free")
-        );
+        assert_eq!(opencode_selection(r#"{"mcp":{}}"#, state).as_deref(), Some("opencode/muse-spark-1.3-contributor-free"));
         assert_eq!(opencode_selection("not json", state).as_deref(), Some("opencode/muse-spark-1.3-contributor-free"));
         let skip = r#"{"recent":[{"providerID":""},{"modelID":"x"},{"providerID":"opencode","modelID":"mimo-v2.5-free"}]}"#;
         assert_eq!(opencode_selection("", skip).as_deref(), Some("opencode/mimo-v2.5-free"));
@@ -1363,14 +1312,7 @@ note
         let cooldown = FastMode { availability: FastModeAvailability::Cooldown, reason: None };
         let unknown = FastMode { availability: FastModeAvailability::Unknown, reason: None };
         let hidden = |reason: &str| FastMode { availability: FastModeAvailability::Hidden, reason: Some(reason.into()) };
-        let rule_out = [
-            "free",
-            "preference",
-            "extra_usage_disabled",
-            "not_first_party",
-            "disabled_by_env",
-            "model_not_allowed",
-        ];
+        let rule_out = ["free", "preference", "extra_usage_disabled", "not_first_party", "disabled_by_env", "model_not_allowed"];
         for reason in rule_out {
             assert_eq!(fast_mode_from(Some("off"), Some(reason), Some(&available)), hidden(reason), "{reason}");
         }
@@ -1479,10 +1421,7 @@ time.sleep(600)
         let argv: Vec<_> = seen["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
         assert!(argv.contains(&"--strict-mcp-config"), "{argv:?}");
-        assert_eq!(
-            std::fs::canonicalize(seen["cwd"].as_str().unwrap()).unwrap(),
-            std::fs::canonicalize(&work).unwrap()
-        );
+        assert_eq!(std::fs::canonicalize(seen["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&work).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1551,7 +1490,8 @@ time.sleep(600)
     fn cursor_acp_title_reads_the_sessions_store() {
         let root = temp_dir("cursor-acp-title");
         std::fs::create_dir_all(root.join("f046c807-c613")).unwrap();
-        std::fs::write(root.join("f046c807-c613/meta.json"), r#"{"schemaVersion":1,"cwd":"/x","title":"Lisbon Trip Planner"}"#).unwrap();
+        std::fs::write(root.join("f046c807-c613/meta.json"), r#"{"schemaVersion":1,"cwd":"/x","title":"Lisbon Trip Planner"}"#)
+            .unwrap();
         std::fs::create_dir_all(root.join("untitled")).unwrap();
         std::fs::write(root.join("untitled/meta.json"), r#"{"schemaVersion":1,"cwd":"/x"}"#).unwrap();
         assert_eq!(cursor_acp_title(&root, "f046c807-c613").as_deref(), Some("Lisbon Trip Planner"));
@@ -1607,11 +1547,8 @@ time.sleep(600)
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         std::fs::write(
             &transcript,
-            [
-                r#"{"type":"bridge-session","sessionId":"s"}"#,
-                r#"{"type":"ai-title","aiTitle":"About the \"user\" table"}"#,
-            ]
-            .join("\n"),
+            [r#"{"type":"bridge-session","sessionId":"s"}"#, r#"{"type":"ai-title","aiTitle":"About the \"user\" table"}"#]
+                .join("\n"),
         )
         .unwrap();
         assert!(!claude_has_turn(&transcript));

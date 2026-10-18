@@ -166,8 +166,18 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
         }
         _ => Listen::local(),
     };
+    // A test or script that starts crewd where nothing else would stop it
+    // (the launchd stand-in, a detached daemon) names itself here.
+    let owner = match flag(args, "--exit-with-pid").map(|pid| pid.parse::<i32>()) {
+        None => None,
+        Some(Ok(pid)) if pid > 1 => Some(pid),
+        Some(_) => {
+            eprintln!("--exit-with-pid takes the pid of a running process");
+            return ExitCode::FAILURE;
+        }
+    };
     let failed_starts = dir.join(FAILED_STARTS);
-    let failure = match run(&dir, supervisor, listen) {
+    let failure = match run(&dir, supervisor, listen, owner) {
         Ok(()) => return ExitCode::SUCCESS,
         Err(failure) => failure,
     };
@@ -178,8 +188,7 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     let tries = match failure {
         Failure::Permanent(_) => TRANSIENT_TRIES,
         Failure::Transient(_) => {
-            let before: u32 =
-                std::fs::read_to_string(&failed_starts).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+            let before: u32 = std::fs::read_to_string(&failed_starts).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
             let _ = std::fs::write(&failed_starts, (before + 1).to_string());
             before + 1
         }
@@ -193,12 +202,15 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure> {
+fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -> Result<(), Failure> {
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
     // cleanup as any stop, instead of killing crewd half started.
     let (stop, stopped) = mpsc::channel();
     watch_signals(stop.clone(), supervisor != Supervisor::Served).map_err(Failure::Transient)?;
+    if let Some(pid) = owner {
+        watch_owner(pid, stop.clone());
+    }
     if supervisor == Supervisor::Launchd {
         tidy_log_every(dir.join(crew_cli::launch_agent::LOG));
         eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
@@ -207,6 +219,10 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure
     // Before the socket, the database or anything else in the folder. Held
     // until `run` returns, after everything below has stopped.
     let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
+    // Before anything writes a file: where this environment keeps what is not
+    // in the data dir itself.
+    crew_core::paths::init(crew_core::paths::Layout::read(dir).map_err(Failure::Permanent)?);
+    crew_core::paths::sweep_tmp(crew_core::paths::TMP_KEEP);
     // The folder terminal sessions' hooks once dropped their records in.
     let _ = std::fs::remove_dir_all(dir.join("claude-bind"));
     // Before anything else is opened: a daemon already serving this data dir
@@ -225,10 +241,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure
     };
     let _ = std::fs::remove_file(dir.join(FAILED_STARTS));
 
-    let info = DaemonInfo {
-        url: handle.url().to_string(),
-        token: handle.token().to_string(),
-    };
+    let info = DaemonInfo { url: handle.url().to_string(), token: handle.token().to_string() };
     // Asked to stop while it was starting: nobody is told it is up.
     let early = stopped.try_recv().is_ok();
     if !early {
@@ -284,21 +297,19 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure
 }
 
 /// Everything after the bridge: the hosts, the database, the WebSocket.
-fn start(
-    dir: &Path,
-    bridge: &Bridge,
-    listen: Listen,
-) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
+fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
     crew_core::shell_path::prewarm();
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
     crew_core::provider_session::prewarm_claude_fast_mode();
-    let pty = PtyHost::new();
-    // Before the host: what a crashed `crewd` left running goes first, and the
-    // host then starts a fresh list.
+    // Before the hosts: what a crashed `crewd` left running goes first, and
+    // they then start a fresh list, one they share. The name is from when only
+    // agents were in it.
     let groups = dir.join("agent-groups.json");
     crew_core::agent_groups::sweep(&groups);
-    let agents = AgentHost::with_registry(groups);
+    let registry = std::sync::Arc::new(crew_core::agent_groups::Registry::new(groups));
+    let pty = PtyHost::with_registry(registry.clone());
+    let agents = AgentHost::with_shared_registry(registry);
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
     // Before anything reads a transcript: a session from before migration 38
     // has its history only in its CLI's files.
@@ -310,13 +321,7 @@ fn start(
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
     let handle = serve_on(
-        Config {
-            pty: pty.clone(),
-            store,
-            processes: processes.clone(),
-            agents: agents.clone(),
-            bridge: bridge.clone(),
-        },
+        Config { pty: pty.clone(), store, processes: processes.clone(), agents: agents.clone(), bridge: bridge.clone() },
         listen,
     )
     .map_err(Failure::Transient)?;
@@ -396,10 +401,7 @@ fn tidy_log(path: &Path, cap: u64, keep: u64) {
 /// returns; the thread it leaves behind only waits for one to arrive.
 fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
     use tokio::signal::unix::{signal, SignalKind};
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("signals: {e}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("signals: {e}"))?;
     let (mut term, mut int, mut hup) = {
         let _entered = runtime.enter();
         let listen = |kind| signal(kind).map_err(|e| format!("signals: {e}"));
@@ -425,12 +427,27 @@ fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
 
 /// Blocks until something says stop: a signal (already watched), a
 /// `daemon_shutdown`, or, for the app's child, the end of stdin.
-fn wait_for_exit(
-    stop: mpsc::Sender<()>,
-    stopped: mpsc::Receiver<()>,
-    watch_stdin: bool,
-    requests: Option<mpsc::Receiver<()>>,
-) {
+/// Stops crewd, the way a signal does, once `pid` is gone: whatever started
+/// it ended without saying so, a test runner killed on a timeout among them.
+fn watch_owner(pid: i32, stop: mpsc::Sender<()>) {
+    let _ = thread::Builder::new().name("crewd-owner".into()).spawn(move || {
+        while owner_alive(pid) {
+            thread::sleep(Duration::from_millis(500));
+        }
+        let _ = stop.send(());
+        // Best effort, after the stop: stderr is often a pipe to the very
+        // process that is gone, and `eprintln!` panics when the write fails.
+        let _ = writeln!(io::stderr(), "[crewd] pid {pid}, which this daemon was to outlive no longer, is gone; stopping");
+    });
+}
+
+/// `kill(pid, 0)` succeeds on a live process, and fails with EPERM on one
+/// that exists but is not ours to signal.
+fn owner_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+}
+
+fn wait_for_exit(stop: mpsc::Sender<()>, stopped: mpsc::Receiver<()>, watch_stdin: bool, requests: Option<mpsc::Receiver<()>>) {
     if watch_stdin {
         thread::Builder::new()
             .name("crewd-stdin".into())

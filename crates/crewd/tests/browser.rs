@@ -42,11 +42,8 @@ async fn call(ws: &mut Ws, id: u32, method: &str, params: Value) -> Result<Value
     let request = json!({ "id": id, "method": method, "params": params }).to_string();
     ws.send(Message::Text(request.into())).await.expect("send");
     loop {
-        let message = tokio::time::timeout(Duration::from_secs(5), ws.next())
-            .await
-            .expect("rpc timeout")
-            .expect("closed")
-            .expect("ws");
+        let message =
+            tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
         let Message::Text(text) = message else { continue };
         let response: Value = serde_json::from_str(&text).expect("json");
         if response["id"] != id {
@@ -70,16 +67,12 @@ async fn history_answers_the_json_the_renderer_sends() {
     assert_eq!(blank, Ok(Value::Null));
     let visit = json!({ "url": "https://me:pw@GitHub.com/#top", "title": "", "workspaceId": "w1" });
     call(&mut ws, 2, "browser_history_visit", visit).await.expect("visit");
-    call(&mut ws, 3, "browser_history_title", json!({ "url": "https://github.com", "title": "GitHub" }))
-        .await
-        .expect("title");
+    call(&mut ws, 3, "browser_history_title", json!({ "url": "https://github.com", "title": "GitHub" })).await.expect("title");
     call(&mut ws, 4, "browser_history_visit", json!({ "url": "https://docs.rs/tokio", "title": "tokio - Rust" }))
         .await
         .expect("visit");
 
-    let found = call(&mut ws, 5, "browser_history_suggest", json!({ "text": "git", "limit": 5 }))
-        .await
-        .expect("suggest");
+    let found = call(&mut ws, 5, "browser_history_suggest", json!({ "text": "git", "limit": 5 })).await.expect("suggest");
     assert_eq!(found.as_array().map(Vec::len), Some(1), "{found}");
     let entry = &found[0];
     assert_eq!(entry["urlKey"], "https://github.com");
@@ -95,18 +88,12 @@ async fn history_answers_the_json_the_renderer_sends() {
     // Both visits may share a millisecond, so find the row rather than index it.
     let docs = listed.as_array().and_then(|rows| rows.iter().find(|row| row["host"] == "docs.rs"));
     assert_eq!(docs.map(|row| &row["workspaceId"]), Some(&Value::Null), "{listed}");
-    let filtered = call(&mut ws, 7, "browser_history_list", json!({ "text": "tokio", "limit": 10 }))
-        .await
-        .expect("list");
+    let filtered = call(&mut ws, 7, "browser_history_list", json!({ "text": "tokio", "limit": 10 })).await.expect("list");
     assert_eq!(filtered.as_array().map(Vec::len), Some(1), "{filtered}");
-    let before = call(&mut ws, 8, "browser_history_list", json!({ "before": 0, "limit": 10 }))
-        .await
-        .expect("list");
+    let before = call(&mut ws, 8, "browser_history_list", json!({ "before": 0, "limit": 10 })).await.expect("list");
     assert_eq!(before, json!([]));
 
-    call(&mut ws, 9, "browser_history_delete", json!({ "urlKey": "https://docs.rs/tokio" }))
-        .await
-        .expect("delete");
+    call(&mut ws, 9, "browser_history_delete", json!({ "urlKey": "https://docs.rs/tokio" })).await.expect("delete");
     let left = call(&mut ws, 10, "browser_history_list", json!({ "limit": 10 })).await.expect("list");
     assert_eq!(left.as_array().map(Vec::len), Some(1), "{left}");
 

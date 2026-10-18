@@ -40,6 +40,7 @@ import {
   isQuickQuestion,
   exitedless,
   nativeName,
+  optionless,
   nativeReport,
   sentOf,
   startedOf,
@@ -584,7 +585,8 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
           <span className="text-text-muted">{word}</span>
           {tagged ? <span data-letter-tag className="text-placeholder"><span data-sep>· </span>{tag}</span> : null}
         </div>
-        <LongText text={exitedless(block)} fold={block.letterKind !== "started"} />
+        {/* The options are buttons under it: the letter's own list of them would say them twice. */}
+        <LongText text={child && ask?.role === "question" ? optionless(exitedless(block)) : exitedless(block)} fold={block.letterKind !== "started"} />
         {child && ask ? <ChildAsk child={child} ask={ask} by={by} onBy={onBy} /> : null}
       </div>
     </div>

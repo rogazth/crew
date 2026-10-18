@@ -16,7 +16,6 @@ use serde_json::{json, Map, Value};
 use super::runtime::Autonomy;
 use super::{as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pretty_input, string_field, todo_items};
 
-
 /// The name Crew's MCP server goes by in `session/new`: the namespace the
 /// model finds its tools under, and the `providerIdentifier` of its calls.
 pub const CREW_SERVER: &str = "crew";
@@ -55,11 +54,7 @@ pub fn with_attached_files(text: &str, files: &[String]) -> String {
     if files.is_empty() {
         return text.to_string();
     }
-    let list = files
-        .iter()
-        .map(|path| format!("- {path}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let list = files.iter().map(|path| format!("- {path}")).collect::<Vec<_>>().join("\n");
     let note = format!("Attached files:\n{list}");
     if text.is_empty() {
         note
@@ -137,9 +132,7 @@ pub fn turn_end(result: &Value) -> TurnEnd {
         Some("cancelled") => TurnEnd::Cancelled,
         Some("refusal") => TurnEnd::Failed("The model refused to go on.".into()),
         Some("max_tokens") => TurnEnd::Completed(Some("Cursor stopped: the reply hit the model's output limit.".into())),
-        Some("max_turn_requests") => {
-            TurnEnd::Completed(Some("Cursor stopped: the turn hit its limit of model requests.".into()))
-        }
+        Some("max_turn_requests") => TurnEnd::Completed(Some("Cursor stopped: the turn hit its limit of model requests.".into())),
         _ => TurnEnd::Completed(None),
     }
 }
@@ -329,11 +322,7 @@ pub fn tool_detail(tool: &AcpTool, output: Option<&Map<String, Value>>, content:
         return Some(ToolDetail::Mcp { server, tool: name, input: pretty_input(&args), output: None });
     }
     let text = |key: &str| {
-        output
-            .and_then(|row| row.get(key))
-            .and_then(Value::as_str)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
+        output.and_then(|row| row.get(key)).and_then(Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
     };
     let count = |key: &str| output.and_then(|row| row.get(key)).and_then(Value::as_u64).map(|n| n as u32);
     match tool.kind.as_str() {
@@ -342,35 +331,18 @@ pub fn tool_detail(tool: &AcpTool, output: Option<&Map<String, Value>>, content:
             let printed = [text("stdout"), text("stderr")].into_iter().flatten().collect::<Vec<_>>().join("\n");
             Some(ToolDetail::Command {
                 command,
-                exit_code: output
-                    .and_then(|row| row.get("exitCode"))
-                    .and_then(Value::as_i64)
-                    .map(|code| code as i32),
+                exit_code: output.and_then(|row| row.get("exitCode")).and_then(Value::as_i64).map(|code| code as i32),
                 output: Some(printed).filter(|text| !text.trim().is_empty()),
             })
         }
-        "read" => Some(ToolDetail::File {
-            path: tool.path()?,
-            line_start: None,
-            line_end: None,
-            preview: text("content"),
-        }),
-        "edit" => Some(ToolDetail::Edit {
-            path: tool.path()?,
-            added: None,
-            removed: None,
-            hunks: edit_hunks(content),
-        }),
+        "read" => Some(ToolDetail::File { path: tool.path()?, line_start: None, line_end: None, preview: text("content") }),
+        "edit" => Some(ToolDetail::Edit { path: tool.path()?, added: None, removed: None, hunks: edit_hunks(content) }),
         "search" => Some(ToolDetail::Search {
             query: string_field(Some(&tool.input), "pattern").or_else(|| string_field(Some(&tool.input), "query"))?,
             matches: count("totalMatches").or_else(|| count("totalFiles")),
             output: None,
         }),
-        "fetch" => Some(ToolDetail::Fetch {
-            url: string_field(Some(&tool.input), "url")?,
-            title: None,
-            output: None,
-        }),
+        "fetch" => Some(ToolDetail::Fetch { url: string_field(Some(&tool.input), "url")?, title: None, output: None }),
         _ => None,
     }
 }
@@ -539,9 +511,7 @@ fn ask_question(row: &Value) -> Option<AcpQuestion> {
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter_map(|option| {
-                    Some((option.get("id")?.as_str()?.to_string(), option.get("label")?.as_str()?.to_string()))
-                })
+                .filter_map(|option| Some((option.get("id")?.as_str()?.to_string(), option.get("label")?.as_str()?.to_string())))
                 .collect()
         })
         .unwrap_or_default();
@@ -549,10 +519,7 @@ fn ask_question(row: &Value) -> Option<AcpQuestion> {
         question: prompt.clone(),
         header: prompt,
         multi_select: row.get("allowMultiple").and_then(Value::as_bool).unwrap_or(false),
-        options: options
-            .iter()
-            .map(|(_, label)| QuestionOption { label: label.clone(), description: None })
-            .collect(),
+        options: options.iter().map(|(_, label)| QuestionOption { label: label.clone(), description: None }).collect(),
     };
     Some(AcpQuestion { id, question, options })
 }
@@ -607,11 +574,7 @@ pub fn questions_response(questions: &[AcpQuestion], answers: Option<&HashMap<St
         let ids: Vec<String> = parts
             .iter()
             .filter_map(|part| {
-                question
-                    .options
-                    .iter()
-                    .find(|(_, label)| label.trim().eq_ignore_ascii_case(part))
-                    .map(|(id, _)| id.clone())
+                question.options.iter().find(|(_, label)| label.trim().eq_ignore_ascii_case(part)).map(|(id, _)| id.clone())
             })
             .collect();
         if ids.len() == parts.len() && !ids.is_empty() {
@@ -855,7 +818,9 @@ mod tests {
             "rawInput": { "command": "touch made.txt" },
             "content": [{ "type": "content", "content": { "type": "text", "text": "Shell allowlist is empty" } }]
         }));
-        let CursorAsk::Approval { name, title, input, allow, reject } = classify_request("session/request_permission", &shell, &tools, &Autonomy::Ask) else {
+        let CursorAsk::Approval { name, title, input, allow, reject } =
+            classify_request("session/request_permission", &shell, &tools, &Autonomy::Ask)
+        else {
             panic!("not an approval")
         };
         assert_eq!((name.as_str(), title.as_str()), ("bash", "touch made.txt"));
@@ -877,21 +842,38 @@ mod tests {
             "providerIdentifier": "crew", "toolName": "list_agents", "args": {} } }));
         tools.insert("m1".to_string(), call);
         let asked = permission(json!({ "toolCallId": "m1", "title": "crew-crew: list_agents", "kind": "other" }));
-        assert_eq!(classify_request("session/request_permission", &asked, &tools, &Autonomy::Ask), CursorAsk::Allow("allow-once".into()));
+        assert_eq!(
+            classify_request("session/request_permission", &asked, &tools, &Autonomy::Ask),
+            CursorAsk::Allow("allow-once".into())
+        );
         let unseen = permission(json!({ "toolCallId": "m2", "title": "crew-crew: list_routines", "kind": "other" }));
-        assert_eq!(classify_request("session/request_permission", &unseen, &tools, &Autonomy::Ask), CursorAsk::Allow("allow-once".into()));
+        assert_eq!(
+            classify_request("session/request_permission", &unseen, &tools, &Autonomy::Ask),
+            CursorAsk::Allow("allow-once".into())
+        );
 
         let other = permission(json!({ "toolCallId": "m3", "title": "spike-echo: echo", "kind": "other" }));
-        tools.insert("m3".into(), tool(json!({ "toolCallId": "m3", "title": "spike: echo", "rawInput": {
-            "providerIdentifier": "spike", "toolName": "echo", "args": { "text": "hi" } } })));
-        let CursorAsk::Approval { name, title, input, .. } = classify_request("session/request_permission", &other, &tools, &Autonomy::Ask) else {
+        tools.insert(
+            "m3".into(),
+            tool(json!({ "toolCallId": "m3", "title": "spike: echo", "rawInput": {
+            "providerIdentifier": "spike", "toolName": "echo", "args": { "text": "hi" } } })),
+        );
+        let CursorAsk::Approval { name, title, input, .. } =
+            classify_request("session/request_permission", &other, &tools, &Autonomy::Ask)
+        else {
             panic!("someone else's MCP tool asks")
         };
         assert_eq!((name.as_str(), title.as_str(), input), ("mcp__spike__echo", "spike · echo", json!({ "text": "hi" })));
 
-        let edit = permission(json!({ "toolCallId": "e1", "title": "Edit `/w/b.txt`", "kind": "edit", "locations": [{ "path": "/w/b.txt" }] }));
-        assert_eq!(classify_request("session/request_permission", &edit, &tools, &Autonomy::Edits), CursorAsk::Allow("allow-once".into()));
-        let CursorAsk::Approval { title, .. } = classify_request("session/request_permission", &edit, &tools, &Autonomy::Ask) else {
+        let edit = permission(
+            json!({ "toolCallId": "e1", "title": "Edit `/w/b.txt`", "kind": "edit", "locations": [{ "path": "/w/b.txt" }] }),
+        );
+        assert_eq!(
+            classify_request("session/request_permission", &edit, &tools, &Autonomy::Edits),
+            CursorAsk::Allow("allow-once".into())
+        );
+        let CursorAsk::Approval { title, .. } = classify_request("session/request_permission", &edit, &tools, &Autonomy::Ask)
+        else {
             panic!("an edit under ask asks")
         };
         assert_eq!(title, "Edit b.txt");
@@ -905,7 +887,8 @@ mod tests {
             { "id": "extras", "prompt": "Extras?", "allowMultiple": true, "options": [
                 { "id": "x", "label": "Comments" }, { "id": "y", "label": "Schema" } ] }
         ] });
-        let CursorAsk::Questions(questions) = classify_request("cursor/ask_question", &asked, &HashMap::new(), &Autonomy::Ask) else {
+        let CursorAsk::Questions(questions) = classify_request("cursor/ask_question", &asked, &HashMap::new(), &Autonomy::Ask)
+        else {
             panic!("not questions")
         };
         assert_eq!(questions[0].question.question, "Which format?");
@@ -934,7 +917,11 @@ mod tests {
         let asked = json!({ "toolCallId": "p1", "name": "Add hello.txt", "overview": "One file.", "plan": "# Add hello.txt\n\nhi", "todos": [] });
         assert_eq!(
             classify_request("cursor/create_plan", &asked, &HashMap::new(), &Autonomy::Ask),
-            CursorAsk::Plan { call_id: Some("p1".into()), title: "Plan: Add hello.txt".into(), text: "# Add hello.txt\n\nhi".into() }
+            CursorAsk::Plan {
+                call_id: Some("p1".into()),
+                title: "Plan: Add hello.txt".into(),
+                text: "# Add hello.txt\n\nhi".into()
+            }
         );
         assert_eq!(plan_accepted(), json!({ "outcome": { "outcome": "accepted" } }));
         assert_eq!(classify_request("fs/read_text_file", &json!({}), &HashMap::new(), &Autonomy::Ask), CursorAsk::Unsupported);
@@ -944,12 +931,18 @@ mod tests {
     /// what it did.
     #[test]
     fn a_turns_calls_read_as_what_they_did() {
-        let shell = tool(json!({ "toolCallId": "t", "title": "`sleep 1 && echo done`", "kind": "execute", "rawInput": { "command": "sleep 1 && echo done" } }));
+        let shell = tool(
+            json!({ "toolCallId": "t", "title": "`sleep 1 && echo done`", "kind": "execute", "rawInput": { "command": "sleep 1 && echo done" } }),
+        );
         assert_eq!((tool_name(&shell), tool_label(&shell)), ("bash".to_string(), "sleep 1 && echo done".to_string()));
         let out = json!({ "exitCode": 1, "stdout": "done\n", "stderr": "" });
         assert_eq!(
             tool_detail(&shell, out.as_object(), None),
-            Some(ToolDetail::Command { command: "sleep 1 && echo done".into(), exit_code: Some(1), output: Some("done\n".into()) })
+            Some(ToolDetail::Command {
+                command: "sleep 1 && echo done".into(),
+                exit_code: Some(1),
+                output: Some("done\n".into())
+            })
         );
         assert_eq!(tool_end("completed", out.as_object()), Some(ToolStatus::Failed));
         assert_eq!(tool_end("completed", json!({ "rejected": true }).as_object()), Some(ToolStatus::Failed));
@@ -958,20 +951,37 @@ mod tests {
 
         let mut edit = tool(json!({ "toolCallId": "e", "title": "Edit File", "kind": "edit", "rawInput": {} }));
         assert!(!edit.named());
-        edit.merge(json!({ "title": "Edit `/w/b.txt`", "rawInput": { "path": "/w/b.txt" }, "locations": [{ "path": "/w/b.txt" }] }).as_object().unwrap());
+        edit.merge(
+            json!({ "title": "Edit `/w/b.txt`", "rawInput": { "path": "/w/b.txt" }, "locations": [{ "path": "/w/b.txt" }] })
+                .as_object()
+                .unwrap(),
+        );
         let diff = json!([{ "type": "diff", "path": "/w/b.txt", "oldText": "-- /dev/null", "newText": "++ b//w/b.txt\nx" }]);
         assert_eq!(
             tool_detail(&edit, None, Some(&diff)),
-            Some(ToolDetail::Edit { path: "/w/b.txt".into(), added: None, removed: None, hunks: Some(vec![EditHunk { before: String::new(), after: "x".into() }]) })
+            Some(ToolDetail::Edit {
+                path: "/w/b.txt".into(),
+                added: None,
+                removed: None,
+                hunks: Some(vec![EditHunk { before: String::new(), after: "x".into() }])
+            })
         );
         assert_eq!(tool_label(&edit), "Edit b.txt");
 
-        let grep = tool(json!({ "toolCallId": "g", "title": "grep \"ask\"", "kind": "search", "rawInput": { "pattern": "ask", "path": "/w" } }));
+        let grep = tool(
+            json!({ "toolCallId": "g", "title": "grep \"ask\"", "kind": "search", "rawInput": { "pattern": "ask", "path": "/w" } }),
+        );
         assert_eq!((tool_name(&grep), tool_label(&grep)), ("grep".to_string(), "Grep ask".to_string()));
-        assert!(matches!(tool_detail(&grep, json!({ "totalMatches": 3 }).as_object(), None), Some(ToolDetail::Search { matches: Some(3), .. })));
+        assert!(matches!(
+            tool_detail(&grep, json!({ "totalMatches": 3 }).as_object(), None),
+            Some(ToolDetail::Search { matches: Some(3), .. })
+        ));
 
         let read = tool(json!({ "toolCallId": "r", "title": "Read b.txt", "kind": "read", "rawInput": { "path": "/w/b.txt" } }));
-        assert_eq!(tool_detail(&read, json!({ "content": "x" }).as_object(), None), Some(ToolDetail::File { path: "/w/b.txt".into(), line_start: None, line_end: None, preview: Some("x".into()) }));
+        assert_eq!(
+            tool_detail(&read, json!({ "content": "x" }).as_object(), None),
+            Some(ToolDetail::File { path: "/w/b.txt".into(), line_start: None, line_end: None, preview: Some("x".into()) })
+        );
 
         let message = tool(json!({ "toolCallId": "m", "title": "crew: message_agent", "kind": "other", "rawInput": {
             "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } }));
@@ -1010,8 +1020,10 @@ mod tests {
         assert_eq!(read_store_context(&dir, "none"), None);
         std::fs::create_dir_all(dir.join("bare")).unwrap();
         let conn = rusqlite::Connection::open(dir.join("bare").join("store.db")).unwrap();
-        conn.execute_batch("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
-            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);",
+        )
+        .unwrap();
         assert_eq!(read_store_context(&dir, "bare"), None);
     }
 

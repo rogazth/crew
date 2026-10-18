@@ -83,3 +83,80 @@ test("B1: a tab opened, read, filled, clicked and captured through the relay", a
     message: "the lease is gone",
   });
 });
+
+// The page and a cross-origin iframe in it see Google Chrome, the way the
+// requests name it, and the agent still reads the console without the
+// debugger's Runtime domain, which pages can detect.
+test("B2: a page and its cross-origin iframe see Google Chrome, and the console still reaches the agent", async (t) => {
+  const frame = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!doctype html><script>
+      parent.postMessage({
+        brands: navigator.userAgentData.brands.map((b) => b.brand),
+        chrome: typeof window.chrome?.loadTimes,
+      }, "*");
+      setTimeout(() => console.log("frame-log"), 300);
+    </script>`);
+  });
+  await new Promise<void>((resolve) => frame.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => frame.close(() => resolve())));
+  // localhost against 127.0.0.1: another site, so the frame runs in its own process.
+  const frameUrl = `http://localhost:${(frame.address() as AddressInfo).port}/frame`;
+  const page = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!doctype html><title>Host</title>
+      <script>addEventListener("message", (e) => { window.fromFrame = e.data; });</script>
+      <iframe src="${frameUrl}"></iframe>`);
+  });
+  await new Promise<void>((resolve) => page.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => page.close(() => resolve())));
+  const url = `http://127.0.0.1:${(page.address() as AddressInfo).port}/`;
+
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const tool = (name: string, args: object = {}) =>
+    crew.request<Block[]>("browser_tool", { workspaceId: workspace.id, tool: name, args });
+  const text = (blocks: Block[]) => blocks.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+  await waitFor(() => tool("open_tab", { url }).catch(() => null), {
+    timeout: 30_000,
+    interval: 250,
+    message: "open_tab reaches the browser host",
+  });
+
+  const top = JSON.parse(
+    text(
+      await tool("browser_evaluate", {
+        expression: "({ brands: navigator.userAgentData.brands.map((b) => b.brand), chrome: typeof window.chrome?.loadTimes })",
+      }),
+    ),
+  );
+  assert.ok(top.brands.includes("Google Chrome"), JSON.stringify(top));
+  assert.equal(top.chrome, "function");
+  // navigator.webdriver is not checked: Playwright starts Electron with
+  // --remote-debugging-port, which alone makes it true. The app as it ships
+  // has it false, with the agent's debugger attached too.
+
+  const inFrame = await waitFor(
+    async () => {
+      const value = text(await tool("browser_evaluate", { expression: "window.fromFrame ?? null" }));
+      return value === "null" ? null : JSON.parse(value);
+    },
+    { timeout: 15_000, message: "the iframe reports what it sees" },
+  );
+  assert.ok(inFrame.brands.includes("Google Chrome"), JSON.stringify(inFrame));
+  assert.equal(inFrame.chrome, "function");
+
+  await tool("browser_evaluate", {
+    expression: "console.log('top-log'); console.warn('top-warn'); setTimeout(() => { throw new Error('top-uncaught'); }, 0); 1",
+  });
+  const log = await waitFor(
+    async () => {
+      const lines = text(await tool("browser_activity", { kind: "console" }));
+      return ["top-log", "top-warn", "top-uncaught", "frame-log"].every((word) => lines.includes(word)) ? lines : null;
+    },
+    { timeout: 15_000, message: "console lines, an uncaught error and the iframe's log reach the agent" },
+  );
+  assert.match(log, /top-uncaught/);
+});

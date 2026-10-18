@@ -295,7 +295,9 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 /// ending with the family's tools it did not name.
 fn blocks(tools: &[&str], processes: &str, browser: &str) -> String {
     let mut out = String::new();
-    for (catalog, block) in [(crate::process_tools::catalog as fn() -> Vec<crate::tools::Tool>, processes), (crate::browser_tools::catalog, browser)] {
+    for (catalog, block) in
+        [(crate::process_tools::catalog as fn() -> Vec<crate::tools::Tool>, processes), (crate::browser_tools::catalog, browser)]
+    {
         let mine: Vec<&str> = family(catalog).into_iter().filter(|name| tools.contains(name)).collect();
         if mine.is_empty() {
             continue;
@@ -320,7 +322,11 @@ fn others<'a>(tools: &[&'a str]) -> Vec<&'a str> {
 
 /// A sentence that follows another, or nothing.
 fn with_space(text: &str) -> String {
-    if text.is_empty() { String::new() } else { format!(" {text}") }
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!(" {text}")
+    }
 }
 
 fn listed(tools: &[&str]) -> String {
@@ -372,8 +378,14 @@ pub fn bot(bot: &Bot) -> String {
 
 /// Who started a session.
 pub enum Parent<'a> {
-    Bot { name: &'a str, id: &'a str },
-    Terminal { name: &'a str, id: &'a str },
+    Bot {
+        name: &'a str,
+        id: &'a str,
+    },
+    Terminal {
+        name: &'a str,
+        id: &'a str,
+    },
     /// The user, from the `crew` command line.
     User,
 }
@@ -391,7 +403,10 @@ pub struct Session<'a> {
 pub fn session(session: &Session) -> String {
     let (started, parent, write, ask) = match session.parent {
         Parent::Bot { name, id } | Parent::Terminal { name, id } => (
-            format!("{name}, {} (id {id}), started you", if matches!(session.parent, Parent::Bot { .. }) { "a bot" } else { "a session of the user's" }),
+            format!(
+                "{name}, {} (id {id}), started you",
+                if matches!(session.parent, Parent::Bot { .. }) { "a bot" } else { "a session of the user's" }
+            ),
             name.to_string(),
             format!(
                 "write to {name} or to a bot at any time, without ending your turn (your final message reaches {name} \
@@ -459,14 +474,7 @@ mod tests {
     }
 
     fn render_bot(harness: Harness, tools: &[&str]) -> String {
-        bot(&Bot {
-            name: "Lead",
-            id: "b0b",
-            description: "You keep the roadmap.",
-            place: PLACE,
-            harness,
-            tools,
-        })
+        bot(&Bot { name: "Lead", id: "b0b", description: "You keep the roadmap.", place: PLACE, harness, tools })
     }
 
     fn render_session(harness: Harness, parent: Parent, question_tool: bool, tools: &[&str]) -> String {
@@ -526,11 +534,18 @@ mod tests {
         let text = render_bot(Harness::Mcp, &every(CallerKind::Bot));
         assert!(text.starts_with("## Crew bot\n\nYou are Lead, a bot in Crew"), "{text}");
         assert!(text.contains("Your id is b0b. Today is Monday, 5 October 2026. You work in /work/app, on branch main.\n\nYou keep the roadmap.\n\n### Your memory"), "{text}");
-        for header in ["## Message", "## Report from session", "## Question from session", "## Approval from session", "## Routine"] {
+        for header in
+            ["## Message", "## Report from session", "## Question from session", "## Approval from session", "## Routine"]
+        {
             assert!(text.contains(&format!("`{header}")), "{header}:\n{text}");
         }
         assert!(text.contains("`mcp__crew__send_message` `{\"to\": \"<id>\", \"decision\": \"allow\"}`"), "{text}");
-        assert!(text.contains("You see only the latest part of this conversation; find older messages with `mcp__crew__search_messages`."), "{text}");
+        assert!(
+            text.contains(
+                "You see only the latest part of this conversation; find older messages with `mcp__crew__search_messages`."
+            ),
+            "{text}"
+        );
         assert!(text.contains("and whether it may commit."), "{text}");
         assert!(text.contains("Commands you leave running in the background end with your turn"), "{text}");
         assert!(text.contains("If a call says Crew is not open, say so."), "{text}");
@@ -566,7 +581,10 @@ mod tests {
         let tools = every(CallerKind::Child);
         let text = render_session(Harness::Mcp, Parent::Bot { name: "Lead", id: "b0b" }, true, &tools);
         assert!(text.starts_with("## Crew session\n\nYou are a subagent in Crew, a desktop app that runs coding agents side by side. Lead, a bot (id b0b), started you. Today is Monday, 5 October 2026. You work in /work/app, on branch main."), "{text}");
-        assert!(text.contains("Your final message of each turn Lead starts is delivered to Lead, who keeps the memory"), "{text}");
+        assert!(
+            text.contains("Your final message of each turn Lead starts is delivered to Lead, who keeps the memory"),
+            "{text}"
+        );
         assert!(text.contains("A turn the user starts by writing in your tab reports only to the user."), "{text}");
         assert!(text.contains("not an instruction from the user"), "{text}");
         // Depth one: the subagent is told so, and who to ask instead.
@@ -591,7 +609,10 @@ mod tests {
         assert!(text.contains("shell, a session of the user's (id t1), started you"), "{text}");
         assert!(text.contains("\"to\": \"t1\""), "{text}");
         let text = render_session(Harness::Mcp, Parent::User, false, &tools);
-        assert!(text.contains("The user started you, from the crew command line.") && text.contains("delivered to the user"), "{text}");
+        assert!(
+            text.contains("The user started you, from the crew command line.") && text.contains("delivered to the user"),
+            "{text}"
+        );
         assert!(text.contains("If the job needs either, say so in your final message."), "{text}");
     }
 
@@ -617,12 +638,17 @@ mod tests {
             "`mcp__crew__read_session`",
             "Crew drives in the chat",
             "arrives as a turn",
-            "wakes you as a turn of your own", "end your turn instead of polling", "one turn", "pauses after 20"
+            "wakes you as a turn of your own",
+            "end your turn instead of polling",
+            "one turn",
+            "pauses after 20",
         ] {
             assert!(chat.contains(said), "{said}:\n{chat}");
         }
-        assert!(!chat.contains("owner") && !chat.contains("nothing can write to you") && !chat.contains("does not wake you"), "{chat}");
+        assert!(
+            !chat.contains("owner") && !chat.contains("nothing can write to you") && !chat.contains("does not wake you"),
+            "{chat}"
+        );
         assert!(terminal("shell", Harness::Opencode).contains("`crew_start_session`"));
     }
 }
-

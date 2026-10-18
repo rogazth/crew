@@ -64,9 +64,12 @@ export const listWorktrees = (path: string): Promise<Worktree[]> =>
 export const addWorktree = (path: string, branch: string): Promise<Worktree> =>
   client.request("worktree_add", { path, branch });
 
-/** Refuses the main checkout, and uncommitted work unless forced. Its sessions go with it. */
-export const removeWorktree = (path: string, force: boolean): Promise<void> =>
-  client.request("worktree_remove", { path, force });
+/**
+ * Refuses the main checkout, and uncommitted work or a lock unless forced. Its sessions go with it.
+ * `repo` is the workspace's checkout, where git runs when the worktree's own folder is gone.
+ */
+export const removeWorktree = (repo: string, path: string, force: boolean): Promise<void> =>
+  client.request("worktree_remove", { path, repo, force });
 
 export const renameWorkspace = (id: string, name: string): Promise<void> =>
   client.request("workspace_rename", { id, name });
@@ -462,14 +465,19 @@ export const processLogTail = (workspaceId: string, id: string, worktree: string
   client.request("process_log_tail", { workspaceId, id, ...(worktree && { worktree }) });
 
 /** Who drives which browser tab right now. */
-export const browserLeasesList = (): Promise<BrowserLeases> => client.request("browser_leases_list", {});
+export const browserLeasesList = (envId?: string): Promise<BrowserLeases> =>
+  client.request("browser_leases_list", {}, envId);
 
-/** Takes a tab back from the agent driving it. */
-export const browserLeaseRelease = (tab: string): Promise<void> =>
-  client.request("browser_lease_release", { tab });
+/** The workspace of a strip: its key is the workspace id, or `<workspace>@<worktree path>`. */
+const workspaceOfStrip = (context: string): string => context.split("@")[0] ?? context;
+
+/** Takes a tab back from the agent driving it, on the daemon of the tab's workspace. */
+export const browserLeaseRelease = (tab: string, context: string): Promise<void> =>
+  client.request("browser_lease_release", { tab, workspaceId: workspaceOfStrip(context) });
 
 /** The user closed a tab: its lease goes, and no agent's next call brings it back. */
-export const browserTabClosed = (tab: string): Promise<void> => client.request("browser_tab_closed", { tab });
+export const browserTabClosed = (tab: string, context: string): Promise<void> =>
+  client.request("browser_tab_closed", { tab, workspaceId: workspaceOfStrip(context) });
 
 export const listRemotes = (): Promise<RemoteEnv[]> => client.request("remote_list");
 

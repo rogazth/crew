@@ -37,7 +37,7 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const repo = workspace.path;
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-login");
+  const tree = path.join(crew.worktrees, "app/feat-login");
 
   // ⌃⌘N: the branch typed over whatever the dialog offers, ↵ makes it.
   await page.keyboard.press(`${WORKTREE_MOD}+n`);

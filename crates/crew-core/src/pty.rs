@@ -120,13 +120,7 @@ impl LivePty {
             pid,
             stream_id,
             exited: AtomicBool::new(false),
-            state: Mutex::new(PtyState {
-                ring: Ring::default(),
-                emitted: 0,
-                acked: 0,
-                behind: false,
-                detached: false,
-            }),
+            state: Mutex::new(PtyState { ring: Ring::default(), emitted: 0, acked: 0, behind: false, detached: false }),
             credit: Condvar::new(),
             supervised: None,
         }
@@ -158,11 +152,7 @@ impl LivePty {
             if self.exited.load(Ordering::Acquire) {
                 return false;
             }
-            state = self
-                .credit
-                .wait_timeout(state, FLOW_POLL)
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
+            state = self.credit.wait_timeout(state, FLOW_POLL).unwrap_or_else(|e| e.into_inner()).0;
         }
         true
     }
@@ -207,6 +197,9 @@ struct Inner {
     /// done, so no exit is announced for them. A window that finds them gone
     /// once a daemon answers again starts them over.
     closing: AtomicBool,
+    /// Where each terminal's process group is recorded while it has members,
+    /// so the next `crewd` can end what a crashed one left running.
+    registry: Option<Arc<crate::agent_groups::Registry>>,
 }
 
 #[derive(Clone)]
@@ -222,6 +215,15 @@ impl Default for PtyHost {
 
 impl PtyHost {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// Like `new`, recording every terminal's process group in `registry`.
+    pub fn with_registry(registry: Arc<crate::agent_groups::Registry>) -> Self {
+        Self::build(Some(registry))
+    }
+
+    fn build(registry: Option<Arc<crate::agent_groups::Registry>>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spawning: Mutex::new(()),
@@ -230,6 +232,7 @@ impl PtyHost {
                 next_stream: AtomicU32::new(1),
                 events: Mutex::new(None),
                 closing: AtomicBool::new(false),
+                registry,
             }),
         }
     }
@@ -245,56 +248,27 @@ impl PtyHost {
     fn insert(&self, id: String, live: Arc<LivePty>) {
         let stream_id = live.stream_id;
         let pid = live.pid;
-        let replaced = self
-            .inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone(), live);
+        let replaced = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), live);
         if let Some(prev) = replaced {
             eprintln!("[pty] {id}: pid {pid} replaced live pid {}; terminating it", prev.pid);
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
-        self.inner
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(stream_id, id);
+        self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).insert(stream_id, id);
     }
 
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
-        self.inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(id)
-            .cloned()
+        self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
 
     fn get_stream(&self, stream_id: u32) -> Option<Arc<LivePty>> {
-        let id = self
-            .inner
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&stream_id)
-            .cloned()?;
+        let id = self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).get(&stream_id).cloned()?;
         self.get(&id)
     }
 
     fn remove(&self, id: &str) -> Option<Arc<LivePty>> {
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(id)?;
-        self.inner
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&live.stream_id);
+        let live = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(id)?;
+        self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&live.stream_id);
         Some(live)
     }
 
@@ -305,11 +279,7 @@ impl PtyHost {
         }
         let live = sessions.remove(id)?;
         drop(sessions);
-        self.inner
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&live.stream_id);
+        self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&live.stream_id);
         Some(live)
     }
 
@@ -405,25 +375,13 @@ impl PtyHost {
         rows: u16,
         options: SpawnOptions,
     ) -> Result<u32, String> {
-        spawn_unix(
-            self,
-            id,
-            cwd,
-            command,
-            cols.max(2),
-            rows.max(2),
-            options.env,
-            options.supervised,
-            options.dark,
-        )
+        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2), options.env, options.supervised, options.dark)
     }
 
     /// Sends `signal` to the child's whole process group, so a server's
     /// workers stop and pause along with it.
     pub fn signal_group(&self, id: &str, signal: i32) -> Result<(), String> {
-        let live = self
-            .get(id)
-            .ok_or_else(|| "Process is not running".to_string())?;
+        let live = self.get(id).ok_or_else(|| "Process is not running".to_string())?;
         // Once reaped the kernel may hand this pid to another process.
         if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
             return Err("Process is not running".into());
@@ -435,38 +393,25 @@ impl PtyHost {
     }
 
     pub fn pid(&self, id: &str) -> Option<u32> {
-        self.get(id)
-            .filter(|live| !live.exited.load(Ordering::Acquire))
-            .map(|live| live.pid)
+        self.get(id).filter(|live| !live.exited.load(Ordering::Acquire)).map(|live| live.pid)
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
-        let live = self
-            .get(id)
-            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let live = self.get(id).ok_or_else(|| "Terminal is not running".to_string())?;
         write_live(&live, data)
     }
 
     pub fn write_stream(&self, stream_id: u32, data: &[u8]) -> Result<(), String> {
-        let live = self
-            .get_stream(stream_id)
-            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let live = self.get_stream(stream_id).ok_or_else(|| "Terminal is not running".to_string())?;
         write_live(&live, data)
     }
 
     pub fn session_of_stream(&self, stream_id: u32) -> Option<String> {
-        self.inner
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&stream_id)
-            .cloned()
+        self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).get(&stream_id).cloned()
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let live = self
-            .get(id)
-            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let live = self.get(id).ok_or_else(|| "Terminal is not running".to_string())?;
         resize_fd(live.master_fd, cols.max(2), rows.max(2))
     }
 
@@ -481,9 +426,7 @@ impl PtyHost {
     where
         F: FnOnce(&PtyAttached, u32, &[u8]),
     {
-        let live = self
-            .get(id)
-            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let live = self.get(id).ok_or_else(|| "Terminal is not running".to_string())?;
         let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
         let start = from.max(state.ring.start);
         if live.supervised.is_some() || state.detached {
@@ -497,10 +440,7 @@ impl PtyHost {
             live.credit.notify_all();
         }
         let skip = start.saturating_sub(state.ring.start).min(state.ring.buf.len() as u64) as usize;
-        let attached = PtyAttached {
-            start,
-            emitted: state.emitted,
-        };
+        let attached = PtyAttached { start, emitted: state.emitted };
         send(&attached, live.stream_id, &state.ring.buf[skip..]);
         drop(state);
         // The view missed bytes the ring let go. A TUI that draws by
@@ -602,10 +542,7 @@ impl Drop for PtyHost {
 
 fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
     let mut writer = live.writer.lock().unwrap_or_else(|e| e.into_inner());
-    writer
-        .write_all(data)
-        .and_then(|_| writer.flush())
-        .map_err(|e| format!("Failed to write to terminal: {e}"))
+    writer.write_all(data).and_then(|_| writer.flush()).map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -652,6 +589,12 @@ fn spawn_unix(
     };
     close_fd(slave);
     let pid = child.id();
+    // setsid() made the child its own group. Recorded before anything can fail,
+    // and dropped only once nobody is left in it.
+    let registry = host.inner.registry.clone();
+    if let Some(registry) = &registry {
+        registry.add(pid);
+    }
 
     let dups = dup_fd(master).and_then(|reader| match dup_fd(master) {
         Ok(writer) => Ok((reader, writer)),
@@ -669,6 +612,7 @@ fn spawn_unix(
             close_fd(master);
             thread::spawn(move || {
                 let _ = child.wait();
+                forget_group_when_empty(registry, pid);
             });
             return Err(err);
         }
@@ -723,6 +667,7 @@ fn spawn_unix(
     let wait_host = host.clone();
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        forget_group_when_empty(registry, pid);
         if sink.is_some() {
             // The child's last words are still in the master: the exit must
             // not reach the log, or a viewer, ahead of them.
@@ -786,6 +731,9 @@ fn pty_command(
         cmd.env("HOME", &home);
     }
     crate::child_env::scrub(&mut cmd);
+    // After the scrub: `crew` typed in a terminal reaches this daemon, not
+    // whichever one the installed app runs.
+    cmd.env("CREW_DATA_DIR", &crate::paths::layout().data);
     // The background as rxvt spells it (white 15, black 0). An OSC 11 reply has
     // to cross the network from the window, and CLIs that wait a few dozen ms
     // for it (Cursor waits 60) then guess dark without this.
@@ -839,18 +787,28 @@ fn working_dir(cwd: &str) -> PathBuf {
 
 fn default_shell() -> (String, Vec<String>) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let login = matches!(
-        std::path::Path::new(&shell)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some("zsh" | "bash" | "sh" | "fish")
-    );
+    let login =
+        matches!(std::path::Path::new(&shell).file_name().and_then(|name| name.to_str()), Some("zsh" | "bash" | "sh" | "fish"));
     let args = if login { vec!["-l".to_string()] } else { Vec::new() };
     (shell, args)
 }
 
 fn apply_path(cmd: &mut std::process::Command) {
     cmd.env("PATH", crate::shell_path::joined());
+}
+
+/// Drops a terminal's group from the registry once nobody is left in it. A
+/// member the leader left running is not killed here: the user may have
+/// meant it to outlive the shell. It stays listed, for a later sweep to end
+/// if `crewd` itself goes down first.
+fn forget_group_when_empty(registry: Option<Arc<crate::agent_groups::Registry>>, pid: u32) {
+    let Some(registry) = registry else { return };
+    thread::spawn(move || {
+        while unsafe { libc::kill(-(pid as i32), 0) } == 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+        registry.remove(pid);
+    });
 }
 
 /// The child was started with setsid(), so its pid is also its process group.
@@ -917,12 +875,7 @@ fn open_pty(cols: u16, rows: u16) -> Result<(i32, i32), String> {
 }
 
 fn resize_fd(fd: i32, cols: u16, rows: u16) -> Result<(), String> {
-    let size = libc::winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
+    let size = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
     if unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &size) } != 0 {
         return Err(os_err("Failed to resize terminal"));
     }
@@ -930,12 +883,7 @@ fn resize_fd(fd: i32, cols: u16, rows: u16) -> Result<(), String> {
 }
 
 fn size_fd(fd: i32) -> Option<(u16, u16)> {
-    let mut size = libc::winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
+    let mut size = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
     if fd < 0 || unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) } != 0 {
         return None;
     }
@@ -984,12 +932,7 @@ fn cloexec_above_stderr(limit: i32) {
     #[cfg(target_os = "linux")]
     unsafe {
         // Linux 5.11+. Older kernels answer ENOSYS or EINVAL and take the loop.
-        let all = libc::syscall(
-            libc::SYS_close_range,
-            3 as libc::c_uint,
-            libc::c_uint::MAX,
-            libc::CLOSE_RANGE_CLOEXEC,
-        );
+        let all = libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC);
         if all == 0 {
             return;
         }
@@ -1069,11 +1012,7 @@ fn wait_readable(fd: i32, timeout: Duration) -> bool {
     if timeout.is_zero() {
         return false;
     }
-    let mut pollfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
+    let mut pollfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
     let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
     unsafe { libc::poll(&mut pollfd, 1, ms) > 0 }
 }
@@ -1083,10 +1022,7 @@ mod tests {
     use super::*;
 
     fn marker_children(marker: &str) -> usize {
-        let out = std::process::Command::new("pgrep")
-            .args(["-f", marker])
-            .output()
-            .expect("pgrep failed");
+        let out = std::process::Command::new("pgrep").args(["-f", marker]).output().expect("pgrep failed");
         String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.is_empty()).count()
     }
 
@@ -1165,10 +1101,7 @@ mod tests {
     #[test]
     fn a_terminal_runs_on_once_its_window_goes() {
         let counter = std::env::temp_dir().join(format!("crew_pty_unwatched_{}", std::process::id()));
-        let script = format!(
-            "i=0; while true; do i=$((i+1)); echo $i > {}; printf '%01000d' 0; done",
-            counter.display()
-        );
+        let script = format!("i=0; while true; do i=$((i+1)); echo $i > {}; printf '%01000d' 0; done", counter.display());
         let host = PtyHost::new();
         let id = "session:unwatched".to_string();
         let command = vec!["/bin/sh".to_string(), "-c".to_string(), script];
@@ -1245,10 +1178,8 @@ mod tests {
     fn pty_child(script: &str) -> (i32, std::process::Child) {
         let (master, slave) = open_pty(80, 24).expect("open pty");
         let args = vec!["-c".to_string(), script.to_string()];
-        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave, None)
-            .expect("command")
-            .spawn()
-            .expect("spawn");
+        let child =
+            pty_command("/bin/sh", &args, std::path::Path::new("/"), slave, None).expect("command").spawn().expect("spawn");
         close_fd(slave);
         (master, child)
     }
@@ -1306,10 +1237,7 @@ mod tests {
                 .args(["-a", "-p", &pid.to_string(), "-d", "0-65535", "-F", "f"])
                 .output()
                 .expect("lsof");
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|line| line.strip_prefix('f')?.parse().ok())
-                .collect()
+            String::from_utf8_lossy(&out.stdout).lines().filter_map(|line| line.strip_prefix('f')?.parse().ok()).collect()
         }
     }
 
@@ -1371,9 +1299,7 @@ mod tests {
         }
         host.insert("t".into(), live.clone());
         let mut replay = Vec::new();
-        let attached = host
-            .attach("t", 0, |_, _, tail| replay.extend_from_slice(tail))
-            .unwrap();
+        let attached = host.attach("t", 0, |_, _, tail| replay.extend_from_slice(tail)).unwrap();
         assert_eq!(attached.start, 0);
         assert_eq!(attached.emitted, 64);
         assert_eq!(replay.as_slice(), &[7; 64]);
@@ -1395,9 +1321,7 @@ mod tests {
         }
         host.insert("t".into(), live.clone());
         let mut replay = Vec::new();
-        let attached = host
-            .attach("t", 0, |_, _, tail| replay.extend_from_slice(tail))
-            .unwrap();
+        let attached = host.attach("t", 0, |_, _, tail| replay.extend_from_slice(tail)).unwrap();
         assert_eq!(attached.start, 100);
         assert_eq!(attached.emitted, 164);
         assert_eq!(replay.len(), 64);
@@ -1437,9 +1361,7 @@ mod tests {
     }
 
     fn emitted(host: &PtyHost, id: &str) -> u64 {
-        host.get(id)
-            .map(|live| live.state.lock().unwrap_or_else(|e| e.into_inner()).emitted)
-            .unwrap_or(0)
+        host.get(id).map(|live| live.state.lock().unwrap_or_else(|e| e.into_inner()).emitted).unwrap_or(0)
     }
 
     fn flood(bytes: u64) -> Vec<String> {
@@ -1499,12 +1421,8 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         host.set_events(recorder.clone());
         let sink = Arc::new(Collect::default());
-        let options = SpawnOptions {
-            supervised: Some(sink.clone()),
-            ..SpawnOptions::default()
-        };
-        host.spawn_with("p".into(), "/".into(), flood(4_000_000), 80, 24, options)
-            .expect("spawn");
+        let options = SpawnOptions { supervised: Some(sink.clone()), ..SpawnOptions::default() };
+        host.spawn_with("p".into(), "/".into(), flood(4_000_000), 80, 24, options).expect("spawn");
         let deadline = Instant::now() + Duration::from_secs(20);
         while sink.exit.lock().unwrap().is_none() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
@@ -1520,13 +1438,7 @@ mod tests {
 
     #[test]
     fn a_supervised_viewer_that_falls_behind_resyncs_once_and_attach_resumes_it() {
-        let mut state = PtyState {
-            ring: Ring::default(),
-            emitted: VIEWER_HIGH,
-            acked: 0,
-            behind: false,
-            detached: false,
-        };
+        let mut state = PtyState { ring: Ring::default(), emitted: VIEWER_HIGH, acked: 0, behind: false, detached: false };
         assert_eq!(forward(&mut state), Forward::Send);
         state.emitted += 1;
         assert_eq!(forward(&mut state), Forward::Resync);
@@ -1534,10 +1446,7 @@ mod tests {
         assert_eq!(forward(&mut state), Forward::Drop, "only an attach clears it");
 
         let host = PtyHost::new();
-        let live = Arc::new(
-            LivePty::new(Box::new(std::io::sink()), -1, 1, 9)
-                .with_sink(Some(Arc::new(Collect::default()))),
-        );
+        let live = Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 1, 9).with_sink(Some(Arc::new(Collect::default()))));
         {
             let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ring.push(&[1; 64]);
@@ -1556,13 +1465,54 @@ mod tests {
     #[test]
     fn remove_if_pid_ignores_a_replaced_session() {
         let host = PtyHost::new();
-        host.insert(
-            "term".into(),
-            Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 42, 1)),
-        );
+        host.insert("term".into(), Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 42, 1)));
         assert!(host.remove_if_pid("term", 7).is_none());
         assert!(host.get("term").is_some());
         assert!(host.remove_if_pid("term", 42).is_some());
         assert!(host.get("term").is_none());
+    }
+
+    fn listed(path: &std::path::Path) -> Vec<i64> {
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap_or_default()).unwrap_or_default();
+        json["groups"].as_array().map(|groups| groups.iter().filter_map(|g| g["pgid"].as_i64()).collect()).unwrap_or_default()
+    }
+
+    /// A crashed `crewd` cannot end its terminals; the next one finds their
+    /// groups in the registry the agents share.
+    #[test]
+    fn a_terminal_is_on_the_registry_while_its_group_lives() {
+        let dir = std::env::temp_dir().join(format!("crew-pty-registry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("agent-groups.json");
+        let host = PtyHost::with_registry(Arc::new(crate::agent_groups::Registry::new(path.clone())));
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "exec sleep 300".to_string()];
+        host.spawn("t".into(), "/".into(), command, 80, 24, None).expect("spawn");
+        let pid = host.pid("t").expect("pid");
+
+        assert_eq!(listed(&path), vec![pid as i64]);
+        host.kill("t");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !listed(&path).is_empty() {
+            assert!(Instant::now() < deadline, "the group stayed on the list");
+            thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `crew` typed in a terminal finds this environment's daemon, whatever
+    /// the app that opened the window was started with.
+    #[test]
+    fn a_terminal_names_its_daemons_data_dir() {
+        let out = std::env::temp_dir().join(format!("crew-pty-datadir-{}", uuid::Uuid::new_v4()));
+        let host = PtyHost::new();
+        let script = format!("printf %s \"$CREW_DATA_DIR\" > {:?}", out.to_string_lossy());
+        host.spawn("t".into(), "/".into(), vec!["/bin/sh".into(), "-c".into(), script], 80, 24, None).expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::read_to_string(&out).map_or(true, |text| text.is_empty()) {
+            assert!(Instant::now() < deadline, "the terminal never wrote");
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), crate::paths::layout().data.to_string_lossy());
+        let _ = std::fs::remove_file(&out);
     }
 }

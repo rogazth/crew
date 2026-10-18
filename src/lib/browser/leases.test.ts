@@ -74,4 +74,16 @@ describe("lease store", () => {
     leases.set([], 9);
     expect([...leases.held()]).toEqual([]);
   });
+
+  it("keeps each daemon's leases apart and shows them all", () => {
+    const leases = createLeaseStore();
+    leases.set([lease("browser:a")], 5, "local");
+    leases.set([lease("browser:r")], 2, "devbox");
+    expect([...leases.held()].sort()).toEqual(["browser:a", "browser:r"]);
+    // One daemon's empty list does not unpin the other's tabs, and its numbers are its own.
+    leases.set([], 3, "devbox");
+    expect([...leases.held()]).toEqual(["browser:a"]);
+    leases.set([lease("browser:old")], 1, "devbox");
+    expect([...leases.held()]).toEqual(["browser:a"]);
+  });
 });

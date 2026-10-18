@@ -8,9 +8,8 @@ use crate::store::{now_millis, Store};
 
 pub fn list(store: &Store) -> Result<Vec<RemoteEnv>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, name, host, port, user, ssh FROM remotes ORDER BY created_at ASC, name ASC",
-        )?;
+        let mut stmt =
+            conn.prepare_cached("SELECT id, name, host, port, user, ssh FROM remotes ORDER BY created_at ASC, name ASC")?;
         let rows = stmt.query_map([], |row| {
             Ok(RemoteEnv {
                 id: row.get(0)?,
@@ -107,14 +106,7 @@ mod tests {
         assert!(list(&store).unwrap().is_empty());
         let saved = upsert(&store, env("100.1.1.1")).unwrap();
         assert!(!saved.id.is_empty());
-        let again = upsert(
-            &store,
-            RemoteEnv {
-                name: "  Falcon  ".into(),
-                ..saved.clone()
-            },
-        )
-        .unwrap();
+        let again = upsert(&store, RemoteEnv { name: "  Falcon  ".into(), ..saved.clone() }).unwrap();
         assert_eq!(again.name, "Falcon");
         let aliased = upsert(&store, RemoteEnv { ssh: " falcon-public ".into(), user: String::new(), ..again.clone() }).unwrap();
         assert_eq!(list(&store).unwrap()[0].ssh, "falcon-public");

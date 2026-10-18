@@ -25,26 +25,26 @@ use std::time::Duration;
 
 use crew_protocol::{
     ApprovalDecision, ApprovalResolution, BackgroundState, CommandEntry, ContextReading, HarnessEvent, McpState, SubagentState,
+    ToolDetail,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, driven, offers_fast, path_list, typed_by_user, Harness, Launch,
-    QuestionReply, Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, driven, offers_fast, path_list, typed_by_user, Harness, Launch, QuestionReply,
+    Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::command_sources::{codex_commands, codex_skills};
 use crate::mailbox;
-use crate::session;
 use crate::providers::codex::{
-    mcp_list_params, mcp_login_params, mcp_login_url, mcp_servers, mcp_startup,
-    approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
-    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, skills_reload_params, steer_params,
-    skills_input, spawned_threads, text_input, thread_id, thread_request, tool_call_id, tool_detail, tool_label,
-    tool_name, turn_end, turn_id, turn_start_input, unsupported_error, user_message_text, with_attached_paths,
-    ApprovalKind, CodexAsk, CodexCommand, CodexThread, TurnEnd,
+    approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params, is_tool_item,
+    item_files, mcp_list_params, mcp_login_params, mcp_login_url, mcp_servers, mcp_startup, plan_detail, questions_response,
+    rpc_error_message, skills_input, skills_list_params, skills_reload_params, spawned_threads, steer_params, text_input,
+    thread_id, thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_input,
+    unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk, CodexCommand, CodexThread, TurnEnd,
 };
-use crate::providers::string_field;
+use crate::providers::{clip, string_field};
+use crate::session;
 
 use super::Live;
 
@@ -117,6 +117,9 @@ struct Child {
     report: Option<String>,
     /// What it said before `call` was known, in order.
     held: Vec<(String, Value)>,
+    /// A `sendInput` the parent wrote to it, and what it sent: the turn that
+    /// starts next is that call's, its steps and its report.
+    next: Option<(String, Option<String>)>,
 }
 
 impl Child {
@@ -135,9 +138,20 @@ pub(super) struct ChildWork {
 
 /// A change to a child's entry in the background board.
 pub(super) enum ChildBoard {
-    Spawned { thread: String, call: String, label: String, nickname: Option<String>, model: Option<String>, effort: Option<String> },
+    Spawned {
+        thread: String,
+        call: String,
+        label: String,
+        nickname: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+    },
     State(String, BackgroundState),
-    Usage { thread: String, tokens: u64, window: Option<u64> },
+    Usage {
+        thread: String,
+        tokens: u64,
+        window: Option<u64>,
+    },
     Activity(String, String),
 }
 
@@ -242,10 +256,7 @@ impl TurnHost {
     /// the Claude path keeps its menu. A bot's process keeps nothing: its
     /// persona must not see the user's skills.
     fn codex_catalog(&self, session_id: &str, cwd: &str, entries: Vec<CommandEntry>) {
-        let bot = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .is_some_and(|session| session.kind == "bot");
+        let bot = session::get(&self.store, session_id.to_string()).ok().flatten().is_some_and(|session| session.kind == "bot");
         if bot {
             return;
         }
@@ -274,11 +285,7 @@ impl TurnHost {
         let text = if carries {
             crate::providers::with_files(params.text.trim(), &files)
         } else {
-            crate::providers::assemble(
-                String::new(),
-                history.as_deref(),
-                &with_attached_paths(params.text.trim(), &files),
-            )
+            crate::providers::assemble(String::new(), history.as_deref(), &with_attached_paths(params.text.trim(), &files))
         };
         // A fresh process was given the settings on its thread; a kept one is
         // told only what moved since, so what the user's own config says of
@@ -376,8 +383,7 @@ impl TurnHost {
             }
         };
         self.agents.kill(session_id);
-        self.lock()
-            .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx), applied))));
+        self.lock().insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx), applied))));
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
         self.background.touch(session_id, |board| board.launch(crate::store::now_millis()));
         None
@@ -504,7 +510,9 @@ impl TurnHost {
                 _ => None,
             };
             if let Some(thread_id) = thread_id {
-                if let Ok(answer) = host.codex_call(&session_id, "mcpServerStatus/list", mcp_list_params(&thread_id), CATALOG_TIMEOUT) {
+                if let Ok(answer) =
+                    host.codex_call(&session_id, "mcpServerStatus/list", mcp_list_params(&thread_id), CATALOG_TIMEOUT)
+                {
                     host.mcp_status.learn(&session_id, mcp_servers(&answer));
                 }
             }
@@ -523,7 +531,8 @@ impl TurnHost {
             _ => None,
         }
         .ok_or("Codex is not running. Send a message first, then sign in.")?;
-        let started = self.codex_call(session_id, "mcpServer/oauth/login", mcp_login_params(name, Some(&thread_id)), LOGIN_TIMEOUT)?;
+        let started =
+            self.codex_call(session_id, "mcpServer/oauth/login", mcp_login_params(name, Some(&thread_id)), LOGIN_TIMEOUT)?;
         mcp_login_url(&started).ok_or_else(|| "Codex gave no page to sign in on.".to_string())
     }
 
@@ -576,12 +585,7 @@ impl TurnHost {
         instructions: Option<&str>,
         overrides: Map<String, Value>,
     ) -> Result<bool, String> {
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::SessionProviderBound {
-                provider_session_id: thread_id.to_string(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: thread_id.to_string() });
         self.transcripts.apply(session_id, HarnessEvent::SessionStarted {});
         if self.stop_requested(session_id) {
             return Err("cancelled".into());
@@ -668,12 +672,9 @@ impl TurnHost {
             if !host.background.read(&session_id, |board| board.codex_running()).unwrap_or(false) {
                 continue;
             }
-            let Ok(listed) = host.codex_call(
-                &session_id,
-                "thread/backgroundTerminals/list",
-                json!({ "threadId": thread_id }),
-                STEER_TIMEOUT,
-            ) else {
+            let Ok(listed) =
+                host.codex_call(&session_id, "thread/backgroundTerminals/list", json!({ "threadId": thread_id }), STEER_TIMEOUT)
+            else {
                 continue;
             };
             let terminals = listed.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -761,25 +762,19 @@ impl TurnHost {
             live.next_id += 1;
             id
         };
-        self.agents
-            .write(session_id, &json!({ "id": id, "method": method, "params": params }).to_string())
+        self.agents.write(session_id, &json!({ "id": id, "method": method, "params": params }).to_string())
     }
 
     fn codex_notify(&self, session_id: &str, method: &str, params: Value) -> Result<(), String> {
-        self.agents
-            .write(session_id, &json!({ "method": method, "params": params }).to_string())
+        self.agents.write(session_id, &json!({ "method": method, "params": params }).to_string())
     }
 
     fn codex_reply(&self, session_id: &str, rpc_id: &Value, result: Value) {
-        let _ = self
-            .agents
-            .write(session_id, &json!({ "id": rpc_id, "result": result }).to_string());
+        let _ = self.agents.write(session_id, &json!({ "id": rpc_id, "result": result }).to_string());
     }
 
     fn codex_reply_error(&self, session_id: &str, rpc_id: &Value, error: Value) {
-        let _ = self
-            .agents
-            .write(session_id, &json!({ "id": rpc_id, "error": error }).to_string());
+        let _ = self.agents.write(session_id, &json!({ "id": rpc_id, "error": error }).to_string());
     }
 
     /// Stop a Codex turn: `turn/interrupt`, and the turn ends when Codex says
@@ -1028,24 +1023,11 @@ impl TurnHost {
             "title": title,
             "input": input,
         });
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::ApprovalRequested {
-                request_id: ui_id,
-                name,
-                title,
-                input: Some(input),
-            },
-        );
+        self.transcripts
+            .apply(session_id, HarnessEvent::ApprovalRequested { request_id: ui_id, name, title, input: Some(input) });
         self.child_asks(session_id, asked);
         let decision = rx.recv().unwrap_or(ApprovalResolution::Cancelled);
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::ApprovalResolved {
-                request_id: ui_id,
-                decision: decision.clone(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::ApprovalResolved { request_id: ui_id, decision: decision.clone() });
         let decided = match decision {
             ApprovalResolution::Cancelled => return,
             ApprovalResolution::Allow => ApprovalDecision::Allow,
@@ -1088,36 +1070,18 @@ impl TurnHost {
             .collect();
         self.transcripts.set_status(session_id, "needs-input", None);
         let asked = json!({ "request_id": ui_id, "kind": "question", "questions": shown });
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::QuestionRequested {
-                request_id: ui_id,
-                questions: shown,
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::QuestionRequested { request_id: ui_id, questions: shown });
         self.child_asks(session_id, asked);
         let reply = rx.recv().unwrap_or(QuestionReply::Cancelled);
         let answers = match reply {
             QuestionReply::Cancelled => {
-                self.transcripts.apply(
-                    session_id,
-                    HarnessEvent::QuestionResolved {
-                        request_id: ui_id,
-                        answers: None,
-                    },
-                );
+                self.transcripts.apply(session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: None });
                 return;
             }
             QuestionReply::Dismiss => None,
             QuestionReply::Answers(answers) => Some(answers),
         };
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::QuestionResolved {
-                request_id: ui_id,
-                answers: answers.clone(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: answers.clone() });
         self.transcripts.set_status(session_id, "working", None);
         self.codex_reply(session_id, &rpc_id, questions_response(&questions, answers.as_ref()));
     }
@@ -1216,8 +1180,8 @@ impl TurnHost {
             if let Some(turn) = turn {
                 // Until the current turn's id is known, only the turn that
                 // just ended is known not to be it.
-                let stale = live.last_turn.as_deref() == Some(turn)
-                    || live.turn_id.as_deref().is_some_and(|running| running != turn);
+                let stale =
+                    live.last_turn.as_deref() == Some(turn) || live.turn_id.as_deref().is_some_and(|running| running != turn);
                 if stale {
                     return;
                 }
@@ -1273,10 +1237,9 @@ impl TurnHost {
                     }
                 }
                 "item/agentMessage/delta" => {
-                    let (Some(item), Some(delta)) = (
-                        params.get("itemId").and_then(Value::as_str),
-                        params.get("delta").and_then(Value::as_str),
-                    ) else {
+                    let (Some(item), Some(delta)) =
+                        (params.get("itemId").and_then(Value::as_str), params.get("delta").and_then(Value::as_str))
+                    else {
                         return;
                     };
                     message_delta(&mut live.follow, item, delta, &mut events);
@@ -1292,16 +1255,16 @@ impl TurnHost {
                     if completed {
                         let mine = live.thread_id.clone().unwrap_or_default();
                         spawn_named(live, item, &mine, &mut work);
+                        input_sent(live, item);
                     }
                     // Every item: one starting says the model went on from a
                     // command still running, which puts that one in the background.
                     command = Some((item.clone(), method == "item/completed"));
                 }
                 "item/commandExecution/outputDelta" => {
-                    if let (Some(item), Some(delta)) = (
-                        params.get("itemId").and_then(Value::as_str),
-                        params.get("delta").and_then(Value::as_str),
-                    ) {
+                    if let (Some(item), Some(delta)) =
+                        (params.get("itemId").and_then(Value::as_str), params.get("delta").and_then(Value::as_str))
+                    {
                         self.background.touch(session_id, |board| {
                             board.codex_output(item, delta);
                             false
@@ -1322,12 +1285,7 @@ impl TurnHost {
                             detail: Some(detail),
                         });
                     } else {
-                        events.push(HarnessEvent::ToolUpdated {
-                            call_id,
-                            title: None,
-                            status: None,
-                            detail: Some(detail),
-                        });
+                        events.push(HarnessEvent::ToolUpdated { call_id, title: None, status: None, detail: Some(detail) });
                     }
                 }
                 "error" => {
@@ -1439,9 +1397,7 @@ fn codex_item(
             }
         }
         "contextCompaction" if completed => {
-            events.push(HarnessEvent::SessionNote {
-                message: "Context compacted".into(),
-            });
+            events.push(HarnessEvent::SessionNote { message: "Context compacted".into() });
         }
         _ => {
             let Some(row) = exec_item(item).filter(is_tool_item) else {
@@ -1522,7 +1478,8 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
     let Some(call) = call else {
         return;
     };
-    let label = exec_item(item).map(|row| tool_label(&row)).unwrap_or_else(|| "Subagent".into());
+    let row = exec_item(item);
+    let label = row.as_ref().map(tool_label).unwrap_or_else(|| "Subagent".into());
     let model = string_field(Some(item), "model").filter(|model| !model.is_empty());
     let effort = string_field(Some(item), "reasoningEffort").filter(|effort| !effort.is_empty());
     for thread in threads {
@@ -1536,6 +1493,28 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
         child.call = Some(call.clone());
         let nickname = child.nickname.clone();
         let held = std::mem::take(&mut child.held);
+        // The spawn names the thread, as a `sendInput` to it later does: the
+        // calls read as one agent's, each with its own steps and state.
+        if let Some(ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps, .. }) =
+            row.as_ref().filter(|_| string_field(Some(item), "id").as_deref() == Some(call.as_str())).and_then(tool_detail)
+        {
+            work.events.push(HarnessEvent::ToolUpdated {
+                call_id: call.clone(),
+                title: None,
+                status: None,
+                detail: Some(ToolDetail::Agent {
+                    description,
+                    agent_type,
+                    prompt,
+                    output,
+                    background,
+                    state,
+                    activity,
+                    steps,
+                    thread: Some(thread.clone()),
+                }),
+            });
+        }
         work.board.push(ChildBoard::Spawned {
             thread: thread.clone(),
             call: call.clone(),
@@ -1550,6 +1529,30 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
     }
 }
 
+/// A `sendInput` the parent wrote to agents it spawned: the turn it starts
+/// on each is that call's. One that lands in a turn still running steers it,
+/// and the turn stays the call's that started it.
+fn input_sent(live: &mut CodexLive, item: &Map<String, Value>) {
+    if string_field(Some(item), "type").as_deref() != Some("collabAgentToolCall")
+        || string_field(Some(item), "tool").as_deref() != Some("sendInput")
+        || string_field(Some(item), "status").as_deref() == Some("failed")
+    {
+        return;
+    }
+    let Some(call) = string_field(Some(item), "id") else {
+        return;
+    };
+    let prompt = string_field(Some(item), "prompt").filter(|prompt| !prompt.trim().is_empty());
+    let threads = item.get("receiverThreadIds").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+    for thread in threads {
+        if let Some(child) =
+            live.children.get_mut(thread).filter(|child| child.call.as_deref().is_some_and(|known| known != call))
+        {
+            child.next = Some((call.clone(), prompt.clone()));
+        }
+    }
+}
+
 /// What a child's notification adds to its call: steps, its state, its
 /// tokens. Until a spawn names the thread there is no call to add it to, and
 /// the notification is kept for then.
@@ -1558,12 +1561,17 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
     // starting) is neither.
     if !matches!(
         method,
-        "turn/started" | "turn/completed" | "item/started" | "item/completed" | "item/agentMessage/delta" | "thread/tokenUsage/updated"
+        "turn/started"
+            | "turn/completed"
+            | "item/started"
+            | "item/completed"
+            | "item/agentMessage/delta"
+            | "thread/tokenUsage/updated"
     ) {
         return;
     }
     let child = live.children.entry(thread.to_string()).or_default();
-    let Some(call) = child.call.clone() else {
+    let Some(mut call) = child.call.clone() else {
         if child.held.len() >= HELD_LIMIT {
             child.held.remove(0);
         }
@@ -1573,6 +1581,33 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
     let mut steps = Vec::new();
     let mut after = Vec::new();
     let mut spawned = None;
+    // The turn a `sendInput` started is that call's: it shows what it sent,
+    // and the steps and the report from here on. The call before keeps its own.
+    if method == "turn/started" {
+        if let Some((next, prompt)) = child.next.take() {
+            call = next;
+            child.call = Some(call.clone());
+            child.follow = Follow::default();
+            child.report = None;
+            let description = prompt.as_deref().map_or_else(|| "Subagent".to_string(), |prompt| clip(prompt, 72));
+            after.push(HarnessEvent::ToolUpdated {
+                call_id: call.clone(),
+                title: Some(description.clone()),
+                status: None,
+                detail: Some(ToolDetail::Agent {
+                    description,
+                    agent_type: None,
+                    prompt,
+                    output: None,
+                    background: Some(true),
+                    state: None,
+                    activity: None,
+                    steps: None,
+                    thread: Some(thread.to_string()),
+                }),
+            });
+        }
+    }
     match method {
         "turn/started" => {
             child.turn = params.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
@@ -1646,7 +1681,12 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
 }
 
 /// Where a subagent is and what it is on, as its call's row shows it.
-pub(super) fn subagent_updated(call: &str, state: Option<SubagentState>, activity: Option<String>, output: Option<String>) -> HarnessEvent {
+pub(super) fn subagent_updated(
+    call: &str,
+    state: Option<SubagentState>,
+    activity: Option<String>,
+    output: Option<String>,
+) -> HarnessEvent {
     HarnessEvent::SubagentUpdated { call_id: call.to_string(), state, activity, output, background: None }
 }
 
@@ -1670,7 +1710,9 @@ pub(super) fn subagent_updated(call: &str, state: Option<SubagentState>, activit
 /// an agent on another thread of the same connection (`child-thread-1`, turn
 /// `child-turn-1`) whose notifications come before the call names it and
 /// between the turn's own words; `SPAWNHOLD` keeps that agent's turn open until
-/// it is interrupted, and `SPAWNREQUEST` has it ask to run a command. It
+/// it is interrupted, `SPAWNREQUEST` has it ask to run a command, and
+/// `SPAWNAGAIN` has the model write to it once it ended (`send-1`), which
+/// runs a second turn on it (`child-turn-2`) that answers `two`. It
 /// answers `report: <last line>`, with ` + <steer>` for each steer it took.
 #[cfg(test)]
 pub(crate) fn fake_codex(dir: &std::path::Path) -> (String, std::path::PathBuf) {
@@ -1802,6 +1844,20 @@ def run(turn, text):
             child_item("completed", dict(echo, status="completed", exitCode=0, aggregatedOutput="one\n"))
             child_item("completed", {"type": "agentMessage", "id": said, "text": "one", "phase": "final_answer"})
             child_out("turn/completed", {"turn": {"id": CHILD_TURN, "status": "completed", "error": None}})
+            if "SPAWNAGAIN" in text:
+                # The model writes to the agent it spawned, which runs a turn
+                # of its own, as Codex 0.160 sent it: the call completes, then
+                # the agent's new turn starts.
+                again = {"type": "collabAgentToolCall", "id": "send-1", "tool": "sendInput", "status": "inProgress", "senderThreadId": state["thread"], "receiverThreadIds": [CHILD], "prompt": "Now reply with just the word two.", "model": None, "reasoningEffort": None, "agentsStates": {}}
+                item("started", again)
+                item("completed", dict(again, status="completed", agentsStates={CHILD: {"status": "completed", "message": "one"}}))
+                child_out("turn/started", {"turn": {"id": "child-turn-2", "status": "inProgress"}})
+                child_out("item/started", {"turnId": "child-turn-2", "item": {"type": "userMessage", "id": "child-asked-2", "clientId": None, "content": [{"type": "text", "text": again["prompt"], "text_elements": []}]}})
+                echo2 = dict(echo, id="child-exec-2", command="/bin/zsh -lc 'echo two'")
+                child_out("item/started", {"turnId": "child-turn-2", "item": echo2})
+                child_out("item/completed", {"turnId": "child-turn-2", "item": dict(echo2, status="completed", exitCode=0, aggregatedOutput="two\n")})
+                child_out("item/completed", {"turnId": "child-turn-2", "item": {"type": "agentMessage", "id": "msg_child_2", "text": "two", "phase": "final_answer"}})
+                child_out("turn/completed", {"turn": {"id": "child-turn-2", "status": "completed", "error": None}})
             # The parent's turn is not over because the agent's is.
             time.sleep(0.5)
         between.append(child_work)
@@ -2051,9 +2107,8 @@ mod catalog_tests {
     pub(super) fn codex_session(host: &TurnHost, kind: &str) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-codex-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
-        let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
-            .expect("workspace")
-            .id;
+        let workspace =
+            crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into()).expect("workspace").id;
         let session = crate::session::create(
             host.test_store(),
             workspace,
@@ -2196,7 +2251,10 @@ mod catalog_tests {
     fn a_skill_the_catalog_does_not_know_goes_as_a_dollar_name_alone() {
         let (host, session, log, _) = started_with("run /lint on src", None, Some(vec!["lint".into()]), Vec::new());
         wait_for(|| !host.is_running(&session));
-        assert_eq!(sent(&log, "turn/start")[0]["input"], json!([{ "type": "text", "text": "run $lint on src", "text_elements": [] }]));
+        assert_eq!(
+            sent(&log, "turn/start")[0]["input"],
+            json!([{ "type": "text", "text": "run $lint on src", "text_elements": [] }])
+        );
     }
 
     /// `/compact` is not a turn/start: Codex compacts the thread, streams it as
@@ -2269,7 +2327,9 @@ mod catalog_tests {
     fn the_servers_of_a_thread_are_read_when_it_opens_and_a_login_that_ran_out_is_told() {
         use crew_protocol::McpState::{Connected, NeedsAuth};
         let (host, session, log, _) = started("hello");
-        wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth) && mcp_state_of(&host, &session, "crew") == Some(Connected));
+        wait_for(|| {
+            mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth) && mcp_state_of(&host, &session, "crew") == Some(Connected)
+        });
         wait_for(|| !host.is_running(&session));
         let asked = sent(&log, "mcpServerStatus/list");
         assert_eq!(asked[0]["detail"], "toolsAndAuthOnly");
@@ -2304,8 +2364,13 @@ mod catalog_tests {
         wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth));
         // The reads the thread's opening asked for are over, or they would replace the error.
         wait_for(|| !host.is_running(&session) && !sent(&log, "mcpServerStatus/list").is_empty());
-        host.codex_mcp_notice(&session, "mcpServer/oauthLogin/completed", &json!({ "name": "sentry", "success": false, "error": "the browser closed" }));
-        let sentry = host.mcp_list(&session).expect("list").servers.into_iter().find(|server| server.name == "sentry").expect("sentry");
+        host.codex_mcp_notice(
+            &session,
+            "mcpServer/oauthLogin/completed",
+            &json!({ "name": "sentry", "success": false, "error": "the browser closed" }),
+        );
+        let sentry =
+            host.mcp_list(&session).expect("list").servers.into_iter().find(|server| server.name == "sentry").expect("sentry");
         assert_eq!((sentry.state, sentry.error.as_deref()), (NeedsAuth, Some("the browser closed")));
     }
 
@@ -2384,7 +2449,11 @@ mod catalog_tests {
         assert_eq!(sent(&log, "skills/list").last(), Some(&json!({ "cwds": [cwd], "forceReload": true })));
         assert_eq!(sent(&log, "config/mcpServer/reload").len(), 1);
         assert!(menu.entries.iter().any(|entry| entry.name == "review-pr" && entry.kind == "skill"), "{menu:?}");
-        assert!(said(&host, &session).contains("Reloaded skills and MCP servers: 4 commands, 1 skill."), "{}", said(&host, &session));
+        assert!(
+            said(&host, &session).contains("Reloaded skills and MCP servers: 4 commands, 1 skill."),
+            "{}",
+            said(&host, &session)
+        );
     }
 
     /// With no app server up, its thread reads the skills as it opens: a
@@ -2394,7 +2463,11 @@ mod catalog_tests {
         let host = TurnHost::test_new();
         let (session, _) = codex_session(&host, "terminal");
         host.commands_reload(&session).expect("reload");
-        assert!(said(&host, &session).contains("Codex reads its skills and servers when its thread opens"), "{}", said(&host, &session));
+        assert!(
+            said(&host, &session).contains("Codex reads its skills and servers when its thread opens"),
+            "{}",
+            said(&host, &session)
+        );
     }
 }
 
@@ -2449,6 +2522,57 @@ mod child_tests {
         assert_eq!(rows, [(BlockRole::Tool, "echo one".to_string()), (BlockRole::Assistant, "one".to_string())]);
         let call = steps[0].tool.as_ref().expect("its command");
         assert_eq!(call.status, ToolStatus::Completed);
+    }
+
+    /// A `sendInput` to an agent that ended runs a turn of its own on it: that
+    /// call shows what it sent, the new turn's steps and its report, and names
+    /// the agent's thread as the spawn does; the spawn keeps its own; the one
+    /// entry runs again and ends.
+    #[test]
+    fn writing_to_a_spawned_agent_again_is_a_call_of_its_own_with_its_steps_and_report() {
+        let (host, session, _log, _) = started("SPAWNAGAIN");
+        wait_for(|| !host.is_running(&session));
+        let calls: Vec<(String, String, ToolDetail)> = blocks(&host, &session)
+            .into_iter()
+            .filter_map(|block| block.tool)
+            .filter_map(|tool| tool.detail.map(|detail| (tool.call_id, tool.title, detail)))
+            .filter(|(_, _, detail)| matches!(detail, ToolDetail::Agent { .. }))
+            .collect();
+        let seen: Vec<_> = calls
+            .iter()
+            .map(|(call, title, detail)| {
+                let ToolDetail::Agent { prompt, state, output, steps, thread, .. } = detail else { unreachable!() };
+                let steps: Vec<(BlockRole, String)> =
+                    steps.clone().unwrap_or_default().into_iter().map(|step| (step.role, step.text)).collect();
+                (call.as_str(), title.as_str(), prompt.clone(), state.clone(), output.clone(), steps, thread.clone())
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "spawn-1",
+                    "Reply with just the word one.",
+                    Some("Reply with just the word one.".to_string()),
+                    Some(SubagentState::Done),
+                    Some("one".to_string()),
+                    vec![(BlockRole::Tool, "echo one".to_string()), (BlockRole::Assistant, "one".to_string())],
+                    Some(CHILD.to_string()),
+                ),
+                (
+                    "send-1",
+                    "Now reply with just the word two.",
+                    Some("Now reply with just the word two.".to_string()),
+                    Some(SubagentState::Done),
+                    Some("two".to_string()),
+                    vec![(BlockRole::Tool, "echo two".to_string()), (BlockRole::Assistant, "two".to_string())],
+                    Some(CHILD.to_string()),
+                ),
+            ]
+        );
+        let list = host.background_list(&session).commands;
+        assert_eq!(list.len(), 1, "one entry for the one agent");
+        assert_eq!((list[0].state, list[0].tool_call_id.as_deref()), (BackgroundState::Completed, Some("spawn-1")));
     }
 
     /// The agent has an entry of its own, running from its spawn to its own
@@ -2532,7 +2656,8 @@ mod child_tests {
         host.codex_notification(&session, "item/completed", &json!({ "threadId": "t1", "turnId": "x", "item": call }));
         let rows = blocks(&host, &session);
         assert_eq!(rows.len(), 1, "{rows:?}");
-        let Some(ToolDetail::Agent { steps: Some(steps), .. }) = rows[0].tool.as_ref().and_then(|tool| tool.detail.clone()) else {
+        let Some(ToolDetail::Agent { steps: Some(steps), .. }) = rows[0].tool.as_ref().and_then(|tool| tool.detail.clone())
+        else {
             panic!("{rows:?}");
         };
         assert_eq!(steps.iter().map(|step| step.text.as_str()).collect::<Vec<_>>(), ["hello"]);

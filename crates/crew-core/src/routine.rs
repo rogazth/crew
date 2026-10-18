@@ -54,9 +54,8 @@ fn row_to_routine(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Routin
 
 pub fn list_for_session(store: &Store, session_id: String) -> Result<Vec<Routine>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {ROUTINE_COLUMNS} FROM routines r WHERE r.session_id = ?1 ORDER BY r.created_at"
-        ))?;
+        let mut stmt = conn
+            .prepare_cached(&format!("SELECT {ROUTINE_COLUMNS} FROM routines r WHERE r.session_id = ?1 ORDER BY r.created_at"))?;
         let rows = stmt.query_map(params![session_id], |row| row_to_routine(row, 0))?;
         rows.collect()
     })
@@ -77,11 +76,7 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
             let routine = row_to_routine(row, 0)?;
             let session = row_to_session(row, ROUTINE_COLUMN_COUNT)?;
             let cwd = folder(session.worktree.as_deref(), row.get(ROUTINE_COLUMN_COUNT + SESSION_COLUMN_COUNT)?);
-            Ok(ScheduledRoutine {
-                routine,
-                session,
-                cwd,
-            })
+            Ok(ScheduledRoutine { routine, session, cwd })
         })?;
         rows.collect()
     })
@@ -154,8 +149,11 @@ pub fn disable(store: &Store, id: &str) -> Result<(), String> {
 /// Move a routine's next run and nothing else: a once routine whose bot was busy.
 pub fn reschedule(store: &Store, id: &str, next_run_at: i64) -> Result<(), String> {
     store.with(|conn| {
-        conn.prepare_cached("UPDATE routines SET next_run_at = ?2, updated_at = ?3 WHERE id = ?1")?
-            .execute(params![id, next_run_at, now_millis()])
+        conn.prepare_cached("UPDATE routines SET next_run_at = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![
+            id,
+            next_run_at,
+            now_millis()
+        ])
     })?;
     Ok(())
 }
@@ -185,13 +183,7 @@ pub fn record_run(
                  runs_json = ?4, updated_at = ?5
              WHERE id = ?1",
         )?
-        .execute(params![
-            id,
-            last_run_at,
-            next_run_at,
-            runs_json(&push_run(&runs, run.clone())),
-            now_millis()
-        ])
+        .execute(params![id, last_run_at, next_run_at, runs_json(&push_run(&runs, run.clone())), now_millis()])
     })?;
     Ok(())
 }
@@ -205,12 +197,9 @@ pub fn record_run(
 /// end of the history does not come back.
 pub fn finish_run(store: &Store, id: &str, run: &RoutineRun) -> Result<(), String> {
     store.with(|conn| {
-        let runs: Vec<RoutineRun> = read_runs(conn, id)?
-            .into_iter()
-            .map(|row| if row.id == run.id { run.clone() } else { row })
-            .collect();
-        conn.prepare_cached("UPDATE routines SET runs_json = ?2 WHERE id = ?1")?
-            .execute(params![id, runs_json(&runs)])
+        let runs: Vec<RoutineRun> =
+            read_runs(conn, id)?.into_iter().map(|row| if row.id == run.id { run.clone() } else { row }).collect();
+        conn.prepare_cached("UPDATE routines SET runs_json = ?2 WHERE id = ?1")?.execute(params![id, runs_json(&runs)])
     })?;
     Ok(())
 }
@@ -279,13 +268,7 @@ pub fn runs_json(runs: &[RoutineRun]) -> String {
 /// The hidden turn that wakes the bot. It says who is talking so the reply
 /// does not read the schedule back, and it allows silence: a routine that
 /// found nothing should say nothing.
-pub fn wake_prompt(
-    name: &str,
-    schedule: &Schedule,
-    trigger: RunTrigger,
-    prompt: &str,
-    by: Option<&str>,
-) -> String {
+pub fn wake_prompt(name: &str, schedule: &Schedule, trigger: RunTrigger, prompt: &str, by: Option<&str>) -> String {
     let when = match schedule {
         Schedule::Cron { expression } => format!("on the cron schedule {expression}"),
         Schedule::Once { at } => format!("once, at {}", crate::schedule::local_time(*at)),
@@ -298,9 +281,9 @@ pub fn wake_prompt(
         }
     };
     let cue = match trigger {
-        RunTrigger::Manual => format!(
-            "[routine] \"{name}\" was run on demand. The user pressed Run now in the app; it normally runs {when}."
-        ),
+        RunTrigger::Manual => {
+            format!("[routine] \"{name}\" was run on demand. The user pressed Run now in the app; it normally runs {when}.")
+        }
         RunTrigger::Schedule => {
             let whose = match by {
                 Some(by) => format!("a standing order {by} set up for you"),
@@ -331,8 +314,7 @@ mod tests {
     fn a_routine(store: &Store) -> Routine {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into())
-            .expect("workspace");
+        let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).expect("workspace");
         let bot = crate::session::create(
             store,
             workspace.id,
@@ -359,13 +341,7 @@ mod tests {
     }
 
     fn run(id: &str, status: RunStatus) -> RoutineRun {
-        RoutineRun {
-            id: id.into(),
-            started_at: 1,
-            finished_at: None,
-            status,
-            trigger: RunTrigger::Schedule,
-        }
+        RoutineRun { id: id.into(), started_at: 1, finished_at: None, status, trigger: RunTrigger::Schedule }
     }
 
     fn history(store: &Store, id: &str) -> Vec<RoutineRun> {
@@ -496,12 +472,7 @@ mod tests {
         std::fs::create_dir_all(&tree).expect("worktree");
         let tree = tree.to_string_lossy().into_owned();
         store
-            .with(|conn| {
-                conn.execute(
-                    "UPDATE sessions SET worktree = ?2 WHERE id = ?1",
-                    params![routine.session_id, tree],
-                )
-            })
+            .with(|conn| conn.execute("UPDATE sessions SET worktree = ?2 WHERE id = ?1", params![routine.session_id, tree]))
             .unwrap();
 
         assert_eq!(scheduled(&store, routine.id.clone()).unwrap().unwrap().cwd, tree);

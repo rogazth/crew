@@ -336,11 +336,9 @@ impl SessionTools {
 
     fn reach(&self, caller: &Caller, target: &Session, letter: bool) -> Result<(), String> {
         if caller.session_id() == Some(target.id.as_str()) {
-            return Err(
-                "That is you. Nothing writes to itself: carry on in this turn, or to come back to something later, \
+            return Err("That is you. Nothing writes to itself: carry on in this turn, or to come back to something later, \
                  save_routine with a once schedule."
-                    .into(),
-            );
+                .into());
         }
         if target.status == "exited" && (target.kind == "child" || !letter) {
             return Err(if target.kind == "child" {
@@ -454,8 +452,7 @@ impl SessionTools {
     }
 
     fn send(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
-        let to = text(args.get("to"))
-            .ok_or("to is required: an id from list_peers, or from the line a message arrived on")?;
+        let to = text(args.get("to")).ok_or("to is required: an id from list_peers, or from the line a message arrived on")?;
         let steer = args.get("steer").and_then(Value::as_bool).unwrap_or(false);
         let answers: Option<Vec<String>> = match args.get("answers") {
             None | Some(Value::Null) => None,
@@ -496,7 +493,10 @@ impl SessionTools {
             return self.answer(caller, &target, &request, body.as_deref(), answers);
         }
         let Some(body) = body else {
-            return Err(format!("{} is not waiting on a question, so there is nothing for answers to answer: send text.", target.name));
+            return Err(format!(
+                "{} is not waiting on a question, so there is nothing for answers to answer: send text.",
+                target.name
+            ));
         };
         // An independent session that has exited takes the letter as a turn
         // on the conversation it left (plan decision 14).
@@ -627,7 +627,10 @@ impl SessionTools {
         let map: HashMap<String, String> = questions.into_iter().zip(given).collect();
         self.turns.answer(&target.id, request_id, Some(map)).map_err(|error| {
             if error.contains("already answered") {
-                format!("{}'s question was already answered (the user may have answered it in Crew). Nothing was sent.", target.name)
+                format!(
+                    "{}'s question was already answered (the user may have answered it in Crew). Nothing was sent.",
+                    target.name
+                )
             } else {
                 format!("{}'s question could not be answered: {error}", target.name)
             }
@@ -636,7 +639,9 @@ impl SessionTools {
         let letter = mailbox::record_delivered(&self.store, &target.id, &caller.sender(), &said)?;
         let note = match caller {
             c if Self::woken_by_reports(c) => "It carries on with your answer. Its report wakes you when its turn ends.",
-            Caller::Terminal(_) => "It carries on with your answer. Nothing wakes you when it reports: check it with read_session.",
+            Caller::Terminal(_) => {
+                "It carries on with your answer. Nothing wakes you when it reports: check it with read_session."
+            }
             _ => "It carries on with your answer.",
         };
         Ok(json!({ "to": target.name, "id": target.id, "letter_id": letter.id, "delivery": "answered", "note": note }))
@@ -688,7 +693,10 @@ impl SessionTools {
                 .to_string();
             self.turns.respond(&target.id, request_id, decision).map_err(|error| {
                 if error.contains("already answered") {
-                    format!("{}'s approval was already answered (the user may have decided it in Crew). Nothing was decided.", target.name)
+                    format!(
+                        "{}'s approval was already answered (the user may have decided it in Crew). Nothing was decided.",
+                        target.name
+                    )
                 } else {
                     format!("{}'s approval could not be decided: {error}", target.name)
                 }
@@ -715,10 +723,9 @@ impl SessionTools {
             ));
         };
         // Who decided, in the session's own transcript, beside the card.
-        self.turns.transcripts().apply(
-            &target.id,
-            crew_protocol::HarnessEvent::SessionNote { message: format!("{by} {verb}: {title}") },
-        );
+        self.turns
+            .transcripts()
+            .apply(&target.id, crew_protocol::HarnessEvent::SessionNote { message: format!("{by} {verb}: {title}") });
         let said = format!("{}: {title}", if allow { "Allowed" } else { "Denied" });
         let letter = mailbox::record_delivered(&self.store, &target.id, &caller.sender(), &said)?;
         let mut out = json!({ "to": target.name, "id": target.id, "letter_id": letter.id, "delivery": "answered" });
@@ -754,20 +761,16 @@ impl SessionTools {
     fn start(&self, caller: &Caller, args: &Value, how: Start) -> Result<Value, String> {
         caller.workspace_id()?;
         if args.get("owner").is_some_and(|owner| !owner.is_null()) {
-            return Err(
-                "owner is gone. delegate hands a job to a subagent that reports to you; start_session starts a \
+            return Err("owner is gone. delegate hands a job to a subagent that reports to you; start_session starts a \
                  separate session the user can see and talk to, and reports to nobody."
-                    .into(),
-            );
+                .into());
         }
         self.depth_one(caller)?;
         let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
         if how == Start::Launch && (wait || args.get("timeout_s").is_some_and(|raw| !raw.is_null())) {
-            return Err(
-                "start_session does not wait: a separate session reports to nobody, so there is nothing to wait \
+            return Err("start_session does not wait: a separate session reports to nobody, so there is nothing to wait \
                  for. To get a job's answer back, use delegate with wait."
-                    .into(),
-            );
+                .into());
         }
         let timeout = wait_seconds(args)?;
         let tool = if how == Start::Delegate { "delegate" } else { "start_session" };
@@ -842,8 +845,8 @@ impl SessionTools {
         kept: &mut Option<String>,
     ) -> Result<(Session, Value), String> {
         let workspace = caller.workspace_id()?.to_string();
-        let prompt = text(args.get("prompt"))
-            .ok_or_else(|| "prompt is required: the session starts with nothing but it".to_string())?;
+        let prompt =
+            text(args.get("prompt")).ok_or_else(|| "prompt is required: the session starts with nothing but it".to_string())?;
         let provider = text(args.get("provider"))
             .or_else(|| caller.session().map(|me| me.provider.clone()))
             .unwrap_or_else(|| "claude".into());
@@ -883,10 +886,7 @@ impl SessionTools {
                     return Err(format!(
                         "You already have {LIVE_CAP} live subagents: {}. Stop one with stop_session first; one idle \
                          for {} minutes ends on its own.",
-                        live.iter()
-                            .map(|row| format!("{} {} ({})", row.name, row.id, row.status))
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                        live.iter().map(|row| format!("{} {} ({})", row.name, row.id, row.status)).collect::<Vec<_>>().join(", "),
                         Self::idle_limit().as_secs() / 60
                     ));
                 }
@@ -1240,9 +1240,9 @@ impl SessionTools {
             let branch = format!("crew/{}-{suffix}", branch_slug(name));
             return (self.make_worktree)(&folder, &branch).map(|tree| (Some(tree.path), true));
         }
-        let existing = crate::worktree::list(&folder).into_iter().find(|tree| {
-            tree.branch.as_deref() == Some(wanted.as_str()) || tree.path == wanted
-        });
+        let existing = crate::worktree::list(&folder)
+            .into_iter()
+            .find(|tree| tree.branch.as_deref() == Some(wanted.as_str()) || tree.path == wanted);
         match existing {
             Some(tree) if tree.main => Ok((None, false)),
             Some(tree) => Ok((Some(tree.path), false)),
@@ -1277,9 +1277,12 @@ impl SessionTools {
                 // Idle with a message on its way is a turn about to start:
                 // the drain at the end of the last one has not got to it yet,
                 // or has claimed it and not started the turn.
-                let queued = matches!(row.status.as_str(), "idle" | "error")
-                    && mailbox::undelivered_count(&self.store, &row.id)? > 0;
-                running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id) || self.turns.is_settling(&row.id) || queued;
+                let queued =
+                    matches!(row.status.as_str(), "idle" | "error") && mailbox::undelivered_count(&self.store, &row.id)? > 0;
+                running |= matches!(row.status.as_str(), "starting" | "working")
+                    || self.turns.is_running(&row.id)
+                    || self.turns.is_settling(&row.id)
+                    || queued;
                 rows.push(row);
             }
             if !news.is_empty() {
@@ -1320,7 +1323,8 @@ impl SessionTools {
     /// `start_session` waits with.
     #[cfg(test)]
     pub(crate) fn wait(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
-        let ids: Vec<String> = args["sessions"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        let ids: Vec<String> =
+            args["sessions"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         let timeout = args["timeout_s"].as_u64().unwrap_or(20);
         let mut targets = Vec::new();
         for id in &ids {
@@ -1347,22 +1351,15 @@ impl SessionTools {
         let id = text(args.get("session")).ok_or("session is required")?;
         let row = self.visible(caller, &id)?;
         let since = args.get("since").and_then(Value::as_i64).map(|n| n.max(0) as usize);
-        let budget = args
-            .get("max_bytes")
-            .and_then(Value::as_u64)
-            .map(|n| (n as usize).clamp(1, READ_MAX))
-            .unwrap_or(READ_DEFAULT);
+        let budget =
+            args.get("max_bytes").and_then(Value::as_u64).map(|n| (n as usize).clamp(1, READ_MAX)).unwrap_or(READ_DEFAULT);
         let tools = args.get("include_tools").and_then(Value::as_bool).unwrap_or(false);
         let blocks = self.blocks_of(&row)?;
         let total = blocks.len();
         let running = matches!(row.status.as_str(), "starting" | "working" | "needs-input");
         // A block still being written ends the read before it, so the next
         // read with this cursor reads it again, whole.
-        let settled = if running {
-            blocks.iter().position(open).unwrap_or(total)
-        } else {
-            total
-        };
+        let settled = if running { blocks.iter().position(open).unwrap_or(total) } else { total };
         let (start, end) = match since {
             Some(from) => {
                 let from = from.min(total);
@@ -1441,7 +1438,8 @@ impl SessionTools {
             also.push(json!({ "id": sub.id, "name": sub.name }));
         }
         if row.status == "exited" {
-            let mut out = json!({ "session": row.id, "status": "exited", "cursor": row.cursor, "note": "It had already exited." });
+            let mut out =
+                json!({ "session": row.id, "status": "exited", "cursor": row.cursor, "note": "It had already exited." });
             if !also.is_empty() {
                 out["also_stopped"] = json!(also);
             }
@@ -1507,9 +1505,9 @@ impl SessionTools {
     fn started_by(caller: &Caller, row: &Session) -> bool {
         match caller {
             Caller::User { .. } => true,
-            _ => caller.session_id().is_some_and(|me| {
-                row.parent_id.as_deref() == Some(me) || row.launched_by.as_deref() == Some(me)
-            }),
+            _ => caller
+                .session_id()
+                .is_some_and(|me| row.parent_id.as_deref() == Some(me) || row.launched_by.as_deref() == Some(me)),
         }
     }
 
@@ -1576,7 +1574,9 @@ impl SessionTools {
             if !std::path::Path::new(tree).is_dir() {
                 continue;
             }
-            if let Some(dirty) = crate::worktree::list(folder).into_iter().find(|t| t.path == tree).map(|t| t.dirty).filter(|dirty| *dirty > 0) {
+            if let Some(dirty) =
+                crate::worktree::list(folder).into_iter().find(|t| t.path == tree).map(|t| t.dirty).filter(|dirty| *dirty > 0)
+            {
                 return Err(format!(
                     "{} works in {tree}, which has {dirty} uncommitted change{}: nothing was deleted. Commit or discard \
                      them, then delete.",
@@ -1675,17 +1675,14 @@ fn describe_event(row: &Session, event: &Event, earlier: usize) -> Value {
         out["request"] = request.clone();
     }
     if earlier > 0 {
-        out["earlier_events"] = json!(format!(
-            "{earlier} earlier event(s) happened since your cursor; read_session shows them."
-        ));
+        out["earlier_events"] = json!(format!("{earlier} earlier event(s) happened since your cursor; read_session shows them."));
     }
     out
 }
 
 /// A block still being written: text streaming in, a tool not done.
 fn open(block: &Block) -> bool {
-    block.streaming == Some(true)
-        || block.tool.as_ref().is_some_and(|tool| tool.status == ToolStatus::Pending)
+    block.streaming == Some(true) || block.tool.as_ref().is_some_and(|tool| tool.status == ToolStatus::Pending)
 }
 
 /// One block as a numbered line of the transcript.
@@ -1774,11 +1771,7 @@ fn default_name(provider: &str, prompt: &str) -> String {
 
 /// A name as a branch's last segment.
 fn branch_slug(name: &str) -> String {
-    let slug: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
+    let slug: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     let slug = slug.split('-').filter(|part| !part.is_empty()).take(5).collect::<Vec<_>>().join("-");
     if slug.is_empty() {
         "session".into()
@@ -1987,7 +1980,9 @@ impl ToolFamily for SessionTools {
         // text (`prompts`); the user, calling from outside, gets the glossary
         // from `tools::instructions` and how the tools fit from here. What is
         // left for a session is its live subagents.
-        let mut note = if !matches!(caller, Caller::User { .. }) { String::new() } else { 
+        let mut note = if !matches!(caller, Caller::User { .. }) {
+            String::new()
+        } else {
             "delegate hands a job to a subagent (another provider CLI, in this checkout or a worktree of \
              its own): its report wakes a bot when its turn ends, or wait: true waits for it; read_session reads \
              what it did, send_message gives it more, stop_session ends it. start_session starts a separate session \
@@ -2387,9 +2382,7 @@ while True:
         std::fs::create_dir_all(&dir).expect("dir");
         let (fake, log) = fake_opencode(&dir);
         turns.override_binary("opencode", fake.clone());
-        let workspace = crate::workspace::create(turns.store(), "w".into(), dir.to_string_lossy().into())
-            .expect("workspace")
-            .id;
+        let workspace = crate::workspace::create(turns.store(), "w".into(), dir.to_string_lossy().into()).expect("workspace").id;
         let made = Arc::new(Mutex::new(Vec::new()));
         let seen = made.clone();
         let trees = dir.join("trees");
@@ -2407,6 +2400,7 @@ while True:
                     add: 0,
                     del: 0,
                     dirty: 0,
+                    locked: None,
                 })
             }),
         ));
@@ -2448,9 +2442,7 @@ while True:
         }
 
         fn start(&self, caller: &Caller, prompt: &str) -> String {
-            let out = self
-                .call(caller, "delegate", json!({ "provider": "opencode", "prompt": prompt }))
-                .expect("start");
+            let out = self.call(caller, "delegate", json!({ "provider": "opencode", "prompt": prompt })).expect("start");
             out["id"].as_str().expect("id").to_string()
         }
 
@@ -2534,7 +2526,10 @@ while True:
         for launch in &launches {
             let system = launch["system"].as_str().unwrap();
             assert!(system.contains("is delivered to"), "{system}");
-            assert!(system.contains("`crew_send_message`") && system.contains("you cannot delegate or start sessions"), "{system}");
+            assert!(
+                system.contains("`crew_send_message`") && system.contains("you cannot delegate or start sessions"),
+                "{system}"
+            );
         }
         let prompt = launches[0]["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("## Message\nFrom: shell (terminal") && !prompt.contains("Your final message"), "{prompt}");
@@ -2589,7 +2584,10 @@ while True:
         let out = w.tools.wait(&parent, &json!({ "sessions": [slow, quick], "timeout_s": 20 })).expect("wait");
         let ended: Vec<&str> = out["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
         assert_eq!(ended, vec![quick.as_str()], "{out}");
-        let next = w.tools.wait(&parent, &json!({ "sessions": [slow, quick], "timeout_s": 20, "cursors": out["cursors"] })).expect("wait");
+        let next = w
+            .tools
+            .wait(&parent, &json!({ "sessions": [slow, quick], "timeout_s": 20, "cursors": out["cursors"] }))
+            .expect("wait");
         let ended: Vec<&str> = next["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
         assert_eq!(ended, vec![slow.as_str()], "{next}");
     }
@@ -2786,8 +2784,15 @@ while True:
         let (id, log) = w.codex(&parent, "one", Some("ask"));
         w.wait(&parent, &id, json!({}));
         let row = w.settle(&id);
-        session::set_options(w.turns.store(), id.clone(), "gpt-5.6-sol".into(), "high".into(), row.service_tier.clone(), "full".into())
-            .expect("options");
+        session::set_options(
+            w.turns.store(),
+            id.clone(),
+            "gpt-5.6-sol".into(),
+            "high".into(),
+            row.service_tier.clone(),
+            "full".into(),
+        )
+        .expect("options");
 
         w.turns
             .start_by_user(TurnStart {
@@ -2967,9 +2972,7 @@ while True:
         std::fs::write(w.dir.join("late-interrupt"), "20").expect("late");
         w.turns.stop(&id).expect("stop");
         w.settle(&id);
-        until("the hung process went", || {
-            w.turns.test_agents().running().is_empty() && w.turns.idle_since(&id).is_none()
-        });
+        until("the hung process went", || w.turns.test_agents().running().is_empty() && w.turns.idle_since(&id).is_none());
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
         let mut out = w.wait(&parent, &id, json!({}));
@@ -3146,9 +3149,18 @@ time.sleep(600)
         let heard = hear_commands(&w);
         w.turns.override_binary("claude", fake_menu_claude(&w.dir));
         let make = |name: &str| {
-            session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), name.into(), "claude".into(), String::new(), String::new(), "ask".into())
-                .expect("session")
-                .id
+            session::create(
+                w.turns.store(),
+                w.workspace.clone(),
+                "terminal".into(),
+                name.into(),
+                "claude".into(),
+                String::new(),
+                String::new(),
+                "ask".into(),
+            )
+            .expect("session")
+            .id
         };
         let (one, two) = (make("one"), make("two"));
 
@@ -3162,10 +3174,7 @@ time.sleep(600)
         assert_eq!(launches.len(), 1, "{launches:?}");
         let argv: Vec<_> = launches[0]["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(argv.contains(&"--setting-sources=user,project,local") && argv.contains(&"--strict-mcp-config"), "{argv:?}");
-        assert_eq!(
-            std::fs::canonicalize(launches[0]["cwd"].as_str().unwrap()).unwrap(),
-            std::fs::canonicalize(&w.dir).unwrap()
-        );
+        assert_eq!(std::fs::canonicalize(launches[0]["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&w.dir).unwrap());
         let heard = heard.lock().unwrap();
         assert_eq!(heard.len(), 1, "{heard:?}");
         assert_eq!(heard[0].session_id, one);
@@ -3178,9 +3187,18 @@ time.sleep(600)
     fn a_claude_that_cannot_be_asked_leaves_the_menu_to_crews_actions() {
         let w = world();
         w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "claude".into(), String::new(), String::new(), "ask".into())
-            .expect("session")
-            .id;
+        let id = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "terminal".into(),
+            "x".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("session")
+        .id;
         let menu = w.turns.commands_list(&id).expect("menu");
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
         assert!(!w.turns.commands().holds("claude", &w.dir.to_string_lossy()));
@@ -3195,7 +3213,8 @@ time.sleep(600)
         let mine = users_claude(&w);
         w.type_with(&mine, "/context", Some("context"), &[], None, None);
         assert_eq!(w.settle(&mine.id).status, "done");
-        let note = w.blocks(&mine.id).into_iter().find(|block| block.text == "Context Usage\n12k / 200k tokens").expect("no note");
+        let note =
+            w.blocks(&mine.id).into_iter().find(|block| block.text == "Context Usage\n12k / 200k tokens").expect("no note");
         assert_eq!(note.role, BlockRole::System);
         w.turns.release(&mine.id);
     }
@@ -3245,7 +3264,10 @@ time.sleep(600)
         let menu = w.turns.commands_reload(&mine.id).expect("reload");
         assert_eq!(provider_entries(&menu), [skill("prototype"), command("compact"), skill("fresh")]);
         assert_eq!(provider_entries(&w.turns.commands_list(&mine.id).expect("menu")), provider_entries(&menu));
-        assert_eq!(w.claude_control().iter().map(|line| line.trim_end()).collect::<Vec<_>>(), ["reload_plugins", "reload_skills"]);
+        assert_eq!(
+            w.claude_control().iter().map(|line| line.trim_end()).collect::<Vec<_>>(),
+            ["reload_plugins", "reload_skills"]
+        );
         assert_eq!(provider_entries(&heard.lock().unwrap().last().expect("a push").catalog), provider_entries(&menu));
         assert!(
             says(&w, &mine.id, "Reloaded plugins and skills: 1 command, 2 skills."),
@@ -3292,11 +3314,16 @@ time.sleep(600)
         assert_eq!(states, [("docs", Connected), ("sentry", NeedsAuth), ("broken", Failed), ("late", Connected)]);
         assert_eq!(
             list.servers[1].sign_in,
-            Some(crew_protocol::McpSignIn::Terminal { command: vec!["claude".into(), "mcp".into(), "login".into(), "sentry".into()] })
+            Some(crew_protocol::McpSignIn::Terminal {
+                command: vec!["claude".into(), "mcp".into(), "login".into(), "sentry".into()]
+            })
         );
         assert_eq!(list.servers[2].error.as_deref(), Some("ENOENT: no such file or directory, posix_spawn '/nonexistent/bin'"));
         let pushed = serde_json::to_string(&*heard.lock().unwrap()).expect("json");
-        assert!(pushed.contains("needs_auth") && !pushed.contains("secret-key") && !pushed.contains("https://docs.example"), "{pushed}");
+        assert!(
+            pushed.contains("needs_auth") && !pushed.contains("secret-key") && !pushed.contains("https://docs.example"),
+            "{pushed}"
+        );
         assert_eq!(mcp_asks(&w), 3, "asked until nothing was left connecting");
         w.turns.release(&mine.id);
     }
@@ -3401,7 +3428,9 @@ time.sleep(600)
             w.turns.mcp_login(&mine.id, "sentry").expect("login"),
             crew_protocol::McpSignIn::Url { url: "https://auth.example/authorize?server=sentry".into() }
         );
-        until("connected once the redirect is taken", || mcp_named(&w, &mine.id, "sentry").is_some_and(|server| server.state == Connected));
+        until("connected once the redirect is taken", || {
+            mcp_named(&w, &mine.id, "sentry").is_some_and(|server| server.state == Connected)
+        });
         assert!(w.turns.mcp_login(&mine.id, "crew").expect_err("login").contains("no sign-in"));
         assert!(w.turns.mcp_login(&mine.id, "nothing").is_err());
         let code = w.turns.mcp_login(&mine.id, "codes").expect_err("a code");
@@ -3442,9 +3471,18 @@ time.sleep(600)
     #[test]
     fn cursor_does_not_report_its_servers() {
         let w = world();
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "cursor".into(), String::new(), String::new(), "ask".into())
-            .expect("session")
-            .id;
+        let id = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "terminal".into(),
+            "x".into(),
+            "cursor".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("session")
+        .id;
         assert_eq!(w.turns.mcp_list(&id).expect("list"), crew_protocol::McpStatus { servers: Vec::new(), reported: false });
         assert!(w.turns.mcp_login(&id, "x").expect_err("login").contains("does not report"));
         assert!(w.turns.mcp_reconnect(&id, "x").expect_err("reconnect").contains("does not report"));
@@ -3472,9 +3510,18 @@ time.sleep(600)
     fn a_reload_with_no_claude_process_reads_the_folder_again_past_a_fresh_menu() {
         let w = world();
         w.turns.override_binary("claude", fake_menu_claude(&w.dir));
-        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "one".into(), "claude".into(), String::new(), String::new(), "ask".into())
-            .expect("session")
-            .id;
+        let id = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "terminal".into(),
+            "one".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("session")
+        .id;
         w.turns.commands_list(&id).expect("menu");
         w.turns.commands_list(&id).expect("menu");
         assert_eq!(launched(&w.dir.join("menu-launch.log")).len(), 1, "a fresh menu was read again");
@@ -3493,17 +3540,35 @@ time.sleep(600)
     fn a_reload_of_a_bot_or_a_cli_with_no_listing_starts_nothing_and_says_when_it_reads() {
         let w = world();
         w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
-        let bot = session::create(w.turns.store(), w.workspace.clone(), "bot".into(), "helper".into(), "claude".into(), String::new(), String::new(), "ask".into())
-            .expect("bot")
-            .id;
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "helper".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("bot")
+        .id;
         let menu = w.turns.commands_reload(&bot).expect("reload");
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
         assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
 
         for (provider, head) in [("cursor", "Cursor reads")] {
-            let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), provider.into(), String::new(), String::new(), "ask".into())
-                .expect("session")
-                .id;
+            let id = session::create(
+                w.turns.store(),
+                w.workspace.clone(),
+                "terminal".into(),
+                "x".into(),
+                provider.into(),
+                String::new(),
+                String::new(),
+                "ask".into(),
+            )
+            .expect("session")
+            .id;
             w.turns.commands_reload(&id).expect("reload");
             let said = w.blocks(&id).into_iter().map(|block| block.text).collect::<Vec<_>>();
             assert_eq!(said, [format!("{head} its commands and skills again when the session restarts. Use /restart.")]);
@@ -3601,7 +3666,10 @@ time.sleep(600)
         assert!(list.live && !list.waiting, "{list:?}");
         assert_eq!(list.commands[0].state, BackgroundState::Running);
         std::thread::sleep(Duration::from_millis(5));
-        assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(), "a pinned process was let go");
+        assert!(
+            w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(),
+            "a pinned process was let go"
+        );
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
@@ -3818,12 +3886,21 @@ time.sleep(600)
         let crew = &started[0]["config"]["mcp_servers"]["crew"];
         assert_eq!(crew["args"], json!(["--mcp"]), "{crew}");
         assert!(crew["env"]["CREW_TOKEN"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
-        assert_eq!((crew["tool_timeout_sec"].clone(), crew["default_tools_approval_mode"].clone()), (json!(3900), json!("approve")));
+        assert_eq!(
+            (crew["tool_timeout_sec"].clone(), crew["default_tools_approval_mode"].clone()),
+            (json!(3900), json!("approve"))
+        );
         assert_eq!(started[0]["model"], "gpt-5.6-luna");
-        assert_eq!((started[0]["approvalPolicy"].clone(), started[0]["sandbox"].clone()), (json!("never"), json!("danger-full-access")));
+        assert_eq!(
+            (started[0]["approvalPolicy"].clone(), started[0]["sandbox"].clone()),
+            (json!("never"), json!("danger-full-access"))
+        );
         let turn = &sent(&log, "turn/start")[0];
         let first = turn["input"][0]["text"].as_str().unwrap();
-        assert!(first.ends_with("remember 4817") && !first.contains("Your final message"), "the persona is in the message: {turn}");
+        assert!(
+            first.ends_with("remember 4817") && !first.contains("Your final message"),
+            "the persona is in the message: {turn}"
+        );
         let context = turn["additionalContext"]["crew"]["value"].as_str().unwrap_or_default();
         assert!(context.contains("is delivered to"), "{context}");
         assert!(context.contains("`mcp__crew__send_message`") && !context.contains("find_tool"), "{context}");
@@ -3915,7 +3992,10 @@ time.sleep(600)
         }
         assert_eq!(turns[1]["model"], "gpt-5.6-sol");
         assert_eq!(turns[1]["effort"], "high");
-        assert_eq!((turns[1]["approvalPolicy"].clone(), turns[1]["sandboxPolicy"].clone()), (json!("never"), json!({ "type": "dangerFullAccess" })));
+        assert_eq!(
+            (turns[1]["approvalPolicy"].clone(), turns[1]["sandboxPolicy"].clone()),
+            (json!("never"), json!({ "type": "dangerFullAccess" }))
+        );
         assert_eq!(turns[1]["approvalsReviewer"], "user");
         assert!(turns[1].get("cwd").is_none(), "{}", turns[1]);
     }
@@ -4156,7 +4236,10 @@ time.sleep(600)
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: acceptForSession", "{done}");
         let started = &sent(&log, "thread/start")[0];
-        assert_eq!((started["approvalPolicy"].clone(), started["sandbox"].clone()), (json!("on-request"), json!("workspace-write")));
+        assert_eq!(
+            (started["approvalPolicy"].clone(), started["sandbox"].clone()),
+            (json!("on-request"), json!("workspace-write"))
+        );
     }
 
     #[test]
@@ -4205,7 +4288,11 @@ time.sleep(600)
         let parent = w.session("terminal", "shell", "full");
         let (id, _) = w.codex(&parent, "FAIL", None);
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!((out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()), (json!("error"), json!("boom")), "{out}");
+        assert_eq!(
+            (out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()),
+            (json!("error"), json!("boom")),
+            "{out}"
+        );
     }
 
     impl World {
@@ -4258,7 +4345,10 @@ time.sleep(600)
         assert!(token["value"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
         let first = sent(&log, "session/prompt")[0]["prompt"][0]["text"].as_str().unwrap().to_string();
         assert!(first.contains("is delivered to"), "the persona is in the message: {first}");
-        assert!(first.contains("the MCP server `crew`") && first.contains("`send_message`"), "the MCP tools, not the crew CLI: {first}");
+        assert!(
+            first.contains("the MCP server `crew`") && first.contains("`send_message`"),
+            "the MCP tools, not the crew CLI: {first}"
+        );
         assert!(!first.contains("find_tool") && first.contains("you cannot delegate or start sessions"), "{first}");
         assert!(first.trim_end().ends_with("remember 4817"), "{first}");
 
@@ -4310,13 +4400,21 @@ time.sleep(600)
         let asked = w.wait(&parent, &id, json!({}));
         assert_eq!(asked["sessions"][0]["event"], "needs-input", "{asked}");
         let request = &asked["sessions"][0]["request"];
-        assert_eq!((request["kind"].clone(), request["tool"].clone(), request["title"].clone()), (json!("approval"), json!("bash"), json!("touch asked.txt")), "{request}");
+        assert_eq!(
+            (request["kind"].clone(), request["tool"].clone(), request["title"].clone()),
+            (json!("approval"), json!("bash"), json!("touch asked.txt")),
+            "{request}"
+        );
         assert_eq!(request["input"]["reason"], "Shell allowlist is empty", "{request}");
         assert_eq!(w.row(&id).status, "needs-input");
         w.turns.respond(&id, request["request_id"].as_u64().unwrap(), ApprovalDecision::Always).expect("respond");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: allow-once", "{done}");
-        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--disable-codebase-ref", "acp"]), "ask runs without --force");
+        assert_eq!(
+            launches_of(&log)[0],
+            json!(["--model", "composer-2.5", "--disable-codebase-ref", "acp"]),
+            "ask runs without --force"
+        );
         let answered: Vec<Value> = std::fs::read_to_string(&log)
             .unwrap()
             .lines()
@@ -4385,7 +4483,11 @@ time.sleep(600)
         let parent = w.session("terminal", "shell", "full");
         let (id, _) = w.cursor(&parent, "FAIL", None);
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!((out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()), (json!("error"), json!("boom")), "{out}");
+        assert_eq!(
+            (out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()),
+            (json!("error"), json!("boom")),
+            "{out}"
+        );
     }
 
     /// A child from before ACP: migration 27 dropped the `-p` chat it cannot
@@ -4447,7 +4549,11 @@ time.sleep(600)
     }
 
     /// Until the session's tray lists `count` commands, and that list.
-    fn until_background(w: &World, id: &str, check: impl Fn(&crew_protocol::BackgroundList) -> bool) -> crew_protocol::BackgroundList {
+    fn until_background(
+        w: &World,
+        id: &str,
+        check: impl Fn(&crew_protocol::BackgroundList) -> bool,
+    ) -> crew_protocol::BackgroundList {
         for _ in 0..400 {
             let list = w.turns.background_list(id);
             if check(&list) {
@@ -4462,11 +4568,8 @@ time.sleep(600)
     fn agent_steps(w: &World, id: &str) -> Vec<(BlockRole, String)> {
         use crew_protocol::ToolDetail;
         let (blocks, _) = w.turns.transcripts().since(id, 0);
-        let call = blocks
-            .iter()
-            .filter_map(|block| block.tool.as_ref())
-            .find(|tool| tool.name == "Agent")
-            .expect("the Agent call");
+        let call =
+            blocks.iter().filter_map(|block| block.tool.as_ref()).find(|tool| tool.name == "Agent").expect("the Agent call");
         let Some(ToolDetail::Agent { steps: Some(steps), .. }) = &call.detail else {
             panic!("the Agent call has no steps: {call:?}");
         };
@@ -4517,7 +4620,10 @@ time.sleep(600)
         let id = started["id"].as_str().unwrap().to_string();
         let list = until_background(&w, &id, |list| list.commands.first().is_some_and(|row| row.tokens.is_some()));
         let row = &list.commands[0];
-        assert_eq!((row.state, row.foreground, row.stoppable, row.stop_note.as_deref()), (BackgroundState::Running, Some(true), Some(true), None));
+        assert_eq!(
+            (row.state, row.foreground, row.stoppable, row.stop_note.as_deref()),
+            (BackgroundState::Running, Some(true), Some(true), None)
+        );
         assert!(!list.waiting, "the turn is not held on it: it is running");
         w.turns.background_stop(&id, "ag1").expect("stop");
         let out = wait_ended(&w, &parent, &id);
@@ -4593,7 +4699,9 @@ time.sleep(600)
         let out = w.wait(&parent, &id, json!({}));
         assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 0.5 + the background command finished", "{out}");
         w.settle(&id);
-        let one = until_background(&w, &id, |list| !list.waiting && list.commands.iter().all(|row| row.state != BackgroundState::Running));
+        let one = until_background(&w, &id, |list| {
+            !list.waiting && list.commands.iter().all(|row| row.state != BackgroundState::Running)
+        });
         assert_eq!((one.commands.len(), one.commands[0].state), (1, BackgroundState::Completed));
         assert!(w.turns.idle_since(&id).is_some(), "the process was not kept");
 
@@ -4719,9 +4827,7 @@ time.sleep(600)
         let applied = w.turns.test_capture();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w
-            .call(&parent, "delegate", json!({ "provider": "claude", "prompt": "SUBAGENT TWICE" }))
-            .expect("start");
+        let started = w.call(&parent, "delegate", json!({ "provider": "claude", "prompt": "SUBAGENT TWICE" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         w.wait(&parent, &id, json!({}));
         w.settle(&id);
@@ -4795,7 +4901,10 @@ time.sleep(600)
         w.turns.release(&id);
         assert!(!w.turns.background_list(&id).live);
         let sent = std::fs::read_to_string(log).unwrap();
-        assert!(sent.contains(r#""method": "thread/backgroundTerminals/terminate", "params": {"processId": "4242", "threadId""#), "{sent}");
+        assert!(
+            sent.contains(r#""method": "thread/backgroundTerminals/terminate", "params": {"processId": "4242", "threadId""#),
+            "{sent}"
+        );
     }
 
     /// A child whose turn ended with nothing pinning it is let go once it has
@@ -5033,10 +5142,18 @@ time.sleep(600)
         // stranger's peers, writable, and the parent's own is too.
         let listed = w.call(&stranger, "list_peers", json!({})).expect("list");
         let seen = listed.as_array().unwrap().iter().find(|row| row["id"] == id).expect("listed to a stranger");
-        assert_eq!((seen["parent"].clone(), seen["write"].clone()), (json!("mine (terminal ".to_string() + parent.session_id().unwrap() + ")"), json!(true)), "{seen}");
+        assert_eq!(
+            (seen["parent"].clone(), seen["write"].clone()),
+            (json!("mine (terminal ".to_string() + parent.session_id().unwrap() + ")"), json!(true)),
+            "{seen}"
+        );
         let mine = w.call(&parent, "list_peers", json!({})).expect("list");
         let row = mine.as_array().unwrap().iter().find(|row| row["id"] == id).expect("its child");
-        assert_eq!((row["kind"].clone(), row["parent"].clone(), row["write"].clone()), (json!("session"), json!("you"), json!(true)), "{row}");
+        assert_eq!(
+            (row["kind"].clone(), row["parent"].clone(), row["write"].clone()),
+            (json!("session"), json!("you"), json!(true)),
+            "{row}"
+        );
         w.settle(&id);
     }
 
@@ -5050,7 +5167,8 @@ time.sleep(600)
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
         let listed = toolbox.visible_names(CallerKind::Child);
-        let gone = ["read_session", "stop_session", "create_bot", "delegate", "start_session", "start_sessions", "update_session"];
+        let gone =
+            ["read_session", "stop_session", "create_bot", "delegate", "start_session", "start_sessions", "update_session"];
         for name in gone.iter().chain(crate::tools::REMOVED_TOOLS) {
             assert!(!listed.contains(name), "a child is listed {name}");
         }
@@ -5107,13 +5225,25 @@ time.sleep(600)
         assert!(told.contains(GLOSSARY), "{told}");
         let user = crate::tools::instructions(&toolbox, &Caller::User { workspace_id: None });
         assert_eq!(user.matches(GLOSSARY).count(), 1, "{user}");
-        for word in ["A bot is", "A session is", "A subagent is", "independent one", "A message is", "A report is", "A subagent works for the session that started it"] {
+        for word in [
+            "A bot is",
+            "A session is",
+            "A subagent is",
+            "independent one",
+            "A message is",
+            "A report is",
+            "A subagent works for the session that started it",
+        ] {
             assert!(GLOSSARY.contains(word), "{word}: {GLOSSARY}");
         }
         for name in ["delegate", "start_session"] {
             let tool = catalog().into_iter().find(|tool| tool.name == name).unwrap();
             assert!(!tool.description.contains("owner"), "{name}: {}", tool.description);
-            assert!(tool.description.contains("subagent") || tool.description.contains("separate session"), "{name}: {}", tool.description);
+            assert!(
+                tool.description.contains("subagent") || tool.description.contains("separate session"),
+                "{name}: {}",
+                tool.description
+            );
         }
         let start = catalog().into_iter().find(|tool| tool.name == "start_session").unwrap();
         assert!(start.description.contains("Do not use it just because the user said \"subagent\""), "{}", start.description);
@@ -5173,7 +5303,8 @@ time.sleep(600)
         let trusted = w.session("terminal", "trusted", "full");
         let inherits = w.start(&trusted, "y");
         assert_eq!(w.row(&inherits).autonomy, "full");
-        let lowered = w.call(&trusted, "delegate", json!({ "provider": "opencode", "prompt": "z", "autonomy": "ask" })).expect("start");
+        let lowered =
+            w.call(&trusted, "delegate", json!({ "provider": "opencode", "prompt": "z", "autonomy": "ask" })).expect("start");
         assert_eq!(lowered["autonomy"], "ask");
         for id in [id, inherits, lowered["id"].as_str().unwrap().to_string()] {
             w.settle(&id);
@@ -5184,7 +5315,9 @@ time.sleep(600)
     fn a_new_worktree_is_a_branch_of_its_own() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let out = w.call(&parent, "delegate", json!({ "provider": "opencode", "prompt": "x", "worktree": "new", "name": "Fix login" })).expect("start");
+        let out = w
+            .call(&parent, "delegate", json!({ "provider": "opencode", "prompt": "x", "worktree": "new", "name": "Fix login" }))
+            .expect("start");
         let id = out["id"].as_str().unwrap();
         let tree = w.row(id).worktree.expect("a worktree");
         assert!(tree.contains("crew-fix-login-"), "{tree}");
@@ -5313,8 +5446,14 @@ time.sleep(600)
         let kids: Vec<Session> = (0..3)
             .map(|n| {
                 session::create_child(
-                    w.turns.store(), w.workspace.clone(), format!("kid {n}"), "opencode".into(), "m".into(), "full".into(),
-                    None, Some(me.clone()),
+                    w.turns.store(),
+                    w.workspace.clone(),
+                    format!("kid {n}"),
+                    "opencode".into(),
+                    "m".into(),
+                    "full".into(),
+                    None,
+                    Some(me.clone()),
                 )
                 .unwrap()
             })
@@ -5339,7 +5478,8 @@ time.sleep(600)
         for (n, kid) in kids.iter().enumerate() {
             let from = crate::caller::Caller::from_session(kid.clone()).sender();
             let cursor = n as i64 + 2;
-            let letter = crate::mailbox::Letter::new(&me, &from, &format!("kid {n} is done"), crate::mailbox::REPORT, Some(cursor));
+            let letter =
+                crate::mailbox::Letter::new(&me, &from, &format!("kid {n} is done"), crate::mailbox::REPORT, Some(cursor));
             session_events::record_reporting(w.turns.store(), &kid.id, cursor, "turn", "completed", "", None, Some(&letter))
                 .unwrap();
             assert!(!w.turns.deliver_to(&row), "a busy bot took a letter mid-turn");
@@ -5353,14 +5493,7 @@ time.sleep(600)
             assert!(woke[0].contains(&format!("## Report from session kid {n} ({})\n\nkid {n} is done", kid.id)), "{}", woke[0]);
             assert_eq!(session_events::seen(w.turns.store(), &kid.id).unwrap(), n as i64 + 2);
         }
-        let letters: Vec<Block> = w
-            .turns
-            .transcripts()
-            .since(&me, 0)
-            .0
-            .into_iter()
-            .filter(|b| b.from_bot.is_some())
-            .collect();
+        let letters: Vec<Block> = w.turns.transcripts().since(&me, 0).0.into_iter().filter(|b| b.from_bot.is_some()).collect();
         let senders: Vec<String> = letters.iter().map(|b| b.from_bot.as_ref().unwrap().id.clone()).collect();
         assert_eq!(senders, kids.iter().map(|k| k.id.clone()).collect::<Vec<_>>());
         assert_eq!(crate::mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0);
@@ -5563,7 +5696,10 @@ time.sleep(600)
         assert_eq!(w.peer(&careful, ask_peer.session_id().unwrap())["write"], json!(true));
         assert_eq!(w.peer(&bot, shell.session_id().unwrap())["write"], json!(true));
         assert_eq!(w.peer(&bot, shell.session_id().unwrap())["kind"], "session");
-        assert_eq!((w.peer(&bot, &chat.id)["kind"].clone(), w.peer(&bot, &chat.id)["write"].clone()), (json!("session"), json!(true)));
+        assert_eq!(
+            (w.peer(&bot, &chat.id)["kind"].clone(), w.peer(&bot, &chat.id)["write"].clone()),
+            (json!("session"), json!(true))
+        );
         assert!(w.peer(&bot, bot.session_id().unwrap()).is_null(), "a caller is not its own peer");
         // An exited subagent takes nothing, and only its parent still lists it.
         w.call(&shell, "stop_session", json!({ "session": child })).expect("stop");
@@ -5585,7 +5721,9 @@ time.sleep(600)
         let shell = w.session("terminal", "shell", "full");
         let stranger = w.session("terminal", "stranger", "full");
         let careful = w.session("terminal", "careful", "ask");
-        let asks = w.call(&shell, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" })).expect("start");
+        let asks = w
+            .call(&shell, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" }))
+            .expect("start");
         let id = asks["id"].as_str().unwrap().to_string();
         until_asking(&w, &id);
         // Less autonomy than the one asking: it may not write, so it may not answer.
@@ -5609,17 +5747,25 @@ time.sleep(600)
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
         w.busy(&bot, 2.0);
-        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "find it", "wait": true, "timeout_s": 20 })).expect("start");
+        let out = w
+            .call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "find it", "wait": true, "timeout_s": 20 }))
+            .expect("start");
         assert_eq!((out["status"].clone(), out["report"].clone()), (json!("reported"), json!("report: find it")), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         w.settle(&me);
         std::thread::sleep(Duration::from_millis(300));
         w.settle(&me);
-        assert!(!prompts(&w).iter().any(|p| p.contains("## Report from session")), "the report woke the bot as well: {:?}", prompts(&w));
+        assert!(
+            !prompts(&w).iter().any(|p| p.contains("## Report from session")),
+            "the report woke the bot as well: {:?}",
+            prompts(&w)
+        );
         let reports: i64 = w
             .turns
             .store()
-            .with(|conn| conn.query_row("SELECT COUNT(*) FROM mailbox WHERE kind = 'report' AND disposed_at IS NULL", [], |row| row.get(0)))
+            .with(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM mailbox WHERE kind = 'report' AND disposed_at IS NULL", [], |row| row.get(0))
+            })
             .unwrap();
         assert_eq!(reports, 0, "a report is still on its way");
         assert_eq!(session_events::seen(w.turns.store(), &id).unwrap(), w.row(&id).cursor);
@@ -5634,19 +5780,34 @@ time.sleep(600)
         let expected = format!("report: {long}");
         let w = world();
         let bot = w.session("bot", "Planner", "full");
-        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": format!("go\n{long}"), "wait": true, "timeout_s": 20 })).expect("start");
+        let out = w
+            .call(
+                &bot,
+                "delegate",
+                json!({ "provider": "opencode", "prompt": format!("go\n{long}"), "wait": true, "timeout_s": 20 }),
+            )
+            .expect("start");
         assert_eq!(out["report"], json!(expected), "the wait cut the report");
         assert!(out.get("report_truncated").is_none(), "{out}");
 
         let woken = w.session("bot", "Planner 2", "full");
         let me = woken.session_id().unwrap().to_string();
         w.busy(&woken, 0.5);
-        let out = w.call(&woken, "delegate", json!({ "provider": "opencode", "prompt": format!("SLEEP 2\n{long}"), "wait": true, "timeout_s": 1 })).expect("start");
+        let out = w
+            .call(
+                &woken,
+                "delegate",
+                json!({ "provider": "opencode", "prompt": format!("SLEEP 2\n{long}"), "wait": true, "timeout_s": 1 }),
+            )
+            .expect("start");
         assert_eq!(out["status"], "running", "{out}");
         let id = out["id"].as_str().unwrap().to_string();
         w.heard(&me, &id);
         w.settle(&me);
-        let woke = prompts(&w).into_iter().find(|p| p.contains("## Report from session") && p.contains("w2099")).expect("never woken with the report");
+        let woke = prompts(&w)
+            .into_iter()
+            .find(|p| p.contains("## Report from session") && p.contains("w2099"))
+            .expect("never woken with the report");
         assert!(woke.contains(&expected), "the wake cut the report");
     }
 
@@ -5658,7 +5819,9 @@ time.sleep(600)
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
         w.busy(&bot, 0.5);
-        let out = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 })).expect("start");
+        let out = w
+            .call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "SLEEP 2", "wait": true, "timeout_s": 1 }))
+            .expect("start");
         assert_eq!(out["status"], "running", "{out}");
         assert!(out["note"].as_str().unwrap().contains("Its report will wake you"), "{out}");
         let id = out["id"].as_str().unwrap().to_string();
@@ -5683,7 +5846,11 @@ time.sleep(600)
         w.turns.override_binary("codex", fake);
         let shell = w.session("terminal", "shell", "full");
         let out = w
-            .call(&shell, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION", "wait": true, "timeout_s": 20 }))
+            .call(
+                &shell,
+                "delegate",
+                json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION", "wait": true, "timeout_s": 20 }),
+            )
             .expect("start");
         assert_eq!(out["status"], "question", "{out}");
         assert_eq!(out["questions"][0]["question"], "Which color?", "{out}");
@@ -5697,7 +5864,11 @@ time.sleep(600)
         assert!(too_many.is_err_and(|e| e.contains("one per question")));
         let answered = w.call(&shell, "send_message", json!({ "to": id, "text": "Blue" })).expect("answer");
         assert_eq!(answered["delivery"], "answered", "{answered}");
-        let late = w.turns.answer(&id, request["request_id"].as_u64().unwrap(), Some(HashMap::from([("Which color?".into(), "Red".into())])));
+        let late = w.turns.answer(
+            &id,
+            request["request_id"].as_u64().unwrap(),
+            Some(HashMap::from([("Which color?".into(), "Red".into())])),
+        );
         assert!(late.is_err_and(|e| e.contains("already answered")));
         let done = w.wait(&shell, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], r#"report: QUESTION + answers: {"color": {"answers": ["Blue"]}}"#, "{done}");
@@ -5712,19 +5883,26 @@ time.sleep(600)
         w.turns.override_binary("codex", fake);
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
-        let asks = w.call(&bot, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" })).expect("start");
+        let asks = w
+            .call(&bot, "delegate", json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": "QUESTION" }))
+            .expect("start");
         let id = asks["id"].as_str().unwrap().to_string();
         w.heard(&me, &id);
         w.settle(&me);
         let woke = prompts(&w).into_iter().find(|p| p.contains("## Question from session")).expect("the bot was never asked");
-        assert!(woke.contains(&format!("## Question from session {} ({id})\n\n1. Which color?\n   Options: Red (Choose red.); Blue (Choose blue.)", w.row(&id).name)), "{woke}");
+        assert!(
+            woke.contains(&format!(
+                "## Question from session {} ({id})\n\n1. Which color?\n   Options: Red (Choose red.); Blue (Choose blue.)",
+                w.row(&id).name
+            )),
+            "{woke}"
+        );
         assert!(woke.contains(&format!("send_message to {id}")), "{woke}");
         assert!(!woke.contains("respond_to_session"), "{woke}");
         assert_eq!(w.call(&bot, "send_message", json!({ "to": id, "text": "Blue" })).expect("answer")["delivery"], "answered");
         w.settle(&id);
         w.heard(&me, &id);
         w.settle(&me);
-
     }
 
     /// Until the session waits on something.
@@ -5766,7 +5944,10 @@ time.sleep(600)
         w.heard(&me, &id);
         w.settle(&me);
         let woke = prompts(&w).into_iter().find(|p| p.contains("## Approval from session")).expect("the bot was never asked");
-        assert!(woke.contains(&format!("## Approval from session {} ({id})\n\nIt wants to use bash: ", w.row(&id).name)), "{woke}");
+        assert!(
+            woke.contains(&format!("## Approval from session {} ({id})\n\nIt wants to use bash: ", w.row(&id).name)),
+            "{woke}"
+        );
         assert!(woke.contains("Why: outside the workspace"), "{woke}");
         assert!(woke.contains(&format!("{{\"to\": \"{id}\", \"decision\": \"allow\"}}")), "{woke}");
         let request = session_events::latest(w.turns.store(), &id).unwrap().unwrap().request.unwrap();
@@ -5831,10 +6012,12 @@ time.sleep(600)
             crate::process::ProcessConfig::default(),
         );
         let tools = SessionTools::new(w.turns.clone(), Arc::new(|_: &Session| {})).with_processes(processes.clone());
-        let family = crate::process_tools::ProcessTools::new(processes.clone(), w.turns.store().clone()).with_turns(w.turns.clone());
+        let family =
+            crate::process_tools::ProcessTools::new(processes.clone(), w.turns.store().clone()).with_turns(w.turns.clone());
         let bot = w.session("bot", "Lead", "full");
         let me = bot.session_id().unwrap().to_string();
-        let started = w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("start");
+        let started =
+            w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         w.settle(&id);
         w.heard(&me, &id);
@@ -5926,7 +6109,11 @@ time.sleep(600)
 
         // Listed for what it is, and the launcher's chat says it started it.
         let peer = w.peer(&bot, &id);
-        assert_eq!((peer["kind"].clone(), peer["launched_by"].clone(), peer["write"].clone()), (json!("session"), json!("you"), json!(true)), "{peer}");
+        assert_eq!(
+            (peer["kind"].clone(), peer["launched_by"].clone(), peer["write"].clone()),
+            (json!("session"), json!("you"), json!(true)),
+            "{peer}"
+        );
         assert!(peer.get("parent").is_none(), "{peer}");
         let blocks = w.turns.transcripts().since(&me, 0).0;
         assert!(blocks.iter().any(|b| b.text.contains(&format!("Started session Auth refactor ({id})"))), "{blocks:?}");
@@ -5959,7 +6146,9 @@ time.sleep(600)
         }
         let ids: Vec<String> = (0..=LIVE_CAP)
             .map(|n| {
-                let out = w.call(&shell, "start_session", json!({ "provider": "claude", "prompt": format!("job {n}") })).expect("start");
+                let out = w
+                    .call(&shell, "start_session", json!({ "provider": "claude", "prompt": format!("job {n}") }))
+                    .expect("start");
                 out["id"].as_str().unwrap().to_string()
             })
             .collect();
@@ -6044,7 +6233,8 @@ time.sleep(600)
         let odd = w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "yolo" }));
         assert!(odd.is_err_and(|e| e.contains("ask, edits, auto or full")));
         for wanted in ["ask", "edits"] {
-            let out = w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": wanted })).expect("start");
+            let out =
+                w.call(&edits, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": wanted })).expect("start");
             assert_eq!(out["autonomy"], wanted);
             w.settle(out["id"].as_str().unwrap());
         }
@@ -6062,7 +6252,13 @@ time.sleep(600)
         toolbox.register(w.tools.clone());
         let shell = w.session("terminal", "shell", "full");
         let bot = w.session("bot", "Planner", "full");
-        let host = crate::tools::Host { store: w.turns.store(), transcripts: w.turns.transcripts(), on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
+        let host = crate::tools::Host {
+            store: w.turns.store(),
+            transcripts: w.turns.transcripts(),
+            on_created: &|_| {},
+            on_routines: &|| {},
+            toolbox: &toolbox,
+        };
         let listed = crate::tools::handle(&host, &shell, "tools/list", json!({})).expect("list");
         let send = listed["tools"].as_array().unwrap().iter().find(|t| t["name"] == "send_message").expect("send_message");
         let said = send["description"].as_str().unwrap();
@@ -6123,11 +6319,8 @@ time.sleep(600)
         assert!(reports.iter().all(|block| block.letter_kind == Some(crew_protocol::LetterKind::Report)));
 
         let page = mailbox::thread(w.turns.store(), &child, &me, None, None).expect("thread");
-        let shape: Vec<(String, &str, &str)> = page
-            .letters
-            .iter()
-            .map(|letter| (letter.from.id.clone(), letter.kind.as_str(), letter.state.as_str()))
-            .collect();
+        let shape: Vec<(String, &str, &str)> =
+            page.letters.iter().map(|letter| (letter.from.id.clone(), letter.kind.as_str(), letter.state.as_str())).collect();
         assert_eq!(
             shape,
             [
@@ -6549,7 +6742,8 @@ time.sleep(600)
                     letter_id: None,
                     mode: mode.map(str::to_string),
                     command: command.map(str::to_string),
-                    skills: Some(skills.iter().map(|skill| skill.to_string()).collect()).filter(|skills: &Vec<String>| !skills.is_empty()),
+                    skills: Some(skills.iter().map(|skill| skill.to_string()).collect())
+                        .filter(|skills: &Vec<String>| !skills.is_empty()),
                 })
                 .expect("start")
         }
@@ -6663,7 +6857,8 @@ time.sleep(600)
 
         until("the queue went over", || w.queue(&mine.id).is_empty() && !w.turns.is_running(&mine.id));
         w.settle(&mine.id);
-        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        let said: Vec<String> =
+            w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
         assert_eq!(said, ["SLEEP 2", "before", "/compact", "after one", "after two"]);
         let handed: Vec<Vec<(String, String)>> = w.claude_inputs();
         assert_eq!(
@@ -6748,7 +6943,8 @@ time.sleep(600)
         let next = w.type_to(&mine, "next", None, None);
         assert_eq!(next.delivery.as_deref(), Some("started"));
         until("the queue went over", || w.queue(&mine.id).is_empty() && !w.turns.is_running(&mine.id));
-        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        let said: Vec<String> =
+            w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
         assert_eq!(said, ["STUBBORN SLEEP 5", "and this", "next"]);
     }
 
@@ -6787,7 +6983,10 @@ time.sleep(600)
         assert_eq!(list.commands[0].state, BackgroundState::Running);
         assert!(w.turns.is_pinned(&mine.id));
         std::thread::sleep(Duration::from_millis(5));
-        assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(), "a pinned process was let go");
+        assert!(
+            w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(),
+            "a pinned process was let go"
+        );
 
         let reply = "report: BACKGROUND 0.5 + the background command finished";
         until("the CLI's own turn ended", || says(&w, &mine.id, reply) && !w.turns.is_running(&mine.id));
@@ -6965,7 +7164,8 @@ time.sleep(600)
         until("the queue went over", || w.launches().len() == 2);
         w.settle(&mine.id);
         assert_eq!(w.launches()[1]["prompt"].as_str().map(str::trim_end), Some("three\n\none\n\ntwo"));
-        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        let said: Vec<String> =
+            w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
         assert_eq!(said, ["SLEEP 1", "three", "one", "two"]);
     }
 
@@ -7141,7 +7341,10 @@ time.sleep(600)
         let prompt = w.launches()[1]["prompt"].as_str().unwrap().to_string();
         assert!(prompt.starts_with("look at this") && prompt.contains("- /tmp/notes.md"), "{prompt}");
         let block = w.blocks(&mine.id).into_iter().find(|block| block.text == "look at this").expect("block");
-        assert_eq!(block.files.map(|files| files.into_iter().map(|file| file.path).collect::<Vec<_>>()), Some(vec!["/tmp/notes.md".to_string()]));
+        assert_eq!(
+            block.files.map(|files| files.into_iter().map(|file| file.path).collect::<Vec<_>>()),
+            Some(vec!["/tmp/notes.md".to_string()])
+        );
     }
 
     /// A steer carries its files as a turn's message would: Claude is handed
@@ -7215,10 +7418,7 @@ time.sleep(600)
 
     /// The real binary for a CLI, found the way the app finds it.
     fn real_binary(name: &str) -> String {
-        crate::shell_path::resolve(name)
-            .unwrap_or_else(|| panic!("`{name}` is not installed"))
-            .to_string_lossy()
-            .into_owned()
+        crate::shell_path::resolve(name).unwrap_or_else(|| panic!("`{name}` is not installed")).to_string_lossy().into_owned()
     }
 
     /// Kills the child's process when the test ends, passed or not.
@@ -7247,8 +7447,15 @@ time.sleep(600)
                 parent.session_id().map(str::to_string),
             )
             .expect("child");
-            session::set_options(self.turns.store(), row.id.clone(), model.into(), effort.into(), row.service_tier, autonomy.into())
-                .expect("options");
+            session::set_options(
+                self.turns.store(),
+                row.id.clone(),
+                model.into(),
+                effort.into(),
+                row.service_tier,
+                autonomy.into(),
+            )
+            .expect("options");
             row.id
         }
 
@@ -7341,7 +7548,8 @@ time.sleep(600)
         until_long("the child's turn ended", Duration::from_secs(240), || {
             !w.turns.is_running(&id) && !matches!(w.row(&id).status.as_str(), "starting" | "working")
         });
-        let ended = w.blocks(&id).iter().rev().take(4).map(|b| format!("{:?}: {}", b.role, b.text)).collect::<Vec<_>>().join("\n");
+        let ended =
+            w.blocks(&id).iter().rev().take(4).map(|b| format!("{:?}: {}", b.role, b.text)).collect::<Vec<_>>().join("\n");
         assert_eq!(w.row(&id).status, "idle", "{provider}'s turn did not end cleanly:\n{ended}");
         let report = w.heard(&me, &id);
         says_one(&report.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report").text);
@@ -7399,7 +7607,13 @@ time.sleep(600)
         let w = world();
         let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
         let home = w.dir.join("opencode-home");
-        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+        for (key, sub) in [
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("HOME", ""),
+        ] {
             let dir = home.join(sub);
             std::fs::create_dir_all(&dir).expect("dir");
             std::env::set_var(key, dir);
@@ -7457,7 +7671,11 @@ time.sleep(600)
         assert!(w.turns.is_pinned(&mine.id));
         let pid = w.live_pid(&mine.id);
 
-        let done = || w.blocks(&mine.id).iter().any(|block| block.role == BlockRole::Assistant && block.text.to_lowercase().contains("done"));
+        let done = || {
+            w.blocks(&mine.id)
+                .iter()
+                .any(|block| block.role == BlockRole::Assistant && block.text.to_lowercase().contains("done"))
+        };
         until_long("the CLI's own turn ended", Duration::from_secs(120), || done() && !w.turns.is_running(&mine.id));
         let reported = at.elapsed();
         assert_eq!(w.row(&mine.id).status, "done");
@@ -7584,15 +7802,23 @@ time.sleep(600)
         says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
         let row = w.settle(&id);
         let pid = w.live_pid(&id);
-        session::set_options(w.turns.store(), id.clone(), "claude-sonnet-4-5".into(), "medium".into(), row.service_tier, row.autonomy)
-            .expect("options");
+        session::set_options(
+            w.turns.store(),
+            id.clone(),
+            "claude-sonnet-4-5".into(),
+            "medium".into(),
+            row.service_tier,
+            row.autonomy,
+        )
+        .expect("options");
 
         says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the settings change launched another process");
         assert_eq!(w.row(&id).model, "claude-sonnet-4-5");
         let row = w.row(&id);
-        session::set_options(w.turns.store(), id.clone(), row.model, "low".into(), row.service_tier, row.autonomy).expect("options");
+        session::set_options(w.turns.store(), id.clone(), row.model, "low".into(), row.service_tier, row.autonomy)
+            .expect("options");
         says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid);
@@ -7620,7 +7846,8 @@ time.sleep(600)
         assert_eq!(w.live_pid(&id), pid, "the second turn started another app server");
 
         let row = w.row(&id);
-        session::set_options(w.turns.store(), id.clone(), row.model, "medium".into(), row.service_tier, row.autonomy).expect("options");
+        session::set_options(w.turns.store(), id.clone(), row.model, "medium".into(), row.service_tier, row.autonomy)
+            .expect("options");
         says_one(&w.live_say(&parent, &id, "Once more: reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the effort change started another app server");
@@ -7638,7 +7865,13 @@ time.sleep(600)
         // Found with the user's own home, before the server gets another.
         let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
         let home = w.dir.join("opencode-home");
-        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+        for (key, sub) in [
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("HOME", ""),
+        ] {
             let dir = home.join(sub);
             std::fs::create_dir_all(&dir).expect("dir");
             std::env::set_var(key, dir);
@@ -7697,7 +7930,13 @@ time.sleep(600)
         let w = world();
         let binary = crate::shell_path::resolve_opencode().expect("opencode 2.x").to_string_lossy().into_owned();
         let home = w.dir.join("opencode-home");
-        for (key, sub) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("HOME", "")] {
+        for (key, sub) in [
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("HOME", ""),
+        ] {
             let dir = home.join(sub);
             std::fs::create_dir_all(&dir).expect("dir");
             std::env::set_var(key, dir);
@@ -7744,11 +7983,8 @@ time.sleep(600)
         let first = w.live_window(&id);
         assert!(first.used > 0 && first.window.is_some_and(|window| window > first.used), "{first:?}");
 
-        let report = w.live_say(
-            &parent,
-            &id,
-            "Call the list_peers tool of the crew MCP server once, then reply with just the word two.",
-        );
+        let report =
+            w.live_say(&parent, &id, "Call the list_peers tool of the crew MCP server once, then reply with just the word two.");
         w.settle(&id);
         assert!(report.to_lowercase().contains("two"), "the report was: {report:?}");
         assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
@@ -7794,7 +8030,12 @@ time.sleep(600)
         let blocks = w.turns.transcripts().since(&id, 0).0;
         eprintln!("report: {report:?}\nentry: {:#?}", list.commands);
         for block in &blocks {
-            eprintln!("{:?} {:?} {:?}", block.role, block.text, block.tool.as_ref().map(|tool| (&tool.name, &tool.status, &tool.detail)));
+            eprintln!(
+                "{:?} {:?} {:?}",
+                block.role,
+                block.text,
+                block.tool.as_ref().map(|tool| (&tool.name, &tool.status, &tool.detail))
+            );
         }
 
         let row = list.commands.iter().find(|row| row.kind == BackgroundKind::Subagent).expect("an entry for the agent");
@@ -7814,8 +8055,12 @@ time.sleep(600)
             steps.iter().any(|step| step.role == BlockRole::Assistant && step.text.to_lowercase().contains("one")),
             "{steps:?}"
         );
-        let said: String = blocks.iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text.as_str()).collect();
-        assert!(said.to_lowercase().contains("finished") && !said.to_lowercase().contains("one"), "the parent's message was {said:?}");
+        let said: String =
+            blocks.iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text.as_str()).collect();
+        assert!(
+            said.to_lowercase().contains("finished") && !said.to_lowercase().contains("one"),
+            "the parent's message was {said:?}"
+        );
     }
 
     /// Runs the real `claude`: three haiku turns. Ask to Edits is a control
@@ -7834,12 +8079,14 @@ time.sleep(600)
         w.live_say(&parent, &id, "Remember the word mango. Reply with just the word ok.");
         let row = w.settle(&id);
         let first = w.live_pid(&id);
-        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "edits".into()).expect("options");
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "edits".into())
+            .expect("options");
 
         w.live_say(&parent, &id, "Reply with just the word ok.");
         let row = w.settle(&id);
         assert_eq!(w.live_pid(&id), first, "Ask to Edits launched another process");
-        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "full".into()).expect("options");
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "full".into())
+            .expect("options");
 
         let report = w.live_say(&parent, &id, "What word did I ask you to remember? Reply with just the word.");
         w.settle(&id);
@@ -7924,11 +8171,26 @@ time.sleep(600)
                 // The workspace goes while the worktree is being made, so the
                 // session that was to run in it cannot be.
                 crate::workspace::delete(&store, workspace.clone())?;
-                Ok(Worktree { path: path.to_string_lossy().into_owned(), branch: Some(branch.to_string()), main: false, add: 0, del: 0, dirty: 0 })
+                Ok(Worktree {
+                    path: path.to_string_lossy().into_owned(),
+                    branch: Some(branch.to_string()),
+                    main: false,
+                    add: 0,
+                    del: 0,
+                    dirty: 0,
+                    locked: None,
+                })
             }),
         );
         let user = w.user();
-        let out = match tools.run(&user, "start_sessions", &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "worktree": "new" })] })).expect("a batch") {
+        let out = match tools
+            .run(
+                &user,
+                "start_sessions",
+                &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "worktree": "new" })] }),
+            )
+            .expect("a batch")
+        {
             ToolOutput::Value(value) => value,
             ToolOutput::Content(_) => panic!("content"),
         };
@@ -7961,7 +8223,13 @@ time.sleep(600)
         let theirs = w.call(&other, "delegate", args.clone()).expect("other");
         assert_ne!(theirs["id"], first["id"]);
         // A retry that waits waits for the first call's session.
-        let waited = w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "job", "request_id": "job-1", "wait": true, "timeout_s": 20 })).expect("wait");
+        let waited = w
+            .call(
+                &shell,
+                "delegate",
+                json!({ "provider": "opencode", "prompt": "job", "request_id": "job-1", "wait": true, "timeout_s": 20 }),
+            )
+            .expect("wait");
         assert_eq!(waited["id"], first["id"]);
         assert_eq!(waited["status"], "reported", "{waited}");
         // An id names one tool.
@@ -7974,7 +8242,9 @@ time.sleep(600)
         assert_ne!(one["id"], two["id"]);
         // A bad id is refused.
         assert!(w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "request_id": 7 })).is_err());
-        for id in [id, theirs["id"].as_str().unwrap().into(), one["id"].as_str().unwrap().into(), two["id"].as_str().unwrap().into()] {
+        for id in
+            [id, theirs["id"].as_str().unwrap().into(), one["id"].as_str().unwrap().into(), two["id"].as_str().unwrap().into()]
+        {
             w.settle(&id);
         }
     }
@@ -8072,15 +8342,28 @@ time.sleep(600)
         let a = w.start(&shell, "first");
         w.settle(&a);
         let make = |name: &str, parent: &str| {
-            session::create_child(w.turns.store(), w.workspace.clone(), name.into(), "opencode".into(), MODEL.into(), "full".into(), None, Some(parent.into()))
-                .expect("child")
-                .id
+            session::create_child(
+                w.turns.store(),
+                w.workspace.clone(),
+                name.into(),
+                "opencode".into(),
+                MODEL.into(),
+                "full".into(),
+                None,
+                Some(parent.into()),
+            )
+            .expect("child")
+            .id
         };
         let b = make("B", &a);
         let c = make("C", &b);
         let sibling = make("S", &a);
         // A session it launched before subagents worked at depth one (decision 28).
-        let launched = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "mine" })).expect("launch")["id"].as_str().unwrap().to_string();
+        let launched = w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "mine" })).expect("launch")
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         session::set_launched_by(w.turns.store(), &launched, &a).expect("launched by a");
         w.settle(&launched);
         w.call(&shell, "send_message", json!({ "to": a, "text": "SLEEP 30" })).expect("busy");
@@ -8135,7 +8418,17 @@ time.sleep(600)
         // Another workspace's session is not in reach.
         std::fs::create_dir_all(w.dir.join("else")).unwrap();
         let elsewhere = crate::workspace::create(store, "other".into(), w.dir.join("else").to_string_lossy().into()).unwrap();
-        let foreign = session::create(store, elsewhere.id, "terminal".into(), "far".into(), "opencode".into(), MODEL.into(), String::new(), "full".into()).unwrap();
+        let foreign = session::create(
+            store,
+            elsewhere.id,
+            "terminal".into(),
+            "far".into(),
+            "opencode".into(),
+            MODEL.into(),
+            String::new(),
+            "full".into(),
+        )
+        .unwrap();
         let out = w.call(&parent, "read_session", json!({ "session": foreign.id }));
         assert!(out.is_err_and(|e| e.contains("No session")));
     }
@@ -8148,7 +8441,10 @@ time.sleep(600)
         let careful = w.session("bot", "Careful", "ask");
         let bot = w.session("bot", "Lead", "full");
         let sub = w.start(&shell, "x");
-        let top = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "y" })).expect("start")["id"].as_str().unwrap().to_string();
+        let top = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "y" })).expect("start")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let chat = w.user_session("opencode", MODEL, "full");
         w.settle(&sub);
         w.settle(&top);
@@ -8188,7 +8484,8 @@ time.sleep(600)
         let careful = w.session("bot", "Careful", "ask");
         let id = w.start(&shell, "x");
         w.settle(&id);
-        let renamed = w.call(&shell, "update_session", json!({ "session": id, "action": "rename", "name": " Auth fix " })).expect("rename");
+        let renamed =
+            w.call(&shell, "update_session", json!({ "session": id, "action": "rename", "name": " Auth fix " })).expect("rename");
         assert_eq!(renamed["name"], "Auth fix");
         assert_eq!(w.row(&id).name, "Auth fix");
         // A caller with less autonomy than the session does not reach it.
@@ -8197,7 +8494,11 @@ time.sleep(600)
         assert_eq!(w.row(&id).name, "Auth fix");
         assert!(w.call(&shell, "update_session", json!({ "session": id, "action": "rename" })).is_err());
         assert!(w.call(&shell, "update_session", json!({ "session": id, "action": "burn" })).is_err());
-        let bot = w.call(&shell, "update_session", json!({ "session": careful.session_id().unwrap(), "action": "rename", "name": "x" }));
+        let bot = w.call(
+            &shell,
+            "update_session",
+            json!({ "session": careful.session_id().unwrap(), "action": "rename", "name": "x" }),
+        );
         assert!(bot.is_err_and(|e| e.contains("is a bot")));
     }
 
@@ -8207,8 +8508,14 @@ time.sleep(600)
         let (_, gone) = recorded(&w);
         let bot = w.session("bot", "Lead", "full");
         let other = w.session("bot", "Other", "full");
-        let launched = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "a" })).expect("start")["id"].as_str().unwrap().to_string();
-        let theirs = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "b" })).expect("start")["id"].as_str().unwrap().to_string();
+        let launched = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "a" })).expect("start")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let theirs = w.call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "b" })).expect("start")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let chat = w.user_session("opencode", MODEL, "full");
         w.settle(&launched);
         w.settle(&theirs);
@@ -8253,8 +8560,15 @@ time.sleep(600)
         let tree = std::fs::canonicalize(&tree).unwrap().to_string_lossy().into_owned();
         let bot = w.session("bot", "Lead", "full");
         let row = session::create_in_worktree(
-            w.turns.store(), w.workspace.clone(), "terminal".into(), "Feature".into(), "opencode".into(), MODEL.into(),
-            String::new(), "full".into(), Some(tree.clone()),
+            w.turns.store(),
+            w.workspace.clone(),
+            "terminal".into(),
+            "Feature".into(),
+            "opencode".into(),
+            MODEL.into(),
+            String::new(),
+            "full".into(),
+            Some(tree.clone()),
         )
         .unwrap();
         session::set_launched_by(w.turns.store(), &row.id, bot.session_id().unwrap()).unwrap();
@@ -8279,7 +8593,17 @@ time.sleep(600)
         let w = world();
         let user = w.user();
         let chat = w.user_session("opencode", MODEL, "full");
-        let sub = session::create_child(w.turns.store(), w.workspace.clone(), "Sub".into(), "opencode".into(), MODEL.into(), "full".into(), None, Some(chat.id.clone())).unwrap();
+        let sub = session::create_child(
+            w.turns.store(),
+            w.workspace.clone(),
+            "Sub".into(),
+            "opencode".into(),
+            MODEL.into(),
+            "full".into(),
+            None,
+            Some(chat.id.clone()),
+        )
+        .unwrap();
         session::set_launched_by(w.turns.store(), &chat.id, "someone").ok();
         let out = w.call(&user, "update_session", json!({ "session": chat.id, "action": "delete" })).expect("delete");
         assert_eq!(out["deleted"], json!([sub.id, chat.id]), "{out}");
@@ -8294,9 +8618,8 @@ time.sleep(600)
         let w = world();
         let lead = w.session("bot", "Lead", "full");
         let other = w.session("bot", "Other", "full");
-        let out = w
-            .call(&lead, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" }))
-            .expect("delegate");
+        let out =
+            w.call(&lead, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("delegate");
         let id = out["id"].as_str().unwrap().to_string();
         w.settle(&id);
         let kid = Caller::from_session(w.row(&id));
@@ -8380,11 +8703,8 @@ time.sleep(600)
         w.turns.set_batch_window(Duration::from_secs(30), Duration::from_secs(60));
         let kid = w.kid_of(&mine.id, "asker");
         let from = crate::caller::Caller::from_session(kid.clone()).sender();
-        mailbox::put(
-            w.turns.store(),
-            mailbox::Letter::new(&mine.id, &from, "which branch?", mailbox::QUESTION, Some(2)),
-        )
-        .unwrap();
+        mailbox::put(w.turns.store(), mailbox::Letter::new(&mine.id, &from, "which branch?", mailbox::QUESTION, Some(2)))
+            .unwrap();
         assert!(w.turns.wake(&mine.id), "a question waited for the window");
         w.settle(&mine.id);
         // A report in the same window does wait.

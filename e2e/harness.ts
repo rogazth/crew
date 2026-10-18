@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
@@ -62,6 +62,8 @@ export type Crew = {
   home: string;
   /** Electron's userData, where crewd keeps its database and socket. */
   userData: string;
+  /** Where crewd makes worktrees: the sandbox's data dir has no layout.json, so its work dir is inside it. */
+  worktrees: string;
   /** Workspaces seeded at launch, in order; the first is the active one. */
   workspaces: Workspace[];
   /**
@@ -110,10 +112,42 @@ export async function launchCrew(opts: LaunchOptions = {}): Promise<Crew> {
   return launch(opts, opts.dir === undefined);
 }
 
+/** Names the spec process a sandbox belongs to, until it is deleted or kept. */
+const OWNER_FILE = "owner.pid";
+
+/**
+ * Deletes the sandboxes of specs that were killed before they could: each
+ * names its spec's pid, and one whose spec is gone is nobody's. A kept
+ * sandbox (E2E_KEEP) no longer names one and stays.
+ */
+async function sweepDeadSandboxes(): Promise<void> {
+  const names = await readdir("/tmp").catch(() => [] as string[]);
+  for (const name of names.filter((entry) => entry.startsWith("ce-"))) {
+    const root = path.join("/tmp", name);
+    const pid = Number(await readFile(path.join(root, OWNER_FILE), "utf8").catch(() => ""));
+    if (pid > 1 && !alive(pid)) await rm(root, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** `owns`: the sandbox is deleted on close, unless a restart handed it on. */
 async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
+  if (opts.dir === undefined) await sweepDeadSandboxes();
   // Resolved, as crewd and git spell it: /tmp is /private/tmp on macOS.
   const root = opts.dir ?? (await realpath(await mkdtemp("/tmp/ce-")));
+  if (opts.dir === undefined) {
+    await writeFile(path.join(root, OWNER_FILE), String(process.pid));
+    // scripts/e2e.mjs checks, once the run ends, that nothing names it any more.
+    if (process.env.CREW_E2E_RUN_LOG) await appendFile(process.env.CREW_E2E_RUN_LOG, `${root}\n`);
+  }
   const home = path.join(root, "home");
   const config = path.join(root, "config");
   const repos = path.join(root, "repos");
@@ -124,8 +158,10 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   let handedOff = false;
   const cleanup = async () => {
     if (!owns || handedOff) return;
-    if (process.env.E2E_KEEP === "1") console.log(`e2e: kept ${root}`);
-    else await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    if (process.env.E2E_KEEP === "1") {
+      await unlink(path.join(root, OWNER_FILE)).catch(() => {});
+      console.log(`e2e: kept ${root}`);
+    } else await rm(root, { recursive: true, force: true, maxRetries: 3 });
   };
 
   const git = async (cwd: string, ...args: string[]) => {
@@ -261,6 +297,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
       root,
       home,
       userData,
+      worktrees: path.join(userData, "work", "worktrees"),
       workspaces,
       request,
       reload,
@@ -308,6 +345,12 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     // macOS resolves appData from the account, not $HOME, so without this the
     // app would open the user's real `Crew Dev` database.
     CREW_DATA_DIR: path.join(config, "Crew Dev"),
+    // The spec's own process: the app and every crewd it starts outside a
+    // child's stdin end with it, even when the spec is killed mid-test.
+    CREW_E2E_OWNER_PID: String(process.pid),
+    // crewd looks for CLIs only on this PATH: the machine's Homebrew and login
+    // shell hold the real codex and opencode.
+    CREW_SANDBOX: "1",
   };
 }
 
@@ -584,6 +627,33 @@ export async function returnToWindow(crew: Crew): Promise<void> {
 
 type Truthy<T> = Exclude<T, null | undefined | false | 0 | "">;
 
+/**
+ * Runs `fn` while no other spec of this run writes the Mac's clipboard: there
+ * is one for the whole machine, and specs run three at a time. The lock is a
+ * folder beside the run's log, so it goes with the run.
+ */
+export async function withSystemClipboard<T>(fn: () => Promise<T>): Promise<T> {
+  const log = process.env.CREW_E2E_RUN_LOG;
+  if (!log) return fn();
+  const lock = path.join(path.dirname(log), "clipboard.lock");
+  const until = Date.now() + 120_000;
+  for (;;) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() >= until) throw new Error("another spec held the clipboard for two minutes");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
+}
+
 /** Polls until `fn` returns something truthy, retrying through throws. */
 export async function waitFor<T>(
   fn: () => T | Promise<T>,
@@ -714,10 +784,24 @@ export async function newSession(crew: Crew, workspaceId: string): Promise<Sessi
   return session;
 }
 
+/**
+ * ⌘T, once the launcher has the keys. Its field is on screen before it has
+ * focus, which moves in on the next animation frame: a key pressed in between
+ * goes to what had focus, the terminal behind it, and the launcher never hears it.
+ */
+export async function openLauncher(crew: Crew): Promise<Locator> {
+  await pressChord(crew, `${MOD}+t`);
+  const field = crew.window.getByLabel("Open a tab");
+  await waitFor(() => field.evaluate((input) => input === document.activeElement), {
+    message: "the launcher takes the keys",
+    interval: 10,
+  });
+  return field;
+}
+
 /** ⌘T ↵: a shell in the tab on screen. */
 export async function openShell(crew: Crew): Promise<void> {
-  await pressChord(crew, `${MOD}+t`);
-  await crew.window.getByLabel("Open a tab").waitFor();
+  await openLauncher(crew);
   await crew.window.keyboard.press("Enter");
   await waitFor(
     () =>
@@ -887,7 +971,9 @@ export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?:
   const env = sandboxEnv(crew.home, path.join(crew.root, "config"));
   let child: ChildProcess | null = null;
   const start = async () => {
-    const proc = spawn(path.join(ROOT, "target/debug/crewd"), ["serve", "--listen", `127.0.0.1:${port}`, "--data-dir", dataDir], {
+    // A spec killed on a timeout never reaches stop(): the daemon goes with it.
+    const owner = ["--exit-with-pid", String(process.pid)];
+    const proc = spawn(path.join(ROOT, "target/debug/crewd"), ["serve", "--listen", `127.0.0.1:${port}`, "--data-dir", dataDir, ...owner], {
       env,
       stdio: ["ignore", "pipe", "inherit"],
     });

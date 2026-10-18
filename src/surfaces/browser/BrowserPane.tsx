@@ -280,7 +280,7 @@ export function BrowserPane({
         <DrivenBar
           lease={lease}
           driver={sessions.find((s) => s.id === lease.sessionId)}
-          onTakeBack={() => void api.browserLeaseRelease(pageId).catch(() => {})} />
+          onTakeBack={() => void api.browserLeaseRelease(pageId, workspaceId).catch(() => {})} />
       )}
       <div className={`flex min-h-0 flex-1 ${FLOW[side]}`}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

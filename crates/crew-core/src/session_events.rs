@@ -80,20 +80,9 @@ pub fn record_reporting(
         tx.execute(
             "INSERT OR IGNORE INTO session_events (session_id, cursor, kind, outcome, report, request, at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                session_id,
-                cursor,
-                kind,
-                outcome,
-                report,
-                request.map(|value| value.to_string()),
-                now_millis()
-            ],
+            params![session_id, cursor, kind, outcome, report, request.map(|value| value.to_string()), now_millis()],
         )?;
-        tx.execute(
-            "UPDATE sessions SET cursor = MAX(cursor, ?2) WHERE id = ?1",
-            params![session_id, cursor],
-        )?;
+        tx.execute("UPDATE sessions SET cursor = MAX(cursor, ?2) WHERE id = ?1", params![session_id, cursor])?;
         if let Some(letter) = letter {
             crate::mailbox::insert(&tx, letter)?;
         }
@@ -162,8 +151,7 @@ pub fn seen(store: &Store, session_id: &str) -> Result<i64, String> {
 /// business, not a reason to show it everything twice next time.
 pub fn mark_seen(store: &Store, session_id: &str, cursor: i64) -> Result<(), String> {
     store.with(|conn| {
-        conn.prepare_cached("UPDATE sessions SET seen = MAX(seen, ?2) WHERE id = ?1")?
-            .execute(params![session_id, cursor])
+        conn.prepare_cached("UPDATE sessions SET seen = MAX(seen, ?2) WHERE id = ?1")?.execute(params![session_id, cursor])
     })?;
     Ok(())
 }
@@ -214,9 +202,8 @@ impl Signal {
             if now >= until {
                 return false;
             }
-            let (next, _) = wake
-                .wait_timeout(guard, (until - now).min(Duration::from_secs(5)))
-                .unwrap_or_else(|e| e.into_inner());
+            let (next, _) =
+                wake.wait_timeout(guard, (until - now).min(Duration::from_secs(5))).unwrap_or_else(|e| e.into_inner());
             guard = next;
         }
         true
@@ -260,11 +247,8 @@ mod tests {
 
     #[test]
     fn a_turn_that_said_nothing_reports_nothing_from_the_turn_before() {
-        let blocks = vec![
-            block(BlockRole::User, "one"),
-            block(BlockRole::Assistant, "first answer"),
-            block(BlockRole::User, "two"),
-        ];
+        let blocks =
+            vec![block(BlockRole::User, "one"), block(BlockRole::Assistant, "first answer"), block(BlockRole::User, "two")];
         assert_eq!(report(&blocks), "");
     }
 
@@ -278,11 +262,25 @@ mod tests {
         let store = Store::open(dir.join("crew.sqlite3")).expect("store");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
-            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            &store,
+            ws.id.clone(),
+            "bot".into(),
+            "Planner".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "full".into(),
         )
         .expect("parent");
         let child = crate::session::create_child(
-            &store, ws.id, "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+            &store,
+            ws.id,
+            "codex: fix".into(),
+            "codex".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            Some(parent.id.clone()),
         )
         .expect("child");
         let from = crew_protocol::BotRef { id: child.id.clone(), name: child.name.clone(), kind: Some("session".into()) };
@@ -335,11 +333,25 @@ mod tests {
         }));
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
-            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            &store,
+            ws.id.clone(),
+            "bot".into(),
+            "Planner".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "full".into(),
         )
         .expect("parent");
         let child = crate::session::create_child(
-            &store, ws.id, "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+            &store,
+            ws.id,
+            "codex: fix".into(),
+            "codex".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            Some(parent.id.clone()),
         )
         .expect("child");
         assert_eq!((child.parent_name.as_deref(), child.last_event.as_ref()), (Some("Planner"), None));

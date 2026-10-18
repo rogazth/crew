@@ -29,7 +29,8 @@ export type EnvLink = {
   info: MachineInfo | null;
 };
 
-type Listener = (payload: unknown) => void;
+/** An event's payload, and the daemon that sent it. */
+type Listener = (payload: unknown, env: string) => void;
 
 const connections = new Map<string, Connection>();
 const rows = new Map<string, RemoteEnv>();
@@ -280,7 +281,7 @@ function wire(conn: Connection) {
   let before = conn.status;
   conn.onEvent = (event, payload) => {
     noteEvent(conn.envId, event, payload);
-    for (const listener of listeners.get(event) ?? []) listener(payload);
+    for (const listener of listeners.get(event) ?? []) listener(payload, conn.envId);
   };
   conn.onReconnect = () => {
     const here: Here = (sessionId) => envOfSession(sessionId) === conn.envId;

@@ -30,6 +30,8 @@ export type Paired = {
   socksPort: number | null;
   /** The tailnet address the daemon is listening on. */
   ip: string;
+  /** Installed and running, but something the user should know: lingering could not be turned on. */
+  warning?: string | null;
 };
 
 /** Same number as `DEFAULT_PORT` in src/lib/remotes.ts. Kept here so this file stays free of app imports. */
@@ -52,9 +54,10 @@ export function remoteLayout(channel: Channel): RemoteLayout {
     case "release":
       return { unit: "crewd", home: ".crew", port: DEFAULT_PORT };
     case "local":
-      return { unit: "crewd-local", home: ".crew-local", port: DEFAULT_PORT + 1 };
+      // Two apart: a daemon's SOCKS listener takes the port after its own.
+      return { unit: "crewd-local", home: ".crew-local", port: DEFAULT_PORT + 2 };
     case "dev":
-      return { unit: "crewd-dev", home: ".crew-dev", port: DEFAULT_PORT + 2 };
+      return { unit: "crewd-dev", home: ".crew-dev", port: DEFAULT_PORT + 4 };
   }
 }
 
@@ -90,6 +93,42 @@ WantedBy=default.target
 `;
 }
 
+/**
+ * Writes the data dir's layout.json (crew_core::paths) unless it has one: the
+ * worktrees go in the build's own folder, and the release's Home is `~/Crew`,
+ * as it always was. Builds of every channel then keep apart on the machine.
+ */
+export function writeLayoutCommand(layout: RemoteLayout = RELEASE): string {
+  const file = `"$HOME/${layout.home}/data/layout.json"`;
+  const json =
+    layout.unit === RELEASE.unit
+      ? `'{"workDir":"%s","homeFolder":"%s"}\\n' "$HOME/${layout.home}" "$HOME/Crew"`
+      : `'{"workDir":"%s"}\\n' "$HOME/${layout.home}"`;
+  return `[ -e ${file} ] || printf ${json} > ${file}`;
+}
+
+/**
+ * Turns lingering on for the ssh user, so systemd keeps their manager, crewd
+ * and the routines it fires running with nobody logged in, then says whether
+ * it is on: `linger=yes`, or `linger=no` and what loginctl said. Most
+ * distros' polkit lets a user turn it on for themselves; some ask for an
+ * admin. Never fails, and asks for no sudo: crewd runs either way, only not
+ * past a logout. Run again on every install and update, which is harmless.
+ * In `sh -c`, since the login shell may not be a POSIX one.
+ */
+export const LINGER_COMMAND = `sh -c 'u="$(id -un)"; said="$(loginctl enable-linger "$u" 2>&1)"; if loginctl show-user "$u" -p Linger 2>/dev/null | grep -qx Linger=yes || [ -e "/var/lib/systemd/linger/$u" ]; then echo linger=yes; else printf "linger=no %s\\n" "$said"; fi'`;
+
+/** What to tell the user when LINGER_COMMAND found lingering off; null when it is on. */
+export function lingerWarning(output: string, user: string): string | null {
+  if (/^linger=yes$/m.test(output)) return null;
+  const said = output.replace(/^linger=no\s*/m, "").trim().split("\n")[0]?.trim() ?? "";
+  return (
+    `crewd runs, but systemd may stop it once you log out of the machine, and routines there stop with it: ` +
+    `lingering could not be turned on${said ? ` (${said})` : ""}. ` +
+    `An admin can turn it on with: sudo loginctl enable-linger ${user}`
+  );
+}
+
 export async function installDaemon(opts: {
   target: SshTarget;
   port?: number;
@@ -110,8 +149,9 @@ export async function installDaemon(opts: {
       route = await reach(opts.target);
       return `${route.hostname}:${route.port}${route.proxied ? " through a proxy" : ""}`;
     });
+    let who = "";
     await step(report, "ssh", async () => {
-      const who = (await ssh(opts.target, "id -un", control)).trim();
+      who = (await ssh(opts.target, "id -un", control)).trim();
       return `${who}@${route.hostname}`;
     });
     const ip = await tailnetIp(opts.target, control, route.hostname);
@@ -123,6 +163,7 @@ export async function installDaemon(opts: {
     if (!binary) throw new Error(`Crew has no Linux build for ${arch}`);
     await step(report, "upload", async () => {
       await ssh(opts.target, `mkdir -p "$HOME/${home}/bin" "$HOME/${home}/data" "$HOME/.config/systemd/user"`, control);
+      await ssh(opts.target, writeLayoutCommand(layout), control);
       await sshStream(
         opts.target,
         `cat > "$HOME/${home}/bin/crewd.new" && chmod 755 "$HOME/${home}/bin/crewd.new"`,
@@ -130,8 +171,16 @@ export async function installDaemon(opts: {
         binary,
       );
     });
+    // Not fatal: crewd runs either way, and the warning says what is missing.
+    let warning: string | null = null;
     await step(report, "service", async () => {
-      await ssh(opts.target, 'loginctl enable-linger "$(id -un)"', control);
+      // First, as it always was: lingering also starts the user's systemd
+      // manager, which `systemctl --user` below needs.
+      const linger = await ssh(opts.target, LINGER_COMMAND, control).catch((error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+      );
+      warning = lingerWarning(linger, who || "<user>");
+      if (warning) console.warn(`crewd on ${opts.target.destination}: ${warning}`);
       await ssh(
         opts.target,
         userctl(swapBinary(layout)),
@@ -139,6 +188,7 @@ export async function installDaemon(opts: {
       );
       await sshStdin(opts.target, `cat > "$HOME/.config/systemd/user/${unit}.service"`, control, serviceUnit(ip, port, layout));
       await ssh(opts.target, userctl(`systemctl --user daemon-reload && systemctl --user enable --now ${unit}`), control);
+      return warning ?? undefined;
     });
     const token = await readToken(opts.target, control, layout);
     const paired = await step(report, "pair", async () => {
@@ -160,7 +210,7 @@ export async function installDaemon(opts: {
       }
     });
     await step(report, "clis", async () => (paired.installed.length > 0 ? paired.installed.join(", ") : "none found"));
-    return { ...paired, ip };
+    return { ...paired, ip, warning };
   } finally {
     await closeControl(opts.target, control);
   }

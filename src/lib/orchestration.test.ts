@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { agentMeta, exitedless, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
+import { agentMeta, exitedless, optionless, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -222,6 +222,15 @@ describe("a child's open request, as its parent's letter carries it", () => {
     expect(isQuickQuestion(question("a", ["1", "2", "3", "4", "5"]))).toBe(false);
     expect(isQuickQuestion(question("a", ["x"], true))).toBe(false);
     expect(isQuickQuestion(question("a", []))).toBe(false);
+  });
+});
+
+describe("optionless", () => {
+  it("drops the options the daemon lists under each question, and keeps the questions", () => {
+    const letter = "1. Which color?\n   Options: Red (warm); Blue\n2. Ship it?\n   Options (several allowed, comma-separated): Yes; No";
+    expect(optionless(letter)).toBe("1. Which color?\n2. Ship it?");
+    expect(optionless("1. Free text?")).toBe("1. Free text?");
+    expect(optionless("Options: not a daemon line")).toBe("Options: not a daemon line");
   });
 });
 

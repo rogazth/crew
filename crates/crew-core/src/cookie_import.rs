@@ -91,16 +91,12 @@ fn profiles(root: &Path) -> Vec<(String, String)> {
 
 /// The names the user gave each profile, from the browser's `Local State`.
 fn profile_names(root: &Path) -> std::collections::HashMap<String, String> {
-    let parsed = fs::read_to_string(root.join("Local State"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let parsed =
+        fs::read_to_string(root.join("Local State")).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
     let Some(cache) = parsed.as_ref().and_then(|v| v.pointer("/profile/info_cache")).and_then(|v| v.as_object()) else {
         return Default::default();
     };
-    cache
-        .iter()
-        .filter_map(|(folder, info)| Some((folder.clone(), info.get("name")?.as_str()?.to_string())))
-        .collect()
+    cache.iter().filter_map(|(folder, info)| Some((folder.clone(), info.get("name")?.as_str()?.to_string()))).collect()
 }
 
 /// Newer Chromium keeps the database under `Network/`; older, in the profile folder.
@@ -131,10 +127,7 @@ pub fn read(source_id: &str) -> Result<CookieRead, String> {
 }
 
 fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 #[cfg(target_os = "macos")]
@@ -175,8 +168,8 @@ struct Snapshot {
 
 impl Snapshot {
     fn take(db: &Path) -> Result<Self, String> {
-        let dir = std::env::temp_dir().join(format!("crew-cookies-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&dir).map_err(|e| e.to_string())?;
+        let dir = crate::paths::tmp("cookies").join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let snapshot = Snapshot { path: dir.join("Cookies"), dir };
         fs::copy(db, &snapshot.path).map_err(|e| format!("Couldn't copy the cookie database: {e}"))?;
         for suffix in ["-wal", "-journal"] {
@@ -255,11 +248,8 @@ pub fn read_db(path: &Path, key: &Key, now: i64) -> Result<CookieRead, String> {
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).map_err(|e| e.to_string())?;
-    let found = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .any(|name| name == column);
+    let found =
+        stmt.query_map([], |row| row.get::<_, String>(1)).map_err(|e| e.to_string())?.flatten().any(|name| name == column);
     Ok(found)
 }
 
@@ -288,9 +278,7 @@ pub fn decrypt(encrypted: &[u8], key: &Key, version: i64, host: &str) -> Option<
     use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
     let ciphertext = encrypted.strip_prefix(b"v10")?;
     let mut buf = ciphertext.to_vec();
-    let plain = cbc::Decryptor::<aes::Aes128>::new(key.into(), &[b' '; 16].into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .ok()?;
+    let plain = cbc::Decryptor::<aes::Aes128>::new(key.into(), &[b' '; 16].into()).decrypt_padded_mut::<Pkcs7>(&mut buf).ok()?;
     let plain = if version >= HOST_DIGEST_VERSION {
         let digest = plain.get(..32)?;
         if digest != host_digest(host) {

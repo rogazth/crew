@@ -1,10 +1,11 @@
-// Settings › General › Command line: Install links the checkout's `crew` into
+// Settings › General › Command line: Install links the checkout's `crew` (as
+// `crew-dev`, since a dev build never takes the release's name) into
 // the sandbox's ~/.local/bin (on its PATH, so no password), the linked command
 // reaches the app's crewd, Uninstall takes the link away, and a crew that is
 // not Crew's is replaced only when the user says so.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { lstat, readlink, rm, writeFile } from "node:fs/promises";
+import { lstat, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -40,7 +41,7 @@ test("C1: the crew command installs from Settings, runs, and uninstalls", async 
   t.after(() => crew.close());
   const page = crew.window;
   const dir = path.join(crew.home, ".local/bin");
-  const link = path.join(dir, "crew");
+  const link = path.join(dir, "crew-dev");
   const source = path.resolve("target/debug/crew");
 
   await pressChord(crew, `${MOD}+,`);
@@ -56,6 +57,20 @@ test("C1: the crew command installs from Settings, runs, and uninstalls", async 
   const env = { ...process.env, HOME: crew.home, CREW_DATA_DIR: crew.userData, CREW_SOCKET: "", CREW_TOKEN: "" };
   const { stdout } = await run(link, ["status"], { env });
   assert.match(stdout, /daemon\s+running/);
+
+  // Typed in a terminal of the app, it reaches this app's crewd with nothing
+  // set by hand: crewd names its data dir in every terminal it starts.
+  const out = path.join(crew.home, "terminal-status.txt");
+  await crew.request("pty_spawn", {
+    id: "cli-terminal",
+    cwd: crew.home,
+    command: ["/bin/sh", "-c", `'${link}' status > '${out}' 2>&1`],
+    cols: 80,
+    rows: 24,
+  });
+  await waitFor(async () => /daemon\s+running/.test(await readFile(out, "utf8").catch(() => "")), {
+    message: "crew in a terminal finds the app's daemon",
+  });
 
   await section.getByRole("button", { name: "Uninstall" }).click();
   await section.getByText(`It links into ${dir}.`).waitFor();

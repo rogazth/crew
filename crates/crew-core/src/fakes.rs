@@ -8,6 +8,11 @@
 //! the same file and has been through that already (23 ms to start, however
 //! many start at once). A script therefore cannot name its folder: it finds
 //! it from the path it was started by (`sys.argv[0]`).
+//!
+//! A Python fake also ends once the process that started it is gone. Each
+//! host ends its children on the way out, but a test binary that panics or is
+//! killed does not, and a fake blocked anywhere but stdin would then run
+//! for days (one did: `3c7d192` fixed the reading, not the cause).
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -18,15 +23,32 @@ use std::sync::Mutex;
 /// The scripts written so far, by their text, and where.
 static MASTERS: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
 
+/// Put after a Python fake's shebang: a thread that ends the process once its
+/// parent is gone, which the parent id changing says.
+const PYTHON_ORPHAN_GUARD: &str = "\
+import os as _crew_os, threading as _crew_threading, time as _crew_time
+def _crew_end_with_parent(parent=_crew_os.getppid()):
+    while _crew_os.getppid() == parent:
+        _crew_time.sleep(0.5)
+    _crew_os._exit(0)
+_crew_threading.Thread(target=_crew_end_with_parent, daemon=True).start()
+";
+
+/// `script` as it is written: a Python one with the orphan guard after its shebang.
+fn guarded(script: &str) -> String {
+    match script.split_once('\n') {
+        Some((shebang, rest)) if shebang.starts_with("#!") && shebang.contains("python") => {
+            format!("{shebang}\n{PYTHON_ORPHAN_GUARD}{rest}")
+        }
+        _ => script.to_string(),
+    }
+}
+
 /// Puts the executable `script` in `dir` as `name` and returns its path.
 pub(crate) fn install(dir: &Path, name: &str, script: &str) -> PathBuf {
     let master = {
         let mut masters = MASTERS.lock().unwrap_or_else(|e| e.into_inner());
-        masters
-            .get_or_insert_with(HashMap::new)
-            .entry(script.to_string())
-            .or_insert_with(|| write_master(script))
-            .clone()
+        masters.get_or_insert_with(HashMap::new).entry(script.to_string()).or_insert_with(|| write_master(script)).clone()
     };
     let path = dir.join(name);
     let _ = std::fs::remove_file(&path);
@@ -44,7 +66,7 @@ fn write_master(script: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("crew-fakes-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("fakes dir");
     let path = dir.join(format!("fake-{:016x}", hasher.finish()));
-    std::fs::write(&path, script).expect("write fake");
+    std::fs::write(&path, guarded(script)).expect("write fake");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     path
 }
@@ -70,5 +92,41 @@ mod tests {
         assert_eq!(std::fs::metadata(&a).unwrap().ino(), std::fs::metadata(&b).unwrap().ino());
         // Installed again in the same folder, it replaces what was there.
         assert_eq!(install(&one, "fake", &script), a);
+    }
+
+    /// A fake whose test is gone ends too, however it was blocked.
+    #[test]
+    fn a_python_fake_ends_once_its_parent_is_gone() {
+        use std::process::{Command, Stdio};
+        let dir = std::env::temp_dir().join(format!("crew-fakes-orphan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("fake.pid");
+        let script = format!(
+            "#!/usr/bin/env python3\nimport os, time\nopen({:?}, 'w').write(str(os.getpid()))\ntime.sleep(300)\n",
+            pid_file.to_string_lossy()
+        );
+        assert!(guarded(&script).contains("_crew_end_with_parent"));
+        let fake = install(&dir, "fake", &script);
+        // A shell that starts the fake in the background and leaves: the fake's
+        // parent is gone, as when a test binary dies.
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{:?} </dev/null >/dev/null 2>&1 & sleep 1", fake.to_string_lossy()))
+            .stdin(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let pid: i32 = std::fs::read_to_string(&pid_file).expect("the fake never started").trim().parse().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(std::time::Instant::now() < deadline, "the fake outlived its parent");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shell_fake_is_written_as_it_is() {
+        assert_eq!(guarded("#!/bin/sh\necho hi\n"), "#!/bin/sh\necho hi\n");
     }
 }

@@ -61,9 +61,11 @@ export function parseContext(id: string): { workspaceId: string; worktree: strin
     : { workspaceId: id.slice(0, at), worktree: id.slice(at + 1) };
 }
 
-/** What a worktree is called: its branch, or where its HEAD stands when it has none. */
+/** What a worktree is called: its branch, or its folder when its HEAD is detached, as agents leave theirs. */
 export function worktreeLabel(tree: Worktree): string {
-  return tree.branch ?? (tree.main ? "No branch" : "Detached");
+  if (tree.branch) return tree.branch;
+  if (tree.main) return "No branch";
+  return tree.path.split("/").filter(Boolean).at(-1) ?? "Detached";
 }
 
 
@@ -89,8 +91,9 @@ export function branchError(branch: string): string | null {
 }
 
 /** What removing a worktree takes with it, for the prompt that asks. Git keeps the branch. */
-export function removalCost(dirty: number, sessions: number): string {
+export function removalCost(dirty: number, sessions: number, locked: string | null = null): string {
   return [
+    locked === null ? "" : `A tool locked it${locked ? ` (${locked})` : ""}; the lock is broken.`,
     dirty > 0
       ? `${dirty} uncommitted ${dirty === 1 ? "change is" : "changes are"} lost with the folder.`
       : "The folder is deleted; the branch stays.",
@@ -107,7 +110,7 @@ export function commandsCost(names: string[]): string {
   return `${listed} ${names.length === 1 ? "stops" : "stop"} first.`;
 }
 
-/** crewd refusing an unforced removal over work git sees and the listing did not. */
+/** crewd refusing an unforced removal over work or a lock git sees and the listing did not. */
 export function isDirtyRefusal(error: unknown): boolean {
-  return error instanceof Error && error.message.endsWith(" has uncommitted changes");
+  return error instanceof Error && /( has uncommitted changes| is locked(: .*)?)$/s.test(error.message);
 }

@@ -26,19 +26,11 @@ pub struct Holder {
 
 impl Holder {
     pub fn session(id: &str, name: &str) -> Self {
-        Self {
-            key: id.to_string(),
-            label: name.to_string(),
-            session_id: Some(id.to_string()),
-        }
+        Self { key: id.to_string(), label: name.to_string(), session_id: Some(id.to_string()) }
     }
 
     pub fn user() -> Self {
-        Self {
-            key: "user".into(),
-            label: "you".into(),
-            session_id: None,
-        }
+        Self { key: "user".into(), label: "you".into(), session_id: None }
     }
 }
 
@@ -85,14 +77,8 @@ impl Leases {
     /// daemon's lists still come after the old one's: a client that keeps the
     /// newest it has seen never needs telling that the daemon changed.
     pub fn new() -> Self {
-        let state = State {
-            seq: crate::store::now_millis().max(0) as u64 * 1000,
-            ..State::default()
-        };
-        Self {
-            state: Arc::new(Mutex::new(state)),
-            on_change: Arc::default(),
-        }
+        let state = State { seq: crate::store::now_millis().max(0) as u64 * 1000, ..State::default() };
+        Self { state: Arc::new(Mutex::new(state)), on_change: Arc::default() }
     }
 
     /// Told every time the set of leases changes (not on a plain renewal), so
@@ -121,12 +107,7 @@ impl Leases {
             } else {
                 state.tabs.insert(
                     tab.to_string(),
-                    Held {
-                        workspace_id: workspace_id.to_string(),
-                        holder: holder.clone(),
-                        until: now + TTL_MS,
-                        process,
-                    },
+                    Held { workspace_id: workspace_id.to_string(), holder: holder.clone(), until: now + TTL_MS, process },
                 );
                 true
             };
@@ -238,11 +219,7 @@ impl Leases {
 
     pub fn holder_of(&self, tab: &str, now: i64) -> Option<BrowserLease> {
         let state = self.lock();
-        state
-            .tabs
-            .get(tab)
-            .filter(|held| held.until > now)
-            .map(|held| describe(tab, held))
+        state.tabs.get(tab).filter(|held| held.until > now).map(|held| describe(tab, held))
     }
 
     /// The tab a call without one is about.
@@ -292,12 +269,8 @@ fn snapshot(state: &mut State, now: i64) -> BrowserLeases {
 }
 
 fn build(state: &State, now: i64) -> BrowserLeases {
-    let mut leases: Vec<BrowserLease> = state
-        .tabs
-        .iter()
-        .filter(|(_, held)| held.until > now)
-        .map(|(tab, held)| describe(tab, held))
-        .collect();
+    let mut leases: Vec<BrowserLease> =
+        state.tabs.iter().filter(|(_, held)| held.until > now).map(|(tab, held)| describe(tab, held)).collect();
     leases.sort_by(|a, b| a.tab.cmp(&b.tab));
     BrowserLeases { seq: state.seq, leases }
 }

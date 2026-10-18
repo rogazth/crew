@@ -175,6 +175,11 @@ export type BotRef = { id: string, name: string,
 kind?: string, };
 
 /**
+ * The host has a `browser-call` and is working on it.
+ */
+export type BrowserAck = { callId: number, };
+
+/**
  * crewd → the browser host (Electron main), as the `browser-call` event: run
  * one tool on one tab and answer with `browser_result`.
  */
@@ -184,7 +189,41 @@ export type BrowserCall = { callId: number, tab: string, tool: string, args: unk
  * told the caller the call failed. A call still queued behind the tab's
  * earlier ones by then is skipped, not run late.
  */
-deadline: number, };
+deadline: number, 
+/**
+ * The same budget from when the call was sent, for a host whose clock is
+ * not this machine's: a remote's deadline means nothing on a Mac that is
+ * a few seconds off.
+ */
+timeoutMs?: number, };
+
+/**
+ * A browser tab in one of this Mac's strips: what `browser_pages_list`
+ * lists, and what a host reports to a remote machine.
+ */
+export type BrowserHostPage = { pageId: string, 
+/**
+ * The strip: the workspace id, or `<workspace>@<worktree path>`.
+ */
+context: string, url: string, title: string, };
+
+/**
+ * Every tab a host shows for this machine's workspaces, replacing the last list.
+ */
+export type BrowserHostPages = { pages: Array<BrowserHostPage>, };
+
+/**
+ * Electron main, registering as a browser host on its own connection.
+ */
+export type BrowserHostRegister = { 
+/**
+ * The Mac's name, which a machine with several hosts shows by each tab.
+ */
+name: string, 
+/**
+ * It answers each `browser-call` with `browser_ack` as it arrives.
+ */
+acks: boolean, };
 
 /**
  * Who is driving a tab, and until when unless they call again.
@@ -232,7 +271,11 @@ context: string, url: string, title: string, };
  */
 export type BrowserResult = { callId: number, ok: boolean, result?: unknown, error?: string, };
 
-export type BrowserTabArg = { tab: string, };
+export type BrowserTabArg = { tab: string, 
+/**
+ * The tab's workspace, so the window sends this to the daemon that holds it.
+ */
+workspaceId?: string, };
 
 /**
  * A browser tool run as the user, from the window or `crew`.
@@ -1388,6 +1431,11 @@ export type WorkspaceId = { workspaceId: string, };
 export type WorktreeAdd = { path: string, branch: string, };
 
 export type WorktreeRemove = { path: string, 
+/**
+ * Any checkout of the same repo, where git runs: a worktree whose folder
+ * is gone cannot be asked about itself. The path's own when absent.
+ */
+repo?: string, 
 /**
  * Discards uncommitted changes; without it a dirty worktree is refused.
  */

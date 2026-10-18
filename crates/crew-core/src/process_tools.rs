@@ -72,11 +72,36 @@ fn spec_properties() -> Value {
 /// `crew processes <action> <process>`, one per action of `control_process`.
 fn control_verbs() -> Vec<CliVerb> {
     vec![
-        cli("processes", "start").sets("action", "start").about("Start a process in your worktree (or the one you name).").pos(&["process"]).flags(&["worktree", "env"]).eg("crew processes start web\n  crew processes start web --worktree ../app-feat --env PORT=3001"),
-        cli("processes", "stop").sets("action", "stop").about("Stop a process's run: SIGTERM to its group, SIGKILL after 5 s.").pos(&["process"]).flags(&["worktree"]).eg("crew processes stop web"),
-        cli("processes", "restart").sets("action", "restart").about("Stop a process's run and start it again.").pos(&["process"]).flags(&["worktree", "env"]).eg("crew processes restart web"),
-        cli("processes", "pause").sets("action", "pause").about("Freeze a running process (SIGSTOP).").pos(&["process"]).flags(&["worktree"]).eg("crew processes pause worker"),
-        cli("processes", "resume").sets("action", "resume").about("Continue a paused process (SIGCONT).").pos(&["process"]).flags(&["worktree"]).eg("crew processes resume worker"),
+        cli("processes", "start")
+            .sets("action", "start")
+            .about("Start a process in your worktree (or the one you name).")
+            .pos(&["process"])
+            .flags(&["worktree", "env"])
+            .eg("crew processes start web\n  crew processes start web --worktree ../app-feat --env PORT=3001"),
+        cli("processes", "stop")
+            .sets("action", "stop")
+            .about("Stop a process's run: SIGTERM to its group, SIGKILL after 5 s.")
+            .pos(&["process"])
+            .flags(&["worktree"])
+            .eg("crew processes stop web"),
+        cli("processes", "restart")
+            .sets("action", "restart")
+            .about("Stop a process's run and start it again.")
+            .pos(&["process"])
+            .flags(&["worktree", "env"])
+            .eg("crew processes restart web"),
+        cli("processes", "pause")
+            .sets("action", "pause")
+            .about("Freeze a running process (SIGSTOP).")
+            .pos(&["process"])
+            .flags(&["worktree"])
+            .eg("crew processes pause worker"),
+        cli("processes", "resume")
+            .sets("action", "resume")
+            .about("Continue a paused process (SIGCONT).")
+            .pos(&["process"])
+            .flags(&["worktree"])
+            .eg("crew processes resume worker"),
     ]
 }
 
@@ -216,9 +241,8 @@ impl ToolFamily for ProcessTools {
             "list_processes" => Value::Array(host.list(workspace)?.iter().map(here).collect()),
             "control_process" => {
                 let target = process(args)?;
-                let action = string(args, "action")?.ok_or_else(|| {
-                    format!("action is required: one of {}", ACTIONS.join(", "))
-                })?;
+                let action =
+                    string(args, "action")?.ok_or_else(|| format!("action is required: one of {}", ACTIONS.join(", ")))?;
                 let env = env(args)?;
                 match action.as_str() {
                     "start" | "restart" => {
@@ -277,7 +301,9 @@ impl ToolFamily for ProcessTools {
             }
             "read_logs" => match string(args, "pattern")? {
                 None => {
-                    if let Some(key) = ["context", "max_matches"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null())) {
+                    if let Some(key) =
+                        ["context", "max_matches"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null()))
+                    {
                         return Err(format!("{key} goes with pattern: it shapes a search, not a read"));
                     }
                     let chunk = host.read_logs(
@@ -291,7 +317,9 @@ impl ToolFamily for ProcessTools {
                     json!({ "text": chunk.text, "cursor": chunk.cursor, "start": chunk.start, "skipped": chunk.skipped })
                 }
                 Some(pattern) => {
-                    if let Some(key) = ["tail", "since", "max_bytes"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null())) {
+                    if let Some(key) =
+                        ["tail", "since", "max_bytes"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null()))
+                    {
                         return Err(format!(
                             "{key} is for reading, and pattern searches the whole log: drop one (max_matches and context shape a search)"
                         ));
@@ -354,9 +382,10 @@ impl ProcessTools {
         let by = caller.session_id().map(str::to_string);
         let ask = !caller.full_autonomy();
         let existing = match (&named, &name) {
-            (Some(key), _) => Some(host.get(workspace, key).map_err(|error| {
-                format!("{error} To create a process, leave out process and pass name and command.")
-            })?),
+            (Some(key), _) => Some(
+                host.get(workspace, key)
+                    .map_err(|error| format!("{error} To create a process, leave out process and pass name and command."))?,
+            ),
             (None, Some(key)) => host.get(workspace, key).ok(),
             (None, None) => return Err("name is required to create a process, or process to change one".into()),
         };
@@ -453,13 +482,7 @@ impl ProcessTools {
     /// An env for one run is a command no one reviewed, unless the command
     /// already names every variable in it: `NODE_OPTIONS` can run anything,
     /// a `PORT` the user put there cannot. Full autonomy may set any.
-    fn may_set_env(
-        &self,
-        caller: &Caller,
-        workspace: &str,
-        process: &str,
-        env: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    fn may_set_env(&self, caller: &Caller, workspace: &str, process: &str, env: &BTreeMap<String, String>) -> Result<(), String> {
         if caller.full_autonomy() {
             return Ok(());
         }
@@ -487,9 +510,9 @@ impl ProcessTools {
         let listed: Vec<String> = processes
             .iter()
             .map(|process| {
-                let running = process
-                    .run_in(mine)
-                    .is_some_and(|run| matches!(run.state, ProcessState::Running | ProcessState::Starting | ProcessState::Paused));
+                let running = process.run_in(mine).is_some_and(|run| {
+                    matches!(run.state, ProcessState::Running | ProcessState::Starting | ProcessState::Paused)
+                });
                 let note = if !process.approved {
                     ", waiting for approval"
                 } else if running {
@@ -771,8 +794,7 @@ mod tests {
         let user = f.user();
         let careful = f.session(&f.workspace, "bot", "Careful", "ask");
         let trusted = f.session(&f.workspace, "terminal", "Trusted", "full");
-        f.call(&user, "save_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" }))
-            .unwrap();
+        f.call(&user, "save_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" })).unwrap();
         f.call(&user, "control_process", json!({ "action": "start", "process": "repl" })).unwrap();
         let first = f.call(&user, "wait_for_log", json!({ "process": "repl", "pattern": "^one$", "timeout_s": 5 })).unwrap();
         assert_eq!(first["result"], "matched", "{first}");
@@ -832,7 +854,8 @@ mod tests {
         assert!(refused.contains("control_process takes: process, action"), "{refused}");
         let refused = f.call(&user, "control_process", json!({ "process": "web", "action": "boot" })).unwrap_err();
         assert!(refused.contains("one of start, stop, restart, pause, resume, not boot"), "{refused}");
-        let refused = f.call(&user, "control_process", json!({ "process": "web", "action": "stop", "env": { "A": "1" } })).unwrap_err();
+        let refused =
+            f.call(&user, "control_process", json!({ "process": "web", "action": "stop", "env": { "A": "1" } })).unwrap_err();
         assert!(refused.contains("env is for start and restart"), "{refused}");
 
         for (action, state) in [("start", "running"), ("pause", "paused"), ("resume", "running"), ("restart", "running")] {
@@ -898,8 +921,12 @@ mod tests {
         let f = fixture("worktree");
         let tree = worktree(&f.dir, "feat");
         let user = f.user();
-        f.call(&user, "save_process", json!({ "name": "web", "command": "echo port=$PORT in $(pwd); sleep 30", "env": { "PORT": "3000" } }))
-            .unwrap();
+        f.call(
+            &user,
+            "save_process",
+            json!({ "name": "web", "command": "echo port=$PORT in $(pwd); sleep 30", "env": { "PORT": "3000" } }),
+        )
+        .unwrap();
         let session = session::create_in_worktree(
             &f.store,
             f.workspace.clone(),
@@ -916,10 +943,16 @@ mod tests {
 
         // Its worktree unless told otherwise, and only the names the command has.
         let refused = f
-            .call(&careful, "control_process", json!({ "action": "start", "process": "web", "env": { "NODE_OPTIONS": "--require x" } }))
+            .call(
+                &careful,
+                "control_process",
+                json!({ "action": "start", "process": "web", "env": { "NODE_OPTIONS": "--require x" } }),
+            )
             .unwrap_err();
         assert!(refused.contains("autonomy ask") && refused.contains("NODE_OPTIONS"), "{refused}");
-        let started = f.call(&careful, "control_process", json!({ "action": "start", "process": "web", "env": { "PORT": "3001" } })).unwrap();
+        let started = f
+            .call(&careful, "control_process", json!({ "action": "start", "process": "web", "env": { "PORT": "3001" } }))
+            .unwrap();
         let run = &started["runs"][0];
         assert_eq!((run["worktree"].as_str(), run["here"].as_bool()), (Some(tree.as_str()), Some(true)), "{started}");
         assert_eq!((run["env"]["PORT"].as_str(), run["started_by"].as_str()), (Some("3001"), Some(careful.label().as_str())));
@@ -937,7 +970,8 @@ mod tests {
         let main = f.call(&user, "read_logs", json!({ "process": "web" })).unwrap();
         assert!(!main["text"].as_str().unwrap().contains("3001"), "each run its own log: {main}");
 
-        let nowhere = f.call(&user, "control_process", json!({ "action": "start", "process": "web", "worktree": "/nope" })).unwrap_err();
+        let nowhere =
+            f.call(&user, "control_process", json!({ "action": "start", "process": "web", "worktree": "/nope" })).unwrap_err();
         assert!(nowhere.contains("not a worktree"), "{nowhere}");
 
         // The user stops the agent's run by naming its worktree; theirs keeps going.
@@ -965,9 +999,7 @@ mod tests {
         let f = fixture("scope");
         let elsewhere_dir = f.dir.join("elsewhere");
         std::fs::create_dir_all(&elsewhere_dir).unwrap();
-        let elsewhere = crate::workspace::create(&f.store, "e".into(), elsewhere_dir.to_string_lossy().into())
-            .unwrap()
-            .id;
+        let elsewhere = crate::workspace::create(&f.store, "e".into(), elsewhere_dir.to_string_lossy().into()).unwrap().id;
         let mine = f.call(&f.user(), "save_process", json!({ "name": "web", "command": "sleep 30" })).unwrap();
 
         let stranger = f.session(&elsewhere, "terminal", "Shell", "full");

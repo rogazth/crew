@@ -74,7 +74,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     (tree: Worktree, sessions: Session[], unsaved: string[], commands: string[] = []) => {
       const prompt = (listed: Worktree, force: boolean): Confirm => ({
         title: `Remove worktree "${worktreeLabel(listed)}"?`,
-        description: [removalCost(listed.dirty, sessions.length), commandsCost(commands), unsavedCost(unsaved)]
+        description: [removalCost(listed.dirty, sessions.length, listed.locked), commandsCost(commands), unsavedCost(unsaved)]
           .filter(Boolean)
           .join(" "),
         action: "Remove",
@@ -89,7 +89,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
           for (const session of sessions) closeTabsFor(session.id);
         },
       });
-      setConfirm(prompt(tree, tree.dirty > 0));
+      setConfirm(prompt(tree, tree.dirty > 0 || tree.locked !== null));
     },
     [closeTabsFor, removeWorktree, rereadWorktrees],
   );

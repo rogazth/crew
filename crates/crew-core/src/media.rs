@@ -23,7 +23,7 @@ pub fn set_dir(dir: PathBuf) {
 }
 
 fn dir() -> PathBuf {
-    DIR.get().cloned().unwrap_or_else(|| std::env::temp_dir().join("crew").join("media"))
+    DIR.get().cloned().unwrap_or_else(|| crate::paths::layout().data.join("media"))
 }
 
 /// The images in a result's content blocks, saved. Reads the shapes the
@@ -104,11 +104,7 @@ pub fn local(path: &str) -> Option<AttachedFile> {
     let path = file_path(path)?;
     let name = Path::new(&path).file_name()?.to_string_lossy().into_owned();
     let size = std::fs::metadata(&path).ok().map(|meta| meta.len());
-    let kind = if crate::files::image_mime(&name).is_some() {
-        AttachedFileKind::Image
-    } else {
-        AttachedFileKind::File
-    };
+    let kind = if crate::files::image_mime(&name).is_some() { AttachedFileKind::Image } else { AttachedFileKind::File };
     Some(AttachedFile { name, path, kind: Some(kind), size })
 }
 

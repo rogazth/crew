@@ -17,9 +17,7 @@ const MAX_TEMP_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// The most one `read_range` hands back, so a caller cannot ask for the disk at once.
 const MAX_RANGE_BYTES: u64 = 16 * 1024 * 1024;
-const SKIPPED_DIRS: &[&str] = &[
-    "node_modules", ".git", "target", "dist", "build", ".next", ".venv", "vendor",
-];
+const SKIPPED_DIRS: &[&str] = &["node_modules", ".git", "target", "dist", "build", ".next", ".venv", "vendor"];
 /// A git-ignored folder holding more files than this is a cache or a build,
 /// not notes someone keeps out of the repo, and is left out whole.
 const IGNORED_FOLDER_BUDGET: usize = 1_000;
@@ -29,8 +27,19 @@ const IGNORED_BUDGET: usize = 2_000;
 const LOOSE_IGNORED_BUDGET: usize = 20;
 /// Ignored folders that are always caches, however few files they hold.
 const CACHE_DIRS: &[&str] = &[
-    "__pycache__", ".cache", ".turbo", ".parcel-cache", ".pytest_cache", ".mypy_cache",
-    ".ruff_cache", ".gradle", ".terraform", ".svelte-kit", ".nuxt", "coverage", "Pods",
+    "__pycache__",
+    ".cache",
+    ".turbo",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".gradle",
+    ".terraform",
+    ".svelte-kit",
+    ".nuxt",
+    "coverage",
+    "Pods",
     "DerivedData",
 ];
 
@@ -135,9 +144,7 @@ fn ls_ignored(root: &Path, prefix: &str, entries: Vec<String>, files: &mut Vec<P
     let entries: Vec<String> = entries
         .into_iter()
         .map(|entry| under(prefix, entry))
-        .filter(|relative| {
-            !has_skipped_dir(relative) && !relative.split('/').any(|segment| CACHE_DIRS.contains(&segment))
-        })
+        .filter(|relative| !has_skipped_dir(relative) && !relative.split('/').any(|segment| CACHE_DIRS.contains(&segment)))
         .collect();
     for relative in &entries {
         // A folder of nothing but ignored files is listed, and so are its files.
@@ -376,17 +383,11 @@ fn make_file(root: &Path, relative: String) -> Option<ProjectFile> {
     if name == ".DS_Store" {
         return None;
     }
-    Some(ProjectFile {
-        name,
-        path: path.to_string_lossy().into_owned(),
-        relative,
-    })
+    Some(ProjectFile { name, path: path.to_string_lossy().into_owned(), relative })
 }
 
 fn has_skipped_dir(relative: &str) -> bool {
-    relative
-        .split('/')
-        .any(|segment| SKIPPED_DIRS.contains(&segment))
+    relative.split('/').any(|segment| SKIPPED_DIRS.contains(&segment))
 }
 
 pub fn read_text(path: &str) -> Result<String, String> {
@@ -415,12 +416,7 @@ pub fn read_base64(path: &str) -> Result<FileBytes, String> {
         return Err("File is too large to attach".into());
     }
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mime = match Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
+    let mime = match Path::new(path).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
@@ -428,19 +424,11 @@ pub fn read_base64(path: &str) -> Result<FileBytes, String> {
         Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     };
-    Ok(FileBytes {
-        mime: mime.into(),
-        data: base64::engine::general_purpose::STANDARD.encode(bytes),
-    })
+    Ok(FileBytes { mime: mime.into(), data: base64::engine::general_purpose::STANDARD.encode(bytes) })
 }
 
 pub fn image_mime(name: &str) -> Option<&'static str> {
-    match Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
+    match Path::new(name).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("png") => Some("image/png"),
         Some("jpg") | Some("jpeg") => Some("image/jpeg"),
         Some("gif") => Some("image/gif"),
@@ -450,8 +438,7 @@ pub fn image_mime(name: &str) -> Option<&'static str> {
 }
 
 pub fn is_image(file: &AttachedFile) -> bool {
-    matches!(file.kind, Some(AttachedFileKind::Image))
-        || (file.kind.is_none() && image_mime(&file.name).is_some())
+    matches!(file.kind, Some(AttachedFileKind::Image)) || (file.kind.is_none() && image_mime(&file.name).is_some())
 }
 
 pub fn load_inline_images(files: &[AttachedFile]) -> Vec<InlineImage> {
@@ -461,11 +448,7 @@ pub fn load_inline_images(files: &[AttachedFile]) -> Vec<InlineImage> {
         .filter_map(|file| {
             let media_type = image_mime(&file.name)?.to_string();
             let bytes = read_base64(&file.path).ok()?;
-            Some(InlineImage {
-                path: file.path.clone(),
-                media_type,
-                data: bytes.data,
-            })
+            Some(InlineImage { path: file.path.clone(), media_type, data: bytes.data })
         })
         .collect()
 }
@@ -487,7 +470,7 @@ pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, Stri
     if bytes.len() > MAX_TEMP_FILE_BYTES {
         return Err("Pasted file is too large".into());
     }
-    let dir = std::env::temp_dir().join("crew");
+    let dir = crate::paths::tmp("files");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(extension)));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
@@ -509,7 +492,7 @@ pub fn write_chunk(id: &str, extension: &str, offset: u64, base64_contents: &str
     if offset + bytes.len() as u64 > MAX_UPLOAD_BYTES {
         return Err("File is too large to upload".into());
     }
-    let dir = std::env::temp_dir().join("crew");
+    let dir = crate::paths::tmp("files");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.{}", safe_extension(extension)));
     let mut options = std::fs::OpenOptions::new();
@@ -559,20 +542,12 @@ pub fn create_base64(path: &str, base64_contents: &str) -> Result<(), String> {
     if let Some(parent) = Path::new(path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())
 }
 
 fn safe_extension(extension: &str) -> String {
-    let kept: String = extension
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(8)
-        .collect();
+    let kept: String = extension.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
     if kept.is_empty() {
         "bin".into()
     } else {
@@ -682,13 +657,7 @@ mod tests {
 
     #[test]
     fn walk_outside_a_repo_lists_nested_repos_through_git() {
-        let dir = scratch(&[
-            "api/.gitignore",
-            "api/app.php",
-            "api/storage/logs/a.log",
-            "api/wt/copy.php",
-            "web/src/index.ts",
-        ]);
+        let dir = scratch(&["api/.gitignore", "api/app.php", "api/storage/logs/a.log", "api/wt/copy.php", "web/src/index.ts"]);
         std::fs::write(dir.join("api/.gitignore"), "storage/\n").unwrap();
         git_init(&dir.join("api"));
         // A worktree or submodule: `.git` is a file pointing elsewhere.
@@ -700,10 +669,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(separate.status.success());
-        assert_eq!(
-            relatives(&dir),
-            ["api/.gitignore", "api/app.php", "api/storage/logs/a.log", "web/src/index.ts"]
-        );
+        assert_eq!(relatives(&dir), ["api/.gitignore", "api/app.php", "api/storage/logs/a.log", "web/src/index.ts"]);
     }
 
     #[test]

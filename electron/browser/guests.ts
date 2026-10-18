@@ -648,6 +648,8 @@ function windowOpen(
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
+        // The preload in every iframe as well; the sandbox still keeps Node out.
+        nodeIntegrationInSubFrames: true,
         webSecurity: true,
       },
     },

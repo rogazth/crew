@@ -273,21 +273,11 @@ pub struct PtyError {
 }
 
 pub fn ok(id: u32, result: Value) -> Response {
-    Response {
-        id,
-        ok: true,
-        result: Some(result),
-        error: None,
-    }
+    Response { id, ok: true, result: Some(result), error: None }
 }
 
 pub fn err(id: u32, error: impl Into<String>) -> Response {
-    Response {
-        id,
-        ok: false,
-        result: None,
-        error: Some(error.into()),
-    }
+    Response { id, ok: false, result: None, error: Some(error.into()) }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -485,6 +475,11 @@ pub struct WorktreeAdd {
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct WorktreeRemove {
     pub path: String,
+    /// Any checkout of the same repo, where git runs: a worktree whose folder
+    /// is gone cannot be asked about itself. The path's own when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<String>,
     /// Discards uncommitted changes; without it a dirty worktree is refused.
     #[serde(default)]
     pub force: bool,
@@ -749,10 +744,7 @@ pub struct FileBytes {
 }
 
 pub fn event(event: impl Into<String>, payload: impl Serialize) -> Result<Event, serde_json::Error> {
-    Ok(Event {
-        event: event.into(),
-        payload: serde_json::to_value(payload)?,
-    })
+    Ok(Event { event: event.into(), payload: serde_json::to_value(payload)? })
 }
 
 /// One row of browser history: every visit to the same normalized URL lands
@@ -956,6 +948,12 @@ pub struct BrowserCall {
     /// earlier ones by then is skipped, not run late.
     #[ts(type = "number")]
     pub deadline: i64,
+    /// The same budget from when the call was sent, for a host whose clock is
+    /// not this machine's: a remote's deadline means nothing on a Mac that is
+    /// a few seconds off.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// The host's answer to one `browser-call`. `result` is an array of MCP
@@ -1013,6 +1011,53 @@ pub struct BrowserLeases {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct BrowserTabArg {
     pub tab: String,
+    /// The tab's workspace, so the window sends this to the daemon that holds it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub workspace_id: Option<String>,
+}
+
+/// Electron main, registering as a browser host on its own connection.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserHostRegister {
+    /// The Mac's name, which a machine with several hosts shows by each tab.
+    #[serde(default)]
+    pub name: String,
+    /// It answers each `browser-call` with `browser_ack` as it arrives.
+    #[serde(default)]
+    pub acks: bool,
+}
+
+/// A browser tab in one of this Mac's strips: what `browser_pages_list`
+/// lists, and what a host reports to a remote machine.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserHostPage {
+    pub page_id: String,
+    /// The strip: the workspace id, or `<workspace>@<worktree path>`.
+    pub context: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// Every tab a host shows for this machine's workspaces, replacing the last list.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserHostPages {
+    pub pages: Vec<BrowserHostPage>,
+}
+
+/// The host has a `browser-call` and is working on it.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserAck {
+    #[ts(type = "number")]
+    pub call_id: u64,
 }
 
 /// A browser tool run as the user, from the window or `crew`.

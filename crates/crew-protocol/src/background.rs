@@ -168,10 +168,7 @@ mod tests {
         let raw = r#"{"id":"t1","command":"npm run dev","kind":"shell","startedAt":1,"state":"running"}"#;
         let row: BackgroundCommand = serde_json::from_str(raw).expect("command");
         assert_eq!(serde_json::to_string(&row).expect("json"), raw);
-        assert_eq!(
-            (row.tokens, row.window, row.stoppable, row.stop_note, row.activity),
-            (None, None, None, None, None)
-        );
+        assert_eq!((row.tokens, row.window, row.stoppable, row.stop_note, row.activity), (None, None, None, None, None));
         assert_eq!((row.model, row.foreground, row.thread_id), (None, None, None));
     }
 
@@ -215,10 +212,7 @@ mod tests {
         assert_eq!(all.ids, None);
         assert_eq!(serde_json::to_string(&all).expect("json"), r#"{"sessionId":"s1"}"#);
         let some = BackgroundClear { session_id: "s1".into(), ids: Some(vec!["t1".into()]), hide: None };
-        assert_eq!(
-            serde_json::to_value(&some).expect("json"),
-            serde_json::json!({ "sessionId": "s1", "ids": ["t1"] })
-        );
+        assert_eq!(serde_json::to_value(&some).expect("json"), serde_json::json!({ "sessionId": "s1", "ids": ["t1"] }));
         let hide = BackgroundClear { session_id: "s1".into(), ids: None, hide: Some(vec!["session:c1@5".into()]) };
         assert_eq!(
             serde_json::to_value(&hide).expect("json"),
