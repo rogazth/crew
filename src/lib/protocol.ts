@@ -171,7 +171,13 @@ export type BotNotes = { entries: Array<string>, used: number, cap: number, };
 /**
  * `bot_notes_set`: the user's edit of a bot's notes, every entry.
  */
-export type BotNotesSet = { id: string, entries: Array<string>, };
+export type BotNotesSet = { id: string, entries: Array<string>, 
+/**
+ * The entries the edit was made from. Given, the edit is laid over the
+ * notes as they are now, so what the bot wrote meanwhile stays; left
+ * out, `entries` replaces them.
+ */
+base?: Array<string>, };
 
 /**
  * Who wrote a message, when it was not the user. Bots address each other by

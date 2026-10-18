@@ -455,12 +455,21 @@ impl ToolDispatch {
     }
 }
 
-/// A bot's notes, after writing `entries` when given. Only a bot has notes.
-fn bot_notes(store: &Store, id: &str, entries: Option<Vec<String>>) -> Result<BotNotes, String> {
+/// A bot's notes, after writing the user's edit when given. Only a bot has notes.
+fn bot_notes(store: &Store, id: &str, edit: Option<BotNotesSet>) -> Result<BotNotes, String> {
     use crew_core::notes;
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
-    let entries = match entries {
-        Some(entries) => notes::set(store, &row.id, entries)?,
+    let entries = match edit {
+        Some(BotNotesSet { entries, base, .. }) => {
+            let laid = notes::update(store, &row.id, |current| {
+                let next = match &base {
+                    Some(base) => notes::merge(current, base, &entries),
+                    None => notes::tidy(entries.clone()),
+                };
+                notes::fits(&next).map(|()| next)
+            })?;
+            laid?.1
+        }
         None => notes::get(store, &row.id)?,
     };
     Ok(BotNotes { used: notes::used(&entries) as u32, cap: notes::CAP as u32, entries })
@@ -1408,11 +1417,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || bot_notes(&store, &id, None)).await?)
         }
-        // The user's edit, every entry at once: the sheet sends what it shows.
+        // The user's edit, every entry at once: the sheet sends what it shows
+        // and what it opened with, so the bot's writes meanwhile survive it.
         "bot_notes_set" => {
-            let BotNotesSet { id, entries } = parse(params)?;
+            let edit: BotNotesSet = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || bot_notes(&store, &id, Some(entries))).await?)
+            let id = edit.id.clone();
+            json(block(move || bot_notes(&store, &id, Some(edit))).await?)
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;

@@ -142,9 +142,13 @@ export const updateSession = (
 /** A bot's notes: what it keeps for later turns, apart from its description. */
 export const getBotNotes = (id: string): Promise<BotNotes> => client.request("bot_notes_get", { id });
 
-/** The user's edit of a bot's notes, every entry; refused over the cap. */
-export const setBotNotes = (id: string, entries: string[]): Promise<BotNotes> =>
-  client.request("bot_notes_set", { id, entries });
+/**
+ * The user's edit of a bot's notes, every entry, made from `base` (what the
+ * sheet opened with): laid over the notes as they are now, so what the bot
+ * wrote meanwhile stays. Refused over the cap.
+ */
+export const setBotNotes = (id: string, entries: string[], base: string[]): Promise<BotNotes> =>
+  client.request("bot_notes_set", { id, entries, base });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });

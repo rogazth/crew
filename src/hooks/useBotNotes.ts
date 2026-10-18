@@ -7,8 +7,8 @@ const CAP = 4000;
 
 /**
  * A bot's notes as the bot sheet edits them: read when it opens, written on
- * save only if the user changed them, so an entry the bot wrote meanwhile
- * survives a save that never touched the notes. `bot` null is a bot being made,
+ * save only if the user changed them, and then as an edit of what it opened
+ * with, so an entry the bot wrote meanwhile survives the save. `bot` null is a bot being made,
  * which has none yet.
  */
 export function useBotNotes(bot: { id: string } | null) {
@@ -41,7 +41,10 @@ export function useBotNotes(bot: { id: string } | null) {
     if (!botId || !notes || !texts || sameNotes(texts, notes.saved)) return;
     if (over) throw new Error("Its notes are over the cap.");
     try {
-      await api.setBotNotes(botId, texts);
+      const written = await api.setBotNotes(botId, texts, notes.saved);
+      // The sheet shows what is stored now, the bot's entries included, and
+      // that is the base of a save retried after the sheet failed further on.
+      setNotes((prev) => (prev ? { ...prev, saved: written.entries, entries: noteEntries(written.entries) } : prev));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       throw failure;

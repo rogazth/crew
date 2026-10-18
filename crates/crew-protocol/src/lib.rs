@@ -496,6 +496,12 @@ pub struct BotNotes {
 pub struct BotNotesSet {
     pub id: String,
     pub entries: Vec<String>,
+    /// The entries the edit was made from. Given, the edit is laid over the
+    /// notes as they are now, so what the bot wrote meanwhile stays; left
+    /// out, `entries` replaces them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base: Option<Vec<String>>,
 }
 
 /// What a session's composer changes: its model, effort, service tier and autonomy.

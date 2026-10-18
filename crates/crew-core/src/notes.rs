@@ -28,28 +28,71 @@ CREATE TABLE IF NOT EXISTS bot_notes (
 
 /// A bot's entries, oldest first.
 pub fn get(store: &Store, session_id: &str) -> Result<Vec<String>, String> {
-    let body: Option<String> = store.with(|conn| {
-        conn.query_row("SELECT body FROM bot_notes WHERE session_id = ?1", params![session_id], |row| row.get(0)).optional()
-    })?;
-    Ok(body.map(|body| split(&body)).unwrap_or_default())
+    store.with(|conn| read(conn, session_id))
 }
 
 /// Replace a bot's entries with `entries`, tidied (see [`tidy`]). Refused
 /// over the cap, saying by how much.
 pub fn set(store: &Store, session_id: &str, entries: Vec<String>) -> Result<Vec<String>, String> {
     let entries = tidy(entries);
-    let used = used(&entries);
+    fits(&entries)?;
+    store.with(|conn| write(conn, session_id, &entries))?;
+    Ok(entries)
+}
+
+/// `f` over a bot's entries, and what it returns stored, under one hold of
+/// the connection: a write that lands between the read and the write (the
+/// bot sheet, a second tool call at once) cannot be lost. Answers the entries
+/// before and after; `f`'s refusal stores nothing.
+pub fn update<E>(
+    store: &Store,
+    session_id: &str,
+    f: impl FnOnce(&[String]) -> Result<Vec<String>, E>,
+) -> Result<Result<(Vec<String>, Vec<String>), E>, String> {
+    store.with(|conn| {
+        let before = read(conn, session_id)?;
+        let next = match f(&before) {
+            Ok(next) => next,
+            Err(refused) => return Ok(Err(refused)),
+        };
+        if next != before {
+            write(conn, session_id, &next)?;
+        }
+        Ok(Ok((before, next)))
+    })
+}
+
+/// The user's edit, made from `base` (the entries the sheet opened with),
+/// laid over the entries as they are now: what the user removed goes, what
+/// they added comes in, and what the bot wrote meanwhile stays.
+pub fn merge(current: &[String], base: &[String], edited: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = current.iter().filter(|entry| !base.contains(entry) || edited.contains(entry)).cloned().collect();
+    out.extend(edited.iter().filter(|entry| !base.contains(entry)).cloned());
+    tidy(out)
+}
+
+/// Refused over the cap, saying by how much.
+pub fn fits(entries: &[String]) -> Result<(), String> {
+    let used = used(entries);
     if used > CAP {
         return Err(format!("Notes hold at most {} characters; these are {}.", thousands(CAP), thousands(used)));
     }
-    store.with(|conn| {
-        conn.execute(
-            "INSERT INTO bot_notes (session_id, body, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(session_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
-            params![session_id, entries.join(SEPARATOR), now_millis()],
-        )
-    })?;
-    Ok(entries)
+    Ok(())
+}
+
+fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Vec<String>> {
+    let body: Option<String> =
+        conn.query_row("SELECT body FROM bot_notes WHERE session_id = ?1", params![session_id], |row| row.get(0)).optional()?;
+    Ok(body.map(|body| split(&body)).unwrap_or_default())
+}
+
+fn write(conn: &rusqlite::Connection, session_id: &str, entries: &[String]) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO bot_notes (session_id, body, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+        params![session_id, entries.join(SEPARATOR), now_millis()],
+    )?;
+    Ok(())
 }
 
 /// Each entry trimmed, the empty ones and repeats dropped, and one that holds
@@ -235,6 +278,29 @@ mod tests {
         assert_eq!(usage(&[]), "[0% - 0/4,000]");
         assert_eq!(usage(&notes(&[&"x".repeat(2_480)])), "[62% - 2,480/4,000]");
         assert_eq!(used(&notes(&["ab", "cd"])), 2 + 2 + SEPARATOR.chars().count());
+    }
+
+    /// A sheet saved after the bot wrote keeps the bot's entry, and drops
+    /// only what the user removed.
+    #[test]
+    fn a_users_edit_is_laid_over_what_the_bot_wrote_meanwhile() {
+        let base = notes(&["silla: id 7731942", "mesa: id 5512"]);
+        let current = notes(&["silla: id 7731942", "mesa: id 5512", "lámpara: id 4410"]);
+        let edited = notes(&["silla: comprada", "mesa: id 5512"]);
+        assert_eq!(merge(&current, &base, &edited), notes(&["mesa: id 5512", "lámpara: id 4410", "silla: comprada"]));
+        // What the bot removed meanwhile stays gone, unless the user wrote it.
+        assert_eq!(merge(&notes(&["mesa: id 5512"]), &base, &base), notes(&["mesa: id 5512"]));
+    }
+
+    /// A refusal inside `update` stores nothing.
+    #[test]
+    fn update_stores_only_what_it_was_given_back() {
+        let (store, bot) = store();
+        set(&store, &bot, notes(&["uno"])).unwrap();
+        let (before, after) = update(&store, &bot, |entries| apply(entries, Edit::Add("dos"))).unwrap().unwrap();
+        assert_eq!((before, after), (notes(&["uno"]), notes(&["uno", "dos"])));
+        assert!(update(&store, &bot, |entries| apply(entries, Edit::Remove("tres"))).unwrap().is_err());
+        assert_eq!(get(&store, &bot).unwrap(), notes(&["uno", "dos"]));
     }
 
     /// What the user types in the sheet is tidied the same way: an entry

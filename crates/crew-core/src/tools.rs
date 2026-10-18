@@ -868,26 +868,24 @@ fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Sessi
 /// `memory`: a bot's notes, read or written an entry at a time.
 fn memory(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
     use crate::notes::{self, Edit, Refused};
-    let entries = notes::get(store, &caller.id)?;
     let content = args.get("content").and_then(Value::as_str).unwrap_or("");
     let old = args.get("old_text").and_then(Value::as_str).unwrap_or("");
     let edit = match text(args.get("action")).as_deref().unwrap_or("show") {
-        "show" => return Ok(listing(&entries, None)),
+        "show" => return Ok(listing(&notes::get(store, &caller.id)?, None)),
         "add" => Edit::Add(content),
         "patch" => Edit::Patch { old, new: content },
         "remove" => Edit::Remove(old),
         other => return Err(format!("Unknown action \"{other}\". One of: add, patch, remove, show")),
     };
-    match notes::apply(&entries, edit) {
-        Ok(next) if next == entries => Ok(listing(&next, Some("Nothing changed: that entry is already there."))),
-        Ok(next) => {
-            let next = notes::set(store, &caller.id, next)?;
-            Ok(listing(&next, Some("Saved. You will see these at the top of your next turn.")))
-        }
-        Err(Refused::Asked(why)) => Err(why),
+    // Read, edited and written under one hold, so two writes at once both land.
+    match notes::update(store, &caller.id, |entries| notes::apply(entries, edit).map_err(|refused| (refused, entries.to_vec())))?
+    {
+        Ok((before, next)) if next == before => Ok(listing(&next, Some("Nothing changed: that entry is already there."))),
+        Ok((_, next)) => Ok(listing(&next, Some("Saved. You will see these at the top of your next turn."))),
+        Err((Refused::Asked(why), _)) => Err(why),
         // The notes come back with the refusal: the bot cannot make room
         // without seeing what takes it.
-        Err(Refused::Full { needed }) => Err(format!(
+        Err((Refused::Full { needed }, entries)) => Err(format!(
             "Your notes are full: that needs {needed} more characters than they hold. Make room first (merge entries \
              that overlap, shorten them, remove what is done), then try again.\nYour notes {}:\n{}",
             notes::usage(&entries),
