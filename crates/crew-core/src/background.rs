@@ -811,6 +811,12 @@ impl Board {
         let before = self.commands[at].clone();
         if state == BackgroundState::Running {
             let row = &mut self.commands[at];
+            // Started again once it ended: a turn the parent's `sendInput`
+            // ran on it. It is the same entry, running anew.
+            if row.state != BackgroundState::Running {
+                row.started_at = now;
+                row.activity = None;
+            }
             row.state = state;
             row.ended_at = None;
             row.exit_code = None;

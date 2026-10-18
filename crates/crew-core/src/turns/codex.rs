@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use crew_protocol::{
     ApprovalDecision, ApprovalResolution, BackgroundState, CommandEntry, ContextReading, HarnessEvent, McpState, SubagentState,
+    ToolDetail,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
@@ -44,7 +45,7 @@ use crate::providers::codex::{
     tool_name, turn_end, turn_id, turn_start_input, unsupported_error, user_message_text, with_attached_paths,
     ApprovalKind, CodexAsk, CodexCommand, CodexThread, TurnEnd,
 };
-use crate::providers::string_field;
+use crate::providers::{clip, string_field};
 
 use super::Live;
 
@@ -117,6 +118,9 @@ struct Child {
     report: Option<String>,
     /// What it said before `call` was known, in order.
     held: Vec<(String, Value)>,
+    /// A `sendInput` the parent wrote to it, and what it sent: the turn that
+    /// starts next is that call's, its steps and its report.
+    next: Option<(String, Option<String>)>,
 }
 
 impl Child {
@@ -1292,6 +1296,7 @@ impl TurnHost {
                     if completed {
                         let mine = live.thread_id.clone().unwrap_or_default();
                         spawn_named(live, item, &mine, &mut work);
+                        input_sent(live, item);
                     }
                     // Every item: one starting says the model went on from a
                     // command still running, which puts that one in the background.
@@ -1522,7 +1527,8 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
     let Some(call) = call else {
         return;
     };
-    let label = exec_item(item).map(|row| tool_label(&row)).unwrap_or_else(|| "Subagent".into());
+    let row = exec_item(item);
+    let label = row.as_ref().map(tool_label).unwrap_or_else(|| "Subagent".into());
     let model = string_field(Some(item), "model").filter(|model| !model.is_empty());
     let effort = string_field(Some(item), "reasoningEffort").filter(|effort| !effort.is_empty());
     for thread in threads {
@@ -1536,6 +1542,28 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
         child.call = Some(call.clone());
         let nickname = child.nickname.clone();
         let held = std::mem::take(&mut child.held);
+        // The spawn names the thread, as a `sendInput` to it later does: the
+        // calls read as one agent's, each with its own steps and state.
+        if let Some(ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps, .. }) =
+            row.as_ref().filter(|_| string_field(Some(item), "id").as_deref() == Some(call.as_str())).and_then(tool_detail)
+        {
+            work.events.push(HarnessEvent::ToolUpdated {
+                call_id: call.clone(),
+                title: None,
+                status: None,
+                detail: Some(ToolDetail::Agent {
+                    description,
+                    agent_type,
+                    prompt,
+                    output,
+                    background,
+                    state,
+                    activity,
+                    steps,
+                    thread: Some(thread.clone()),
+                }),
+            });
+        }
         work.board.push(ChildBoard::Spawned {
             thread: thread.clone(),
             call: call.clone(),
@@ -1546,6 +1574,28 @@ fn spawn_named(live: &mut CodexLive, item: &Map<String, Value>, from: &str, work
         });
         for (method, params) in held {
             child_note(live, &thread, &method, &params, work);
+        }
+    }
+}
+
+/// A `sendInput` the parent wrote to agents it spawned: the turn it starts
+/// on each is that call's. One that lands in a turn still running steers it,
+/// and the turn stays the call's that started it.
+fn input_sent(live: &mut CodexLive, item: &Map<String, Value>) {
+    if string_field(Some(item), "type").as_deref() != Some("collabAgentToolCall")
+        || string_field(Some(item), "tool").as_deref() != Some("sendInput")
+        || string_field(Some(item), "status").as_deref() == Some("failed")
+    {
+        return;
+    }
+    let Some(call) = string_field(Some(item), "id") else {
+        return;
+    };
+    let prompt = string_field(Some(item), "prompt").filter(|prompt| !prompt.trim().is_empty());
+    let threads = item.get("receiverThreadIds").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+    for thread in threads {
+        if let Some(child) = live.children.get_mut(thread).filter(|child| child.call.as_deref().is_some_and(|known| known != call)) {
+            child.next = Some((call.clone(), prompt.clone()));
         }
     }
 }
@@ -1563,7 +1613,7 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
         return;
     }
     let child = live.children.entry(thread.to_string()).or_default();
-    let Some(call) = child.call.clone() else {
+    let Some(mut call) = child.call.clone() else {
         if child.held.len() >= HELD_LIMIT {
             child.held.remove(0);
         }
@@ -1573,6 +1623,33 @@ fn child_note(live: &mut CodexLive, thread: &str, method: &str, params: &Value, 
     let mut steps = Vec::new();
     let mut after = Vec::new();
     let mut spawned = None;
+    // The turn a `sendInput` started is that call's: it shows what it sent,
+    // and the steps and the report from here on. The call before keeps its own.
+    if method == "turn/started" {
+        if let Some((next, prompt)) = child.next.take() {
+            call = next;
+            child.call = Some(call.clone());
+            child.follow = Follow::default();
+            child.report = None;
+            let description = prompt.as_deref().map_or_else(|| "Subagent".to_string(), |prompt| clip(prompt, 72));
+            after.push(HarnessEvent::ToolUpdated {
+                call_id: call.clone(),
+                title: Some(description.clone()),
+                status: None,
+                detail: Some(ToolDetail::Agent {
+                    description,
+                    agent_type: None,
+                    prompt,
+                    output: None,
+                    background: Some(true),
+                    state: None,
+                    activity: None,
+                    steps: None,
+                    thread: Some(thread.to_string()),
+                }),
+            });
+        }
+    }
     match method {
         "turn/started" => {
             child.turn = params.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
@@ -1670,7 +1747,9 @@ pub(super) fn subagent_updated(call: &str, state: Option<SubagentState>, activit
 /// an agent on another thread of the same connection (`child-thread-1`, turn
 /// `child-turn-1`) whose notifications come before the call names it and
 /// between the turn's own words; `SPAWNHOLD` keeps that agent's turn open until
-/// it is interrupted, and `SPAWNREQUEST` has it ask to run a command. It
+/// it is interrupted, `SPAWNREQUEST` has it ask to run a command, and
+/// `SPAWNAGAIN` has the model write to it once it ended (`send-1`), which
+/// runs a second turn on it (`child-turn-2`) that answers `two`. It
 /// answers `report: <last line>`, with ` + <steer>` for each steer it took.
 #[cfg(test)]
 pub(crate) fn fake_codex(dir: &std::path::Path) -> (String, std::path::PathBuf) {
@@ -1802,6 +1881,20 @@ def run(turn, text):
             child_item("completed", dict(echo, status="completed", exitCode=0, aggregatedOutput="one\n"))
             child_item("completed", {"type": "agentMessage", "id": said, "text": "one", "phase": "final_answer"})
             child_out("turn/completed", {"turn": {"id": CHILD_TURN, "status": "completed", "error": None}})
+            if "SPAWNAGAIN" in text:
+                # The model writes to the agent it spawned, which runs a turn
+                # of its own, as Codex 0.160 sent it: the call completes, then
+                # the agent's new turn starts.
+                again = {"type": "collabAgentToolCall", "id": "send-1", "tool": "sendInput", "status": "inProgress", "senderThreadId": state["thread"], "receiverThreadIds": [CHILD], "prompt": "Now reply with just the word two.", "model": None, "reasoningEffort": None, "agentsStates": {}}
+                item("started", again)
+                item("completed", dict(again, status="completed", agentsStates={CHILD: {"status": "completed", "message": "one"}}))
+                child_out("turn/started", {"turn": {"id": "child-turn-2", "status": "inProgress"}})
+                child_out("item/started", {"turnId": "child-turn-2", "item": {"type": "userMessage", "id": "child-asked-2", "clientId": None, "content": [{"type": "text", "text": again["prompt"], "text_elements": []}]}})
+                echo2 = dict(echo, id="child-exec-2", command="/bin/zsh -lc 'echo two'")
+                child_out("item/started", {"turnId": "child-turn-2", "item": echo2})
+                child_out("item/completed", {"turnId": "child-turn-2", "item": dict(echo2, status="completed", exitCode=0, aggregatedOutput="two\n")})
+                child_out("item/completed", {"turnId": "child-turn-2", "item": {"type": "agentMessage", "id": "msg_child_2", "text": "two", "phase": "final_answer"}})
+                child_out("turn/completed", {"turn": {"id": "child-turn-2", "status": "completed", "error": None}})
             # The parent's turn is not over because the agent's is.
             time.sleep(0.5)
         between.append(child_work)
@@ -2449,6 +2542,59 @@ mod child_tests {
         assert_eq!(rows, [(BlockRole::Tool, "echo one".to_string()), (BlockRole::Assistant, "one".to_string())]);
         let call = steps[0].tool.as_ref().expect("its command");
         assert_eq!(call.status, ToolStatus::Completed);
+    }
+
+    /// A `sendInput` to an agent that ended runs a turn of its own on it: that
+    /// call shows what it sent, the new turn's steps and its report, and names
+    /// the agent's thread as the spawn does; the spawn keeps its own; the one
+    /// entry runs again and ends.
+    #[test]
+    fn writing_to_a_spawned_agent_again_is_a_call_of_its_own_with_its_steps_and_report() {
+        let (host, session, _log, _) = started("SPAWNAGAIN");
+        wait_for(|| !host.is_running(&session));
+        let calls: Vec<(String, String, ToolDetail)> = blocks(&host, &session)
+            .into_iter()
+            .filter_map(|block| block.tool)
+            .filter_map(|tool| tool.detail.map(|detail| (tool.call_id, tool.title, detail)))
+            .filter(|(_, _, detail)| matches!(detail, ToolDetail::Agent { .. }))
+            .collect();
+        let seen: Vec<_> = calls
+            .iter()
+            .map(|(call, title, detail)| {
+                let ToolDetail::Agent { prompt, state, output, steps, thread, .. } = detail else {
+                    unreachable!()
+                };
+                let steps: Vec<(BlockRole, String)> =
+                    steps.clone().unwrap_or_default().into_iter().map(|step| (step.role, step.text)).collect();
+                (call.as_str(), title.as_str(), prompt.clone(), state.clone(), output.clone(), steps, thread.clone())
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "spawn-1",
+                    "Reply with just the word one.",
+                    Some("Reply with just the word one.".to_string()),
+                    Some(SubagentState::Done),
+                    Some("one".to_string()),
+                    vec![(BlockRole::Tool, "echo one".to_string()), (BlockRole::Assistant, "one".to_string())],
+                    Some(CHILD.to_string()),
+                ),
+                (
+                    "send-1",
+                    "Now reply with just the word two.",
+                    Some("Now reply with just the word two.".to_string()),
+                    Some(SubagentState::Done),
+                    Some("two".to_string()),
+                    vec![(BlockRole::Tool, "echo two".to_string()), (BlockRole::Assistant, "two".to_string())],
+                    Some(CHILD.to_string()),
+                ),
+            ]
+        );
+        let list = host.background_list(&session).commands;
+        assert_eq!(list.len(), 1, "one entry for the one agent");
+        assert_eq!((list[0].state, list[0].tool_call_id.as_deref()), (BackgroundState::Completed, Some("spawn-1")));
     }
 
     /// The agent has an entry of its own, running from its spawn to its own
