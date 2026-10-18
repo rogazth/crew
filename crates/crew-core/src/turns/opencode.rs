@@ -28,8 +28,8 @@ use std::thread;
 use std::time::Duration;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, AttachedFile, BackgroundState, BotRef, ContextReading, HarnessEvent,
-    SubagentState, ToolStatus, TurnStart, TurnUsage,
+    ApprovalDecision, ApprovalResolution, AttachedFile, BackgroundState, BotRef, ContextReading, HarnessEvent, SubagentState,
+    ToolStatus, TurnStart, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
@@ -37,15 +37,15 @@ use tokio::sync::oneshot;
 use super::codex::{subagent_updated, ChildBoard, ChildWork};
 use super::opencode_server::Conn;
 use super::{
-    carries_conversation, conversation_to_resume, driven, keeps_process, path_list, typed_by_user, Answers, Harness,
-    Launch, Live, QuestionReply, Steer, TurnHost, TurnOutcome,
+    carries_conversation, conversation_to_resume, driven, keeps_process, path_list, typed_by_user, Answers, Harness, Launch,
+    Live, QuestionReply, Steer, TurnHost, TurnOutcome,
 };
 use crate::http_local::Reply;
 use crate::mailbox;
 use crate::providers::opencode::{
-    add_usage, ask_of, bot_text, command_entries, context_used, context_window, crew_commands, error_message,
-    finish_failure, form_answer, form_questions, model_ref, permission_rules, prompt_body, session_of, skill_entries,
-    tool_detail, tool_label, tool_output, tool_status, ToolEnd,
+    add_usage, ask_of, bot_text, command_entries, context_used, context_window, crew_commands, error_message, finish_failure,
+    form_answer, form_questions, model_ref, permission_rules, prompt_body, session_of, skill_entries, tool_detail, tool_label,
+    tool_output, tool_status, ToolEnd,
 };
 use crate::session;
 
@@ -325,7 +325,10 @@ impl TurnHost {
                 match client.post_json(&format!("/api/session/{oc}/command"), &body) {
                     // A command opencode does not know is the text of a turn.
                     Ok(reply) if reply.status == 404 => {
-                        ok(client.post_json(&format!("/api/session/{oc}/prompt"), &prompt_body(&text, &skills)), "take the message")?;
+                        ok(
+                            client.post_json(&format!("/api/session/{oc}/prompt"), &prompt_body(&text, &skills)),
+                            "take the message",
+                        )?;
                     }
                     reply => {
                         ok(reply, &format!("run /{name}"))?;
@@ -357,9 +360,8 @@ impl TurnHost {
         let autonomy = self.autonomy(session);
         let rules = permission_rules(&autonomy, session.kind == "bot");
         let model = model_ref(&session.model, &session.effort);
-        let resume = conversation_to_resume(session).filter(|oc| {
-            client.get_json(&format!("/api/session/{oc}")).is_ok_and(|reply| reply.status == 200)
-        });
+        let resume = conversation_to_resume(session)
+            .filter(|oc| client.get_json(&format!("/api/session/{oc}")).is_ok_and(|reply| reply.status == 200));
         let oc = match &resume {
             Some(oc) => {
                 // Taken up again: it runs on what the session asks for now.
@@ -380,11 +382,7 @@ impl TurnHost {
                     body["model"] = model.clone();
                 }
                 let created = ok(client.post_json("/api/session", &body), "open a session")?;
-                created
-                    .pointer("/data/id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .ok_or("opencode opened no session.")?
+                created.pointer("/data/id").and_then(Value::as_str).map(str::to_string).ok_or("opencode opened no session.")?
             }
         };
         if let Some(Live::Opencode(live)) = self.lock().get_mut(&session.id) {
@@ -397,7 +395,10 @@ impl TurnHost {
         let persona = self.persona(session, Harness::Opencode, self.mcp().is_some(), &params.cwd);
         if let Some(persona) = persona.filter(|_| first) {
             ok(
-                client.put_json(&format!("/api/experimental/session/{oc}/instructions/entries/{PERSONA_KEY}"), &json!({ "value": persona })),
+                client.put_json(
+                    &format!("/api/experimental/session/{oc}/instructions/entries/{PERSONA_KEY}"),
+                    &json!({ "value": persona }),
+                ),
                 "take the persona",
             )?;
         }
@@ -438,7 +439,13 @@ impl TurnHost {
     /// A kept binding, told what moved since its last turn: the model in
     /// place, the autonomy as its rules. One bound on a server that has since
     /// stopped is bound again on this one.
-    fn opencode_settle(&self, session: &session::Session, params: &TurnStart, conn: &Conn, since: &Launch) -> Result<String, String> {
+    fn opencode_settle(
+        &self,
+        session: &session::Session,
+        params: &TurnStart,
+        conn: &Conn,
+        since: &Launch,
+    ) -> Result<String, String> {
         let (oc, epoch) = match self.lock().get(&session.id) {
             Some(Live::Opencode(live)) => (live.oc.clone(), live.epoch),
             _ => (None, 0),
@@ -626,7 +633,9 @@ impl TurnHost {
                 return Err("No opencode turn is running to take it.".into());
             };
             // In before the request: its delivery can beat the answer.
-            live.steers.push((None, Steer {
+            live.steers.push((
+                None,
+                Steer {
                     sent: sent.clone(),
                     text: text.to_string(),
                     from,
@@ -635,7 +644,8 @@ impl TurnHost {
                     files,
                     typed,
                     rest,
-                }));
+                },
+            ));
             oc
         };
         let forget = || {
@@ -647,13 +657,15 @@ impl TurnHost {
             forget();
             return Err("opencode is not running.".into());
         };
-        let inbox = match ok(conn.client().post_json(&format!("/api/session/{oc}/prompt"), &prompt_body(&sent, &[])), "take the message") {
-            Ok(answer) => answer.pointer("/data/id").and_then(Value::as_str).map(str::to_string),
-            Err(error) => {
-                forget();
-                return Err(error);
-            }
-        };
+        let inbox =
+            match ok(conn.client().post_json(&format!("/api/session/{oc}/prompt"), &prompt_body(&sent, &[])), "take the message")
+            {
+                Ok(answer) => answer.pointer("/data/id").and_then(Value::as_str).map(str::to_string),
+                Err(error) => {
+                    forget();
+                    return Err(error);
+                }
+            };
         let Some(inbox) = inbox else {
             forget();
             return Err("opencode took the message without saying where it put it.".into());
@@ -826,7 +838,8 @@ impl TurnHost {
                     }
                 }
                 "session.tool.input.started" => {
-                    let (Some(call), Some(name)) = (data.get("id").and_then(Value::as_str), data.get("name").and_then(Value::as_str))
+                    let (Some(call), Some(name)) =
+                        (data.get("id").and_then(Value::as_str), data.get("name").and_then(Value::as_str))
                     else {
                         return;
                     };
@@ -930,8 +943,7 @@ impl TurnHost {
                     if live.usage.is_some() {
                         events.push(HarnessEvent::TurnCompleted { usage: live.usage.clone() });
                     }
-                    outcome =
-                        Some(if live.cancelled { TurnOutcome::Stopped } else { TurnOutcome::Failed(error_message(data)) });
+                    outcome = Some(if live.cancelled { TurnOutcome::Stopped } else { TurnOutcome::Failed(error_message(data)) });
                 }
                 "session.execution.interrupted" => outcome = Some(TurnOutcome::Stopped),
                 _ => {}
@@ -966,9 +978,9 @@ impl TurnHost {
             let Some(parent) = data.get("parentID").and_then(Value::as_str) else {
                 return;
             };
-            let model = data.get("model").and_then(|model| {
-                Some(format!("{}/{}", model.get("providerID")?.as_str()?, model.get("id")?.as_str()?))
-            });
+            let model = data
+                .get("model")
+                .and_then(|model| Some(format!("{}/{}", model.get("providerID")?.as_str()?, model.get("id")?.as_str()?)));
             let effort = data
                 .pointer("/model/variant")
                 .and_then(Value::as_str)
@@ -1141,7 +1153,9 @@ impl TurnHost {
         let Some(form_id) = form.get("id").and_then(Value::as_str).map(str::to_string) else {
             return;
         };
-        if questions.is_empty() || !matches!(self.lock().get(session_id), Some(Live::Opencode(live)) if live.active && !live.cancelled) {
+        if questions.is_empty()
+            || !matches!(self.lock().get(session_id), Some(Live::Opencode(live)) if live.active && !live.cancelled)
+        {
             return;
         }
         let host = self.clone();

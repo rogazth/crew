@@ -133,17 +133,11 @@ impl CommandsHost {
         };
         let named: HashSet<&str> = actions.iter().map(|action| action.name.as_str()).chain(["fast"]).collect();
         let mut entries = actions.clone();
-        entries.extend(
-            reported
-                .entries
-                .iter()
-                .filter(|entry| !named.contains(entry.name.as_str()))
-                .map(|entry| {
-                    let is_skill = reported.skills.contains(&entry.name)
-                        || entry.aliases.iter().flatten().any(|alias| reported.skills.contains(alias));
-                    CommandEntry { kind: if is_skill { "skill" } else { "command" }.into(), ..entry.clone() }
-                }),
-        );
+        entries.extend(reported.entries.iter().filter(|entry| !named.contains(entry.name.as_str())).map(|entry| {
+            let is_skill = reported.skills.contains(&entry.name)
+                || entry.aliases.iter().flatten().any(|alias| reported.skills.contains(alias));
+            CommandEntry { kind: if is_skill { "skill" } else { "command" }.into(), ..entry.clone() }
+        }));
         // A catalog nothing was read for says when it was asked, not zero: the
         // reader tells a stale menu by this time.
         CommandCatalog { entries, at: if reported.at == 0 { now } else { reported.at } }
@@ -251,10 +245,7 @@ mod tests {
         let (init, _) = answers();
         let entries = claude_entries(&init["commands"]);
         let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["cold-run", "prototype", "figma:figma-use", "loop", "compact", "context", "model", "effort"]
-        );
+        assert_eq!(names, ["cold-run", "prototype", "figma:figma-use", "loop", "compact", "context", "model", "effort"]);
         let get = |name: &str| entries.iter().find(|entry| entry.name == name).expect(name);
         assert_eq!(get("compact").argument_hint.as_deref(), Some("<optional custom summarization instructions>"));
         assert_eq!(get("context").argument_hint, None);

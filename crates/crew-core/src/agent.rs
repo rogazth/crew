@@ -87,10 +87,7 @@ impl AgentHost {
     fn build(registry: Option<Arc<Registry>>) -> Self {
         Self {
             shared: Arc::new(Shared {
-                inner: Mutex::new(Inner {
-                    children: HashMap::new(),
-                    epochs: HashMap::new(),
-                }),
+                inner: Mutex::new(Inner { children: HashMap::new(), epochs: HashMap::new() }),
                 kill_all_gen: AtomicU64::new(0),
                 events: Mutex::new(None),
                 registry,
@@ -124,13 +121,7 @@ impl AgentHost {
         (epoch, kill_all, prev)
     }
 
-    fn install_spawn(
-        &self,
-        session_id: String,
-        epoch: u64,
-        kill_all: u64,
-        live: Arc<LiveChild>,
-    ) -> Option<Arc<LiveChild>> {
+    fn install_spawn(&self, session_id: String, epoch: u64, kill_all: u64, live: Arc<LiveChild>) -> Option<Arc<LiveChild>> {
         let mut inner = self.lock();
         if self.shared.kill_all_gen.load(Ordering::SeqCst) != kill_all {
             return Some(live);
@@ -193,14 +184,10 @@ impl AgentHost {
     /// Resolve `claude` the way a terminal would. Finder-launched apps inherit
     /// launchd's PATH, so Homebrew / `~/.local/bin` would otherwise look missing.
     pub fn resolve_claude() -> Result<AgentBinary, String> {
-        shell_path::resolve("claude")
-            .map(|path| AgentBinary {
-                path: path.to_string_lossy().into_owned(),
-            })
-            .ok_or_else(|| {
-                "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`."
-                    .into()
-            })
+        shell_path::resolve("claude").map(|path| AgentBinary { path: path.to_string_lossy().into_owned() }).ok_or_else(|| {
+            "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`."
+                .into()
+        })
     }
 
     pub fn resolve(name: &str) -> Result<AgentBinary, String> {
@@ -214,18 +201,13 @@ impl AgentHost {
         } else {
             shell_path::resolve(name).ok_or_else(|| format!("`{name}` was not found on your PATH."))?
         };
-        Ok(AgentBinary {
-            path: path.to_string_lossy().into_owned(),
-        })
+        Ok(AgentBinary { path: path.to_string_lossy().into_owned() })
     }
 
     /// The names that resolve, asked again each time so a CLI installed
     /// mid-session shows up. opencode costs a `--version` run to answer.
     pub fn installed(names: Vec<String>) -> Vec<String> {
-        names
-            .into_iter()
-            .filter(|name| !name.contains('/') && Self::resolve(name).is_ok())
-            .collect()
+        names.into_iter().filter(|name| !name.contains('/') && Self::resolve(name).is_ok()).collect()
     }
 
     pub fn spawn(
@@ -259,9 +241,7 @@ impl AgentHost {
             .stderr(Stdio::piped());
         prepare_child(&mut cmd);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to start {command}: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to start {command}: {e}"))?;
         let pid = child.id();
 
         let (stdin, stdout, stderr) = match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
@@ -277,11 +257,7 @@ impl AgentHost {
             registry.add(pid);
         }
 
-        let live = Arc::new(LiveChild {
-            stdin: Mutex::new(Some(stdin)),
-            pid,
-            exited: AtomicBool::new(false),
-        });
+        let live = Arc::new(LiveChild { stdin: Mutex::new(Some(stdin)), pid, exited: AtomicBool::new(false) });
         if let Some(rejected) = self.install_spawn(session_id.clone(), epoch, kill_all, live.clone()) {
             let _ = terminate(&rejected);
             let registry = registry.clone();
@@ -293,10 +269,7 @@ impl AgentHost {
             return Err(SPAWN_CANCELLED.to_string());
         }
 
-        let gate = Arc::new(Gate {
-            session_id: session_id.clone(),
-            epoch,
-        });
+        let gate = Arc::new(Gate { session_id: session_id.clone(), epoch });
         let (pumps_done, pumps) = mpsc::channel();
         pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout, pumps_done.clone());
         pump(self.clone(), STDERR_EVENT, gate, stderr, pumps_done);
@@ -326,13 +299,9 @@ impl AgentHost {
     }
 
     pub fn write(&self, session_id: &str, line: &str) -> Result<(), String> {
-        let live = self
-            .get(session_id)
-            .ok_or_else(|| "Agent process is not running".to_string())?;
+        let live = self.get(session_id).ok_or_else(|| "Agent process is not running".to_string())?;
         let mut slot = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
-        let stdin = slot
-            .as_mut()
-            .ok_or_else(|| "Agent stdin is closed".to_string())?;
+        let stdin = slot.as_mut().ok_or_else(|| "Agent stdin is closed".to_string())?;
         stdin
             .write_all(line.as_bytes())
             .and_then(|_| stdin.write_all(b"\n"))
@@ -371,13 +340,7 @@ struct Gate {
 /// One reader thread feeds a channel; the emitter waits a beat for the rest of
 /// the burst and sends it as one event. With partial messages on, claude writes
 /// a line per token, and each event is a JSON round-trip into the webview.
-fn pump(
-    host: AgentHost,
-    event: &'static str,
-    gate: Arc<Gate>,
-    reader: impl Read + Send + 'static,
-    done: mpsc::Sender<()>,
-) {
+fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read + Send + 'static, done: mpsc::Sender<()>) {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
@@ -540,14 +503,8 @@ mod tests {
         let host = AgentHost::new();
         let collected = Arc::new(Collect(Mutex::new(Vec::new())));
         host.set_events(collected.clone());
-        host.spawn(
-            "s1".into(),
-            script.to_string_lossy().into_owned(),
-            Vec::new(),
-            dir.to_string_lossy().into_owned(),
-            None,
-        )
-        .expect("spawn");
+        host.spawn("s1".into(), script.to_string_lossy().into_owned(), Vec::new(), dir.to_string_lossy().into_owned(), None)
+            .expect("spawn");
 
         let want = std::fs::canonicalize(&dir).expect("canonical");
         for _ in 0..100 {
@@ -557,8 +514,7 @@ mod tests {
                     // The shell reports the logical path it was handed; the
                     // same directory under /var and /private/var is the same
                     // directory, and this test is about which one it is.
-                    let got = std::fs::canonicalize(line.trim())
-                        .unwrap_or_else(|_| std::path::PathBuf::from(line.trim()));
+                    let got = std::fs::canonicalize(line.trim()).unwrap_or_else(|_| std::path::PathBuf::from(line.trim()));
                     assert_eq!(got, want, "the agent was left in the daemon's directory");
                 }
                 return;
@@ -607,32 +563,18 @@ mod tests {
     }
 
     fn registered(path: &std::path::Path) -> Vec<i64> {
-        let json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap_or_default()).unwrap_or_default();
-        json["groups"]
-            .as_array()
-            .map(|groups| groups.iter().filter_map(|g| g["pgid"].as_i64()).collect())
-            .unwrap_or_default()
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap_or_default()).unwrap_or_default();
+        json["groups"].as_array().map(|groups| groups.iter().filter_map(|g| g["pgid"].as_i64()).collect()).unwrap_or_default()
     }
 
     fn spawn_script(host: &AgentHost, dir: &std::path::Path, body: &str) -> u32 {
-        host.spawn(
-            "s1".into(),
-            script(dir, body),
-            Vec::new(),
-            dir.to_string_lossy().into_owned(),
-            None,
-        )
-        .expect("spawn")
+        host.spawn("s1".into(), script(dir, body), Vec::new(), dir.to_string_lossy().into_owned(), None).expect("spawn")
     }
 
     fn read_helper_pid(dir: &std::path::Path) -> i32 {
         let mut pid = 0;
         until("the helper never reported its pid", || {
-            pid = std::fs::read_to_string(dir.join("helper.pid"))
-                .ok()
-                .and_then(|text| text.trim().parse().ok())
-                .unwrap_or(0);
+            pid = std::fs::read_to_string(dir.join("helper.pid")).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
             pid > 0
         });
         pid
@@ -686,18 +628,12 @@ mod tests {
 
     fn sleeper() -> std::process::Child {
         use std::os::unix::process::CommandExt;
-        Command::new("sleep")
-            .arg("300")
-            .process_group(0)
-            .spawn()
-            .expect("sleep")
+        Command::new("sleep").arg("300").process_group(0).spawn().expect("sleep")
     }
 
     fn write_groups(path: &std::path::Path, boot: i64, groups: &[(u32, i64)]) {
-        let groups: Vec<_> = groups
-            .iter()
-            .map(|(pgid, started)| serde_json::json!({ "pgid": pgid, "started": started }))
-            .collect();
+        let groups: Vec<_> =
+            groups.iter().map(|(pgid, started)| serde_json::json!({ "pgid": pgid, "started": started })).collect();
         let json = serde_json::json!({ "boot": boot, "groups": groups });
         std::fs::write(path, json.to_string()).expect("registry file");
     }
@@ -717,9 +653,7 @@ mod tests {
 
         crate::agent_groups::sweep(&path);
 
-        until("the group survived the sweep", || {
-            matches!(child.try_wait(), Ok(Some(_)))
-        });
+        until("the group survived the sweep", || matches!(child.try_wait(), Ok(Some(_))));
         assert!(registered(&path).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

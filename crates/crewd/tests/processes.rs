@@ -46,11 +46,8 @@ async fn call(ws: &mut Ws, seen: &mut Vec<Value>, id: u32, method: &str, params:
     let request = json!({ "id": id, "method": method, "params": params }).to_string();
     ws.send(Message::Text(request.into())).await.expect("send");
     loop {
-        let message = tokio::time::timeout(Duration::from_secs(15), ws.next())
-            .await
-            .expect("rpc timeout")
-            .expect("closed")
-            .expect("ws");
+        let message =
+            tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
         let Message::Text(text) = message else { continue };
         let response: Value = serde_json::from_str(&text).expect("json");
         if response["id"] != id {
@@ -69,9 +66,8 @@ async fn processes_answer_the_json_the_renderer_sends() {
     let (handle, dir) = daemon("rpc");
     let mut ws = connect(&handle).await;
     let mut seen = Vec::new();
-    let workspace = call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir }))
-        .await
-        .expect("workspace");
+    let workspace =
+        call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir })).await.expect("workspace");
     let workspace_id = workspace["id"].as_str().unwrap().to_string();
 
     let created = call(
@@ -126,9 +122,7 @@ async fn processes_answer_the_json_the_renderer_sends() {
     assert!(call(&mut ws, &mut seen, 7, "process_start", wrong).await.is_err());
 
     call(&mut ws, &mut seen, 8, "process_delete", target).await.expect("delete");
-    let listed = call(&mut ws, &mut seen, 9, "process_list", json!({ "workspaceId": workspace_id }))
-        .await
-        .expect("list");
+    let listed = call(&mut ws, &mut seen, 9, "process_list", json!({ "workspaceId": workspace_id })).await.expect("list");
     assert_eq!(listed, json!([]));
     assert!(seen.iter().any(|m| m["event"] == "process-removed"));
     handle.shutdown();
@@ -140,21 +134,15 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     let (handle, dir) = daemon("resync");
     let mut ws = connect(&handle).await;
     let mut seen = Vec::new();
-    let workspace = call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir }))
-        .await
-        .expect("workspace");
+    let workspace =
+        call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir })).await.expect("workspace");
     let workspace_id = workspace["id"].as_str().unwrap().to_string();
     // Paced a little, so the viewer is attached while most of it is still to come.
     let flood = "sleep 0.5; yes 0123456789abcdefghijklmnopqrstuvwxyz | head -c 4000000; echo; echo DONE; sleep 30";
-    let created = call(
-        &mut ws,
-        &mut seen,
-        2,
-        "process_create",
-        json!({ "workspaceId": workspace_id, "name": "flood", "command": flood }),
-    )
-    .await
-    .expect("create");
+    let created =
+        call(&mut ws, &mut seen, 2, "process_create", json!({ "workspaceId": workspace_id, "name": "flood", "command": flood }))
+            .await
+            .expect("create");
     let target = json!({ "workspaceId": workspace_id, "id": created["id"] });
     let started = call(&mut ws, &mut seen, 3, "process_start", target.clone()).await.expect("start");
     let pty = started["runs"][0]["ptyId"].as_str().unwrap().to_string();
@@ -182,9 +170,15 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     // With nobody draining the socket the process still finishes its output.
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let now = call(&mut ws, &mut seen, 5, "process_log_tail", json!({ "workspaceId": workspace_id, "id": created["id"], "maxBytes": 64 }))
-            .await
-            .expect("tail");
+        let now = call(
+            &mut ws,
+            &mut seen,
+            5,
+            "process_log_tail",
+            json!({ "workspaceId": workspace_id, "id": created["id"], "maxBytes": 64 }),
+        )
+        .await
+        .expect("tail");
         if now["text"].as_str().unwrap_or_default().contains("DONE") {
             break;
         }
@@ -206,9 +200,8 @@ async fn approve_carries_the_revision() {
     let (handle, dir) = daemon("approve");
     let mut ws = connect(&handle).await;
     let mut seen = Vec::new();
-    let workspace = call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir }))
-        .await
-        .expect("workspace");
+    let workspace =
+        call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir })).await.expect("workspace");
     let workspace_id = workspace["id"].as_str().unwrap().to_string();
 
     // An agent's request, written beside the daemon on the same database.

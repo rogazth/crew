@@ -138,10 +138,7 @@ mod tests {
     /// The push names its session and carries the catalog it replaces.
     #[test]
     fn a_commands_changed_push_names_its_session_and_catalog() {
-        let push = CommandsChanged {
-            session_id: "s1".into(),
-            catalog: CommandCatalog { entries: Vec::new(), at: 5 },
-        };
+        let push = CommandsChanged { session_id: "s1".into(), catalog: CommandCatalog { entries: Vec::new(), at: 5 } };
         assert_eq!(
             serde_json::to_value(&push).expect("json"),
             serde_json::json!({ "sessionId": "s1", "catalog": { "entries": [], "at": 5 } })

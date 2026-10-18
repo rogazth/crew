@@ -84,11 +84,7 @@ impl Agent {
     /// `ProcessType Interactive`: left unset, launchd throttles an agent's CPU
     /// and I/O, and this one runs the user's dev servers and builds.
     pub fn plist(&self) -> String {
-        let arguments: String = self
-            .arguments()
-            .iter()
-            .map(|arg| format!("\t\t<string>{}</string>\n", escape(arg)))
-            .collect();
+        let arguments: String = self.arguments().iter().map(|arg| format!("\t\t<string>{}</string>\n", escape(arg))).collect();
         let log = escape(&self.log().to_string_lossy());
         let label = label(&self.data_dir);
         format!(
@@ -156,11 +152,7 @@ fn escape(text: &str) -> String {
 }
 
 fn unescape(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 pub fn plist_path(data_dir: &Path) -> PathBuf {
@@ -313,12 +305,13 @@ mod tests {
       <string>/opt/crewd</string><string>--supervised-by</string><string>launchd</string>
       <string>--data-dir</string><string>/d/Crew &lt;dev&gt;</string>
   </array><key>Label</key><string>rogazth.crew.crewd</string></dict></plist>"#;
-        assert_eq!(
-            Agent::from_plist(xml),
-            Some(Agent { program: "/opt/crewd".into(), data_dir: "/d/Crew <dev>".into() })
-        );
+        assert_eq!(Agent::from_plist(xml), Some(Agent { program: "/opt/crewd".into(), data_dir: "/d/Crew <dev>".into() }));
         assert_eq!(Agent::from_plist("<plist><dict></dict></plist>"), None);
-        assert_eq!(Agent::from_plist(r"<key>ProgramArguments</key><array><string>/opt/crewd</string></array>"), None, "no data dir");
+        assert_eq!(
+            Agent::from_plist(r"<key>ProgramArguments</key><array><string>/opt/crewd</string></array>"),
+            None,
+            "no data dir"
+        );
     }
 
     /// Out of ~/Library/LaunchAgents, so login never loads it.
@@ -335,11 +328,16 @@ mod tests {
     #[test]
     fn each_data_dir_has_a_label_of_its_own() {
         assert_eq!(label(Path::new("/Users/me/Library/Application Support/Crew")), LABEL);
-        assert_eq!(label(Path::new("/Users/me/Library/Application Support/Crew Local")), "rogazth.crew.crewd.crew-local-e1e2ad52");
+        assert_eq!(
+            label(Path::new("/Users/me/Library/Application Support/Crew Local")),
+            "rogazth.crew.crewd.crew-local-e1e2ad52"
+        );
         assert_eq!(label(Path::new("/tmp/app data")), "rogazth.crew.crewd.app-data-bb444e4d");
         let dir = Path::new("/Users/me/Library/Application Support/Crew Dev");
         assert_eq!(plist_path(dir), dir.join(format!("{}.plist", label(dir))));
-        assert!(Agent { program: "/crewd".into(), data_dir: dir.into() }.plist().contains(&format!("<string>{}</string>", label(dir))));
+        assert!(Agent { program: "/crewd".into(), data_dir: dir.into() }
+            .plist()
+            .contains(&format!("<string>{}</string>", label(dir))));
     }
 
     #[test]

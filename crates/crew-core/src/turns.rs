@@ -9,49 +9,47 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, AttachedFile, AttachedFileKind, ContextReading, HarnessEvent, ToolStatus,
-    TurnStart, TurnStarted,
+    ApprovalDecision, ApprovalResolution, AttachedFile, AttachedFileKind, ContextReading, HarnessEvent, ToolStatus, TurnStart,
+    TurnStarted,
 };
 use serde_json::{json, Map, Value};
 
 use crate::agent::AgentHost;
 use crate::bridge::Bridge;
+use crate::mailbox;
+pub(crate) use crate::prompts::Harness;
 use crate::providers::claude::{
     assistant_context, assistant_text_blocks, assistant_tool_uses, build_claude_dispatch_message, build_claude_spawn_args,
     build_claude_user_message, build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
-    input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message,
-    parse_context_usage, permission_mode, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
-    reload_plugins_request, reload_skills_request, result_context_window, stop_task_request,
-    session_id_from_message, stream_text_delta, to_permission_result,
-    to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
-    tool_result_detail as claude_tool_result_detail, tool_result_files as claude_tool_result_files,
-    tool_results_from_user_message, tool_start_from_event,
-    try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
-    ClaudeSpawn, Subagents,
+    input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message, parse_context_usage,
+    parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions, permission_mode,
+    reload_plugins_request, reload_skills_request, result_context_window, session_id_from_message, stop_task_request,
+    stream_text_delta, to_permission_result, to_question_result, tool_detail as claude_tool_detail,
+    tool_label as claude_tool_label, tool_result_detail as claude_tool_result_detail,
+    tool_result_files as claude_tool_result_files, tool_results_from_user_message, tool_start_from_event, try_parse_json_record,
+    turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest, ClaudeSpawn, Subagents,
 };
 use crate::providers::parse_json_line;
 use crate::providers::{string_field, Autonomy};
-use crate::mailbox;
-pub(crate) use crate::prompts::Harness;
 use crate::session;
-use crate::working_set;
 use crate::store::Store;
 use crate::transcript::TranscriptHub;
+use crate::working_set;
 
 mod codex;
 mod cursor;
 mod mcp;
 mod opencode;
 mod opencode_server;
-use codex::CodexLive;
-use cursor::CursorLive;
-use opencode::OpencodeLive;
-#[cfg(test)]
-pub(crate) use opencode::fake_opencode_server;
 #[cfg(test)]
 pub(crate) use codex::fake_codex;
+use codex::CodexLive;
+use cursor::CursorLive;
 #[cfg(test)]
 pub(crate) use cursor::{fake_cursor, ACP_NOTE as CURSOR_ACP_NOTE};
+#[cfg(test)]
+pub(crate) use opencode::fake_opencode_server;
+use opencode::OpencodeLive;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
@@ -249,10 +247,7 @@ fn carries_conversation(session: &crate::session::Session) -> bool {
 /// The provider conversation a session carries on, once its first turn bound
 /// one. A bot never resumes: its memory is the tail Crew hands it.
 fn conversation_to_resume(session: &crate::session::Session) -> Option<String> {
-    carries_conversation(session)
-        .then(|| session.provider_session_id.clone())
-        .flatten()
-        .filter(|id| !id.is_empty())
+    carries_conversation(session).then(|| session.provider_session_id.clone()).flatten().filter(|id| !id.is_empty())
 }
 
 /// Whether the process a turn ran on stays up for the session's next one.
@@ -289,9 +284,7 @@ impl Launch {
     /// override back, so a process that has it must go.
     fn clears_a_setting_of(&self, old: &Launch) -> bool {
         let cleared = |new: &Option<String>, old: &Option<String>| new.is_none() && old.is_some();
-        cleared(&self.model, &old.model)
-            || cleared(&self.effort, &old.effort)
-            || cleared(&self.service_tier, &old.service_tier)
+        cleared(&self.model, &old.model) || cleared(&self.effort, &old.effort) || cleared(&self.service_tier, &old.service_tier)
     }
 
     /// What a kept Codex process is told on its next `turn/start`: the
@@ -333,7 +326,10 @@ enum Change {
     /// The service tier moved. `fast` is what the `fastMode` setting becomes,
     /// when it has to be said: asked for only where the account may use it,
     /// as at launch, and otherwise only to turn it off.
-    Tier { tier: Option<String>, fast: Option<bool> },
+    Tier {
+        tier: Option<String>,
+        fast: Option<bool>,
+    },
 }
 
 impl Change {
@@ -341,12 +337,8 @@ impl Change {
     fn request(&self) -> Option<Value> {
         match self {
             Change::Model(model) => Some(json!({ "subtype": "set_model", "model": model })),
-            Change::Effort(effort) => {
-                Some(json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": effort } }))
-            }
-            Change::Permission(autonomy) => {
-                Some(json!({ "subtype": "set_permission_mode", "mode": permission_mode(autonomy) }))
-            }
+            Change::Effort(effort) => Some(json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": effort } })),
+            Change::Permission(autonomy) => Some(json!({ "subtype": "set_permission_mode", "mode": permission_mode(autonomy) })),
             Change::Tier { fast, .. } => {
                 fast.map(|on| json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": on } }))
             }
@@ -405,10 +397,7 @@ fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
     if old.service_tier != new.service_tier {
         let fast = |tier: &Option<String>| tier.as_deref() == Some("fast");
         let want = fast(&new.service_tier) && fast_allowed;
-        changes.push(Change::Tier {
-            tier: new.service_tier.clone(),
-            fast: (want || fast(&old.service_tier)).then_some(want),
-        });
+        changes.push(Change::Tier { tier: new.service_tier.clone(), fast: (want || fast(&old.service_tier)).then_some(want) });
     }
     Plan::Changes(changes)
 }
@@ -533,9 +522,7 @@ fn woken(live: &mut ClaudeLive, events: &mut Vec<HarnessEvent>) {
     if live.woken_by.is_empty() {
         return;
     }
-    events.push(HarnessEvent::SessionNote {
-        message: std::mem::take(&mut live.woken_by).join(" · "),
-    });
+    events.push(HarnessEvent::SessionNote { message: std::mem::take(&mut live.woken_by).join(" · ") });
 }
 
 /// One Claude Code process and the conversation it carries. What lives as long
@@ -883,13 +870,7 @@ impl TurnHost {
     /// answers it with, by its kind, as its harness spells them; none when
     /// Crew's server is not there. None for the user's own session: it runs
     /// as their CLI, which is told nothing beyond what the CLI itself says.
-    pub(crate) fn persona(
-        &self,
-        session: &crate::session::Session,
-        harness: Harness,
-        mcp: bool,
-        cwd: &str,
-    ) -> Option<String> {
+    pub(crate) fn persona(&self, session: &crate::session::Session, harness: Harness, mcp: bool, cwd: &str) -> Option<String> {
         if driven(session) == Some(Driven::User) {
             return None;
         }
@@ -930,10 +911,7 @@ impl TurnHost {
     }
 
     pub fn override_binary(&self, name: &str, path: impl Into<String>) {
-        self.binaries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(name.to_string(), path.into());
+        self.binaries.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), path.into());
     }
 
     /// Look for Cursor's ACP session stores in `dir` instead of
@@ -1006,33 +984,20 @@ impl TurnHost {
         if let Some(handle) = self.handle() {
             handle.block_on(fut)
         } else {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime")
-                .block_on(fut)
+            tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime").block_on(fut)
         }
     }
 
     fn stop_requested(&self, session_id: &str) -> bool {
-        self.cancelled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(session_id)
+        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
     fn mark_stop(&self, session_id: &str) {
-        self.cancelled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.to_string());
+        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
     }
 
     fn clear_stop(&self, session_id: &str) {
-        self.cancelled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id);
+        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
     }
 
     pub fn start(&self, params: TurnStart) -> Result<TurnStarted, String> {
@@ -1064,8 +1029,7 @@ impl TurnHost {
     /// a turn.
     pub fn start_by_user(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         params.letter_id = None;
-        let session = session::get(&self.store, params.session_id.clone())?
-            .ok_or_else(|| "Session not found".to_string())?;
+        let session = session::get(&self.store, params.session_id.clone())?.ok_or_else(|| "Session not found".to_string())?;
         let drive = driven(&session);
         if !matches!(drive, Some(Driven::Child | Driven::User)) || params.hidden == Some(true) || params.from_bot.is_some() {
             // A bot the user writes to is theirs again too: its count starts
@@ -1131,29 +1095,16 @@ impl TurnHost {
         let files = attached(&params);
         let dispatch = dispatch_of(&params);
         let mut written = None;
-        if mode != SendMode::Queue
-            && dispatch.is_none()
-            && STEERABLE.contains(&session.provider.as_str())
-            && self.is_running(id)
+        if mode != SendMode::Queue && dispatch.is_none() && STEERABLE.contains(&session.provider.as_str()) && self.is_running(id)
         {
             // Claimed by the turn it is written into: read, it is delivered;
             // not taken, it is released and waits like any other.
-            let letter = mailbox::record_claimed_with_files(
-                &self.store,
-                id,
-                &mailbox::user(),
-                &params.text,
-                files.clone(),
-                None,
-            )?;
+            let letter =
+                mailbox::record_claimed_with_files(&self.store, id, &mailbox::user(), &params.text, files.clone(), None)?;
             match self.steer_files(id, &params.text, mailbox::user(), Some(letter.id.clone()), files.clone(), Vec::new()) {
                 Ok(()) => {
                     self.tell_parent(session, &letter.id);
-                    return Ok(TurnStarted {
-                        working: true,
-                        delivery: Some("steered".into()),
-                        letter_id: Some(letter.id),
-                    });
+                    return Ok(TurnStarted { working: true, delivery: Some("steered".into()), letter_id: Some(letter.id) });
                 }
                 Err(_) => {
                     mailbox::release(&self.store, &letter.id)?;
@@ -1257,8 +1208,7 @@ impl TurnHost {
     /// handed their envelopes one after the other. They count as delivered
     /// when this turn ends.
     fn begin(&self, mut params: TurnStart, letters: Vec<mailbox::Letter>) -> Result<TurnStarted, String> {
-        let session = session::get(&self.store, params.session_id.clone())?
-            .ok_or_else(|| "Session not found".to_string())?;
+        let session = session::get(&self.store, params.session_id.clone())?.ok_or_else(|| "Session not found".to_string())?;
         let Some(drive) = driven(&session) else {
             return Err(format!("{} is not a session Crew drives.", session.name));
         };
@@ -1293,12 +1243,7 @@ impl TurnHost {
         let history = if carries {
             None
         } else {
-            working_set::history(
-                &self
-                    .transcripts
-                    .window(&params.session_id, Some(working_set::TAIL_BLOCKS), None)
-                    .blocks,
-            )
+            working_set::history(&self.transcripts.window(&params.session_id, Some(working_set::TAIL_BLOCKS), None).blocks)
         };
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
@@ -1331,17 +1276,18 @@ impl TurnHost {
                     || (letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some())
                         && typed_by_user(drive, &letter.from))
             };
-            params.text = letters
-                .iter()
-                .map(|letter| {
-                    if as_typed(letter) {
-                        letter.text.clone()
-                    } else {
-                        mailbox::render(letter, session.parent_id.as_deref())
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n");
+            params.text =
+                letters
+                    .iter()
+                    .map(|letter| {
+                        if as_typed(letter) {
+                            letter.text.clone()
+                        } else {
+                            mailbox::render(letter, session.parent_id.as_deref())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
             // What the batch asks of the provider: a command letter is a batch
             // of its own (see `mailbox::claim_batch`), so it is the one letter
             // and its command; otherwise the skills of every letter.
@@ -1365,10 +1311,7 @@ impl TurnHost {
                         &params.text,
                         from.clone(),
                         params.letter_id.clone(),
-                        params
-                            .letter_id
-                            .as_deref()
-                            .and_then(|id| mailbox::letter_kind(&self.store, id)),
+                        params.letter_id.as_deref().and_then(|id| mailbox::letter_kind(&self.store, id)),
                     );
                     params.text = mailbox::envelope(
                         &from,
@@ -1394,13 +1337,9 @@ impl TurnHost {
         if let Some(id) = params.letter_id.as_deref() {
             let _ = mailbox::claim_id(&self.store, id);
         }
-        let letters_from_others: Vec<String> = letters
-            .iter()
-            .filter(|letter| letter.from.kind.as_deref() != Some("user"))
-            .map(|letter| letter.id.clone())
-            .collect();
-        let carried: Vec<String> =
-            letters.into_iter().map(|letter| letter.id).chain(params.letter_id.clone()).collect();
+        let letters_from_others: Vec<String> =
+            letters.iter().filter(|letter| letter.from.kind.as_deref() != Some("user")).map(|letter| letter.id.clone()).collect();
+        let carried: Vec<String> = letters.into_iter().map(|letter| letter.id).chain(params.letter_id.clone()).collect();
         // Only the letters of other sessions are held back until the provider
         // confirms them: what the user typed is on their screen already.
         let held_back: Vec<String> = letters_from_others;
@@ -1439,7 +1378,8 @@ impl TurnHost {
         let cwd = session::cwd(&self.store, &session)?;
         if session.provider == "claude" {
             let now = crate::store::now_millis();
-            let live = matches!(self.lock().get(session_id), Some(Live::Claude(live)) if live.menu_cwd.as_deref() == Some(cwd.as_str()));
+            let live =
+                matches!(self.lock().get(session_id), Some(Live::Claude(live)) if live.menu_cwd.as_deref() == Some(cwd.as_str()));
             let held = if live { self.commands.holds("claude", &cwd) } else { self.commands.is_fresh("claude", &cwd, now) };
             if !held {
                 if let Err(error) = self.probe_claude_commands(session_id, &cwd, false) {
@@ -1717,8 +1657,12 @@ impl TurnHost {
                 }),
                 // Only the window: what compacts it by itself is not told.
                 (None, Some(window)) => host.publish_context(&id, |last| {
-                    last.filter(|last| last.window.is_none())
-                        .map(|last| ContextReading { used: last.used, window: Some(window), auto_compact_at: None, stale: None })
+                    last.filter(|last| last.window.is_none()).map(|last| ContextReading {
+                        used: last.used,
+                        window: Some(window),
+                        auto_compact_at: None,
+                        stale: None,
+                    })
                 }),
                 (None, None) => {}
             }
@@ -1728,9 +1672,7 @@ impl TurnHost {
     /// The end of a background command's output: asked of the CLI while it
     /// is up, and otherwise the last that was read of it.
     pub fn background_output(&self, session_id: &str, id: &str) -> Result<crew_protocol::BackgroundOutput, String> {
-        let known = self
-            .background
-            .read(session_id, |board| (board.command(id).cloned(), board.is_live(), board.output(id)));
+        let known = self.background.read(session_id, |board| (board.command(id).cloned(), board.is_live(), board.output(id)));
         let Some((Some(row), live, kept)) = known else {
             return Err("No such background command.".into());
         };
@@ -1930,10 +1872,7 @@ impl TurnHost {
     /// The bot that started `child`, when it may decide `request` for it:
     /// only what it could do itself without asking anyone.
     pub fn deciding_parent(&self, child: &crate::session::Session, request: &Value) -> Option<crate::session::Session> {
-        let parent = child
-            .parent_id
-            .as_deref()
-            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
+        let parent = child.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
         (parent.kind == "bot" && may_decide(&self.autonomy(&parent), request)).then_some(parent)
     }
 
@@ -2039,10 +1978,7 @@ impl TurnHost {
                 }
                 if mid && !cancelled {
                     drop(map);
-                    self.transcripts.apply(
-                        session_id,
-                        HarnessEvent::SessionEnded { code },
-                    );
+                    self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 } else if !mid && row.initialized {
                     // No turn is running: a kept process died while idle (or
@@ -2296,10 +2232,7 @@ impl TurnHost {
     /// exited. A store that cannot say counts as pinned, so nothing is let go
     /// on a guess; [`PIN_CAP`] still ends it.
     pub fn is_pinned(&self, session_id: &str) -> bool {
-        let running = self
-            .background
-            .read(session_id, |board| !board.running().is_empty())
-            .unwrap_or(false);
+        let running = self.background.read(session_id, |board| !board.running().is_empty()).unwrap_or(false);
         running || session::has_live_children(&self.store, session_id).unwrap_or(true)
     }
 
@@ -2307,13 +2240,8 @@ impl TurnHost {
     /// when nothing pins them, and past `pin_cap` whatever pins them. Returns
     /// the ids released.
     pub fn release_idle(&self, limit: Duration, pin_cap: Duration) -> Vec<String> {
-        let idle: Vec<(String, Instant)> = self
-            .idle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .map(|(id, since)| (id.clone(), *since))
-            .collect();
+        let idle: Vec<(String, Instant)> =
+            self.idle.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, since)| (id.clone(), *since)).collect();
         let mut released = Vec::new();
         for (id, since) in idle {
             let age = since.elapsed();
@@ -2337,13 +2265,7 @@ impl TurnHost {
     }
 
     fn resolve_bin(&self, name: &str) -> Result<String, String> {
-        if let Some(path) = self
-            .binaries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(name)
-            .cloned()
-        {
+        if let Some(path) = self.binaries.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned() {
             return Ok(path);
         }
         AgentHost::resolve(name).map(|bin| bin.path)
@@ -2377,9 +2299,7 @@ impl TurnHost {
             "codex" => self.run_codex(session, params, history),
             "cursor" => self.run_cursor(session, params, history),
             "opencode" => self.run_opencode(session, params, history),
-            other => TurnOutcome::Failed(format!(
-                "{other} agents are not wired up yet. Pick Claude for now."
-            )),
+            other => TurnOutcome::Failed(format!("{other} agents are not wired up yet. Pick Claude for now.")),
         };
         self.finish_turn(row, outcome, carried);
     }
@@ -2456,16 +2376,12 @@ impl TurnHost {
                 self.transcripts.flush(&session_id);
             }
             TurnOutcome::Failed(message) => {
-                self.transcripts.apply(
-                    &session_id,
-                    HarnessEvent::SessionError { message },
-                );
+                self.transcripts.apply(&session_id, HarnessEvent::SessionError { message });
                 self.transcripts.set_status(&session_id, "error", None);
                 self.transcripts.flush(&session_id);
             }
             TurnOutcome::Stopped => {
-                self.transcripts
-                    .apply(&session_id, HarnessEvent::SessionEnded { code: None });
+                self.transcripts.apply(&session_id, HarnessEvent::SessionEnded { code: None });
                 self.transcripts.append_system(&session_id, "Stopped");
                 self.transcripts.set_status(&session_id, "idle", None);
                 self.transcripts.flush(&session_id);
@@ -2502,8 +2418,8 @@ impl TurnHost {
         let user_wrote = |letters: &[mailbox::Letter]| letters.iter().any(|letter| letter.from.kind.as_deref() == Some("user"));
         // A paused session, or one whose last turn failed before reading its
         // letters, is started by the user alone.
-        let stalled = session::paused(&self.store, session_id)
-            || self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id);
+        let stalled =
+            session::paused(&self.store, session_id) || self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id);
         if stalled && !mailbox::waiting(&self.store, session_id).is_ok_and(|waiting| user_wrote(&waiting)) {
             return false;
         }
@@ -2630,7 +2546,8 @@ impl TurnHost {
         });
         if !urgent {
             let (wait, max) = *self.batch_window.lock().unwrap_or_else(|e| e.into_inner());
-            let left = batch_remaining(oldest, newest, crate::store::now_millis(), wait.as_millis() as i64, max.as_millis() as i64);
+            let left =
+                batch_remaining(oldest, newest, crate::store::now_millis(), wait.as_millis() as i64, max.as_millis() as i64);
             if left > 0 {
                 self.wake_later(session_id, Duration::from_millis(left as u64));
                 return false;
@@ -2751,7 +2668,8 @@ impl TurnHost {
         let (kind, detail, status) = match (outcome, exit_by) {
             (_, Some(by)) => {
                 self.transcripts.apply(id, HarnessEvent::SessionEnded { code: None });
-                self.transcripts.append_system(id, &format!("Stopped by {by}. The session has exited; its transcript stays here."));
+                self.transcripts
+                    .append_system(id, &format!("Stopped by {by}. The session has exited; its transcript stays here."));
                 ("exited", format!("stopped by {by}"), "exited")
             }
             (TurnOutcome::Completed, None) => {
@@ -2805,16 +2723,8 @@ impl TurnHost {
         let (_, report) = self.transcripts.since(id, cursor as usize);
         let report = if kind == "needs-input" { String::new() } else { report };
         let letter = if tell { self.report_letter(session, kind, outcome, &report, request, cursor) } else { None };
-        let written = crate::session_events::record_reporting(
-            &self.store,
-            id,
-            cursor,
-            kind,
-            outcome,
-            &report,
-            request,
-            letter.as_ref(),
-        );
+        let written =
+            crate::session_events::record_reporting(&self.store, id, cursor, kind, outcome, &report, request, letter.as_ref());
         if let Err(error) = &written {
             eprintln!("[crewd] session {id}: the event was not written: {error}");
         }
@@ -2851,10 +2761,7 @@ impl TurnHost {
         request: Option<&Value>,
         cursor: i64,
     ) -> Option<mailbox::Letter> {
-        let parent = session
-            .parent_id
-            .as_deref()
-            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
+        let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
         // A bot or a session has turns a report can wake.
         if driven(&parent).is_none() {
             return None;
@@ -2865,11 +2772,7 @@ impl TurnHost {
         if matches!(kind, "turn" | "error") && self.user_started.lock().unwrap_or_else(|e| e.into_inner()).contains(&session.id) {
             return None;
         }
-        let from = crew_protocol::BotRef {
-            id: session.id.clone(),
-            name: session.name.clone(),
-            kind: Some("session".into()),
-        };
+        let from = crew_protocol::BotRef { id: session.id.clone(), name: session.name.clone(), kind: Some("session".into()) };
         if kind == "needs-input" {
             let request = request?;
             return match request.get("kind").and_then(Value::as_str) {
@@ -2910,10 +2813,7 @@ impl TurnHost {
         if !self.is_running(session_id) {
             return false;
         }
-        self.exiting
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.to_string(), by.to_string());
+        self.exiting.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string(), by.to_string());
         self.cancel(session_id, true);
         true
     }
@@ -3012,12 +2912,7 @@ impl TurnHost {
         }
     }
 
-    fn run_claude(
-        &self,
-        session: crate::session::Session,
-        params: TurnStart,
-        history: Option<String>,
-    ) -> TurnOutcome {
+    fn run_claude(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) -> TurnOutcome {
         let outcome = self.claude_turn(&session, &params, history);
         self.claude_turn_ended(&session, &outcome);
         outcome
@@ -3103,11 +2998,7 @@ impl TurnHost {
     /// A turn the CLI started by itself that no turn of Crew's took over, now
     /// claimed as the session's running turn; under `running`, which the
     /// caller holds. Its outcome comes on the receiver.
-    fn claim_unclaimed(
-        &self,
-        running: &mut HashSet<String>,
-        session_id: &str,
-    ) -> Option<oneshot::Receiver<TurnOutcome>> {
+    fn claim_unclaimed(&self, running: &mut HashSet<String>, session_id: &str) -> Option<oneshot::Receiver<TurnOutcome>> {
         let mut map = self.lock();
         let slot = match map.get_mut(session_id) {
             Some(Live::Claude(live)) if live.unclaimed() => &mut live.turn_tx,
@@ -3172,11 +3063,7 @@ impl TurnHost {
             kept = false;
         }
         if let Err(error) = self.ensure_claude(session, params, kept) {
-            return if self.stop_requested(&session_id) {
-                TurnOutcome::Stopped
-            } else {
-                TurnOutcome::Failed(error)
-            };
+            return if self.stop_requested(&session_id) { TurnOutcome::Stopped } else { TurnOutcome::Failed(error) };
         }
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
@@ -3220,15 +3107,11 @@ impl TurnHost {
             params.command.as_deref(),
             params.skills.as_deref().unwrap_or_default(),
         );
-        if let Err(error) = self
-            .agents
-            .write(&session_id, &serde_json::to_string(&message).unwrap_or_default())
-        {
+        if let Err(error) = self.agents.write(&session_id, &serde_json::to_string(&message).unwrap_or_default()) {
             return TurnOutcome::Failed(error);
         }
         self.ask_claude_title(session, params);
-        self.block_on(turn_rx)
-            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
+        self.block_on(turn_rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
     }
 
     /// In stream-json the CLI names a conversation only when asked, as its
@@ -3255,11 +3138,7 @@ impl TurnHost {
         let id = session.id.clone();
         let description = text.to_string();
         thread::spawn(move || {
-            let _ = host.claude_control_on(
-                &id,
-                Some(epoch),
-                crate::titles::claude_request(&description),
-            );
+            let _ = host.claude_control_on(&id, Some(epoch), crate::titles::claude_request(&description));
         });
     }
 
@@ -3314,7 +3193,13 @@ impl TurnHost {
                 match live {
                     Some(true) => Ok(()),
                     Some(false) => self.claude_control(&session.id, titles::claude_request(&first)).map(drop),
-                    None => titles::name_claude(std::path::Path::new(&self.resolve_bin("claude")?), std::path::Path::new(&cwd), &id, &first).map(drop),
+                    None => titles::name_claude(
+                        std::path::Path::new(&self.resolve_bin("claude")?),
+                        std::path::Path::new(&cwd),
+                        &id,
+                        &first,
+                    )
+                    .map(drop),
                 }
             }
             "codex" => {
@@ -3343,13 +3228,7 @@ impl TurnHost {
     /// `letter` is the letter it is, already claimed: read, it is delivered;
     /// unread when the turn ends, it waits for the turn the CLI starts on it,
     /// or goes back in the box (see [`TurnHost::claude_turn_ended`]).
-    pub fn steer(
-        &self,
-        session_id: &str,
-        text: &str,
-        from: crew_protocol::BotRef,
-        letter: Option<String>,
-    ) -> Result<(), String> {
+    pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef, letter: Option<String>) -> Result<(), String> {
         self.steer_files(session_id, text, from, letter, Vec::new(), Vec::new())
     }
 
@@ -3442,13 +3321,7 @@ impl TurnHost {
     /// A batch of letters written into a running turn as one message: each
     /// under its own envelope, one after the other, as a turn would be handed
     /// them.
-    fn steer_text_all(
-        &self,
-        session_id: &str,
-        from: &crew_protocol::BotRef,
-        text: &str,
-        rest: &[Extra],
-    ) -> String {
+    fn steer_text_all(&self, session_id: &str, from: &crew_protocol::BotRef, text: &str, rest: &[Extra]) -> String {
         let mut all = self.steer_text(session_id, from, text);
         for extra in rest {
             all.push_str("\n\n");
@@ -3593,14 +3466,8 @@ impl TurnHost {
         if !kept {
             self.launch_claude(session, params, &claude_session_id)?;
         }
-        self.transcripts.apply(
-            &session_id,
-            HarnessEvent::SessionProviderBound {
-                provider_session_id: claude_session_id,
-            },
-        );
-        self.transcripts
-            .apply(&session_id, HarnessEvent::SessionStarted {});
+        self.transcripts.apply(&session_id, HarnessEvent::SessionProviderBound { provider_session_id: claude_session_id });
+        self.transcripts.apply(&session_id, HarnessEvent::SessionStarted {});
         Ok(())
     }
 
@@ -3618,9 +3485,7 @@ impl TurnHost {
         // already holds, so the user's session, which names its conversation
         // before the CLI has written it, resumes only once its file is there.
         let resume = match driven(session) {
-            Some(Driven::User) => self
-                .claude_holds(&params.cwd, claude_session_id)
-                .then(|| claude_session_id.to_string()),
+            Some(Driven::User) => self.claude_holds(&params.cwd, claude_session_id).then(|| claude_session_id.to_string()),
             _ => conversation_to_resume(session),
         };
         if self.stop_requested(&session_id) {
@@ -3754,9 +3619,7 @@ impl TurnHost {
                 match map.get(&id) {
                     Some(Live::Codex(live)) => live.active && !live.saw_output && !live.cancelled,
                     Some(Live::Cursor(live)) => live.active && !live.saw_output && !live.cancelled,
-                    Some(Live::Opencode(live)) => {
-                        live.active && !live.saw_output && !live.cancelled
-                    }
+                    Some(Live::Opencode(live)) => live.active && !live.saw_output && !live.cancelled,
                     _ => false,
                 }
             };
@@ -3877,7 +3740,8 @@ impl TurnHost {
             .then(|| string_field(Some(&rec), "task_id"))
             .flatten()
             .and_then(|task| {
-                let call = self.background.read(session_id, |board| board.command(&task).and_then(|row| row.tool_call_id.clone()));
+                let call =
+                    self.background.read(session_id, |board| board.command(&task).and_then(|row| row.tool_call_id.clone()));
                 call.flatten().map(|call| (task, call))
             });
         // A finished shell the transcript already draws: its row is marked
@@ -3888,7 +3752,9 @@ impl TurnHost {
             .flatten()
             .and_then(|task| {
                 self.background.read(session_id, |board| {
-                    board.command(&task).is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
+                    board
+                        .command(&task)
+                        .is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
                 })
             })
             .unwrap_or(false);
@@ -3902,9 +3768,7 @@ impl TurnHost {
             let tasks = type_name.as_deref() == Some("system")
                 && matches!(
                     subtype.as_deref(),
-                    Some(
-                        "task_started" | "task_progress" | "task_updated" | "task_notification" | "background_tasks_changed"
-                    )
+                    Some("task_started" | "task_progress" | "task_updated" | "task_notification" | "background_tasks_changed")
                 );
             if live.mute {
                 // The interrupt's result closes the stopped turn: the process
@@ -3936,8 +3800,7 @@ impl TurnHost {
                 return;
             }
             if type_name.as_deref() == Some("control_response")
-                || (type_name.as_deref() == Some("system")
-                    && matches!(subtype.as_deref(), Some("init" | "initialized")))
+                || (type_name.as_deref() == Some("system") && matches!(subtype.as_deref(), Some("init" | "initialized")))
             {
                 // What the line teaches of the menu: the answer to
                 // `initialize` lists the commands, and `init` the skills.
@@ -3977,8 +3840,7 @@ impl TurnHost {
                 if let Some(id) = bind {
                     self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: id });
                 }
-                if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some())
-                {
+                if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some()) {
                     self.learn_commands(session_id, &cwd, entries, skills);
                 }
                 if let Some(servers) = servers {
@@ -3994,9 +3856,8 @@ impl TurnHost {
             if let Some(steps) = live.subagents.frame(&rec) {
                 drop(map);
                 // The model it runs on is named by the frames it sends.
-                let model = string_field(Some(&rec), "parent_tool_use_id").zip(
-                    rec.get("message").and_then(|message| message.get("model")).and_then(Value::as_str).map(str::to_string),
-                );
+                let model = string_field(Some(&rec), "parent_tool_use_id")
+                    .zip(rec.get("message").and_then(|message| message.get("model")).and_then(Value::as_str).map(str::to_string));
                 if let Some((call, model)) = model {
                     self.background.touch(session_id, |board| board.claude_subagent_model(&call, &model));
                 }
@@ -4020,9 +3881,8 @@ impl TurnHost {
             let agent_result = type_name.as_deref() == Some("user")
                 && rec.get("tool_use_result").is_some_and(|result| result.get("agentId").is_some());
             if tasks || agent_result || type_name.as_deref() == Some("result") {
-                let call = string_field(Some(&rec), "tool_use_id").and_then(|id| {
-                    live.tools_by_id.get(&id).map(|tool| (id, tool.name.clone(), tool.input.clone()))
-                });
+                let call = string_field(Some(&rec), "tool_use_id")
+                    .and_then(|id| live.tools_by_id.get(&id).map(|tool| (id, tool.name.clone(), tool.input.clone())));
                 task = Some((Value::Object(rec.clone()), call));
             }
             if type_name.as_deref() == Some("system") {
@@ -4054,13 +3914,9 @@ impl TurnHost {
                         }
                     }
                     Some("task_updated") => {
-                        let status =
-                            rec.get("patch").and_then(|patch| patch.get("status")).and_then(Value::as_str);
+                        let status = rec.get("patch").and_then(|patch| patch.get("status")).and_then(Value::as_str);
                         let done = status.is_some_and(|status| matches!(status, "completed" | "failed" | "killed" | "stopped"));
-                        let sent_back = rec
-                            .get("patch")
-                            .and_then(|patch| patch.get("is_backgrounded"))
-                            .and_then(Value::as_bool)
+                        let sent_back = rec.get("patch").and_then(|patch| patch.get("is_backgrounded")).and_then(Value::as_bool)
                             == Some(true);
                         if let (true, Some(task)) = (sent_back, string_field(Some(&rec), "task_id")) {
                             // Sent to the background while it ran: its end
@@ -4078,16 +3934,14 @@ impl TurnHost {
                 }
             }
             if is_compact_boundary(&rec) {
-                events.push(HarnessEvent::SessionNote {
-                    message: "Context compacted".into(),
-                });
+                events.push(HarnessEvent::SessionNote { message: "Context compacted".into() });
                 ask = Some((true, None));
             } else if type_name.as_deref() == Some("system") && subtype.as_deref() == Some("local_command_output") {
                 // What a command the CLI ran itself printed. The 2.1.295 CLI
                 // says it as a synthetic assistant message instead, which
                 // draws as any reply; this is the SDK's own line for it.
-                let output = string_field(Some(&rec), "content")
-                    .and_then(|content| crate::command_output::local_command_output(&content));
+                let output =
+                    string_field(Some(&rec), "content").and_then(|content| crate::command_output::local_command_output(&content));
                 if let Some(message) = output {
                     events.push(HarnessEvent::SessionNote { message });
                 }
@@ -4132,20 +3986,13 @@ impl TurnHost {
                     // The result names only the call, so the input the row was
                     // opened with is what turns it back into a detail.
                     let tool = live.tools_by_id.get(&result.tool_use_id);
-                    let detail = tool.and_then(|tool| {
-                        claude_tool_result_detail(&tool.name, &tool.input, &result.content, result.is_error)
-                    });
-                    let files = tool
-                        .map(|tool| claude_tool_result_files(&tool.name, &tool.input, &result))
-                        .unwrap_or_default();
+                    let detail = tool
+                        .and_then(|tool| claude_tool_result_detail(&tool.name, &tool.input, &result.content, result.is_error));
+                    let files = tool.map(|tool| claude_tool_result_files(&tool.name, &tool.input, &result)).unwrap_or_default();
                     events.push(HarnessEvent::ToolUpdated {
                         call_id: result.tool_use_id.clone(),
                         title: None,
-                        status: Some(if result.is_error {
-                            ToolStatus::Failed
-                        } else {
-                            ToolStatus::Completed
-                        }),
+                        status: Some(if result.is_error { ToolStatus::Failed } else { ToolStatus::Completed }),
                         detail,
                     });
                     if !files.is_empty() {
@@ -4156,14 +4003,8 @@ impl TurnHost {
                 // Only a turn that is running has a result: one that comes
                 // with none (a late answer from a turn already settled, on a
                 // process kept between turns) is nobody's to end.
-                let failed = if live.cancelled {
-                    None
-                } else {
-                    claude_turn_failed(&rec)
-                };
-                events.push(HarnessEvent::TurnCompleted {
-                    usage: Some(claude_turn_usage(&rec)),
-                });
+                let failed = if live.cancelled { None } else { claude_turn_failed(&rec) };
+                events.push(HarnessEvent::TurnCompleted { usage: Some(claude_turn_usage(&rec)) });
                 if live.applied.service_tier.as_deref() == Some("fast") && !live.fast_refused {
                     if let Some(message) = fast_reason.as_deref().and_then(crate::provider_session::claude_fast_refusal) {
                         live.fast_refused = true;
@@ -4216,12 +4057,7 @@ impl TurnHost {
             self.background.touch(session_id, |board| board.set_waiting(false));
         }
         if let Some(id) = bind {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: id,
-                },
-            );
+            self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: id });
         }
         for event in events {
             self.transcripts.apply(session_id, event);
@@ -4256,8 +4092,7 @@ impl TurnHost {
         if control.subtype != "can_use_tool" && control.subtype != "permission" {
             let _ = self.agents.write(
                 session_id,
-                &serde_json::to_string(&build_control_response(&control.request_id, json!({})))
-                    .unwrap_or_default(),
+                &serde_json::to_string(&build_control_response(&control.request_id, json!({}))).unwrap_or_default(),
             );
             return;
         }
@@ -4329,44 +4164,20 @@ impl TurnHost {
                 };
                 let ui_id = live.next_ui;
                 live.next_ui += 1;
-                live.questions.insert(
-                    ui_id,
-                    PendingQuestion {
-                        request_id: control.request_id.clone(),
-                        tx,
-                    },
-                );
+                live.questions.insert(ui_id, PendingQuestion { request_id: control.request_id.clone(), tx });
                 ui_id
             };
             self.transcripts.set_status(&session_id, "needs-input", None);
             let asked = json!({ "request_id": ui_id, "kind": "question", "questions": questions });
-            self.transcripts.apply(
-                &session_id,
-                HarnessEvent::QuestionRequested {
-                    request_id: ui_id,
-                    questions,
-                },
-            );
+            self.transcripts.apply(&session_id, HarnessEvent::QuestionRequested { request_id: ui_id, questions });
             self.child_asks(&session_id, asked);
             let reply = rx.recv().unwrap_or(QuestionReply::Dismiss);
             match reply {
                 QuestionReply::Cancelled => {
-                    self.transcripts.apply(
-                        &session_id,
-                        HarnessEvent::QuestionResolved {
-                            request_id: ui_id,
-                            answers: None,
-                        },
-                    );
+                    self.transcripts.apply(&session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: None });
                 }
                 QuestionReply::Dismiss => {
-                    self.transcripts.apply(
-                        &session_id,
-                        HarnessEvent::QuestionResolved {
-                            request_id: ui_id,
-                            answers: None,
-                        },
-                    );
+                    self.transcripts.apply(&session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: None });
                     self.transcripts.set_status(&session_id, "working", None);
                     let _ = self.agents.write(
                         &session_id,
@@ -4378,13 +4189,8 @@ impl TurnHost {
                     );
                 }
                 QuestionReply::Answers(answers) => {
-                    self.transcripts.apply(
-                        &session_id,
-                        HarnessEvent::QuestionResolved {
-                            request_id: ui_id,
-                            answers: Some(answers.clone()),
-                        },
-                    );
+                    self.transcripts
+                        .apply(&session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: Some(answers.clone()) });
                     self.transcripts.set_status(&session_id, "working", None);
                     let _ = self.agents.write(
                         &session_id,
@@ -4406,13 +4212,7 @@ impl TurnHost {
             };
             let ui_id = live.next_ui;
             live.next_ui += 1;
-                live.approvals.insert(
-                    ui_id,
-                    PendingApproval {
-                        request_id: control.request_id.clone(),
-                        tx,
-                    },
-                );
+            live.approvals.insert(ui_id, PendingApproval { request_id: control.request_id.clone(), tx });
             ui_id
         };
         let title = claude_tool_label(&tool_name, &control.input);
@@ -4435,13 +4235,7 @@ impl TurnHost {
         );
         self.child_asks(&session_id, asked);
         let decision = rx.recv().unwrap_or(ApprovalResolution::Deny);
-        self.transcripts.apply(
-            &session_id,
-            HarnessEvent::ApprovalResolved {
-                request_id: ui_id,
-                decision: decision.clone(),
-            },
-        );
+        self.transcripts.apply(&session_id, HarnessEvent::ApprovalResolved { request_id: ui_id, decision: decision.clone() });
         if decision == ApprovalResolution::Cancelled {
             return;
         }
@@ -4460,7 +4254,6 @@ impl TurnHost {
             .unwrap_or_default(),
         );
     }
-
 }
 
 /// The reading a new one makes after the last: one without a window keeps the
@@ -4499,12 +4292,15 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
             partial_json: String::new(),
         };
         if started.index >= 0 {
-            live.tools_by_index.insert(started.index, InFlightTool {
-                id: started.id.clone(),
-                name: started.name.clone(),
-                input: started.input.clone(),
-                partial_json: String::new(),
-            });
+            live.tools_by_index.insert(
+                started.index,
+                InFlightTool {
+                    id: started.id.clone(),
+                    name: started.name.clone(),
+                    input: started.input.clone(),
+                    partial_json: String::new(),
+                },
+            );
         }
         live.tools_by_id.insert(started.id.clone(), tool);
         events.push(HarnessEvent::ToolStarted {
@@ -4575,12 +4371,7 @@ fn claude_assistant(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mu
         }
         live.tools_by_id.insert(
             use_.id.clone(),
-            InFlightTool {
-                id: use_.id.clone(),
-                name: use_.name.clone(),
-                input: use_.input.clone(),
-                partial_json: String::new(),
-            },
+            InFlightTool { id: use_.id.clone(), name: use_.name.clone(), input: use_.input.clone(), partial_json: String::new() },
         );
         events.push(HarnessEvent::ToolStarted {
             call_id: use_.id,
@@ -4656,14 +4447,7 @@ impl crate::transcript::TranscriptEvents for Applied {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
     }
 
-    fn status(
-        &self,
-        _session_id: &str,
-        _status: &str,
-        _provider_session_id: Option<&str>,
-        _updated_at: i64,
-    ) {
-    }
+    fn status(&self, _session_id: &str, _status: &str, _provider_session_id: Option<&str>, _updated_at: i64) {}
 }
 
 #[cfg(test)]
@@ -4719,9 +4503,7 @@ impl TurnHost {
     pub(crate) fn test_install_cursor(&self, id: &str) {
         self.lock().insert(id.to_string(), Live::Cursor(Box::new(CursorLive::new(None, Autonomy::Ask))));
     }
-
 }
-
 
 #[cfg(test)]
 mod mailbox_tests {
@@ -4731,11 +4513,7 @@ mod mailbox_tests {
     /// another.
     #[test]
     fn a_turn_waiting_forever_does_not_hold_up_another_sessions_timers() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let host = TurnHost::test_new();
         host.set_runtime(runtime.handle().clone());
         let (_hold, never) = tokio::sync::oneshot::channel::<()>();
@@ -4746,17 +4524,16 @@ mod mailbox_tests {
         std::thread::sleep(Duration::from_millis(100));
         let (tx, rx) = std::sync::mpsc::channel();
         let armed = host.clone();
-        std::thread::spawn(move || armed.after(Duration::from_millis(1), move || {
-            let _ = tx.send(());
-        }));
-        assert!(
-            rx.recv_timeout(Duration::from_secs(3)).is_ok(),
-            "a timer armed while another session waits never fired"
-        );
+        std::thread::spawn(move || {
+            armed.after(Duration::from_millis(1), move || {
+                let _ = tx.send(());
+            })
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok(), "a timer armed while another session waits never fired");
     }
 
     use super::*;
-    use crew_protocol::{BotRef, BlockRole};
+    use crew_protocol::{BlockRole, BotRef};
 
     /// opencode's server (`fake_opencode_server`): a turn answers at once,
     /// which ends it, the moment the box is drained.
@@ -4816,13 +4593,9 @@ mod mailbox_tests {
     }
 
     fn workspace(world: &World) -> String {
-        crate::workspace::create(
-            world.host.test_store(),
-            "w".into(),
-            world.dir.to_string_lossy().into_owned(),
-        )
-        .expect("workspace")
-        .id
+        crate::workspace::create(world.host.test_store(), "w".into(), world.dir.to_string_lossy().into_owned())
+            .expect("workspace")
+            .id
     }
 
     /// Turns run on their own thread; wait for the bot to go quiet.
@@ -4940,7 +4713,8 @@ mod mailbox_tests {
             .map(|entry| entry.path())
             .find(|path| path.extension().is_some_and(|ext| ext == "launch"))
             .expect("the server was launched");
-        let launched: Value = serde_json::from_str(std::fs::read_to_string(launch).expect("log").lines().next().expect("a launch")).expect("json");
+        let launched: Value =
+            serde_json::from_str(std::fs::read_to_string(launch).expect("log").lines().next().expect("a launch")).expect("json");
         let token = launched
             .pointer("/config/mcp/servers/crew/environment/CREW_TOKEN")
             .and_then(Value::as_str)
@@ -4948,7 +4722,10 @@ mod mailbox_tests {
         assert!(!token.is_empty());
         let values = launched["env_values"].as_array().expect("env values");
         assert!(!values.is_empty());
-        assert!(values.iter().all(|value| !value.as_str().unwrap_or_default().contains(token)), "the server's environment: {values:?}");
+        assert!(
+            values.iter().all(|value| !value.as_str().unwrap_or_default().contains(token)),
+            "the server's environment: {values:?}"
+        );
         assert!(!launched["env"].as_array().unwrap().iter().any(|key| key == "CREW_TOKEN"), "{}", launched["env"]);
         assert!(!launched["argv"].to_string().contains(token), "{}", launched["argv"]);
     }
@@ -4959,13 +4736,8 @@ mod mailbox_tests {
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
         let cuddles = bot(&world, &ws, "Cuddles");
-        mailbox::enqueue(
-            world.host.test_store(),
-            &cuddles.id,
-            &BotRef::bot(coder.id.clone(), "Coder"),
-            "the branch is green",
-        )
-        .expect("enqueue");
+        mailbox::enqueue(world.host.test_store(), &cuddles.id, &BotRef::bot(coder.id.clone(), "Coder"), "the branch is green")
+            .expect("enqueue");
 
         turn(&world, &cuddles, "hello");
         settle(&world, &cuddles.id);
@@ -4976,10 +4748,7 @@ mod mailbox_tests {
             .find(|block| block.role == BlockRole::User && block.text == "the branch is green")
             .expect("the letter never arrived");
         assert_eq!(delivered.from_bot.as_ref().map(|from| from.name.as_str()), Some("Coder"));
-        assert_eq!(
-            mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
-            0
-        );
+        assert_eq!(mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"), 0);
     }
 
     /// The turn is the whole prompt: every turn is a new provider session, so
@@ -4998,9 +4767,10 @@ mod mailbox_tests {
         turn(&world, &coder, "y ahora?");
         let second = launches(&world)[1].clone();
         assert_ne!(first["session"], second["session"], "a bot's turn carried on its last session");
-        let log = world.dir.read_dir().unwrap().flatten().map(|entry| entry.path()).find(|path| {
-            path.extension().is_some_and(|ext| ext == "log") && path.to_string_lossy().contains("fake-opencode-")
-        });
+        let log =
+            world.dir.read_dir().unwrap().flatten().map(|entry| entry.path()).find(|path| {
+                path.extension().is_some_and(|ext| ext == "log") && path.to_string_lossy().contains("fake-opencode-")
+            });
         let requests = std::fs::read_to_string(log.expect("the request log")).unwrap();
         let deleted = format!("\"method\": \"DELETE\", \"path\": \"/api/session/{}\"", first["session"].as_str().unwrap());
         assert!(requests.contains(&deleted), "the first turn's session outlived it: {requests}");
@@ -5061,13 +4831,8 @@ mod mailbox_tests {
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
         let cuddles = bot(&world, &ws, "Cuddles");
-        mailbox::enqueue(
-            world.host.test_store(),
-            &cuddles.id,
-            &BotRef::bot(coder.id.clone(), "Coder"),
-            "the branch is green",
-        )
-        .expect("enqueue");
+        mailbox::enqueue(world.host.test_store(), &cuddles.id, &BotRef::bot(coder.id.clone(), "Coder"), "the branch is green")
+            .expect("enqueue");
 
         world.host.deliver_to(&cuddles);
         settle(&world, &cuddles.id);
@@ -5080,9 +4845,8 @@ mod mailbox_tests {
         // And the reader sees the letter, not the envelope.
         let rows = blocks(&world, &cuddles.id);
         assert!(
-            rows.iter().any(|block| block.role == BlockRole::User
-                && block.text == "the branch is green"
-                && block.from_bot.is_some()),
+            rows.iter()
+                .any(|block| block.role == BlockRole::User && block.text == "the branch is green" && block.from_bot.is_some()),
             "the transcript should hold the letter as written: {rows:?}"
         );
     }
@@ -5093,13 +4857,8 @@ mod mailbox_tests {
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
         let cuddles = bot(&world, &ws, "Cuddles");
-        mailbox::enqueue(
-            world.host.test_store(),
-            &cuddles.id,
-            &BotRef::bot(coder.id.clone(), "Coder"),
-            "later",
-        )
-        .expect("enqueue");
+        mailbox::enqueue(world.host.test_store(), &cuddles.id, &BotRef::bot(coder.id.clone(), "Coder"), "later")
+            .expect("enqueue");
 
         // Slow enough that the stop lands mid-turn instead of after it.
         world
@@ -5146,17 +4905,42 @@ mod mailbox_tests {
         let dir = std::env::temp_dir().join(format!("sheet-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("dir");
         let ws = crate::workspace::create(store, "sheet".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
-        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
-            .expect("bot");
-        let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
-            .expect("child");
+        let bot = crate::session::create(
+            store,
+            ws.clone(),
+            "bot".into(),
+            "B".into(),
+            "claude".into(),
+            "".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("bot");
+        let child = crate::session::create_child(
+            store,
+            ws,
+            "C".into(),
+            "claude".into(),
+            "".into(),
+            "ask".into(),
+            None,
+            Some(bot.id.clone()),
+        )
+        .expect("child");
         let cwd = dir.to_string_lossy().into_owned();
         let told = host.persona(&bot, Harness::Mcp, true, &cwd).expect("bot persona");
-        assert!(told.starts_with("## Crew bot") && told.contains("`mcp__crew__delegate`") && told.contains("## Message"), "{told}");
+        assert!(
+            told.starts_with("## Crew bot") && told.contains("`mcp__crew__delegate`") && told.contains("## Message"),
+            "{told}"
+        );
         assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
         let child_told = host.persona(&child, Harness::Mcp, true, &cwd).expect("child persona");
         assert!(child_told.starts_with("## Crew session"), "{child_told}");
-        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && child_told.contains("you cannot delegate or start sessions"), "{child_told}");
+        assert!(
+            child_told.contains(&format!("B, a bot (id {}), started you", bot.id))
+                && child_told.contains("you cannot delegate or start sessions"),
+            "{child_told}"
+        );
         assert!(child_told.contains("your question tool reaches B"), "{child_told}");
         for gone in crate::tools::REMOVED_TOOLS {
             assert!(!told.contains(gone) && !child_told.contains(gone), "{gone}: {told}\n{child_told}");
@@ -5342,7 +5126,17 @@ mod mailbox_tests {
             panic!("not an agent row");
         };
         assert_eq!(state, Some(SubagentState::Stopped));
-        let log = std::fs::read_to_string(world.dir.join(std::fs::read_dir(&world.dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| n.ends_with(".log") && n.starts_with("fake-opencode")).expect("log"))).expect("read log");
+        let log = std::fs::read_to_string(
+            world.dir.join(
+                std::fs::read_dir(&world.dir)
+                    .unwrap()
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .find(|n| n.ends_with(".log") && n.starts_with("fake-opencode"))
+                    .expect("log"),
+            ),
+        )
+        .expect("read log");
         let interrupts: Vec<&str> = log.lines().filter(|line| line.contains("/interrupt")).collect();
         assert_eq!(interrupts.len(), 1, "only the child was interrupted: {interrupts:?}");
         assert!(interrupts[0].contains(&row.id));
@@ -5521,11 +5315,7 @@ mod plan_tests {
         );
         assert_eq!(
             plan,
-            Plan::Changes(vec![
-                Change::Model("opus".into()),
-                Change::Effort("max".into()),
-                Change::Permission(Autonomy::Auto),
-            ])
+            Plan::Changes(vec![Change::Model("opus".into()), Change::Effort("max".into()), Change::Permission(Autonomy::Auto),])
         );
         let Plan::Changes(changes) = plan else { unreachable!() };
         let requests: Vec<Value> = changes.iter().filter_map(Change::request).collect();
@@ -5577,10 +5367,7 @@ mod plan_tests {
         let fast = |new: &mut Launch| new.service_tier = Some("fast".into());
         let on = Change::Tier { tier: Some("fast".into()), fast: Some(true) };
         assert_eq!(plan(fast, true), Plan::Changes(vec![on.clone()]));
-        assert_eq!(
-            on.request(),
-            Some(json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": true } }))
-        );
+        assert_eq!(on.request(), Some(json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": true } })));
         // Hidden: a tier carried over from another provider says nothing, as at launch.
         let hidden = Change::Tier { tier: Some("fast".into()), fast: None };
         assert_eq!(plan(fast, false), Plan::Changes(vec![hidden.clone()]));

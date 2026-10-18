@@ -106,11 +106,7 @@ impl Decoder for CodexDecoder {
             "assistant" => true,
             "user" => {
                 !probe.payload.content.is_empty()
-                    && !probe
-                        .payload
-                        .content
-                        .iter()
-                        .any(|part| part.kind == "input_text" && is_injected(&part.text))
+                    && !probe.payload.content.iter().any(|part| part.kind == "input_text" && is_injected(&part.text))
             }
             _ => false,
         }
@@ -195,12 +191,7 @@ impl Out {
     }
 
     fn updated(&mut self, call_id: &str, status: Option<ToolStatus>, detail: Option<ToolDetail>) {
-        self.event(HarnessEvent::ToolUpdated {
-            call_id: call_id.to_string(),
-            title: None,
-            status,
-            detail,
-        });
+        self.event(HarnessEvent::ToolUpdated { call_id: call_id.to_string(), title: None, status, detail });
     }
 }
 
@@ -266,14 +257,7 @@ impl CodexDecoder {
         }
     }
 
-    fn function_call(
-        &mut self,
-        call_id: String,
-        name: &str,
-        namespace: Option<&str>,
-        args: &Map<String, Value>,
-        out: &mut Out,
-    ) {
+    fn function_call(&mut self, call_id: String, name: &str, namespace: Option<&str>, args: &Map<String, Value>, out: &mut Out) {
         if let Some(server) = namespace.and_then(|ns| ns.strip_prefix("mcp__")) {
             let server = server.trim_end_matches('_');
             return self.start_mcp(call_id, server, name, args, out);
@@ -315,12 +299,7 @@ impl CodexDecoder {
                 let path = string_field(Some(args), "path");
                 let title = path.as_deref().map_or_else(|| "View image".into(), |path| format!("View {}", leaf(path)));
                 let file = path.as_deref().and_then(crate::media::local);
-                let detail = path.map(|path| ToolDetail::File {
-                    path,
-                    line_start: None,
-                    line_end: None,
-                    preview: None,
-                });
+                let detail = path.map(|path| ToolDetail::File { path, line_start: None, line_end: None, preview: None });
                 self.start_other(call_id.clone(), name.into(), title, detail, out);
                 out.files(&call_id, file.into_iter().collect());
             }
@@ -387,12 +366,7 @@ impl CodexDecoder {
     }
 
     fn start_other(&mut self, call_id: String, name: String, title: String, detail: Option<ToolDetail>, out: &mut Out) {
-        out.event(HarnessEvent::ToolStarted {
-            call_id: call_id.clone(),
-            name: name.clone(),
-            title,
-            detail,
-        });
+        out.event(HarnessEvent::ToolStarted { call_id: call_id.clone(), name: name.clone(), title, detail });
         let item = Map::from_iter([("type".to_string(), Value::String(name))]);
         self.tools.insert(call_id, Call { kind: Kind::Other, item, settled: false });
     }
@@ -434,18 +408,12 @@ impl CodexDecoder {
         }
         self.next_request += 1;
         self.questions.insert(call_id, (self.next_request, ids));
-        out.event(HarnessEvent::QuestionRequested {
-            request_id: self.next_request,
-            questions,
-        });
+        out.event(HarnessEvent::QuestionRequested { request_id: self.next_request, questions });
     }
 
     fn output(&mut self, call_id: &str, text: &str, out: &mut Out) {
         if let Some((request_id, ids)) = self.questions.remove(call_id) {
-            out.event(HarnessEvent::QuestionResolved {
-                request_id,
-                answers: question_answers(text, &ids),
-            });
+            out.event(HarnessEvent::QuestionResolved { request_id, answers: question_answers(text, &ids) });
             return;
         }
         if let Some(session) = self.polls.remove(call_id) {
@@ -512,11 +480,7 @@ impl CodexDecoder {
         });
         match (string_field(action, "type").as_deref(), string_field(action, "url")) {
             (Some("open_page" | "find_in_page"), Some(url)) => {
-                let detail = ToolDetail::Fetch {
-                    url: url.clone(),
-                    title: None,
-                    output: None,
-                };
+                let detail = ToolDetail::Fetch { url: url.clone(), title: None, output: None };
                 out.event(HarnessEvent::ToolStarted {
                     call_id: id.clone(),
                     name: "webfetch".into(),
@@ -578,9 +542,7 @@ impl CodexDecoder {
             Some("turn_aborted") => {
                 // An error rather than a note, only so the calls left running
                 // settle as interrupted: the block it adds is the same.
-                out.event(HarnessEvent::SessionError {
-                    message: "Interrupted".into(),
-                });
+                out.event(HarnessEvent::SessionError { message: "Interrupted".into() });
                 out.turn_ended();
             }
             // Legacy files keep the dropped turns and only record that they
@@ -609,9 +571,8 @@ impl CodexDecoder {
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let images = parts.iter().any(|part| {
-                    matches!(part.get("type").and_then(Value::as_str), Some("image" | "local_image"))
-                });
+                let images =
+                    parts.iter().any(|part| matches!(part.get("type").and_then(Value::as_str), Some("image" | "local_image")));
                 if !text.trim().is_empty() && !is_injected(&text) {
                     out.user(text);
                 } else if text.trim().is_empty() && images {
@@ -622,12 +583,7 @@ impl CodexDecoder {
                 let text = item
                     .get("content")
                     .and_then(Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|part| part.get("text").and_then(Value::as_str))
-                            .collect::<String>()
-                    })
+                    .map(|parts| parts.iter().filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<String>())
                     .unwrap_or_default();
                 out.assistant(text);
             }
@@ -779,9 +735,7 @@ impl Ran {
                 header = true;
                 break;
             }
-            let code = line
-                .strip_prefix("Process exited with code ")
-                .or_else(|| line.strip_prefix("Exit code: "));
+            let code = line.strip_prefix("Process exited with code ").or_else(|| line.strip_prefix("Exit code: "));
             if let Some(code) = code {
                 ran.exit_code = code.trim().parse().ok();
                 header = true;
@@ -867,13 +821,9 @@ fn id_text(value: &Value) -> Option<String> {
 fn output_text(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => Some(
-            parts
-                .iter()
-                .filter_map(|part| as_record(part)?.get("text")?.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
+        Value::Array(parts) => {
+            Some(parts.iter().filter_map(|part| as_record(part)?.get("text")?.as_str()).collect::<Vec<_>>().join("\n"))
+        }
         _ => None,
     }
 }
@@ -895,10 +845,7 @@ fn patch_files(patch: &str) -> Vec<PatchFile> {
     let flush = |files: &mut Vec<PatchFile>, hunk: &mut Option<(Vec<&str>, Vec<&str>)>| {
         if let (Some(file), Some((before, after))) = (files.last_mut(), hunk.take()) {
             if !before.is_empty() || !after.is_empty() {
-                file.hunks.push(EditHunk {
-                    before: before.join("\n"),
-                    after: after.join("\n"),
-                });
+                file.hunks.push(EditHunk { before: before.join("\n"), after: after.join("\n") });
             }
         }
     };
@@ -908,13 +855,7 @@ fn patch_files(patch: &str) -> Vec<PatchFile> {
             .find_map(|(prefix, kind)| line.strip_prefix(prefix).map(|path| (path.trim(), *kind)));
         if let Some((path, kind)) = header {
             flush(&mut files, &mut hunk);
-            files.push(PatchFile {
-                path: path.to_string(),
-                kind,
-                hunks: Vec::new(),
-                added: 0,
-                removed: 0,
-            });
+            files.push(PatchFile { path: path.to_string(), kind, hunks: Vec::new(), added: 0, removed: 0 });
             hunk = Some((Vec::new(), Vec::new()));
             continue;
         }
@@ -946,10 +887,7 @@ fn patch_files(patch: &str) -> Vec<PatchFile> {
 }
 
 fn patch_item(patch: &str) -> Value {
-    let changes: Vec<Value> = patch_files(patch)
-        .iter()
-        .map(|file| json!({ "path": file.path, "kind": file.kind }))
-        .collect();
+    let changes: Vec<Value> = patch_files(patch).iter().map(|file| json!({ "path": file.path, "kind": file.kind })).collect();
     json!({ "type": "file_change", "changes": changes })
 }
 
@@ -1018,11 +956,7 @@ const INJECTED: &[&str] = &[
 
 fn is_injected(text: &str) -> bool {
     let trimmed = text.trim_start();
-    INJECTED.iter().any(|marker| {
-        trimmed
-            .get(..marker.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(marker))
-    })
+    INJECTED.iter().any(|marker| trimmed.get(..marker.len()).is_some_and(|head| head.eq_ignore_ascii_case(marker)))
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1240,10 +1174,7 @@ mod tests {
             panic!("an edit row: {detail:?}");
         };
         assert_eq!((path.as_str(), *added, *removed), ("notes.txt", Some(1), Some(1)));
-        assert_eq!(
-            hunks.as_deref(),
-            Some(&[EditHunk { before: "hello world".into(), after: "hello planet".into() }][..])
-        );
+        assert_eq!(hunks.as_deref(), Some(&[EditHunk { before: "hello world".into(), after: "hello planet".into() }][..]));
 
         assert_eq!(blocks[4].text, "npm test");
         let (_, status, detail) = tool(&blocks[4]);
@@ -1412,8 +1343,7 @@ mod tests {
 
     #[test]
     fn exec_outputs() {
-        let running =
-            Ran::parse("Chunk ID: a\nWall time: 1.0 seconds\nProcess running with session ID 7\nOutput:\nhalf");
+        let running = Ran::parse("Chunk ID: a\nWall time: 1.0 seconds\nProcess running with session ID 7\nOutput:\nhalf");
         assert_eq!((running.session.as_deref(), running.status()), (Some("7"), None));
         let failed = Ran::parse(
             "Warning: truncated output (original token count: 9)\nWall time: 0.1 seconds\n\

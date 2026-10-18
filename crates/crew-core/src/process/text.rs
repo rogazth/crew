@@ -133,7 +133,9 @@ mod tests {
 
     #[test]
     fn a_local_address_is_found_and_made_openable() {
-        let vite = clean(b"  \x1b[32m\xe2\x9e\x9c\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m\r\n");
+        let vite = clean(
+            b"  \x1b[32m\xe2\x9e\x9c\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m\r\n",
+        );
         assert_eq!(local_url(&vite).as_deref(), Some("http://localhost:5173/"));
         assert_eq!(local_url("Listening on http://0.0.0.0:3000.").as_deref(), Some("http://localhost:3000"));
         assert_eq!(local_url("ready at https://app.localhost:8443/admin").as_deref(), Some("https://app.localhost:8443/admin"));

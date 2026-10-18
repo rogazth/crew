@@ -80,10 +80,8 @@ fn by_run(row: &Value) -> Vec<Value> {
 /// not running has none either way.
 fn with_uptime(row: &Value, now_ms: i64) -> Value {
     let mut row = row.clone();
-    let running = matches!(
-        row.get("state").or_else(|| row.get("status")).and_then(Value::as_str),
-        Some("running" | "paused" | "starting")
-    );
+    let running =
+        matches!(row.get("state").or_else(|| row.get("status")).and_then(Value::as_str), Some("running" | "paused" | "starting"));
     let secs = match (row.get("uptime").and_then(Value::as_u64), row.get("startedAt").and_then(Value::as_i64)) {
         (Some(secs), _) => Some(secs),
         (None, Some(started)) if running => Some(((now_ms - started).max(0) / 1000) as u64),
@@ -96,10 +94,7 @@ fn with_uptime(row: &Value, now_ms: i64) -> Value {
 }
 
 fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as i64).unwrap_or(0)
 }
 
 /// `web  running  pid 4242`, from a process row: the run the verb acted on
@@ -349,7 +344,9 @@ pub fn edit(ctx: &Ctx, edit: ProcEdit) -> Result<ExitCode, CliError> {
     set("env", if env.is_empty() { None } else { Some(json!(parse_env(&env)?)) });
     set("auto_restart", auto_restart.map(Value::from));
     if changes.is_empty() {
-        return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-restart.".into()));
+        return Err(CliError::Usage(
+            "Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-restart.".into(),
+        ));
     }
     changes.insert("process".into(), json!(process));
     let reply = ctx.client()?.run("save_process", Value::Object(changes))?;
@@ -385,7 +382,10 @@ mod tests {
     #[test]
     fn the_process_table_shows_what_the_tool_reports() {
         let rows = vec![
-            with_uptime(&json!({ "name": "web", "state": "running", "pid": 7, "startedAt": 0, "command": "npm run dev", "exitCode": null }), 5_000),
+            with_uptime(
+                &json!({ "name": "web", "state": "running", "pid": 7, "startedAt": 0, "command": "npm run dev", "exitCode": null }),
+                5_000,
+            ),
             with_uptime(&json!({ "name": "db", "state": "exited", "pid": null, "command": "postgres", "exitCode": 1 }), 5_000),
         ];
         let table = output::table(&rows, PROCESS_COLUMNS).render(false);

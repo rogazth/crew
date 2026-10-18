@@ -228,10 +228,7 @@ const PENDING: &str = "claimed_at IS NULL AND delivered_at IS NULL AND disposed_
 pub fn envelope(from: &BotRef, body: &str, at: Option<i64>, parent: Option<&str>) -> String {
     let kind = from.kind.as_deref().unwrap_or("bot");
     let (who, reply) = if kind == "user" {
-        (
-            "the user (a person, from the crew command line)".to_string(),
-            "They read your reply here.".to_string(),
-        )
+        ("the user (a person, from the crew command line)".to_string(), "They read your reply here.".to_string())
     } else if from.id.is_empty() {
         (format!("{} ({kind}, no longer in this workspace), a model", from.name), String::new())
     } else if parent == Some(from.id.as_str()) {
@@ -610,10 +607,8 @@ fn not_the_users_to_change(conn: &rusqlite::Connection, session_id: &str, letter
                FROM mailbox WHERE id = ?1",
         )
         .and_then(|mut stmt| {
-            stmt.query_row(params![letter_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-            })
-            .optional()
+            stmt.query_row(params![letter_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+                .optional()
         })
         .unwrap_or(None);
     match found {
@@ -637,66 +632,60 @@ fn not_the_users_to_change(conn: &rusqlite::Connection, session_id: &str, letter
 /// has yet to be handed. `files` of `None` leaves the files as they are. Refused
 /// once a turn has taken the letter (a steer, or a batch), and for any letter
 /// that is not the user's.
-pub fn edit(
-    store: &Store,
-    session_id: &str,
-    letter_id: &str,
-    text: &str,
-    files: Option<Vec<String>>,
-) -> Result<(), String> {
-    store.with(|conn| {
-        let tx = conn.unchecked_transaction()?;
-        let held: Option<(Option<String>, Option<String>)> = tx
-            .prepare_cached(&format!(
-                "SELECT files_json, dispatch_json FROM mailbox
+pub fn edit(store: &Store, session_id: &str, letter_id: &str, text: &str, files: Option<Vec<String>>) -> Result<(), String> {
+    store
+        .with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let held: Option<(Option<String>, Option<String>)> = tx
+                .prepare_cached(&format!(
+                    "SELECT files_json, dispatch_json FROM mailbox
                   WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING}"
-            ))?
-            .query_row(params![letter_id, session_id], |row| Ok((row.get(0)?, row.get(1)?)))
-            .optional()?;
-        let Some((held, dispatch)) = held else {
-            return Ok(Err(not_the_users_to_change(&tx, session_id, letter_id, "edited")));
-        };
-        let dispatch = dispatch_from(dispatch).and_then(|dispatch| dispatch.kept_by(text));
-        let files = match files {
-            None => held,
-            // The ones it already holds keep what was known of them (an image
-            // stays an image); a new path is known by its name.
-            Some(paths) => {
-                let held = files_from(held);
-                let files: Vec<AttachedFile> = paths
-                    .into_iter()
-                    .map(|path| {
-                        held.iter().find(|file| file.path == path).cloned().unwrap_or_else(|| file_at(&path))
-                    })
-                    .collect();
-                files_json(&files)
+                ))?
+                .query_row(params![letter_id, session_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?;
+            let Some((held, dispatch)) = held else {
+                return Ok(Err(not_the_users_to_change(&tx, session_id, letter_id, "edited")));
+            };
+            let dispatch = dispatch_from(dispatch).and_then(|dispatch| dispatch.kept_by(text));
+            let files = match files {
+                None => held,
+                // The ones it already holds keep what was known of them (an image
+                // stays an image); a new path is known by its name.
+                Some(paths) => {
+                    let held = files_from(held);
+                    let files: Vec<AttachedFile> = paths
+                        .into_iter()
+                        .map(|path| held.iter().find(|file| file.path == path).cloned().unwrap_or_else(|| file_at(&path)))
+                        .collect();
+                    files_json(&files)
+                }
+            };
+            if text.trim().is_empty() && files.is_none() {
+                return Ok(Err("A message needs some text or a file.".to_string()));
             }
-        };
-        if text.trim().is_empty() && files.is_none() {
-            return Ok(Err("A message needs some text or a file.".to_string()));
-        }
-        tx.prepare_cached("UPDATE mailbox SET text = ?2, files_json = ?3, dispatch_json = ?4 WHERE id = ?1")?
-            .execute(params![letter_id, text, files, dispatch_json(dispatch.as_ref())])?;
-        tx.commit()?;
-        Ok(Ok(()))
-    })?
-    .inspect(|_| store.mailbox_changed(session_id))
+            tx.prepare_cached("UPDATE mailbox SET text = ?2, files_json = ?3, dispatch_json = ?4 WHERE id = ?1")?
+                .execute(params![letter_id, text, files, dispatch_json(dispatch.as_ref())])?;
+            tx.commit()?;
+            Ok(Ok(()))
+        })?
+        .inspect(|_| store.mailbox_changed(session_id))
 }
 
 /// Sets aside a letter the user wrote that its session has yet to be handed,
 /// unread. Refused once a turn has taken it, and for any letter that is not
 /// the user's.
 pub fn dispose_users(store: &Store, session_id: &str, letter_id: &str) -> Result<(), String> {
-    store.with(|conn| {
-        let set_aside = conn
-            .prepare_cached(&format!(
-                "UPDATE mailbox SET disposed_at = ?3
+    store
+        .with(|conn| {
+            let set_aside = conn
+                .prepare_cached(&format!(
+                    "UPDATE mailbox SET disposed_at = ?3
                   WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING}"
-            ))?
-            .execute(params![letter_id, session_id, now_millis()])?;
-        Ok(if set_aside == 1 { Ok(()) } else { Err(not_the_users_to_change(conn, session_id, letter_id, "removed")) })
-    })?
-    .inspect(|_| store.mailbox_changed(session_id))
+                ))?
+                .execute(params![letter_id, session_id, now_millis()])?;
+            Ok(if set_aside == 1 { Ok(()) } else { Err(not_the_users_to_change(conn, session_id, letter_id, "removed")) })
+        })?
+        .inspect(|_| store.mailbox_changed(session_id))
 }
 
 /// Puts the letters named first, in the order given. Ids that are not waiting
@@ -801,9 +790,7 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
 /// Everything still waiting for one bot, in the order it goes over.
 pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(&format!(
-            "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"
-        ))?;
+        let mut stmt = conn.prepare_cached(&format!("{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"))?;
         let rows = stmt.query_map(params![to_session], row_to_letter)?;
         rows.collect()
     })
@@ -812,9 +799,10 @@ pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
 /// Claim the first waiting letter alone. Claiming in the same statement that
 /// picks it is what keeps two callers from handing the same letter over twice.
 pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> {
-    store.with(|conn| {
-        conn.prepare_cached(&format!(
-            "UPDATE mailbox SET claimed_at = ?2
+    store
+        .with(|conn| {
+            conn.prepare_cached(&format!(
+                "UPDATE mailbox SET claimed_at = ?2
              WHERE id = (
                SELECT id FROM mailbox
                WHERE to_session = ?1 AND {PENDING}
@@ -823,15 +811,15 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
                ORDER BY {QUEUE} LIMIT 1
              )
              {RETURNING}"
-        ))?
-        .query_row(params![to_session, now_millis()], row_to_letter)
-        .optional()
-    })
-    .inspect(|letter| {
-        if letter.is_some() {
-            store.mailbox_changed(to_session);
-        }
-    })
+            ))?
+            .query_row(params![to_session, now_millis()], row_to_letter)
+            .optional()
+        })
+        .inspect(|letter| {
+            if letter.is_some() {
+                store.mailbox_changed(to_session);
+            }
+        })
 }
 
 /// Claim what one turn is handed: every waiting letter, in queue order, until
@@ -840,52 +828,48 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
 /// `/compact` is neither run with the letters before it nor given the next one
 /// as its arguments.
 pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Letter>, String> {
-    store.with(|conn| {
-        let tx = conn.unchecked_transaction()?;
-        let pending: Vec<Letter> = tx
-            .prepare_cached(&format!(
-                "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"
-            ))?
-            .query_map(params![to_session], row_to_letter)?
-            .collect::<rusqlite::Result<_>>()?;
-        let mut batch: Vec<Letter> = Vec::new();
-        let mut spent = 0;
-        for letter in pending {
-            let size = letter.text.chars().count();
-            let command = letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some());
-            if !batch.is_empty() && (command || spent + size > cap) {
-                break;
+    store
+        .with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let pending: Vec<Letter> = tx
+                .prepare_cached(&format!("{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"))?
+                .query_map(params![to_session], row_to_letter)?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut batch: Vec<Letter> = Vec::new();
+            let mut spent = 0;
+            for letter in pending {
+                let size = letter.text.chars().count();
+                let command = letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some());
+                if !batch.is_empty() && (command || spent + size > cap) {
+                    break;
+                }
+                spent += size;
+                batch.push(letter);
+                if command {
+                    break;
+                }
             }
-            spent += size;
-            batch.push(letter);
-            if command {
-                break;
+            let now = now_millis();
+            for letter in &batch {
+                tx.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, now])?;
             }
-        }
-        let now = now_millis();
-        for letter in &batch {
-            tx.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?
-                .execute(params![letter.id, now])?;
-        }
-        tx.commit()?;
-        Ok(batch)
-    })
-    .inspect(|batch| {
-        if !batch.is_empty() {
-            store.mailbox_changed(to_session);
-        }
-    })
+            tx.commit()?;
+            Ok(batch)
+        })
+        .inspect(|batch| {
+            if !batch.is_empty() {
+                store.mailbox_changed(to_session);
+            }
+        })
 }
 
 /// Put a claimed letter back, for a delivery that could not go through. It
 /// keeps its original `at`, so it stays at the head of the queue.
 pub fn release(store: &Store, id: &str) -> Result<(), String> {
     let to: Option<String> = store.with(|conn| {
-        conn.prepare_cached(
-            "UPDATE mailbox SET claimed_at = NULL WHERE id = ?1 AND delivered_at IS NULL RETURNING to_session",
-        )?
-        .query_row(params![id], |row| row.get(0))
-        .optional()
+        conn.prepare_cached("UPDATE mailbox SET claimed_at = NULL WHERE id = ?1 AND delivered_at IS NULL RETURNING to_session")?
+            .query_row(params![id], |row| row.get(0))
+            .optional()
     })?;
     if let Some(to) = to {
         store.mailbox_changed(&to);
@@ -958,15 +942,16 @@ fn changed(store: &Store, to_session: &str, count: usize) {
 /// message the child wrote, or a later turn's report, still has to be handed
 /// over.
 pub fn take_back(store: &Store, to_session: &str, from_session: &str, seen: i64) -> Result<usize, String> {
-    store.with(|conn| {
-        conn.prepare_cached(&format!(
-            "UPDATE mailbox SET disposed_at = ?4
+    store
+        .with(|conn| {
+            conn.prepare_cached(&format!(
+                "UPDATE mailbox SET disposed_at = ?4
               WHERE to_session = ?1 AND from_session = ?2 AND kind IN ('report', 'question', 'approval')
                 AND event_cursor IS NOT NULL AND event_cursor <= ?3 AND {PENDING}"
-        ))?
-        .execute(params![to_session, from_session, seen, now_millis()])
-    })
-    .inspect(|&count| changed(store, to_session, count))
+            ))?
+            .execute(params![to_session, from_session, seen, now_millis()])
+        })
+        .inspect(|&count| changed(store, to_session, count))
 }
 
 /// A child's question was answered, by its parent or by the user: a question
@@ -982,14 +967,15 @@ pub fn dispose_approvals(store: &Store, to_session: &str, from_session: &str) ->
 }
 
 fn dispose_kind(store: &Store, to_session: &str, from_session: &str, kind: &str) -> Result<usize, String> {
-    store.with(|conn| {
-        conn.prepare_cached(&format!(
-            "UPDATE mailbox SET disposed_at = ?3
+    store
+        .with(|conn| {
+            conn.prepare_cached(&format!(
+                "UPDATE mailbox SET disposed_at = ?3
               WHERE to_session = ?1 AND from_session = ?2 AND kind = ?4 AND {PENDING}"
-        ))?
-        .execute(params![to_session, from_session, now_millis(), kind])
-    })
-    .inspect(|&count| changed(store, to_session, count))
+            ))?
+            .execute(params![to_session, from_session, now_millis(), kind])
+        })
+        .inspect(|&count| changed(store, to_session, count))
 }
 
 /// Whether `from_session` has ever written `to_session` a message: a session
@@ -1019,8 +1005,10 @@ pub fn waiting_count(store: &Store, to_session: &str) -> Result<i64, String> {
 /// it settles, so this is never stuck on a turn that is over.
 pub fn undelivered_count(store: &Store, to_session: &str) -> Result<i64, String> {
     store.with(|conn| {
-        conn.prepare_cached("SELECT COUNT(*) FROM mailbox WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL")?
-            .query_row(params![to_session], |row| row.get(0))
+        conn.prepare_cached(
+            "SELECT COUNT(*) FROM mailbox WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL",
+        )?
+        .query_row(params![to_session], |row| row.get(0))
     })
 }
 
@@ -1079,11 +1067,7 @@ fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol:
     Ok((
         crew_protocol::ThreadLetter {
             id: row.get(0)?,
-            from: BotRef {
-                id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                name: row.get(3)?,
-                kind: row.get(6)?,
-            },
+            from: BotRef { id: row.get::<_, Option<String>>(2)?.unwrap_or_default(), name: row.get(3)?, kind: row.get(6)? },
             to: BotRef { id: row.get(1)?, name: row.get(8)?, kind: party_kind(&to_kind) },
             text: row.get(4)?,
             at: row.get(5)?,
@@ -1124,16 +1108,10 @@ pub fn thread(
     let limit = limit.unwrap_or(THREAD_LIMIT).clamp(1, THREAD_MAX);
     let (pair, first, second) = match (is_user(a), is_user(b)) {
         (true, true) => return Err("A thread is between two parties; both were the user".into()),
-        (true, false) | (false, true) => (
-            "m.from_kind = 'user' AND m.from_session IS NULL AND m.to_session = ?1",
-            if is_user(a) { b } else { a },
-            "",
-        ),
-        (false, false) => (
-            "((m.from_session = ?1 AND m.to_session = ?2) OR (m.from_session = ?2 AND m.to_session = ?1))",
-            a,
-            b,
-        ),
+        (true, false) | (false, true) => {
+            ("m.from_kind = 'user' AND m.from_session IS NULL AND m.to_session = ?1", if is_user(a) { b } else { a }, "")
+        }
+        (false, false) => ("((m.from_session = ?1 AND m.to_session = ?2) OR (m.from_session = ?2 AND m.to_session = ?1))", a, b),
     };
     store.with(|conn| {
         // Where the page ends: the letter `before`, by its time and then the
@@ -1152,9 +1130,7 @@ pub fn thread(
                 "{THREAD_SELECT} WHERE {pair} AND (m.at < ?3 OR (m.at = ?3 AND m.rowid < ?4))
                   ORDER BY m.at DESC, m.rowid DESC LIMIT ?5"
             ))?
-            .query_map(params![first, second, at, rowid, limit + 1], |row| {
-                row_to_thread_letter(row).map(|(letter, _)| letter)
-            })?
+            .query_map(params![first, second, at, rowid, limit + 1], |row| row_to_thread_letter(row).map(|(letter, _)| letter))?
             .collect::<rusqlite::Result<_>>()?;
         let more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
@@ -1235,9 +1211,7 @@ mod tests {
     fn session(store: &Store, name: &str) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace =
-            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
-                .expect("workspace");
+        let workspace = crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into()).expect("workspace");
         crate::session::create(
             store,
             workspace.id,
@@ -1297,7 +1271,10 @@ mod tests {
         assert!(person.contains("From: the user (a person") && !person.contains("a model"), "{person}");
         let session = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
         let from_session = envelope(&session, "hi", None, None);
-        assert!(from_session.contains("From: codex: fix (session c1), a model\nReply with `send_message` to `c1`"), "{from_session}");
+        assert!(
+            from_session.contains("From: codex: fix (session c1), a model\nReply with `send_message` to `c1`"),
+            "{from_session}"
+        );
         assert!(from_session.contains("No reply is needed"), "{from_session}");
         let parent = envelope(&sender("p1"), "more", None, Some("p1"));
         assert!(parent.contains("your report at the end of this turn reaches it") && !parent.contains("Reply with"), "{parent}");
@@ -1353,9 +1330,7 @@ mod tests {
         for text in ["first", "second", "third"] {
             enqueue(&store, &to, &sender(&from), text).expect("enqueue");
         }
-        let order: Vec<String> = (0..3)
-            .map(|_| claim(&store, &to).expect("claim").expect("letter").text)
-            .collect();
+        let order: Vec<String> = (0..3).map(|_| claim(&store, &to).expect("claim").expect("letter").text).collect();
         assert_eq!(order, ["first", "second", "third"]);
     }
 
@@ -1593,7 +1568,10 @@ mod tests {
         let first = enqueue(&store, &to, &sender(&from), "one").expect("enqueue");
         let second = enqueue(&store, &to, &sender(&from), "two").expect("enqueue");
         let queue = pending(&store, &to).expect("pending");
-        assert_eq!(queue.iter().map(|l| (l.text.as_str(), l.state.as_str())).collect::<Vec<_>>(), [("one", "pending"), ("two", "pending")]);
+        assert_eq!(
+            queue.iter().map(|l| (l.text.as_str(), l.state.as_str())).collect::<Vec<_>>(),
+            [("one", "pending"), ("two", "pending")]
+        );
         assert_eq!(queue[0].from.id, from);
         claim(&store, &to).expect("claim");
         assert_eq!(pending(&store, &to).expect("pending")[0].state, "claimed");
@@ -1657,7 +1635,8 @@ mod tests {
     fn a_letter_keeps_its_files_from_the_box_to_the_turn() {
         let store = store();
         let to = session(&store, "to");
-        let sent = enqueue_with_files(&store, &to, &user(), "look", vec![file("/tmp/a.md"), file("/tmp/b.png")], None).expect("enqueue");
+        let sent =
+            enqueue_with_files(&store, &to, &user(), "look", vec![file("/tmp/a.md"), file("/tmp/b.png")], None).expect("enqueue");
         enqueue(&store, &to, &user(), "and no more").expect("enqueue");
         let queue = pending(&store, &to).expect("pending");
         assert_eq!(queue[0].files, Some(vec!["/tmp/a.md".to_string(), "/tmp/b.png".to_string()]));
@@ -1687,12 +1666,15 @@ mod tests {
     fn a_letter_keeps_its_command_and_skills_from_the_box_to_the_turn() {
         let store = store();
         let to = session(&store, "to");
-        let waits = enqueue_with_files(&store, &to, &user(), "/review main", Vec::new(), dispatch(Some("review"), &[])).expect("enqueue");
-        let skilled = enqueue_with_files(&store, &to, &user(), "use /lint here", Vec::new(), dispatch(None, &["lint"])).expect("enqueue");
+        let waits =
+            enqueue_with_files(&store, &to, &user(), "/review main", Vec::new(), dispatch(Some("review"), &[])).expect("enqueue");
+        let skilled =
+            enqueue_with_files(&store, &to, &user(), "use /lint here", Vec::new(), dispatch(None, &["lint"])).expect("enqueue");
         let batch = claim_batch(&store, &to, BATCH_CHARS).expect("claim");
         assert_eq!(batch, vec![waits]);
         assert_eq!(claim_batch(&store, &to, BATCH_CHARS).expect("next"), vec![skilled]);
-        let direct = record_claimed_with_files(&store, &to, &user(), "/goal ship it", Vec::new(), dispatch(Some("goal"), &[])).expect("claimed");
+        let direct = record_claimed_with_files(&store, &to, &user(), "/goal ship it", Vec::new(), dispatch(Some("goal"), &[]))
+            .expect("claimed");
         release(&store, &direct.id).expect("release");
         assert_eq!(claim_batch(&store, &to, BATCH_CHARS).expect("again")[0].dispatch, dispatch(Some("goal"), &[]));
     }
@@ -1755,7 +1737,8 @@ mod tests {
         edit(&store, &to, &skill_gone.id, "/review the lint changes", None).expect("edit");
         edit(&store, &to, &command_gone.id, "please run /lint now", None).expect("edit");
         edit(&store, &to, &both_gone.id, "just words", None).expect("edit");
-        let kept: Vec<Option<Dispatch>> = waiting(&store, &to).expect("waiting").into_iter().map(|letter| letter.dispatch).collect();
+        let kept: Vec<Option<Dispatch>> =
+            waiting(&store, &to).expect("waiting").into_iter().map(|letter| letter.dispatch).collect();
         assert_eq!(kept, [dispatch(Some("review"), &[]), dispatch(None, &["lint"]), None]);
     }
 
@@ -1769,7 +1752,10 @@ mod tests {
         edit(&store, &to, &mine.id, "better", None).expect("edit the text alone");
         edit(&store, &to, &mine.id, "best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()])).expect("edit both");
         let queue = pending(&store, &to).expect("pending");
-        assert_eq!((queue[0].text.as_str(), queue[0].files.clone()), ("best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()])));
+        assert_eq!(
+            (queue[0].text.as_str(), queue[0].files.clone()),
+            ("best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()]))
+        );
         edit(&store, &to, &mine.id, "text only", Some(Vec::new())).expect("clear the files");
         assert_eq!(pending(&store, &to).expect("pending")[0].files, None);
         assert!(edit(&store, &to, &mine.id, " ", None).expect_err("empty").contains("some text or a file"));

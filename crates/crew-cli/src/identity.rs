@@ -91,10 +91,8 @@ pub fn data_dir(flag: Option<&Path>, env: &Env) -> Result<PathBuf, CliError> {
 
 /// Electron's `userData` for an app named Crew.
 pub fn default_data_dir(env: &Env) -> Result<PathBuf, CliError> {
-    let home = env
-        .home
-        .as_deref()
-        .ok_or_else(|| CliError::Failed("HOME is not set; name the data directory with --data-dir".into()))?;
+    let home =
+        env.home.as_deref().ok_or_else(|| CliError::Failed("HOME is not set; name the data directory with --data-dir".into()))?;
     if cfg!(target_os = "macos") {
         return Ok(Path::new(home).join("Library/Application Support/Crew"));
     }

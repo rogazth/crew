@@ -158,9 +158,8 @@ fn crewd_path(flag: Option<&Path>) -> Result<PathBuf, CliError> {
             .map_err(|e| CliError::Failed(format!("Couldn't tell where this crew is ({e}); name crewd with --crewd.")))?
             .with_file_name("crewd"),
     };
-    let path = std::fs::canonicalize(&named).map_err(|_| {
-        CliError::Failed(format!("No crewd at {}; name the one to run with --crewd <path>.", named.display()))
-    })?;
+    let path = std::fs::canonicalize(&named)
+        .map_err(|_| CliError::Failed(format!("No crewd at {}; name the one to run with --crewd <path>.", named.display())))?;
     if !path.is_file() {
         return Err(CliError::Failed(format!("{} is not a file; name crewd with --crewd <path>.", path.display())));
     }
@@ -315,11 +314,9 @@ fn restart(dir: &Path, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
         }
         None => Err(CliError::NotRunning(match supervisor {
             Supervisor::App => "crewd stopped and nothing started it again. Open Crew (`crew open`) to start it.".into(),
-            Supervisor::LaunchAgent(agent) => format!(
-                "launchd did not bring crewd back within {} s. See {}.",
-                START_WAIT.as_secs(),
-                agent.log().display()
-            ),
+            Supervisor::LaunchAgent(agent) => {
+                format!("launchd did not bring crewd back within {} s. See {}.", START_WAIT.as_secs(), agent.log().display())
+            }
         })),
     }
 }
@@ -343,7 +340,11 @@ fn stop_agent(dir: &Path) -> Result<DaemonFile, CliError> {
             return Ok(file);
         }
         if Instant::now() >= deadline {
-            return Err(CliError::Failed(format!("crewd (pid {}) is still running {} s after it was asked to stop.", pid_text(&file), STOP_WAIT.as_secs())));
+            return Err(CliError::Failed(format!(
+                "crewd (pid {}) is still running {} s after it was asked to stop.",
+                pid_text(&file),
+                STOP_WAIT.as_secs()
+            )));
         }
         std::thread::sleep(POLL);
     }
@@ -429,7 +430,10 @@ mod tests {
         let agent = Supervisor::LaunchAgent(agent_for("/d"));
         let running = launch_agent::Loaded { state: Some("running".into()), pid: Some(7) };
         let text = agent.describe(Some(&running));
-        assert!(text.contains(launch_agent::LABEL) && text.contains("(running)") && text.contains("keeps running when Crew quits"), "{text}");
+        assert!(
+            text.contains(launch_agent::LABEL) && text.contains("(running)") && text.contains("keeps running when Crew quits"),
+            "{text}"
+        );
         assert!(agent.describe(None).contains("installed, not loaded"));
     }
 

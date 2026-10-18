@@ -49,10 +49,7 @@ pub fn budget(tool: &str, args: &Value) -> Option<Duration> {
 }
 
 fn wait_secs(args: &Value) -> u64 {
-    args.get("timeout_s")
-        .and_then(Value::as_u64)
-        .unwrap_or(WAIT_DEFAULT_S)
-        .clamp(1, WAIT_MAX_S)
+    args.get("timeout_s").and_then(Value::as_u64).unwrap_or(WAIT_DEFAULT_S).clamp(1, WAIT_MAX_S)
 }
 
 fn tab_prop() -> Value {
@@ -238,12 +235,7 @@ struct Located {
 
 impl BrowserTools {
     pub fn new(store: Store, relay: BrowserRelay, leases: Leases) -> Self {
-        Self {
-            store,
-            relay,
-            leases,
-            opened: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { store, relay, leases, opened: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     pub fn relay(&self) -> &BrowserRelay {
@@ -272,9 +264,7 @@ impl BrowserTools {
             "browser_wait_for" => self.wait_for(workspace_id, holder, args),
             "browser_act" => self.act(workspace_id, holder, args),
             "browser_activity" => self.activity(workspace_id, holder, args),
-            "browser_snapshot" | "browser_screenshot" | "browser_evaluate" => {
-                self.drive(workspace_id, holder, tool, args)
-            }
+            "browser_snapshot" | "browser_screenshot" | "browser_evaluate" => self.drive(workspace_id, holder, tool, args),
             _ => Err(format!("Unknown browser tool \"{tool}\"")),
         }
     }
@@ -297,8 +287,8 @@ impl BrowserTools {
                 let title = if page.title.is_empty() { "(untitled)" } else { page.title.as_str() };
                 let url = if page.url.is_empty() { "about:blank" } else { page.url.as_str() };
                 let who = match self.leases.holder_of(&page.page_id, now) {
-                    Some(lease) if lease.session_id.as_deref() == holder.session_id.as_deref()
-                        && lease.holder == holder.label =>
+                    Some(lease)
+                        if lease.session_id.as_deref() == holder.session_id.as_deref() && lease.holder == holder.label =>
                     {
                         format!("yours for ~{} s", secs(lease.until - now))
                     }
@@ -357,7 +347,8 @@ impl BrowserTools {
         match self.relay.call(Some(host), &tab, "open_tab", json!({ "url": url }), Some(page_ref(&page)), LOAD_TIMEOUT) {
             Ok(out) if self.relay.is_remote() => {
                 let name = self.relay.host_name(host).unwrap_or_else(|| "the Mac".into());
-                let note = format!("It is in Crew on {name}, over the network: each call is slower than a browser on this machine.");
+                let note =
+                    format!("It is in Crew on {name}, over the network: each call is slower than a browser on this machine.");
                 Ok(match out {
                     Value::Array(mut blocks) => {
                         blocks.push(json!({ "type": "text", "text": note }));
@@ -375,9 +366,9 @@ impl BrowserTools {
             // The window may have made the tab anyway, or be making it still:
             // it stays the caller's, and is named, so no tab is left open that
             // the agent never heard of.
-            Err(error) => Err(format!(
-                "{error} The tab is {tab} and it is yours; it may still come up: list_tabs shows whether it did."
-            )),
+            Err(error) => {
+                Err(format!("{error} The tab is {tab} and it is yours; it may still come up: list_tabs shows whether it did."))
+            }
         }
     }
 
@@ -451,10 +442,8 @@ impl BrowserTools {
     pub fn activity(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
         let kinds = || ACTIVITY.map(|(kind, _)| kind).join(" or ");
         let kind = arg(args, "kind").ok_or_else(|| format!("kind is required: {}", kinds()))?;
-        let (_, call) = ACTIVITY
-            .iter()
-            .find(|(name, _)| *name == kind)
-            .ok_or_else(|| format!("kind is {}, not {kind}", kinds()))?;
+        let (_, call) =
+            ACTIVITY.iter().find(|(name, _)| *name == kind).ok_or_else(|| format!("kind is {}, not {kind}", kinds()))?;
         self.drive(workspace_id, holder, call, args)
     }
 
@@ -517,10 +506,8 @@ impl BrowserTools {
     }
 
     fn pages_of(&self, workspace_id: &str, now: i64) -> Result<Vec<Located>, String> {
-        let mut pages: Vec<Located> = browser::workspace_pages(&self.store, workspace_id)?
-            .into_iter()
-            .map(|page| Located { page, host: None })
-            .collect();
+        let mut pages: Vec<Located> =
+            browser::workspace_pages(&self.store, workspace_id)?.into_iter().map(|page| Located { page, host: None }).collect();
         for hosted in self.relay.hosted_pages() {
             if hosted.page.workspace_id == workspace_id && !pages.iter().any(|known| known.page.page_id == hosted.page.page_id) {
                 pages.push(Located { page: hosted.page, host: Some(hosted.host) });
@@ -573,11 +560,7 @@ impl ToolFamily for BrowserTools {
 }
 
 fn page_ref(page: &OpenPage) -> BrowserPageRef {
-    BrowserPageRef {
-        context: page.context.clone(),
-        url: page.url.clone(),
-        title: page.title.clone(),
-    }
+    BrowserPageRef { context: page.context.clone(), url: page.url.clone(), title: page.title.clone() }
 }
 
 fn secs(ms: i64) -> i64 {
@@ -793,14 +776,13 @@ mod tests {
         let (tools, _) = tools(store);
         let ask = session("w1", "ask");
         let run = |caller: &Caller, name: &str, args: Value| ToolFamily::run(&tools, caller, name, &args).map(|_| ());
-        let error = run(&ask, "browser_evaluate", json!({ "tab": "browser:a", "expression": "document.cookie" }))
-            .expect_err("ask");
+        let error =
+            run(&ask, "browser_evaluate", json!({ "tab": "browser:a", "expression": "document.cookie" })).expect_err("ask");
         assert_eq!(error, EVALUATE_NEEDS_FULL);
         run(&ask, "browser_navigate", json!({ "tab": "browser:a", "url": "https://example.com" })).expect("navigates");
         run(&ask, "open_tab", json!({ "url": "https://example.com" })).expect("opens");
         tools.leases().release_all("s-ask", now_millis());
-        run(&session("w1", "full"), "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" }))
-            .expect("full autonomy");
+        run(&session("w1", "full"), "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" })).expect("full autonomy");
         tools.leases().release_all("s-full", now_millis());
         let me = Caller::User { workspace_id: Some("w1".into()) };
         run(&me, "browser_evaluate", json!({ "tab": "browser:a", "expression": "1" })).expect("the user");
@@ -862,8 +844,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                "list_tabs", "open_tab", "release_tab", "browser_navigate", "browser_snapshot", "browser_act",
-                "browser_screenshot", "browser_wait_for", "browser_activity", "browser_evaluate",
+                "list_tabs",
+                "open_tab",
+                "release_tab",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_act",
+                "browser_screenshot",
+                "browser_wait_for",
+                "browser_activity",
+                "browser_evaluate",
             ]
         );
         assert!(catalog().iter().all(|tool| tool.audience == Audience::EVERYONE));
@@ -910,9 +900,8 @@ mod tests {
     #[test]
     fn the_user_without_a_workspace_is_told_to_name_one() {
         let (tools, _) = tools(store());
-        let error = ToolFamily::run(&tools, &Caller::User { workspace_id: None }, "list_tabs", &json!({}))
-            .err()
-            .expect("no workspace");
+        let error =
+            ToolFamily::run(&tools, &Caller::User { workspace_id: None }, "list_tabs", &json!({})).err().expect("no workspace");
         assert!(error.starts_with("No workspace"), "{error}");
     }
 

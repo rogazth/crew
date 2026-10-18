@@ -194,10 +194,8 @@ pub fn text_input(text: &str) -> Value {
 /// ahead of the text. One whose file is not (the catalog was not read) stays
 /// a `$name` the model may or may not act on.
 pub fn skills_input(text: &str, skills: &[(String, Option<String>)]) -> Value {
-    let mut marks: Vec<(usize, usize)> = skills
-        .iter()
-        .flat_map(|(name, _)| super::invocations(text, name).into_iter().map(move |at| (at, name.len())))
-        .collect();
+    let mut marks: Vec<(usize, usize)> =
+        skills.iter().flat_map(|(name, _)| super::invocations(text, name).into_iter().map(move |at| (at, name.len()))).collect();
     marks.sort();
     marks.dedup();
     let mut named = String::new();
@@ -211,9 +209,7 @@ pub fn skills_input(text: &str, skills: &[(String, Option<String>)]) -> Value {
     named.push_str(&text[from..]);
     let mut input = vec![json!({ "type": "text", "text": named, "text_elements": [] })];
     input.extend(
-        skills
-            .iter()
-            .filter_map(|(name, path)| Some(json!({ "type": "skill", "name": name, "path": path.as_deref()? }))),
+        skills.iter().filter_map(|(name, path)| Some(json!({ "type": "skill", "name": name, "path": path.as_deref()? }))),
     );
     Value::Array(input)
 }
@@ -269,14 +265,10 @@ impl CodexCommand {
     pub fn request(&self, thread_id: &str) -> (&'static str, Value) {
         match self {
             Self::Compact => ("thread/compact/start", json!({ "threadId": thread_id })),
-            Self::Review(None) => (
-                "review/start",
-                json!({ "threadId": thread_id, "target": { "type": "uncommittedChanges" } }),
-            ),
-            Self::Review(Some(instructions)) => (
-                "review/start",
-                json!({ "threadId": thread_id, "target": { "type": "custom", "instructions": instructions } }),
-            ),
+            Self::Review(None) => ("review/start", json!({ "threadId": thread_id, "target": { "type": "uncommittedChanges" } })),
+            Self::Review(Some(instructions)) => {
+                ("review/start", json!({ "threadId": thread_id, "target": { "type": "custom", "instructions": instructions } }))
+            }
             Self::GoalSet(objective) => ("thread/goal/set", json!({ "threadId": thread_id, "objective": objective })),
             Self::GoalGet => ("thread/goal/get", json!({ "threadId": thread_id })),
             Self::GoalClear => ("thread/goal/clear", json!({ "threadId": thread_id })),
@@ -415,7 +407,9 @@ pub fn mcp_startup(params: &Value) -> Option<(String, McpState, Option<String>)>
     let state = match params.get("status").and_then(Value::as_str)? {
         "starting" => McpState::Pending,
         "ready" => McpState::Connected,
-        "failed" if params.get("failureReason").and_then(Value::as_str) == Some("reauthenticationRequired") => McpState::NeedsAuth,
+        "failed" if params.get("failureReason").and_then(Value::as_str) == Some("reauthenticationRequired") => {
+            McpState::NeedsAuth
+        }
         "failed" | "cancelled" => McpState::Failed,
         _ => McpState::Unknown,
     };
@@ -469,11 +463,7 @@ pub fn user_message_text(item: &Map<String, Value>) -> Option<String> {
         return None;
     }
     let parts = item.get("content")?.as_array()?;
-    let text = parts
-        .iter()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = parts.iter().filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n");
     Some(text)
 }
 
@@ -520,11 +510,8 @@ pub fn exec_item(item: &Map<String, Value>) -> Option<Map<String, Value>> {
                 .map(|rows| {
                     rows.iter()
                         .map(|row| {
-                            let kind = row
-                                .pointer("/kind/type")
-                                .or_else(|| row.get("kind"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("update");
+                            let kind =
+                                row.pointer("/kind/type").or_else(|| row.get("kind")).and_then(Value::as_str).unwrap_or("update");
                             json!({ "path": row.get("path").cloned().unwrap_or(Value::Null), "kind": kind })
                         })
                         .collect()
@@ -623,11 +610,7 @@ pub fn classify_request(method: &str, params: &Value, items: &HashMap<String, Ma
             CodexAsk::Approval { kind: ApprovalKind::Command, name: "bash".into(), title, input }
         }
         "item/fileChange/requestApproval" => {
-            let item = params
-                .get("itemId")
-                .and_then(Value::as_str)
-                .and_then(|id| items.get(id))
-                .and_then(exec_item);
+            let item = params.get("itemId").and_then(Value::as_str).and_then(|id| items.get(id)).and_then(exec_item);
             let title = item.as_ref().map(tool_label).unwrap_or_else(|| "Edit files".into());
             let paths: Vec<Value> = item
                 .as_ref()
@@ -724,8 +707,12 @@ pub fn approval_response(kind: ApprovalKind, decision: ApprovalDecision, params:
         }),
         ApprovalKind::Permissions => match decision {
             ApprovalDecision::Deny => json!({ "permissions": {} }),
-            ApprovalDecision::Allow => json!({ "permissions": params.get("permissions").cloned().unwrap_or(json!({})), "scope": "turn" }),
-            ApprovalDecision::Always => json!({ "permissions": params.get("permissions").cloned().unwrap_or(json!({})), "scope": "session" }),
+            ApprovalDecision::Allow => {
+                json!({ "permissions": params.get("permissions").cloned().unwrap_or(json!({})), "scope": "turn" })
+            }
+            ApprovalDecision::Always => {
+                json!({ "permissions": params.get("permissions").cloned().unwrap_or(json!({})), "scope": "session" })
+            }
         },
         ApprovalKind::McpTool => json!({
             "action": if decision == ApprovalDecision::Deny { "decline" } else { "accept" },
@@ -762,11 +749,7 @@ pub fn unsupported_error(method: &str) -> Value {
 
 /// The message of a JSON-RPC error.
 pub fn rpc_error_message(error: &Value) -> String {
-    error
-        .get("message")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| error.to_string())
+    error.get("message").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| error.to_string())
 }
 
 /// What a turn is handed besides its text: a list of the paths attached.
@@ -774,11 +757,7 @@ pub fn with_attached_paths(text: &str, files: &[String]) -> String {
     if files.is_empty() {
         return text.to_string();
     }
-    let list = files
-        .iter()
-        .map(|path| format!("- {path}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let list = files.iter().map(|path| format!("- {path}")).collect::<Vec<_>>().join("\n");
     let note = format!("Attached files:\n{list}");
     if text.is_empty() {
         note
@@ -810,9 +789,7 @@ pub fn item_files(item: &Map<String, Value>) -> Vec<AttachedFile> {
         Some("mcp_tool_call") => {
             crate::media::images(item.get("result").and_then(as_record).and_then(|result| result.get("content")))
         }
-        Some("image_view") => {
-            string_field(Some(item), "path").and_then(|path| crate::media::local(&path)).into_iter().collect()
-        }
+        Some("image_view") => string_field(Some(item), "path").and_then(|path| crate::media::local(&path)).into_iter().collect(),
         Some("image_generation") => string_field(Some(item), "saved_path")
             .and_then(|path| crate::media::local(&path))
             .or_else(|| crate::media::save("image/png", &string_field(Some(item), "result")?))
@@ -909,10 +886,7 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
     match string_field(Some(item), "type").as_deref() {
         Some("command_execution") => Some(ToolDetail::Command {
             command: unwrap_shell(&string_field(Some(item), "command")?),
-            exit_code: item
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .map(|code| code as i32),
+            exit_code: item.get("exit_code").and_then(Value::as_i64).map(|code| code as i32),
             output: output_text(item.get("aggregated_output")),
         }),
         Some("file_change") => {
@@ -922,12 +896,7 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
             let [only] = changes.as_slice() else {
                 return None;
             };
-            Some(ToolDetail::Edit {
-                path: string_field(as_record(only), "path")?,
-                added: None,
-                removed: None,
-                hunks: None,
-            })
+            Some(ToolDetail::Edit { path: string_field(as_record(only), "path")?, added: None, removed: None, hunks: None })
         }
         Some("mcp_tool_call") => {
             // codex splits the server from the tool instead of prefixing it, so
@@ -942,9 +911,8 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
                         let result = item.get("result").and_then(as_record);
                         let refused = string_field(Some(item), "status").as_deref() == Some("failed")
                             || result.and_then(|result| result.get("isError")).and_then(Value::as_bool) == Some(true);
-                        let answer = output_text(result.and_then(|result| result.get("content"))).or_else(|| {
-                            string_field(item.get("error").and_then(as_record), "message")
-                        });
+                        let answer = output_text(result.and_then(|result| result.get("content")))
+                            .or_else(|| string_field(item.get("error").and_then(as_record), "message"));
                         let done = answer.and_then(|answer| super::crew_result_detail(&named, arguments, &answer, refused));
                         return Some(done.unwrap_or(detail));
                     }
@@ -963,14 +931,8 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
                 _ => Some(ToolDetail::Output { text: output? }),
             }
         }
-        Some("web_search") => Some(ToolDetail::Search {
-            query: string_field(Some(item), "query")?,
-            matches: None,
-            output: None,
-        }),
-        Some("todo_list") => Some(ToolDetail::Todo {
-            items: todo_items(item.get("items"))?,
-        }),
+        Some("web_search") => Some(ToolDetail::Search { query: string_field(Some(item), "query")?, matches: None, output: None }),
+        Some("todo_list") => Some(ToolDetail::Todo { items: todo_items(item.get("items"))? }),
         // The agent it started: its own work lands in `steps`, from its
         // thread's notifications, and it runs on after the call returns.
         Some("collab_tool_call") => {
@@ -993,9 +955,7 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
             line_end: None,
             preview: None,
         }),
-        Some("image_generation") => Some(ToolDetail::Output {
-            text: string_field(Some(item), "revised_prompt")?,
-        }),
+        Some("image_generation") => Some(ToolDetail::Output { text: string_field(Some(item), "revised_prompt")? }),
         _ => None,
     }
 }
@@ -1051,7 +1011,6 @@ pub fn completed_tool_status(item: &Map<String, Value>) -> crew_protocol::ToolSt
         }
     }
 }
-
 
 #[cfg(test)]
 mod crew_row_tests {
@@ -1421,7 +1380,8 @@ mod protocol_tests {
         );
         assert_eq!(completed_tool_status(&row), crew_protocol::ToolStatus::Failed);
         assert!(exec_item(json!({ "type": "reasoning", "id": "r" }).as_object().unwrap()).is_none());
-        let plan = plan_detail(&json!({ "plan": [{ "step": "a", "status": "completed" }, { "step": "b", "status": "inProgress" }] }));
+        let plan =
+            plan_detail(&json!({ "plan": [{ "step": "a", "status": "completed" }, { "step": "b", "status": "inProgress" }] }));
         assert!(matches!(plan, Some(ToolDetail::Todo { ref items }) if items.len() == 2), "{plan:?}");
     }
 
@@ -1549,7 +1509,10 @@ mod tests {
     #[test]
     fn a_login_asks_for_the_server_and_answers_the_page() {
         assert_eq!(mcp_login_params("sentry", Some("t1")), json!({ "name": "sentry", "threadId": "t1" }));
-        assert_eq!(mcp_login_url(&json!({ "authorizationUrl": "https://auth.example/x" })).as_deref(), Some("https://auth.example/x"));
+        assert_eq!(
+            mcp_login_url(&json!({ "authorizationUrl": "https://auth.example/x" })).as_deref(),
+            Some("https://auth.example/x")
+        );
         assert_eq!(mcp_login_url(&json!({ "authorizationUrl": "" })), None);
     }
 
@@ -1575,7 +1538,12 @@ mod tests {
                     status: None,
                     detail: Some(ToolDetail::Command { command: "ls -la".into(), exit_code: Some(0), output: None }),
                 },
-                HarnessEvent::ToolUpdated { call_id: "c1".into(), title: None, status: Some(ToolStatus::Completed), detail: None },
+                HarnessEvent::ToolUpdated {
+                    call_id: "c1".into(),
+                    title: None,
+                    status: Some(ToolStatus::Completed),
+                    detail: None
+                },
             ]
         );
     }
@@ -1646,7 +1614,10 @@ mod tests {
 
     #[test]
     fn the_end_of_the_turn_settles_it() {
-        let got = feed(&[note("turn/completed", json!({ "threadId": "t", "turn": { "id": "u", "status": "completed", "error": null } }))]);
+        let got = feed(&[note(
+            "turn/completed",
+            json!({ "threadId": "t", "turn": { "id": "u", "status": "completed", "error": null } }),
+        )]);
         assert_eq!(got, vec![HarnessEvent::MessageCompleted {}, HarnessEvent::TurnCompleted { usage: None }]);
     }
 
@@ -1683,10 +1654,17 @@ mod tests {
 
     #[test]
     fn a_plan_is_one_todo_row_per_turn() {
-        let plan = |status: &str| note("turn/plan/updated", json!({ "turnId": "u", "plan": [{ "step": "a", "status": status }] }));
+        let plan =
+            |status: &str| note("turn/plan/updated", json!({ "turnId": "u", "plan": [{ "step": "a", "status": status }] }));
         let got = feed(&[plan("inProgress"), plan("completed")]);
-        assert!(matches!(&got[0], HarnessEvent::ToolStarted { call_id, name, .. } if call_id == "plan-u" && name == "todo"), "{got:?}");
-        assert!(matches!(&got[1], HarnessEvent::ToolUpdated { call_id, detail: Some(ToolDetail::Todo { .. }), .. } if call_id == "plan-u"), "{got:?}");
+        assert!(
+            matches!(&got[0], HarnessEvent::ToolStarted { call_id, name, .. } if call_id == "plan-u" && name == "todo"),
+            "{got:?}"
+        );
+        assert!(
+            matches!(&got[1], HarnessEvent::ToolUpdated { call_id, detail: Some(ToolDetail::Todo { .. }), .. } if call_id == "plan-u"),
+            "{got:?}"
+        );
     }
 
     /// The real stream of a turn in `tests/fixtures/protocols/codex.jsonl`,

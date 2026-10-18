@@ -153,13 +153,7 @@ impl LineReader {
 
     /// Starts reading at `offset`, which must be a line start.
     pub fn at(path: impl Into<PathBuf>, offset: u64) -> Self {
-        Self {
-            path: path.into(),
-            pos: offset,
-            split: Splitter::default(),
-            identity: None,
-            seen: Vec::new(),
-        }
+        Self { path: path.into(), pos: offset, split: Splitter::default(), identity: None, seen: Vec::new() }
     }
 
     pub fn path(&self) -> &Path {
@@ -254,11 +248,7 @@ impl LineReader {
                 self.seen.drain(..self.seen.len() - SEEN_BYTES);
             }
         }
-        Ok(Read {
-            lines,
-            reset,
-            exists: true,
-        })
+        Ok(Read { lines, reset, exists: true })
     }
 }
 
@@ -452,11 +442,8 @@ impl<D: Decoder + Default> History<D> {
             // above the end; comparing is what finds where the change begins.
             let before = self.blocks.clone();
             turn_ended = self.ingest(read.lines);
-            let at = before
-                .iter()
-                .zip(&self.blocks)
-                .position(|(old, new)| old != new)
-                .unwrap_or(before.len().min(self.blocks.len()));
+            let at =
+                before.iter().zip(&self.blocks).position(|(old, new)| old != new).unwrap_or(before.len().min(self.blocks.len()));
             if at < before.len() || at < self.blocks.len() {
                 first = Some(at);
             }
@@ -468,12 +455,7 @@ impl<D: Decoder + Default> History<D> {
         let Some(first) = first.or(turn_ended.then_some(self.blocks.len())) else {
             return Ok(None);
         };
-        Ok(Some(Change {
-            from: self.base + first as i64,
-            blocks: self.blocks[first..].to_vec(),
-            turn_ended,
-            reset: false,
-        }))
+        Ok(Some(Change { from: self.base + first as i64, blocks: self.blocks[first..].to_vec(), turn_ended, reset: false }))
     }
 
     fn nest(&mut self) -> Option<usize> {
@@ -490,12 +472,7 @@ impl<D: Decoder + Default> History<D> {
     }
 
     fn rebuilt(&self, turn_ended: bool) -> Change {
-        Change {
-            from: self.base,
-            blocks: self.blocks.clone(),
-            turn_ended,
-            reset: true,
-        }
+        Change { from: self.base, blocks: self.blocks.clone(), turn_ended, reset: true }
     }
 
     /// The last `limit` blocks, or the `limit` before global index `before`.
@@ -506,11 +483,7 @@ impl<D: Decoder + Default> History<D> {
             None => len,
         };
         let start = end.saturating_sub(limit);
-        Window {
-            blocks: self.blocks[start..end].to_vec(),
-            start: self.base + start as i64,
-            more: start > 0 || self.start > 0,
-        }
+        Window { blocks: self.blocks[start..end].to_vec(), start: self.base + start as i64, more: start > 0 || self.start > 0 }
     }
 
     /// Whether bytes before the held range are still unread.
@@ -526,11 +499,7 @@ impl<D: Decoder + Default> History<D> {
             let decoder = D::default();
             let from = tail_offset(&self.path, self.start, min_messages.max(1), |line| decoder.is_message(line))?;
             let lines = read_range(&self.path, from, self.start)?;
-            let mut page = Page {
-                decoder,
-                blocks: Vec::new(),
-                messages: 0,
-            };
+            let mut page = Page { decoder, blocks: Vec::new(), messages: 0 };
             page.ingest(lines);
             page.finish();
             self.start = from;
@@ -562,11 +531,7 @@ impl<D: Decoder + Default> History<D> {
 
     /// Returns whether a turn ended along the way.
     fn ingest(&mut self, lines: Vec<String>) -> bool {
-        let mut page = Page {
-            decoder: std::mem::take(&mut self.decoder),
-            blocks: std::mem::take(&mut self.blocks),
-            messages: 0,
-        };
+        let mut page = Page { decoder: std::mem::take(&mut self.decoder), blocks: std::mem::take(&mut self.blocks), messages: 0 };
         let turn_ended = page.ingest(lines);
         self.decoder = page.decoder;
         self.blocks = page.blocks;
@@ -620,10 +585,7 @@ pub(super) fn apply_stamped(blocks: Vec<Block>, event: HarnessEvent, at_ms: Opti
         return next;
     };
     for (index, block) in next.iter_mut().enumerate().skip(before.saturating_sub(1)) {
-        let fresh = index >= before
-            || last
-                .as_ref()
-                .is_some_and(|(id, stamp)| *id != block.id || *stamp != block.at);
+        let fresh = index >= before || last.as_ref().is_some_and(|(id, stamp)| *id != block.id || *stamp != block.at);
         if fresh {
             block.at = Some(at);
         }
@@ -890,12 +852,7 @@ mod tests {
         let path = dir.file();
         write(&path, &[user("one"), reply("two"), user("three")]);
         let mut history = open(&path, 300);
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .expect("open")
-            .set_len(0)
-            .expect("truncate");
+        std::fs::OpenOptions::new().write(true).open(&path).expect("open").set_len(0).expect("truncate");
         append(&path, &format!("{}\n", user("again")));
         let change = history.poll().expect("poll").expect("a change");
         assert!(change.reset);
@@ -963,11 +920,7 @@ mod tests {
         assert_eq!(history.base(), -((30 - held.len()) as i64));
         assert!(!history.window(None, 100).more);
         assert!(!history.has_earlier());
-        assert!(history
-            .blocks()
-            .iter()
-            .filter_map(|block| block.tool.as_ref())
-            .all(|tool| tool.status == ToolStatus::Completed));
+        assert!(history.blocks().iter().filter_map(|block| block.tool.as_ref()).all(|tool| tool.status == ToolStatus::Completed));
 
         let window = history.window(Some(history.base() + 5), 3);
         assert_eq!(window.start, history.base() + 2);
@@ -979,16 +932,7 @@ mod tests {
     fn a_call_whose_result_is_on_the_later_page_does_not_stay_pending() {
         let dir = Dir::new();
         let path = dir.file();
-        write(
-            &path,
-            &[
-                user("go"),
-                bash("c1", "sleep 1"),
-                result("c1", "done"),
-                reply("finished"),
-                user("next"),
-            ],
-        );
+        write(&path, &[user("go"), bash("c1", "sleep 1"), result("c1", "done"), reply("finished"), user("next")]);
         // The tail starts at the result, so the call is on the earlier page.
         let mut history = open(&path, 3);
         assert_eq!(texts(history.blocks()), ["finished", "next"]);

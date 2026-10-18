@@ -87,9 +87,7 @@ Examples:
   crew completions zsh > ~/.zfunc/_crew
   crew completions bash > /usr/local/etc/bash_completion.d/crew
   crew completions fish > ~/.config/fish/completions/crew.fish")]
-    Completions {
-        shell: CompletionShell,
-    },
+    Completions { shell: CompletionShell },
 
     /// The daemon behind the app: status, stop, restart, and running it on its own.
     /// Refused inside a Crew session, unless --as-user.
@@ -280,7 +278,8 @@ mod tests {
 
     #[test]
     fn processes_add_keeps_the_command_whole() {
-        let add: ProcAdd = verb(&["processes", "add", "api", "--env", "PORT=4000", "--auto-restart", "--", "cargo", "run", "--release"]);
+        let add: ProcAdd =
+            verb(&["processes", "add", "api", "--env", "PORT=4000", "--auto-restart", "--", "cargo", "run", "--release"]);
         assert_eq!(add.name, "api");
         assert_eq!(add.command, ["cargo", "run", "--release"]);
         assert_eq!(add.env, ["PORT=4000"]);
@@ -289,7 +288,8 @@ mod tests {
 
     #[test]
     fn daemon_install_takes_the_crewd_to_run() {
-        let cli = Cli::from_arg_matches(&matches(&["daemon", "install", "--crewd", "/b/crewd", "--data-dir", "/d"])).expect("cli");
+        let cli =
+            Cli::from_arg_matches(&matches(&["daemon", "install", "--crewd", "/b/crewd", "--data-dir", "/d"])).expect("cli");
         let Command::Daemon { command: DaemonCommand::Install { crewd } } = cli.command else {
             panic!("not daemon install");
         };

@@ -49,17 +49,11 @@ pub fn parse_blocks(raw: Option<&str>) -> Vec<Block> {
 
 pub fn is_open(block: &Block) -> bool {
     match block.role {
-        BlockRole::Tool => block
-            .tool
-            .as_ref()
-            .is_some_and(|tool| tool.status == ToolStatus::Pending),
-        BlockRole::Approval => block
-            .approval
-            .as_ref()
-            .is_some_and(|approval| approval.decided.is_none()),
-        BlockRole::Question => block.question.as_ref().is_some_and(|question| {
-            question.answers.is_none() && question.dismissed != Some(true)
-        }),
+        BlockRole::Tool => block.tool.as_ref().is_some_and(|tool| tool.status == ToolStatus::Pending),
+        BlockRole::Approval => block.approval.as_ref().is_some_and(|approval| approval.decided.is_none()),
+        BlockRole::Question => {
+            block.question.as_ref().is_some_and(|question| question.answers.is_none() && question.dismissed != Some(true))
+        }
         _ => false,
     }
 }
@@ -133,12 +127,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             settled[index].at = Some(now_ms());
             settled
         }
-        HarnessEvent::ToolStarted {
-            call_id,
-            name,
-            title,
-            detail,
-        } => {
+        HarnessEvent::ToolStarted { call_id, name, title, detail } => {
             let settled = settle_streaming(blocks);
             let mut tool = new_block(BlockRole::Tool, title.clone());
             tool.tool = Some(BlockTool {
@@ -165,12 +154,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next.push(tool);
             next
         }
-        HarnessEvent::ToolUpdated {
-            call_id,
-            title,
-            status,
-            detail,
-        } => blocks
+        HarnessEvent::ToolUpdated { call_id, title, status, detail } => blocks
             .into_iter()
             .map(|mut block| {
                 let Some(tool) = block.tool.as_mut() else {
@@ -249,27 +233,14 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             }
             next
         }
-        HarnessEvent::ApprovalRequested {
-            request_id,
-            name,
-            title,
-            input,
-        } => {
+        HarnessEvent::ApprovalRequested { request_id, name, title, input } => {
             let mut next = settle_streaming(blocks);
             let mut card = new_block(BlockRole::Approval, title);
-            card.approval = Some(BlockApproval {
-                request_id,
-                name,
-                input,
-                decided: None,
-            });
+            card.approval = Some(BlockApproval { request_id, name, input, decided: None });
             next.push(card);
             next
         }
-        HarnessEvent::ApprovalResolved {
-            request_id,
-            decision,
-        } => {
+        HarnessEvent::ApprovalResolved { request_id, decision } => {
             let decided = match decision {
                 ApprovalResolution::Cancelled => ApprovalDecision::Deny,
                 ApprovalResolution::Allow => ApprovalDecision::Allow,
@@ -281,10 +252,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             // waiting can be the one being answered.
             let mut next = blocks;
             let waiting = next.iter().rposition(|block| {
-                block
-                    .approval
-                    .as_ref()
-                    .is_some_and(|approval| approval.request_id == request_id && approval.decided.is_none())
+                block.approval.as_ref().is_some_and(|approval| approval.request_id == request_id && approval.decided.is_none())
             });
             if let Some(index) = waiting {
                 if let Some(approval) = next[index].approval.as_mut() {
@@ -293,10 +261,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             }
             next
         }
-        HarnessEvent::QuestionRequested {
-            request_id,
-            questions,
-        } => {
+        HarnessEvent::QuestionRequested { request_id, questions } => {
             let settled = settle_streaming(blocks);
             let text = questions
                 .first()
@@ -311,19 +276,10 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 })
                 .unwrap_or_else(|| "Question".into());
             let mut card = new_block(BlockRole::Question, text);
-            card.question = Some(BlockQuestion {
-                request_id,
-                questions,
-                answers: None,
-                dismissed: None,
-            });
+            card.question = Some(BlockQuestion { request_id, questions, answers: None, dismissed: None });
             // The provider announced the ask as a tool call first; the card is that call.
             if let Some(last) = settled.last() {
-                if last
-                    .tool
-                    .as_ref()
-                    .is_some_and(|tool| tool.status == ToolStatus::Pending && is_question_tool(&tool.name))
-                {
+                if last.tool.as_ref().is_some_and(|tool| tool.status == ToolStatus::Pending && is_question_tool(&tool.name)) {
                     card.id = last.id.clone();
                     let mut next = settled;
                     next.pop();
@@ -335,17 +291,12 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next.push(card);
             next
         }
-        HarnessEvent::QuestionResolved {
-            request_id,
-            answers,
-        } => {
+        HarnessEvent::QuestionResolved { request_id, answers } => {
             // Same as an approval: the id is only unique within its turn.
             let mut next = blocks;
             let waiting = next.iter().rposition(|block| {
                 block.question.as_ref().is_some_and(|question| {
-                    question.request_id == request_id
-                        && question.answers.is_none()
-                        && question.dismissed != Some(true)
+                    question.request_id == request_id && question.answers.is_none() && question.dismissed != Some(true)
                 })
             });
             if let Some(index) = waiting {
@@ -369,14 +320,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next.push(new_block(BlockRole::System, message));
             next
         }
-        HarnessEvent::UserMessage {
-            text,
-            hidden,
-            files,
-            from_bot,
-            letter_id,
-            letter_kind,
-        } => {
+        HarnessEvent::UserMessage { text, hidden, files, from_bot, letter_id, letter_kind } => {
             let mut block = new_block(BlockRole::User, text);
             if hidden == Some(true) {
                 block.hidden = Some(true);
@@ -424,7 +368,15 @@ fn with_files(old: Option<Vec<AttachedFile>>, new: &[AttachedFile]) -> Option<Ve
 fn merged(old: Option<ToolDetail>, new: ToolDetail) -> ToolDetail {
     match (old, new) {
         (
-            Some(ToolDetail::Agent { output: old_output, background: old_background, state: old_state, activity: old_activity, steps: old_steps, thread: old_thread, .. }),
+            Some(ToolDetail::Agent {
+                output: old_output,
+                background: old_background,
+                state: old_state,
+                activity: old_activity,
+                steps: old_steps,
+                thread: old_thread,
+                ..
+            }),
             ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps, thread },
         ) => ToolDetail::Agent {
             description,
@@ -444,9 +396,7 @@ fn merged(old: Option<ToolDetail>, new: ToolDetail) -> ToolDetail {
 /// The detail of the subagent call `call_id`, the newest one by that id.
 fn subagent_of<'a>(blocks: &'a mut [Block], call_id: &str) -> Option<&'a mut ToolDetail> {
     let block = blocks.iter_mut().rev().find(|block| {
-        block.tool.as_ref().is_some_and(|tool| {
-            tool.call_id == call_id && matches!(tool.detail, Some(ToolDetail::Agent { .. }))
-        })
+        block.tool.as_ref().is_some_and(|tool| tool.call_id == call_id && matches!(tool.detail, Some(ToolDetail::Agent { .. })))
     })?;
     block.tool.as_mut()?.detail.as_mut()
 }
@@ -459,18 +409,12 @@ pub fn step_event(event: HarnessEvent) -> Option<HarnessEvent> {
         HarnessEvent::MessageDelta { text } => HarnessEvent::MessageDelta { text: clip(&text, STEP_TEXT_LIMIT) },
         HarnessEvent::ReasoningDelta { text } => HarnessEvent::ReasoningDelta { text: clip(&text, STEP_TEXT_LIMIT) },
         HarnessEvent::MessageCompleted {} => HarnessEvent::MessageCompleted {},
-        HarnessEvent::ToolStarted { call_id, name, title, detail } => HarnessEvent::ToolStarted {
-            call_id,
-            name,
-            title,
-            detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)),
-        },
-        HarnessEvent::ToolUpdated { call_id, title, status, detail } => HarnessEvent::ToolUpdated {
-            call_id,
-            title,
-            status,
-            detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)),
-        },
+        HarnessEvent::ToolStarted { call_id, name, title, detail } => {
+            HarnessEvent::ToolStarted { call_id, name, title, detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)) }
+        }
+        HarnessEvent::ToolUpdated { call_id, title, status, detail } => {
+            HarnessEvent::ToolUpdated { call_id, title, status, detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)) }
+        }
         _ => return None,
     })
 }
@@ -493,10 +437,7 @@ fn append_streaming(blocks: Vec<Block>, role: BlockRole, text: String) -> Vec<Bl
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -512,14 +453,8 @@ mod tests {
                 header: "Color".into(),
                 multi_select: false,
                 options: vec![
-                    QuestionOption {
-                        label: "Red".into(),
-                        description: None,
-                    },
-                    QuestionOption {
-                        label: "Blue".into(),
-                        description: None,
-                    },
+                    QuestionOption { label: "Red".into(), description: None },
+                    QuestionOption { label: "Blue".into(), description: None },
                 ],
             },
             Question {
@@ -527,14 +462,8 @@ mod tests {
                 header: "Toppings".into(),
                 multi_select: true,
                 options: vec![
-                    QuestionOption {
-                        label: "Cheese".into(),
-                        description: None,
-                    },
-                    QuestionOption {
-                        label: "Ham".into(),
-                        description: None,
-                    },
+                    QuestionOption { label: "Cheese".into(), description: None },
+                    QuestionOption { label: "Ham".into(), description: None },
                 ],
             },
         ]
@@ -548,18 +477,10 @@ mod tests {
     fn streaming_keeps_assistant_and_reasoning_apart() {
         let blocks = run(
             vec![
-                HarnessEvent::ReasoningDelta {
-                    text: "Let me ".into(),
-                },
-                HarnessEvent::ReasoningDelta {
-                    text: "think.".into(),
-                },
-                HarnessEvent::MessageDelta {
-                    text: "Done.".into(),
-                },
-                HarnessEvent::MessageDelta {
-                    text: " Really.".into(),
-                },
+                HarnessEvent::ReasoningDelta { text: "Let me ".into() },
+                HarnessEvent::ReasoningDelta { text: "think.".into() },
+                HarnessEvent::MessageDelta { text: "Done.".into() },
+                HarnessEvent::MessageDelta { text: " Really.".into() },
             ],
             vec![],
         );
@@ -582,10 +503,7 @@ mod tests {
                     title: "AskUserQuestion".into(),
                     detail: None,
                 },
-                HarnessEvent::QuestionRequested {
-                    request_id: 1,
-                    questions: questions(),
-                },
+                HarnessEvent::QuestionRequested { request_id: 1, questions: questions() },
             ],
             vec![],
         );
@@ -599,17 +517,10 @@ mod tests {
     fn question_stores_answers() {
         let blocks = run(
             vec![
-                HarnessEvent::QuestionRequested {
-                    request_id: 1,
-                    questions: questions(),
-                },
+                HarnessEvent::QuestionRequested { request_id: 1, questions: questions() },
                 HarnessEvent::QuestionResolved {
                     request_id: 1,
-                    answers: Some(
-                        [("Pick a color".into(), "Red".into())]
-                            .into_iter()
-                            .collect(),
-                    ),
+                    answers: Some([("Pick a color".into(), "Red".into())].into_iter().collect()),
                 },
             ],
             vec![],
@@ -625,14 +536,8 @@ mod tests {
     fn question_null_answer_dismisses() {
         let blocks = run(
             vec![
-                HarnessEvent::QuestionRequested {
-                    request_id: 1,
-                    questions: questions(),
-                },
-                HarnessEvent::QuestionResolved {
-                    request_id: 1,
-                    answers: None,
-                },
+                HarnessEvent::QuestionRequested { request_id: 1, questions: questions() },
+                HarnessEvent::QuestionResolved { request_id: 1, answers: None },
             ],
             vec![],
         );
@@ -642,13 +547,7 @@ mod tests {
     #[test]
     fn settle_dismisses_unanswered_question() {
         let blocks = settle_turn(
-            run(
-                vec![HarnessEvent::QuestionRequested {
-                    request_id: 1,
-                    questions: questions(),
-                }],
-                vec![],
-            ),
+            run(vec![HarnessEvent::QuestionRequested { request_id: 1, questions: questions() }], vec![]),
             ToolStatus::Interrupted,
         );
         assert_eq!(blocks[0].question.as_ref().and_then(|q| q.dismissed), Some(true));
@@ -665,10 +564,7 @@ mod tests {
                     title: "npm run lint".into(),
                     input: Some(json!({ "command": "npm run lint" })),
                 },
-                HarnessEvent::ApprovalResolved {
-                    request_id: 1,
-                    decision: ApprovalResolution::Always,
-                },
+                HarnessEvent::ApprovalResolved { request_id: 1, decision: ApprovalResolution::Always },
                 HarnessEvent::ToolStarted {
                     call_id: "t1".into(),
                     name: "Bash".into(),
@@ -680,26 +576,15 @@ mod tests {
         );
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].role, BlockRole::Tool);
-        assert_eq!(
-            blocks[0].approval.as_ref().and_then(|row| row.decided.clone()),
-            Some(ApprovalDecision::Always)
-        );
+        assert_eq!(blocks[0].approval.as_ref().and_then(|row| row.decided.clone()), Some(ApprovalDecision::Always));
     }
 
     #[test]
     fn denied_approval_stays_its_own_row() {
         let blocks = run(
             vec![
-                HarnessEvent::ApprovalRequested {
-                    request_id: 1,
-                    name: "Bash".into(),
-                    title: "rm -rf dist".into(),
-                    input: None,
-                },
-                HarnessEvent::ApprovalResolved {
-                    request_id: 1,
-                    decision: ApprovalResolution::Deny,
-                },
+                HarnessEvent::ApprovalRequested { request_id: 1, name: "Bash".into(), title: "rm -rf dist".into(), input: None },
+                HarnessEvent::ApprovalResolved { request_id: 1, decision: ApprovalResolution::Deny },
                 HarnessEvent::ToolStarted {
                     call_id: "t1".into(),
                     name: "Bash".into(),
@@ -709,10 +594,7 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!(
-            blocks.iter().map(|b| b.role.clone()).collect::<Vec<_>>(),
-            vec![BlockRole::Approval, BlockRole::Tool]
-        );
+        assert_eq!(blocks.iter().map(|b| b.role.clone()).collect::<Vec<_>>(), vec![BlockRole::Approval, BlockRole::Tool]);
     }
 
     #[test]
@@ -727,10 +609,7 @@ mod tests {
                     letter_id: None,
                     letter_kind: None,
                 },
-                HarnessEvent::SystemMessage {
-                    text: "Stopped".into(),
-                    letter_id: None,
-                },
+                HarnessEvent::SystemMessage { text: "Stopped".into(), letter_id: None },
             ],
             vec![],
         );
@@ -747,12 +626,7 @@ mod tests {
             vec![
                 HarnessEvent::MessageDelta { text: "ok".into() },
                 HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage {
-                        input_tokens: None,
-                        output_tokens: None,
-                        cost_usd: Some(0.01),
-                        duration_ms: None,
-                    }),
+                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: Some(0.01), duration_ms: None }),
                 },
             ],
             vec![new_block(BlockRole::User, "hi")],
@@ -771,12 +645,7 @@ mod tests {
             vec![
                 HarnessEvent::MessageDelta { text: "on it".into() },
                 HarnessEvent::MessageCompleted {},
-                HarnessEvent::ToolStarted {
-                    call_id: "c1".into(),
-                    name: "bash".into(),
-                    title: "npm test".into(),
-                    detail: None,
-                },
+                HarnessEvent::ToolStarted { call_id: "c1".into(), name: "bash".into(), title: "npm test".into(), detail: None },
                 HarnessEvent::ToolUpdated {
                     call_id: "c1".into(),
                     title: None,
@@ -784,12 +653,7 @@ mod tests {
                     detail: None,
                 },
                 HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage {
-                        input_tokens: None,
-                        output_tokens: None,
-                        cost_usd: Some(0.02),
-                        duration_ms: None,
-                    }),
+                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: Some(0.02), duration_ms: None }),
                 },
             ],
             vec![new_block(BlockRole::User, "hi")],
@@ -797,10 +661,7 @@ mod tests {
         let last = blocks.last().unwrap();
         assert_eq!(last.role, BlockRole::Tool);
         assert_eq!(last.usage.as_ref().and_then(|u| u.cost_usd), Some(0.02));
-        assert!(
-            blocks.iter().all(|b| b.role != BlockRole::Assistant || b.usage.is_none()),
-            "the cost landed on a reply as well"
-        );
+        assert!(blocks.iter().all(|b| b.role != BlockRole::Assistant || b.usage.is_none()), "the cost landed on a reply as well");
     }
 
     #[test]
@@ -854,10 +715,7 @@ mod tests {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("repo root");
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("repo root");
         let script = root.join("scripts/fold-blocks.ts");
         let mut child = Command::new("npx")
             .args(["vite-node", script.to_str().expect("utf8 path")])
@@ -867,18 +725,9 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn vite-node");
-        child
-            .stdin
-            .as_mut()
-            .expect("stdin")
-            .write_all(payload.as_bytes())
-            .expect("write fixture");
+        child.stdin.as_mut().expect("stdin").write_all(payload.as_bytes()).expect("write fixture");
         let output = child.wait_with_output().expect("vite-node");
-        assert!(
-            output.status.success(),
-            "vite-node failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success(), "vite-node failed: {}", String::from_utf8_lossy(&output.stderr));
         serde_json::from_slice(&output.stdout).expect("ts fold json")
     }
 
@@ -900,28 +749,10 @@ mod tests {
             HarnessEvent::ReasoningDelta { text: "hm".into() },
             HarnessEvent::MessageDelta { text: "ok".into() },
             HarnessEvent::MessageCompleted {},
-            HarnessEvent::ToolStarted {
-                call_id: "c9".into(),
-                name: "bash".into(),
-                title: "ls".into(),
-                detail: None,
-            },
-            HarnessEvent::ToolUpdated {
-                call_id: "c9".into(),
-                title: None,
-                status: Some(ToolStatus::Completed),
-                detail: None,
-            },
-            HarnessEvent::ApprovalRequested {
-                request_id: 7,
-                name: "bash".into(),
-                title: "rm".into(),
-                input: None,
-            },
-            HarnessEvent::ApprovalResolved {
-                request_id: 7,
-                decision: ApprovalResolution::Allow,
-            },
+            HarnessEvent::ToolStarted { call_id: "c9".into(), name: "bash".into(), title: "ls".into(), detail: None },
+            HarnessEvent::ToolUpdated { call_id: "c9".into(), title: None, status: Some(ToolStatus::Completed), detail: None },
+            HarnessEvent::ApprovalRequested { request_id: 7, name: "bash".into(), title: "rm".into(), input: None },
+            HarnessEvent::ApprovalResolved { request_id: 7, decision: ApprovalResolution::Allow },
             HarnessEvent::QuestionRequested { request_id: 8, questions: Vec::new() },
             HarnessEvent::QuestionResolved { request_id: 8, answers: None },
             HarnessEvent::TurnCompleted { usage: None },
@@ -951,28 +782,16 @@ mod tests {
                 },
                 HarnessEvent::MessageDelta { text: "earlier answer".into() },
                 HarnessEvent::MessageCompleted {},
-                HarnessEvent::ToolStarted {
-                    call_id: "c1".into(),
-                    name: "bash".into(),
-                    title: "npm test".into(),
-                    detail: None,
-                },
+                HarnessEvent::ToolStarted { call_id: "c1".into(), name: "bash".into(), title: "npm test".into(), detail: None },
             ],
             Vec::new(),
         );
         let before: Vec<String> = history.iter().map(|block| block.id.clone()).collect();
 
         for event in every_event() {
-            let after: Vec<String> = apply_event(history.clone(), event.clone())
-                .iter()
-                .map(|block| block.id.clone())
-                .collect();
+            let after: Vec<String> = apply_event(history.clone(), event.clone()).iter().map(|block| block.id.clone()).collect();
             let shared = before.len().min(after.len());
-            assert_eq!(
-                before[..shared],
-                after[..shared],
-                "{event:?} moved a block that was already written"
-            );
+            assert_eq!(before[..shared], after[..shared], "{event:?} moved a block that was already written");
         }
     }
 
@@ -998,10 +817,8 @@ mod tests {
             HarnessEvent::ToolStarted { call_id: "t1".into(), name: "x".into(), title: "x".into(), detail: None },
         );
         let blocks = apply_event(blocks, HarnessEvent::ToolFiles { call_id: "t1".into(), files: vec![file("/a.png")] });
-        let blocks = apply_event(
-            blocks,
-            HarnessEvent::ToolFiles { call_id: "t1".into(), files: vec![file("/a.png"), file("/b.png")] },
-        );
+        let blocks =
+            apply_event(blocks, HarnessEvent::ToolFiles { call_id: "t1".into(), files: vec![file("/a.png"), file("/b.png")] });
         let blocks = apply_event(blocks, HarnessEvent::ToolFiles { call_id: "other".into(), files: vec![file("/c.png")] });
         let paths: Vec<String> = blocks[0].files.as_ref().unwrap().iter().map(|file| file.path.clone()).collect();
         assert_eq!(paths, ["/a.png", "/b.png"]);
@@ -1024,32 +841,14 @@ mod id_reuse_review {
     fn resolving_an_approval_does_not_rewrite_the_last_turns() {
         let events = vec![
             // Turn one: approval 1, denied.
-            HarnessEvent::ApprovalRequested {
-                request_id: 1,
-                name: "Bash".into(),
-                title: "rm -rf /".into(),
-                input: None,
-            },
-            HarnessEvent::ApprovalResolved {
-                request_id: 1,
-                decision: ApprovalResolution::Deny,
-            },
+            HarnessEvent::ApprovalRequested { request_id: 1, name: "Bash".into(), title: "rm -rf /".into(), input: None },
+            HarnessEvent::ApprovalResolved { request_id: 1, decision: ApprovalResolution::Deny },
             HarnessEvent::TurnCompleted { usage: None },
             // Turn two: the counter started over, so this is approval 1 too.
-            HarnessEvent::ApprovalRequested {
-                request_id: 1,
-                name: "Bash".into(),
-                title: "ls".into(),
-                input: None,
-            },
-            HarnessEvent::ApprovalResolved {
-                request_id: 1,
-                decision: ApprovalResolution::Allow,
-            },
+            HarnessEvent::ApprovalRequested { request_id: 1, name: "Bash".into(), title: "ls".into(), input: None },
+            HarnessEvent::ApprovalResolved { request_id: 1, decision: ApprovalResolution::Allow },
         ];
-        let blocks = events
-            .into_iter()
-            .fold(Vec::<Block>::new(), apply_event);
+        let blocks = events.into_iter().fold(Vec::<Block>::new(), apply_event);
         let decisions: Vec<Option<ApprovalDecision>> = blocks
             .iter()
             .filter(|block| block.role == BlockRole::Approval)

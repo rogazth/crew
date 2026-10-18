@@ -88,12 +88,9 @@ pub fn permission_rules(autonomy: &Autonomy, bot: bool) -> Value {
         Autonomy::Edits | Autonomy::Auto => {
             vec![rule("shell", "ask"), rule("webfetch", "ask"), rule("external_directory", "ask")]
         }
-        Autonomy::Ask => vec![
-            rule("edit", "ask"),
-            rule("shell", "ask"),
-            rule("webfetch", "ask"),
-            rule("external_directory", "ask"),
-        ],
+        Autonomy::Ask => {
+            vec![rule("edit", "ask"), rule("shell", "ask"), rule("webfetch", "ask"), rule("external_directory", "ask")]
+        }
     };
     if bot {
         rules.push(rule("question", "deny"));
@@ -325,7 +322,8 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>, end: &ToolEnd) -> Opt
         return Some(ToolDetail::Output { text: end.error.clone()? });
     }
     let meta = end.metadata;
-    let meta_text = |key: &str| meta.and_then(|meta| meta.get(key)).and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
+    let meta_text =
+        |key: &str| meta.and_then(|meta| meta.get(key)).and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
     match name {
         // 1.x calls it `bash`, 2.x `shell`.
         "bash" | "shell" => Some(ToolDetail::Command {
@@ -341,7 +339,8 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>, end: &ToolEnd) -> Opt
                     .or_else(|| string_field(Some(input), "path"))?,
                 line_start: line_number(display, "lineStart"),
                 line_end: line_number(display, "lineEnd"),
-                preview: meta_text("preview").or_else(|| display.and_then(|d| d.get("text")).and_then(Value::as_str).map(str::to_string)),
+                preview: meta_text("preview")
+                    .or_else(|| display.and_then(|d| d.get("text")).and_then(Value::as_str).map(str::to_string)),
             })
         }
         // opencode counts no lines on a write, so the counts stay unset; the
@@ -373,11 +372,9 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>, end: &ToolEnd) -> Opt
             thread: string_field(Some(input), "sessionID").or_else(|| meta_text("sessionID")),
         }),
         // Code the model ran against a server's tools (Code Mode): what it ran.
-        "execute" => Some(ToolDetail::Command {
-            command: string_field(Some(input), "code")?,
-            exit_code: None,
-            output: end.output.clone(),
-        }),
+        "execute" => {
+            Some(ToolDetail::Command { command: string_field(Some(input), "code")?, exit_code: None, output: end.output.clone() })
+        }
         _ => Some(ToolDetail::Output { text: end.output.clone()? }),
     }
 }
@@ -434,7 +431,8 @@ fn edit_hunk(name: &str, input: &Map<String, Value>) -> Option<EditHunk> {
         "write" => (None, text_field(Some(input), "content")),
         _ => return None,
     };
-    (before.is_some() || after.is_some()).then(|| EditHunk { before: before.unwrap_or_default(), after: after.unwrap_or_default() })
+    (before.is_some() || after.is_some())
+        .then(|| EditHunk { before: before.unwrap_or_default(), after: after.unwrap_or_default() })
 }
 
 pub fn text_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<String> {
@@ -792,7 +790,10 @@ mod tests {
         let ask = effects(Autonomy::Ask, false);
         assert!(ask.contains(&("edit".into(), "ask".into())) && ask.contains(&("shell".into(), "ask".into())), "{ask:?}");
         let edits = effects(Autonomy::Edits, false);
-        assert!(!edits.iter().any(|(action, _)| action == "edit") && edits.contains(&("shell".into(), "ask".into())), "{edits:?}");
+        assert!(
+            !edits.iter().any(|(action, _)| action == "edit") && edits.contains(&("shell".into(), "ask".into())),
+            "{edits:?}"
+        );
         assert_eq!(effects(Autonomy::Auto, false), edits);
         let bot = effects(Autonomy::Full, true);
         assert!(bot.contains(&("question".into(), "deny".into())), "{bot:?}");
@@ -806,7 +807,8 @@ mod tests {
     #[test]
     fn the_server_config_names_crews_server_in_the_2x_format() {
         let env = [("CREW_TOKEN".to_string(), "host".to_string())];
-        let config: Value = serde_json::from_str(&server_config(Some(&("/bin/crewd".into(), vec!["--mcp".into()])), &env)).unwrap();
+        let config: Value =
+            serde_json::from_str(&server_config(Some(&("/bin/crewd".into(), vec!["--mcp".into()])), &env)).unwrap();
         let crew = &config["mcp"]["servers"]["crew"];
         assert_eq!(crew["environment"], json!({ "CREW_TOKEN": "host" }));
         assert_eq!(crew["command"], json!(["/bin/crewd", "--mcp"]));
@@ -819,7 +821,10 @@ mod tests {
 
     #[test]
     fn a_model_id_is_its_provider_and_model_with_the_effort_as_variant() {
-        assert_eq!(model_ref("opencode/mimo-v2.6-flash-free", ""), Some(json!({ "providerID": "opencode", "id": "mimo-v2.6-flash-free" })));
+        assert_eq!(
+            model_ref("opencode/mimo-v2.6-flash-free", ""),
+            Some(json!({ "providerID": "opencode", "id": "mimo-v2.6-flash-free" }))
+        );
         assert_eq!(
             model_ref("openrouter/anthropic/claude-x", "high"),
             Some(json!({ "providerID": "openrouter", "id": "anthropic/claude-x", "variant": "high" }))
@@ -848,10 +853,13 @@ mod tests {
     /// database: running with a count, then completed.
     #[test]
     fn the_migration_is_read_as_running_with_its_count_until_it_completes() {
-        let running = json!({ "status": "running", "progress": { "label": "Migrating sessions", "numerator": 119, "denominator": 276 } });
+        let running =
+            json!({ "status": "running", "progress": { "label": "Migrating sessions", "numerator": 119, "denominator": 276 } });
         assert_eq!(migration(&running), Migration::Running { label: "Migrating sessions".into(), done: 119, total: 276 });
         assert_eq!(migration(&json!({ "status": "completed" })), Migration::Done);
-        assert!(matches!(migration(&json!({ "status": "failed", "error": "disk full" })), Migration::Failed(why) if why == "disk full"));
+        assert!(
+            matches!(migration(&json!({ "status": "failed", "error": "disk full" })), Migration::Failed(why) if why == "disk full")
+        );
     }
 
     /// A prompt steers by default, and picked skills go in their own field.
@@ -904,7 +912,10 @@ mod tests {
         let questions = form_questions(&form);
         assert_eq!(questions.len(), 1);
         let (key, question) = &questions[0];
-        assert_eq!((key.as_str(), question.header.as_str(), question.question.as_str()), ("q0", "Color preference", "Do you prefer Red or Blue?"));
+        assert_eq!(
+            (key.as_str(), question.header.as_str(), question.question.as_str()),
+            ("q0", "Color preference", "Do you prefer Red or Blue?")
+        );
         assert_eq!(question.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), ["Red", "Blue"]);
         let answers = HashMap::from([("Do you prefer Red or Blue?".to_string(), "Blue".to_string())]);
         assert_eq!(form_answer(&form, &answers), json!({ "q0": "blue-ish" }));
@@ -933,9 +944,12 @@ mod tests {
 
     #[test]
     fn the_menu_reads_commands_by_name_and_skills_by_id() {
-        let commands = command_entries(&json!({ "data": [{ "name": "review", "description": "review changes" }, { "name": " " }] }));
+        let commands =
+            command_entries(&json!({ "data": [{ "name": "review", "description": "review changes" }, { "name": " " }] }));
         assert_eq!(commands.iter().map(|c| (c.name.as_str(), c.kind.as_str())).collect::<Vec<_>>(), [("review", "command")]);
-        let skills = skill_entries(&json!({ "data": [{ "id": "opencode", "name": "OpenCode", "description": "About opencode", "path": "/builtin/opencode.md", "content": "…" }] }));
+        let skills = skill_entries(
+            &json!({ "data": [{ "id": "opencode", "name": "OpenCode", "description": "About opencode", "path": "/builtin/opencode.md", "content": "…" }] }),
+        );
         assert_eq!(skills[0].name, "opencode");
         assert_eq!(skills[0].kind, "skill");
         assert_eq!(skills[0].path.as_deref(), Some("/builtin/opencode.md"));
@@ -953,11 +967,20 @@ mod tests {
     fn a_tools_end_says_whether_it_failed() {
         let input = json!({ "command": "ls /nope" }).as_object().unwrap().clone();
         let meta = json!({ "exit": 2, "status": "completed" }).as_object().unwrap().clone();
-        let end = ToolEnd { status: Some("completed"), output: Some("ls: /nope: No such file".into()), error: None, metadata: Some(&meta) };
+        let end = ToolEnd {
+            status: Some("completed"),
+            output: Some("ls: /nope: No such file".into()),
+            error: None,
+            metadata: Some(&meta),
+        };
         assert_eq!(tool_status("shell", &end), ToolStatus::Failed);
         assert_eq!(
             tool_detail("shell", &input, &end),
-            Some(ToolDetail::Command { command: "ls /nope".into(), exit_code: Some(2), output: Some("ls: /nope: No such file".into()) })
+            Some(ToolDetail::Command {
+                command: "ls /nope".into(),
+                exit_code: Some(2),
+                output: Some("ls: /nope: No such file".into())
+            })
         );
         let threw = ToolEnd { status: Some("error"), error: Some("Tool execution interrupted".into()), ..ToolEnd::default() };
         assert_eq!(tool_status("shell", &threw), ToolStatus::Failed);

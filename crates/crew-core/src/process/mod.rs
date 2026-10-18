@@ -70,15 +70,10 @@ pub fn migrate_unique_names(conn: &Connection) -> rusqlite::Result<()> {
             continue;
         }
         let names = taken.entry(workspace.as_str()).or_default();
-        let fresh = (2..)
-            .map(|n| format!("{name} ({n})"))
-            .find(|candidate| !names.contains(candidate))
-            .expect("some number is free");
+        let fresh =
+            (2..).map(|n| format!("{name} ({n})")).find(|candidate| !names.contains(candidate)).expect("some number is free");
         names.insert(fresh.clone());
-        conn.execute(
-            "UPDATE processes SET name = ?2, revision = revision + 1 WHERE id = ?1",
-            params![id, fresh],
-        )?;
+        conn.execute("UPDATE processes SET name = ?2, revision = revision + 1 WHERE id = ?1", params![id, fresh])?;
     }
     conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS processes_name_idx ON processes (workspace_id, name);")
 }
@@ -226,9 +221,8 @@ fn run_slug(worktree: Option<&str>) -> String {
     let Some(path) = worktree else {
         return "main".into();
     };
-    let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-    });
+    let hash =
+        path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3));
     format!("wt-{hash:016x}")
 }
 
@@ -475,9 +469,8 @@ impl ProcessHost {
 
     fn defs(&self, workspace_id: &str) -> Result<Vec<Def>, String> {
         self.inner.store.with(|conn| {
-            let mut stmt = conn.prepare_cached(&format!(
-                "{SELECT} WHERE workspace_id = ?1 ORDER BY sort_order ASC, created_at ASC"
-            ))?;
+            let mut stmt =
+                conn.prepare_cached(&format!("{SELECT} WHERE workspace_id = ?1 ORDER BY sort_order ASC, created_at ASC"))?;
             let rows = stmt.query_map(params![workspace_id], row_to_def)?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
         })
@@ -496,8 +489,7 @@ impl ProcessHost {
         created_by: Option<String>,
         ask_approval: bool,
     ) -> Result<Process, String> {
-        crate::workspace::get(&self.inner.store, workspace_id.to_string())?
-            .ok_or("Workspace not found")?;
+        crate::workspace::get(&self.inner.store, workspace_id.to_string())?.ok_or("Workspace not found")?;
         let spec = tidy(spec)?;
         relative_cwd(&spec.cwd)?;
         let edits = self.edits();
@@ -506,33 +498,35 @@ impl ProcessHost {
         let now = now_millis();
         let env = serde_json::to_string(&spec.env).map_err(|e| e.to_string())?;
         let requested_by = if ask_approval { created_by.clone() } else { None };
-        self.inner.store.with(|conn| {
-            let order: i64 = conn.query_row(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM processes WHERE workspace_id = ?1",
-                params![workspace_id],
-                |row| row.get(0),
-            )?;
-            conn.execute(
-                "INSERT INTO processes (id, workspace_id, name, command, cwd, env_json,
+        self.inner
+            .store
+            .with(|conn| {
+                let order: i64 = conn.query_row(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM processes WHERE workspace_id = ?1",
+                    params![workspace_id],
+                    |row| row.get(0),
+                )?;
+                conn.execute(
+                    "INSERT INTO processes (id, workspace_id, name, command, cwd, env_json,
                    auto_restart, created_by, sort_order, approved, requested_by, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-                params![
-                    id,
-                    workspace_id,
-                    spec.name,
-                    spec.command,
-                    spec.cwd,
-                    env,
-                    spec.auto_restart,
-                    created_by,
-                    order,
-                    !ask_approval,
-                    requested_by,
-                    now
-                ],
-            )
-        })
-        .map_err(|error| name_taken(error, &spec.name))?;
+                    params![
+                        id,
+                        workspace_id,
+                        spec.name,
+                        spec.command,
+                        spec.cwd,
+                        env,
+                        spec.auto_restart,
+                        created_by,
+                        order,
+                        !ask_approval,
+                        requested_by,
+                        now
+                    ],
+                )
+            })
+            .map_err(|error| name_taken(error, &spec.name))?;
         drop(edits);
         self.emit(&id);
         self.get(workspace_id, &id)
@@ -608,9 +602,7 @@ impl ProcessHost {
         requested_by: Option<String>,
     ) -> Result<(), String> {
         let env = serde_json::to_string(&spec.env).map_err(|e| e.to_string())?;
-        let proposal = proposal
-            .map(|proposal| serde_json::to_string(proposal).map_err(|e| e.to_string()))
-            .transpose()?;
+        let proposal = proposal.map(|proposal| serde_json::to_string(proposal).map_err(|e| e.to_string())).transpose()?;
         self.inner
             .store
             .with(|conn| {
@@ -645,14 +637,8 @@ impl ProcessHost {
         }
         self.runs().retain(|(id, _), _| *id != def.id);
         self.wake_waiters(&def.id);
-        self.inner
-            .store
-            .with(|conn| conn.execute("DELETE FROM processes WHERE id = ?1", params![def.id]))?;
-        self.inner
-            .logs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|(id, _), _| *id != def.id);
+        self.inner.store.with(|conn| conn.execute("DELETE FROM processes WHERE id = ?1", params![def.id]))?;
+        self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _), _| *id != def.id);
         let _ = std::fs::remove_dir_all(self.inner.logs_dir.join(&def.id));
         if let Some(events) = self.events() {
             events.removed(workspace_id, &def.id);
@@ -718,12 +704,8 @@ impl ProcessHost {
     }
 
     pub fn reorder(&self, workspace_id: &str, ids: &[String]) -> Result<(), String> {
-        let mine: Vec<String> = self
-            .list(workspace_id)?
-            .into_iter()
-            .map(|process| process.id)
-            .filter(|id| ids.contains(id))
-            .collect();
+        let mine: Vec<String> =
+            self.list(workspace_id)?.into_iter().map(|process| process.id).filter(|id| ids.contains(id)).collect();
         let ordered: Vec<String> = ids.iter().filter(|id| mine.contains(id)).cloned().collect();
         self.inner.store.with(|conn| set_order(conn, "processes", &ordered))
     }
@@ -782,17 +764,10 @@ impl ProcessHost {
             log: log.clone(),
             scan: Mutex::new(Some(Vec::new())),
         });
-        let shell = std::env::var("SHELL")
-            .ok()
-            .filter(|shell| !shell.is_empty())
-            .unwrap_or_else(|| "/bin/zsh".into());
+        let shell = std::env::var("SHELL").ok().filter(|shell| !shell.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
         let mut env = def.spec.env.clone();
         env.extend(run.env.clone());
-        let options = SpawnOptions {
-            env: env.into_iter().collect(),
-            supervised: Some(sink),
-            ..SpawnOptions::default()
-        };
+        let options = SpawnOptions { env: env.into_iter().collect(), supervised: Some(sink), ..SpawnOptions::default() };
         let id = pty_id(&key.0, key.1.as_deref());
         // The user's shell reads the command, so pipes, `&&` and globs work
         // as typed; PATH is the login shell's, which the PTY sets.
@@ -961,9 +936,7 @@ impl ProcessHost {
         let deadline = Instant::now() + limit;
         let mut runs = self.runs();
         loop {
-            let ended = runs
-                .get(key)
-                .is_none_or(|run| run.generation != generation || !live(run.state));
+            let ended = runs.get(key).is_none_or(|run| run.generation != generation || !live(run.state));
             if ended {
                 return true;
             }
@@ -971,12 +944,7 @@ impl ProcessHost {
             if left.is_zero() {
                 return false;
             }
-            runs = self
-                .inner
-                .moved
-                .wait_timeout(runs, left)
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
+            runs = self.inner.moved.wait_timeout(runs, left).unwrap_or_else(|e| e.into_inner()).0;
         }
     }
 
@@ -1125,12 +1093,7 @@ impl ProcessHost {
             } else {
                 bytes.len()
             };
-            return Ok(LogChunk {
-                text: text::clean(&bytes[..used]),
-                start: at,
-                cursor: at + used as u64,
-                skipped: at - from,
-            });
+            return Ok(LogChunk { text: text::clean(&bytes[..used]), start: at, cursor: at + used as u64, skipped: at - from });
         }
         let (at, bytes) = log.read(total.saturating_sub(max), total);
         let lines = tail.unwrap_or(TAIL_DEFAULT).clamp(1, TAIL_MAX) as usize;
@@ -1139,12 +1102,7 @@ impl ProcessHost {
         if begin == 0 && at > log.first() {
             begin = bytes.iter().position(|&b| b == b'\n').map_or(0, |nl| nl + 1);
         }
-        Ok(LogChunk {
-            text: text::clean(&bytes[begin..]),
-            start: at + begin as u64,
-            cursor: total,
-            skipped: 0,
-        })
+        Ok(LogChunk { text: text::clean(&bytes[begin..]), start: at + begin as u64, cursor: total, skipped: 0 })
     }
 
     /// The raw end of the log, escapes kept, for a terminal to repaint a
@@ -1162,11 +1120,7 @@ impl ProcessHost {
         let max = u64::from(max_bytes.unwrap_or(READ_MAX).clamp(1, READ_MAX));
         let (at, bytes) = log.read(total.saturating_sub(max), total);
         // Start on a line: an escape cut in half paints garbage.
-        let begin = if at > log.first() {
-            bytes.iter().position(|&b| b == b'\n').map_or(0, |nl| nl + 1)
-        } else {
-            0
-        };
+        let begin = if at > log.first() { bytes.iter().position(|&b| b == b'\n').map_or(0, |nl| nl + 1) } else { 0 };
         Ok(LogChunk {
             text: String::from_utf8_lossy(&bytes[begin..]).into_owned(),
             start: at + begin as u64,
@@ -1225,11 +1179,7 @@ impl ProcessHost {
             }
             true
         });
-        Ok(LogGrep {
-            matches: matches.into(),
-            total,
-            cursor: total_bytes,
-        })
+        Ok(LogGrep { matches: matches.into(), total, cursor: total_bytes })
     }
 
     /// Blocks until a line from `since` on matches, the process ends, or
@@ -1256,10 +1206,8 @@ impl ProcessHost {
         let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s.clamp(1, WAIT_MAX_S)));
         let mut pos = loop {
             let seen = log.seq();
-            let (state, exit_code, run_cursor) = self
-                .runs()
-                .get(&key)
-                .map_or((ProcessState::Stopped, None, 0), |run| (run.state, run.exit_code, run.run_cursor));
+            let (state, exit_code, run_cursor) =
+                self.runs().get(&key).map_or((ProcessState::Stopped, None, 0), |run| (run.state, run.exit_code, run.run_cursor));
             if live(state) {
                 break since.unwrap_or(run_cursor);
             }
@@ -1294,10 +1242,8 @@ impl ProcessHost {
             }
             // Only whole lines are behind us; an unfinished one is read again.
             pos = end.max(pos);
-            let (state, exit_code) = self
-                .runs()
-                .get(&key)
-                .map_or((ProcessState::Stopped, None), |run| (run.state, run.exit_code));
+            let (state, exit_code) =
+                self.runs().get(&key).map_or((ProcessState::Stopped, None), |run| (run.state, run.exit_code));
             let waiting = live(state) || state == ProcessState::Starting;
             if !waiting && log.seq() == seen {
                 return Ok(LogWait::Ended { state, exit_code, cursor: pos });
@@ -1386,11 +1332,9 @@ impl ProcessHost {
     }
 
     fn def_by_id(&self, id: &str) -> Result<Option<Def>, String> {
-        self.inner.store.with(|conn| {
-            conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?
-                .query_row(params![id], row_to_def)
-                .optional()
-        })
+        self.inner
+            .store
+            .with(|conn| conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?.query_row(params![id], row_to_def).optional())
     }
 
     /// By id, then by name, and only inside the workspace: a caller never
@@ -1413,11 +1357,9 @@ impl ProcessHost {
 
     fn ensure_free_name(&self, workspace_id: &str, name: &str, except: Option<&str>) -> Result<(), String> {
         let taken: Option<String> = self.inner.store.with(|conn| {
-            conn.query_row(
-                "SELECT id FROM processes WHERE workspace_id = ?1 AND name = ?2",
-                params![workspace_id, name],
-                |row| row.get(0),
-            )
+            conn.query_row("SELECT id FROM processes WHERE workspace_id = ?1 AND name = ?2", params![workspace_id, name], |row| {
+                row.get(0)
+            })
             .optional()
         })?;
         match taken {
@@ -1434,8 +1376,7 @@ impl ProcessHost {
         let Some(path) = worktree.map(|path| path.trim_end_matches('/')).filter(|path| !path.is_empty()) else {
             return Ok(None);
         };
-        let workspace = crate::workspace::get(&self.inner.store, def.workspace_id.clone())?
-            .ok_or("Workspace not found")?;
+        let workspace = crate::workspace::get(&self.inner.store, def.workspace_id.clone())?.ok_or("Workspace not found")?;
         if path == workspace.path.trim_end_matches('/') {
             return Ok(None);
         }
@@ -1457,11 +1398,7 @@ impl ProcessHost {
     fn cwd_of(&self, def: &Def, worktree: Option<&str>) -> Result<String, String> {
         let root = match worktree {
             Some(path) => path.to_string(),
-            None => {
-                crate::workspace::get(&self.inner.store, def.workspace_id.clone())?
-                    .ok_or("Workspace not found")?
-                    .path
-            }
+            None => crate::workspace::get(&self.inner.store, def.workspace_id.clone())?.ok_or("Workspace not found")?.path,
         };
         let path = resolve_cwd(&root, &def.spec.cwd);
         // The PTY falls back to $HOME for a missing folder, which suits a
@@ -1553,10 +1490,7 @@ fn is_note(line: &str) -> bool {
 }
 
 fn compile(pattern: &str) -> Result<regex::Regex, String> {
-    regex::RegexBuilder::new(pattern)
-        .size_limit(1 << 20)
-        .build()
-        .map_err(|e| format!("Bad pattern: {e}"))
+    regex::RegexBuilder::new(pattern).size_limit(1 << 20).build().map_err(|e| format!("Bad pattern: {e}"))
 }
 
 /// Where the last `lines` lines of `bytes` start. A trailing newline ends a
@@ -1602,20 +1536,13 @@ fn plan_restart(
         *backoff = Duration::ZERO;
     }
     crashes.push_back(now);
-    while crashes
-        .front()
-        .is_some_and(|at| now.duration_since(*at) > config.crash_window)
-    {
+    while crashes.front().is_some_and(|at| now.duration_since(*at) > config.crash_window) {
         crashes.pop_front();
     }
     if crashes.len() >= config.crash_limit {
         return None;
     }
-    let next = if backoff.is_zero() {
-        config.backoff_min
-    } else {
-        (*backoff * 2).min(config.backoff_max)
-    };
+    let next = if backoff.is_zero() { config.backoff_min } else { (*backoff * 2).min(config.backoff_max) };
     *backoff = next;
     Some(next)
 }

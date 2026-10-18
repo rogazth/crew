@@ -273,21 +273,11 @@ pub struct PtyError {
 }
 
 pub fn ok(id: u32, result: Value) -> Response {
-    Response {
-        id,
-        ok: true,
-        result: Some(result),
-        error: None,
-    }
+    Response { id, ok: true, result: Some(result), error: None }
 }
 
 pub fn err(id: u32, error: impl Into<String>) -> Response {
-    Response {
-        id,
-        ok: false,
-        result: None,
-        error: Some(error.into()),
-    }
+    Response { id, ok: false, result: None, error: Some(error.into()) }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -754,10 +744,7 @@ pub struct FileBytes {
 }
 
 pub fn event(event: impl Into<String>, payload: impl Serialize) -> Result<Event, serde_json::Error> {
-    Ok(Event {
-        event: event.into(),
-        payload: serde_json::to_value(payload)?,
-    })
+    Ok(Event { event: event.into(), payload: serde_json::to_value(payload)? })
 }
 
 /// One row of browser history: every visit to the same normalized URL lands

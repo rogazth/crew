@@ -49,11 +49,7 @@ pub struct Registry {
 
 impl Registry {
     pub fn new(path: PathBuf) -> Self {
-        let registry = Self {
-            path,
-            boot: boot_time().unwrap_or(0),
-            groups: Mutex::new(BTreeMap::new()),
-        };
+        let registry = Self { path, boot: boot_time().unwrap_or(0), groups: Mutex::new(BTreeMap::new()) };
         // Start from the current boot with nothing in it, whatever the file held.
         let groups = registry.groups.lock().unwrap_or_else(|e| e.into_inner());
         registry.write(&groups);
@@ -90,10 +86,7 @@ impl Registry {
     }
 
     fn write(&self, groups: &BTreeMap<u32, i64>) {
-        let groups = groups
-            .iter()
-            .map(|(&pgid, &started)| Group { pgid, started })
-            .collect();
+        let groups = groups.iter().map(|(&pgid, &started)| Group { pgid, started }).collect();
         write_file(&self.path, self.boot, groups);
     }
 }
@@ -113,9 +106,7 @@ impl Registry {
 /// - neither: nothing to do.
 pub fn sweep(path: &Path) {
     let now = boot_time();
-    let previous = std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok());
+    let previous = std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok());
     if let (Some(previous), Some(now)) = (previous, now) {
         if previous.boot == now {
             for group in previous.groups {
@@ -207,12 +198,7 @@ pub fn boot_time() -> Option<i64> {
 #[cfg(target_os = "linux")]
 pub fn boot_time() -> Option<i64> {
     let stat = std::fs::read_to_string("/proc/stat").ok()?;
-    let seconds = stat
-        .lines()
-        .find_map(|line| line.strip_prefix("btime "))?
-        .trim()
-        .parse::<i64>()
-        .ok()?;
+    let seconds = stat.lines().find_map(|line| line.strip_prefix("btime "))?.trim().parse::<i64>().ok()?;
     (seconds > 0).then_some(seconds)
 }
 

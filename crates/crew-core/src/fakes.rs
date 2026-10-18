@@ -48,11 +48,7 @@ fn guarded(script: &str) -> String {
 pub(crate) fn install(dir: &Path, name: &str, script: &str) -> PathBuf {
     let master = {
         let mut masters = MASTERS.lock().unwrap_or_else(|e| e.into_inner());
-        masters
-            .get_or_insert_with(HashMap::new)
-            .entry(script.to_string())
-            .or_insert_with(|| write_master(script))
-            .clone()
+        masters.get_or_insert_with(HashMap::new).entry(script.to_string()).or_insert_with(|| write_master(script)).clone()
     };
     let path = dir.join(name);
     let _ = std::fs::remove_file(&path);

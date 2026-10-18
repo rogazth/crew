@@ -21,13 +21,7 @@ const MAX_WINDOW: u32 = 500;
 
 pub trait TranscriptEvents: Send + Sync {
     fn apply(&self, session_id: &str, seq: u64, event: &HarnessEvent);
-    fn status(
-        &self,
-        session_id: &str,
-        status: &str,
-        provider_session_id: Option<&str>,
-        updated_at: i64,
-    );
+    fn status(&self, session_id: &str, status: &str, provider_session_id: Option<&str>, updated_at: i64);
 }
 
 struct Live {
@@ -84,10 +78,7 @@ impl TranscriptHub {
     }
 
     fn hydrate(&self, session_id: &str) -> Live {
-        let blocks = self
-            .store
-            .with(|conn| crate::messages::all(conn, session_id))
-            .unwrap_or_default();
+        let blocks = self.store.with(|conn| crate::messages::all(conn, session_id)).unwrap_or_default();
         let status = session::get(&self.store, session_id.to_string())
             .ok()
             .flatten()
@@ -114,17 +105,10 @@ impl TranscriptHub {
             return;
         }
         let created = self.hydrate(session_id);
-        self.lock()
-            .entry(session_id.to_string())
-            .or_insert(created);
+        self.lock().entry(session_id.to_string()).or_insert(created);
     }
 
-    pub fn window(
-        &self,
-        session_id: &str,
-        limit: Option<u32>,
-        before_pos: Option<i64>,
-    ) -> MessagePage {
+    pub fn window(&self, session_id: &str, limit: Option<u32>, before_pos: Option<i64>) -> MessagePage {
         let limit = limit.unwrap_or(WINDOW_LIMIT).clamp(1, MAX_WINDOW) as usize;
         self.ensure(session_id);
         // Sliced under the lock: copying a whole transcript to hand back a page
@@ -225,25 +209,12 @@ impl TranscriptHub {
     /// (whatever its provider shows of the call), or one it is party to
     /// without writing or reading it (the user writing to its child).
     pub fn append_system_letter(&self, session_id: &str, text: &str, letter_id: &str) {
-        self.apply(
-            session_id,
-            HarnessEvent::SystemMessage {
-                text: text.to_string(),
-                letter_id: Some(letter_id.to_string()),
-            },
-        );
+        self.apply(session_id, HarnessEvent::SystemMessage { text: text.to_string(), letter_id: Some(letter_id.to_string()) });
     }
 
     pub fn apply(&self, session_id: &str, event: HarnessEvent) -> u64 {
-        if let HarnessEvent::SessionProviderBound {
-            provider_session_id,
-        } = &event
-        {
-            let _ = session::set_provider_session(
-                &self.store,
-                session_id.to_string(),
-                provider_session_id.clone(),
-            );
+        if let HarnessEvent::SessionProviderBound { provider_session_id } = &event {
+            let _ = session::set_provider_session(&self.store, session_id.to_string(), provider_session_id.clone());
         }
         let flush_now = matches!(
             event,
@@ -255,9 +226,7 @@ impl TranscriptHub {
         );
         let (seq, emit_event) = {
             let mut map = self.lock();
-            let row = map
-                .entry(session_id.to_string())
-                .or_insert_with(|| self.hydrate(session_id));
+            let row = map.entry(session_id.to_string()).or_insert_with(|| self.hydrate(session_id));
             row.blocks = apply_event(std::mem::take(&mut row.blocks), event.clone());
             row.seq += 1;
             row.dirty = true;
@@ -282,9 +251,7 @@ impl TranscriptHub {
     pub fn emit_live(&self, session_id: &str, event: HarnessEvent) -> u64 {
         let seq = {
             let mut map = self.lock();
-            let row = map
-                .entry(session_id.to_string())
-                .or_insert_with(|| self.hydrate(session_id));
+            let row = map.entry(session_id.to_string()).or_insert_with(|| self.hydrate(session_id));
             row.seq += 1;
             row.seq
         };
@@ -295,20 +262,12 @@ impl TranscriptHub {
     }
 
     pub fn append_system(&self, session_id: &str, text: &str) {
-        self.apply(
-            session_id,
-            HarnessEvent::SystemMessage {
-                text: text.to_string(),
-                letter_id: None,
-            },
-        );
+        self.apply(session_id, HarnessEvent::SystemMessage { text: text.to_string(), letter_id: None });
     }
 
     pub fn set_working(&self, session_id: &str, working: bool) {
         let mut map = self.lock();
-        let row = map
-            .entry(session_id.to_string())
-            .or_insert_with(|| self.hydrate(session_id));
+        let row = map.entry(session_id.to_string()).or_insert_with(|| self.hydrate(session_id));
         row.working = working;
     }
 
@@ -316,9 +275,7 @@ impl TranscriptHub {
         let _ = session::set_status(&self.store, session_id.to_string(), status.to_string());
         {
             let mut map = self.lock();
-            let row = map
-                .entry(session_id.to_string())
-                .or_insert_with(|| self.hydrate(session_id));
+            let row = map.entry(session_id.to_string()).or_insert_with(|| self.hydrate(session_id));
             row.status = status.to_string();
             row.working = status == "working" || status == "needs-input";
         }
@@ -344,10 +301,7 @@ impl TranscriptHub {
             row.save_gen += 1;
             (row.blocks.clone(), std::mem::take(&mut row.synced))
         };
-        let written = self
-            .store
-            .with(|conn| crate::messages::sync(conn, session_id, &blocks, &mut synced))
-            .is_ok();
+        let written = self.store.with(|conn| crate::messages::sync(conn, session_id, &blocks, &mut synced)).is_ok();
         if let Some(row) = self.lock().get_mut(session_id) {
             if written {
                 row.synced = synced;
@@ -363,10 +317,7 @@ impl TranscriptHub {
     pub fn flush_all(&self) {
         let ids: Vec<String> = {
             let map = self.lock();
-            map.iter()
-                .filter(|(_, row)| row.dirty)
-                .map(|(id, _)| id.clone())
-                .collect()
+            map.iter().filter(|(_, row)| row.dirty).map(|(id, _)| id.clone()).collect()
         };
         for id in ids {
             self.flush(&id);
@@ -451,19 +402,12 @@ mod tests {
         .unwrap();
         let hub = TranscriptHub::new(store.clone());
         hub.append_user(&session.id, "hi", false, None, None);
-        hub.apply(
-            &session.id,
-            HarnessEvent::MessageDelta {
-                text: "ok".into(),
-            },
-        );
+        hub.apply(&session.id, HarnessEvent::MessageDelta { text: "ok".into() });
         let seq = hub.apply(&session.id, HarnessEvent::TurnCompleted { usage: None });
         assert_eq!(seq, 3);
         let snap = hub.window(&session.id, None, None);
         assert_eq!(snap.blocks.iter().filter(|b| b.role == BlockRole::Assistant).count(), 1);
-        let stored = store
-            .with(|conn| crate::messages::all(conn, &session.id))
-            .expect("read back");
+        let stored = store.with(|conn| crate::messages::all(conn, &session.id)).expect("read back");
         assert!(stored.iter().any(|block| block.text == "ok"));
     }
 
@@ -519,8 +463,7 @@ mod review_tests {
     pub(super) fn bot(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
-        let workspace =
-            crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
+        let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
         crate::session::create(
             store,
             workspace.id,
@@ -564,9 +507,7 @@ mod review_tests {
         // An explicit limit: the default window is a page, and this compares
         // everything the hub holds against everything that landed.
         let live = hub.window(&id, Some(MAX_WINDOW), None).blocks.len();
-        let rows = store
-            .with(|conn| crate::messages::count(conn, &id))
-            .expect("count") as usize;
+        let rows = store.with(|conn| crate::messages::count(conn, &id)).expect("count") as usize;
         assert_eq!(rows, live, "the messages table holds {rows} of {live} blocks");
     }
 
@@ -580,18 +521,12 @@ mod review_tests {
         let hub = TranscriptHub::new(store.clone());
         hub.append_system(&id, "first");
 
-        store
-            .with(|conn| conn.pragma_update(None, "query_only", true))
-            .expect("read only");
+        store.with(|conn| conn.pragma_update(None, "query_only", true)).expect("read only");
         hub.append_system(&id, "second");
-        store
-            .with(|conn| conn.pragma_update(None, "query_only", false))
-            .expect("writable");
+        store.with(|conn| conn.pragma_update(None, "query_only", false)).expect("writable");
 
         hub.flush(&id);
-        let stored = store
-            .with(|conn| crate::messages::all(conn, &id))
-            .expect("read back");
+        let stored = store.with(|conn| crate::messages::all(conn, &id)).expect("read back");
         assert!(
             stored.iter().any(|block| block.text == "second"),
             "the block whose write failed is gone from disk for good: {:?}",
@@ -616,8 +551,7 @@ mod window_tests {
     pub(super) fn bot(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
-        let workspace =
-            crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
+        let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
         crate::session::create(
             store,
             workspace.id,
@@ -660,12 +594,8 @@ mod window_tests {
     fn the_default_window_is_the_last_two_hundred_blocks() {
         let store = tmp_store();
         let id = bot(&store);
-        let blocks: Vec<Block> = (1..=250)
-            .map(|n| new_block(BlockRole::Assistant, format!("line {n}")))
-            .collect();
-        store
-            .with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new()))
-            .expect("seed");
+        let blocks: Vec<Block> = (1..=250).map(|n| new_block(BlockRole::Assistant, format!("line {n}"))).collect();
+        store.with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new())).expect("seed");
 
         let hub = TranscriptHub::new(store);
         let page = hub.window(&id, None, None);
@@ -693,11 +623,7 @@ mod window_tests {
         assert_eq!(first.from_pos, 1);
         assert!(!first.more);
 
-        let walked: Vec<String> = texts(&first)
-            .into_iter()
-            .chain(texts(&earlier))
-            .chain(texts(&last))
-            .collect();
+        let walked: Vec<String> = texts(&first).into_iter().chain(texts(&earlier)).chain(texts(&last)).collect();
         assert_eq!(walked, texts(&hub.window(&id, Some(10), None)));
     }
 
@@ -744,27 +670,16 @@ mod window_tests {
         let hub = TranscriptHub::new(store.clone());
         hub.append_system(&id, "flushed");
 
-        store
-            .with(|conn| conn.pragma_update(None, "query_only", true))
-            .expect("read only");
-        hub.apply(
-            &id,
-            HarnessEvent::MessageDelta {
-                text: "still streaming".into(),
-            },
-        );
+        store.with(|conn| conn.pragma_update(None, "query_only", true)).expect("read only");
+        hub.apply(&id, HarnessEvent::MessageDelta { text: "still streaming".into() });
 
         let page = hub.window(&id, None, None);
         assert_eq!(texts(&page), vec!["flushed", "still streaming"]);
         assert_eq!(page.to_pos, 2);
-        let stored = store
-            .with(|conn| crate::messages::count(conn, &id))
-            .expect("count");
+        let stored = store.with(|conn| crate::messages::count(conn, &id)).expect("count");
         assert_eq!(stored, 1, "sanity: the table already holds the unflushed block");
 
-        store
-            .with(|conn| conn.pragma_update(None, "query_only", false))
-            .expect("writable");
+        store.with(|conn| conn.pragma_update(None, "query_only", false)).expect("writable");
     }
 
     #[test]
@@ -773,12 +688,7 @@ mod window_tests {
         let id = bot(&store);
         let hub = TranscriptHub::new(store);
         hub.set_status(&id, "working", None);
-        let seq = hub.apply(
-            &id,
-            HarnessEvent::MessageDelta {
-                text: "thinking".into(),
-            },
-        );
+        let seq = hub.apply(&id, HarnessEvent::MessageDelta { text: "thinking".into() });
 
         let page = hub.window(&id, Some(1), None);
         assert_eq!(page.seq, seq);
@@ -795,8 +705,8 @@ mod window_tests {
 
 #[cfg(test)]
 mod cost_tests {
-    use super::*;
     use super::review_tests::{bot, tmp_store};
+    use super::*;
     use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
 
     fn tool_block(n: usize) -> Block {
@@ -845,9 +755,7 @@ mod cost_tests {
         let blocks = hub.window(&id, Some(MAX_WINDOW), None).blocks;
         let before = store.with(|conn| Ok(conn.total_changes())).expect("changes");
         for _ in 0..5 {
-            store
-                .with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new()))
-                .expect("rewrite");
+            store.with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new())).expect("rewrite");
         }
         let full = store.with(|conn| Ok(conn.total_changes())).expect("changes") - before;
 
@@ -872,8 +780,7 @@ mod window_review {
     use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
 
     fn tool_block(n: usize) -> Block {
-        let mut block =
-            crate::blocks::new_block(crew_protocol::BlockRole::Tool, format!("bash {n}"));
+        let mut block = crate::blocks::new_block(crew_protocol::BlockRole::Tool, format!("bash {n}"));
         block.tool = Some(BlockTool {
             call_id: format!("c{n}"),
             name: "Bash".into(),
@@ -890,9 +797,7 @@ mod window_review {
 
     pub(super) fn seed(store: &Store, id: &str, count: usize) -> Vec<Block> {
         let blocks: Vec<Block> = (0..count).map(tool_block).collect();
-        store
-            .with(|conn| crate::messages::sync(conn, id, &blocks, &mut Vec::new()))
-            .expect("seed");
+        store.with(|conn| crate::messages::sync(conn, id, &blocks, &mut Vec::new())).expect("seed");
         blocks
     }
 
@@ -905,9 +810,7 @@ mod window_review {
         let id = bot(&store);
         seed(&store, &id, 40);
         let row = TranscriptHub::new(store.clone()).hydrate(&id);
-        let stored = store
-            .with(|conn| crate::messages::fingerprints(conn, &id))
-            .expect("fingerprints");
+        let stored = store.with(|conn| crate::messages::fingerprints(conn, &id)).expect("fingerprints");
         assert_eq!(row.synced, stored, "a fresh hub would rewrite rows that never moved");
     }
 
@@ -973,23 +876,18 @@ mod window_review {
         // fingerprint it.
         let read_twice = best(Box::new(|| {
             let _ = store.with(|conn| crate::messages::all(conn, &id)).expect("all");
-            let _ = store
-                .with(|conn| crate::messages::fingerprints(conn, &id))
-                .expect("fingerprints");
+            let _ = store.with(|conn| crate::messages::fingerprints(conn, &id)).expect("fingerprints");
         }));
 
-        println!(
-            "2000 blocks — one read: {read_once:?}; hydrate: {hydrated:?}; read twice: {read_twice:?}"
-        );
+        println!("2000 blocks — one read: {read_once:?}; hydrate: {hydrated:?}; read twice: {read_twice:?}");
         assert!(hydrated < read_twice, "hydrate cost more than reading the rows twice");
     }
-
 }
 
 #[cfg(test)]
 mod window_cost_tests {
-    use super::*;
     use super::review_tests::{bot, tmp_store};
+    use super::*;
 
     /// A page is a page. `window` used to clone the whole transcript before
     /// slicing 200 out of it, so every read of a chat — every resync, every

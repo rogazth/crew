@@ -32,7 +32,9 @@ pub enum Caller {
     Child(Session),
     /// `None` when the call named no workspace, or one that resolved to none.
     /// Tools that need one say so through [`Caller::workspace_id`].
-    User { workspace_id: Option<String> },
+    User {
+        workspace_id: Option<String>,
+    },
 }
 
 /// The kind alone, for deciding which tools a caller is shown.
@@ -63,7 +65,8 @@ impl Caller {
             // It names no session by itself; the bridge turns it into the
             // session an opencode session id is bound to before asking.
             Bearer::OpencodeHost(_) => {
-                Err("The opencode host token speaks for no session by itself: a call has to name a session Crew bound.".to_string())
+                Err("The opencode host token speaks for no session by itself: a call has to name a session Crew bound."
+                    .to_string())
             }
         }
     }
@@ -105,10 +108,10 @@ impl Caller {
         match self {
             Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session) => Ok(&session.workspace_id),
             Caller::User { workspace_id: Some(id) } => Ok(id),
-            Caller::User { workspace_id: None } => Err(
-                "No workspace: run this from inside a workspace's folder, or name one with --workspace (an id or a path)."
-                    .to_string(),
-            ),
+            Caller::User { workspace_id: None } => {
+                Err("No workspace: run this from inside a workspace's folder, or name one with --workspace (an id or a path)."
+                    .to_string())
+            }
         }
     }
 
@@ -146,21 +149,11 @@ impl Caller {
     pub fn sender(&self) -> BotRef {
         match self {
             Caller::Bot(session) => BotRef::bot(session.id.clone(), session.name.clone()),
-            Caller::Terminal(session) => BotRef {
-                id: session.id.clone(),
-                name: session.name.clone(),
-                kind: Some("terminal".into()),
-            },
-            Caller::Child(session) => BotRef {
-                id: session.id.clone(),
-                name: session.name.clone(),
-                kind: Some("session".into()),
-            },
-            Caller::User { .. } => BotRef {
-                id: String::new(),
-                name: "You".into(),
-                kind: Some("user".into()),
-            },
+            Caller::Terminal(session) => {
+                BotRef { id: session.id.clone(), name: session.name.clone(), kind: Some("terminal".into()) }
+            }
+            Caller::Child(session) => BotRef { id: session.id.clone(), name: session.name.clone(), kind: Some("session".into()) },
+            Caller::User { .. } => BotRef { id: String::new(), name: "You".into(), kind: Some("user".into()) },
         }
     }
 }
@@ -227,9 +220,18 @@ mod tests {
         let (store, dir) = store();
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let make = |kind: &str| {
-            crate::session::create(&store, ws.id.clone(), kind.into(), "S".into(), "claude".into(), "".into(), "".into(), "ask".into())
-                .expect("session")
-                .id
+            crate::session::create(
+                &store,
+                ws.id.clone(),
+                kind.into(),
+                "S".into(),
+                "claude".into(),
+                "".into(),
+                "".into(),
+                "ask".into(),
+            )
+            .expect("session")
+            .id
         };
         let bot = Caller::resolve(&store, &Bearer::Session(make("bot")), None).expect("bot");
         let shell = Caller::resolve(&store, &Bearer::Session(make("terminal")), Some("elsewhere")).expect("terminal");

@@ -122,10 +122,7 @@ async fn decode_addr(client: &mut TcpStream, atyp: u8) -> std::io::Result<Option
             if name != "localhost" {
                 return Ok(None);
             }
-            return Ok(Some(vec![
-                SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
-                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-            ]));
+            return Ok(Some(vec![SocketAddr::from((Ipv6Addr::LOCALHOST, port)), SocketAddr::from((Ipv4Addr::LOCALHOST, port))]));
         }
         _ => return Ok(None),
     };
@@ -201,10 +198,7 @@ mod tests {
         let mut client = TcpStream::connect(addr).await.unwrap();
         greet(&mut client, "secret", "secret").await;
         let port = echo_addr.port().to_be_bytes();
-        client
-            .write_all(&[5, CONNECT, 0, ATYP_V4, 127, 0, 0, 1, port[0], port[1]])
-            .await
-            .unwrap();
+        client.write_all(&[5, CONNECT, 0, ATYP_V4, 127, 0, 0, 1, port[0], port[1]]).await.unwrap();
         let mut reply = [0u8; 10];
         client.read_exact(&mut reply).await.unwrap();
         assert_eq!(reply[1], 0, "connect refused");

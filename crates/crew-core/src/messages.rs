@@ -14,8 +14,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crew_protocol::{
-    BotRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
-    SearchHit, SearchQuery, SearchSort, TurnUsage,
+    AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool, BotRef, SearchHit, SearchQuery, SearchSort,
+    TurnUsage,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -215,16 +215,9 @@ const BLOCK_COLUMNS: &str = "id, role, text, at, extra_json";
 /// Write the blocks of one session, touching only the rows whose fingerprint
 /// moved. `prior` is the caller's cache of the last written fingerprints and is
 /// updated in place; pass an empty vec to force a full write.
-pub fn sync(
-    conn: &Connection,
-    session_id: &str,
-    blocks: &[Block],
-    prior: &mut Vec<u64>,
-) -> rusqlite::Result<()> {
+pub fn sync(conn: &Connection, session_id: &str, blocks: &[Block], prior: &mut Vec<u64>) -> rusqlite::Result<()> {
     let next: Vec<u64> = blocks.iter().map(fingerprint).collect();
-    let changed: Vec<usize> = (0..blocks.len())
-        .filter(|index| prior.get(*index) != next.get(*index))
-        .collect();
+    let changed: Vec<usize> = (0..blocks.len()).filter(|index| prior.get(*index) != next.get(*index)).collect();
     let removed = prior.len() > blocks.len();
     if changed.is_empty() && !removed {
         return Ok(());
@@ -340,11 +333,7 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
         SearchSort::Relevance => "bm25(messages_fts) ASC, m.at DESC",
         SearchSort::Newest => "m.at DESC",
     };
-    sql.push_str(&format!(
-        " ORDER BY {order} LIMIT ?{} OFFSET ?{}",
-        binds.len() - 1,
-        binds.len()
-    ));
+    sql.push_str(&format!(" ORDER BY {order} LIMIT ?{} OFFSET ?{}", binds.len() - 1, binds.len()));
 
     store.with(|conn| {
         let mut stmt = conn.prepare(&sql)?;
@@ -376,8 +365,7 @@ const NONCE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
 pub fn claim_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<bool, String> {
     store.with(|conn| {
-        conn.prepare_cached("DELETE FROM send_nonces WHERE at < ?1")?
-            .execute(params![now_millis() - NONCE_TTL_MS])?;
+        conn.prepare_cached("DELETE FROM send_nonces WHERE at < ?1")?.execute(params![now_millis() - NONCE_TTL_MS])?;
         let rows = conn
             .prepare_cached(
                 "INSERT INTO send_nonces (session_id, nonce, at) VALUES (?1, ?2, ?3)
@@ -393,8 +381,7 @@ pub fn claim_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<bool,
 /// had.
 pub fn release_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<(), String> {
     store.with(|conn| {
-        conn.prepare_cached("DELETE FROM send_nonces WHERE session_id = ?1 AND nonce = ?2")?
-            .execute(params![session_id, nonce])
+        conn.prepare_cached("DELETE FROM send_nonces WHERE session_id = ?1 AND nonce = ?2")?.execute(params![session_id, nonce])
     })?;
     Ok(())
 }
@@ -402,16 +389,14 @@ pub fn release_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<(),
 /// How many blocks a session has on disk. The transcript hub uses it to decide
 /// whether its cache of fingerprints is still aligned with the table.
 pub fn count(conn: &Connection, session_id: &str) -> rusqlite::Result<i64> {
-    conn.prepare_cached("SELECT COUNT(*) FROM messages WHERE session_id = ?1")?
-        .query_row(params![session_id], |row| row.get(0))
+    conn.prepare_cached("SELECT COUNT(*) FROM messages WHERE session_id = ?1")?.query_row(params![session_id], |row| row.get(0))
 }
 
 /// Every block of a session, in order. Nothing in production pages the table —
 /// the hub answers windows from memory — so this is the one way to read it.
 pub fn all(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<Block>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {BLOCK_COLUMNS} FROM messages WHERE session_id = ?1 ORDER BY pos ASC"
-    ))?;
+    let mut stmt =
+        conn.prepare_cached(&format!("SELECT {BLOCK_COLUMNS} FROM messages WHERE session_id = ?1 ORDER BY pos ASC"))?;
     let rows = stmt.query_map(params![session_id], |row| row_to_block(row, 0))?;
     rows.collect()
 }
@@ -482,9 +467,7 @@ mod tests {
     fn session(store: &Store, name: &str) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace =
-            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
-                .expect("workspace");
+        let workspace = crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into()).expect("workspace");
         crate::session::create(
             store,
             workspace.id,
@@ -500,9 +483,7 @@ mod tests {
     }
 
     fn write(store: &Store, session_id: &str, blocks: &[Block]) {
-        store
-            .with(|conn| sync(conn, session_id, blocks, &mut Vec::new()))
-            .expect("sync");
+        store.with(|conn| sync(conn, session_id, blocks, &mut Vec::new())).expect("sync");
     }
 
     fn say(role: BlockRole, text: &str) -> Block {
@@ -541,22 +522,16 @@ mod tests {
         let id = session(&store, "b");
         let mut blocks = vec![say(BlockRole::User, "one"), say(BlockRole::Assistant, "two")];
         let mut prior = Vec::new();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("first");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
         assert_eq!(prior.len(), 2);
 
         // Rewriting the same blocks is a no-op: same fingerprints, no statement.
         let before = prior.clone();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("second");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("second");
         assert_eq!(before, prior);
 
         blocks[1].text = "two and a half".into();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("third");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("third");
         assert_ne!(before[1], prior[1]);
         assert_eq!(before[0], prior[0]);
         let stored = store.with(|conn| all(conn, &id)).expect("read back");
@@ -569,12 +544,8 @@ mod tests {
         let id = session(&store, "c");
         let blocks = vec![say(BlockRole::User, "one"), say(BlockRole::Assistant, "two")];
         let mut prior = Vec::new();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("write");
-        store
-            .with(|conn| sync(conn, &id, &blocks[..1], &mut prior))
-            .expect("shrink");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("write");
+        store.with(|conn| sync(conn, &id, &blocks[..1], &mut prior)).expect("shrink");
         let left = store.with(|conn| count(conn, &id)).expect("count");
         assert_eq!(left, 1);
         let stored = store.with(|conn| all(conn, &id)).expect("read back");
@@ -588,19 +559,9 @@ mod tests {
         write(
             &store,
             &id,
-            &[
-                say(BlockRole::User, "deploy the marketplace branch"),
-                say(BlockRole::Assistant, "nothing to do with it"),
-            ],
+            &[say(BlockRole::User, "deploy the marketplace branch"), say(BlockRole::Assistant, "nothing to do with it")],
         );
-        let hits = search(
-            &store,
-            SearchQuery {
-                query: "marketplace".into(),
-                ..Default::default()
-            },
-        )
-        .expect("search");
+        let hits = search(&store, SearchQuery { query: "marketplace".into(), ..Default::default() }).expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_name, "searchable");
         assert_eq!(hits[0].pos, 1);
@@ -619,27 +580,14 @@ mod tests {
         write(&store, &one, &[old]);
         write(&store, &two, &[new]);
 
-        let by_date = search(
-            &store,
-            SearchQuery {
-                query: "shared".into(),
-                from: Some(5_000),
-                ..Default::default()
-            },
-        )
-        .expect("date");
+        let by_date =
+            search(&store, SearchQuery { query: "shared".into(), from: Some(5_000), ..Default::default() }).expect("date");
         assert_eq!(by_date.len(), 1);
         assert_eq!(by_date[0].session_name, "two");
 
-        let by_session = search(
-            &store,
-            SearchQuery {
-                query: "shared".into(),
-                session_ids: vec![one.clone()],
-                ..Default::default()
-            },
-        )
-        .expect("session");
+        let by_session =
+            search(&store, SearchQuery { query: "shared".into(), session_ids: vec![one.clone()], ..Default::default() })
+                .expect("session");
         assert_eq!(by_session.len(), 1);
         assert_eq!(by_session[0].session_id, one);
     }
@@ -650,25 +598,13 @@ mod tests {
         let id = session(&store, "edited");
         let mut blocks = vec![say(BlockRole::Assistant, "kubernetes")];
         let mut prior = Vec::new();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("write");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("write");
         blocks[0].text = "podman".into();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("update");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("update");
 
-        let stale = search(
-            &store,
-            SearchQuery { query: "kubernetes".into(), ..Default::default() },
-        )
-        .expect("stale");
+        let stale = search(&store, SearchQuery { query: "kubernetes".into(), ..Default::default() }).expect("stale");
         assert!(stale.is_empty(), "the index still holds replaced text");
-        let fresh = search(
-            &store,
-            SearchQuery { query: "podman".into(), ..Default::default() },
-        )
-        .expect("fresh");
+        let fresh = search(&store, SearchQuery { query: "podman".into(), ..Default::default() }).expect("fresh");
         assert_eq!(fresh.len(), 1);
     }
 
@@ -678,10 +614,7 @@ mod tests {
         let id = session(&store, "punct");
         write(&store, &id, &[say(BlockRole::Assistant, "call foo(bar) now")]);
         for query in ["foo(bar", "foo(bar)", "AND foo", "\"quoted"] {
-            let hits = search(
-                &store,
-                SearchQuery { query: query.into(), ..Default::default() },
-            );
+            let hits = search(&store, SearchQuery { query: query.into(), ..Default::default() });
             assert!(hits.is_ok(), "{query} raised {:?}", hits.err());
         }
     }
@@ -691,8 +624,7 @@ mod tests {
         let store = store();
         let id = session(&store, "empty");
         write(&store, &id, &[say(BlockRole::Assistant, "text")]);
-        let hits = search(&store, SearchQuery { query: "!!! ???".into(), ..Default::default() })
-            .expect("search");
+        let hits = search(&store, SearchQuery { query: "!!! ???".into(), ..Default::default() }).expect("search");
         assert!(hits.is_empty());
     }
 
@@ -714,19 +646,11 @@ mod tests {
         recent.at = Some(9_000);
         write(&store, &id, &[strong, recent]);
 
-        let best = search(&store, SearchQuery { query: "deploy".into(), ..Default::default() })
-            .expect("relevance");
+        let best = search(&store, SearchQuery { query: "deploy".into(), ..Default::default() }).expect("relevance");
         assert_eq!(best[0].at, 1_000, "bm25 should favour the denser line");
 
-        let newest = search(
-            &store,
-            SearchQuery {
-                query: "deploy".into(),
-                sort: Some(SearchSort::Newest),
-                ..Default::default()
-            },
-        )
-        .expect("newest");
+        let newest = search(&store, SearchQuery { query: "deploy".into(), sort: Some(SearchSort::Newest), ..Default::default() })
+            .expect("newest");
         assert_eq!(newest[0].at, 9_000);
     }
 
@@ -743,11 +667,8 @@ mod tests {
             })
             .expect("seed");
         claim_nonce(&store, &id, "fresh").expect("claim");
-        let left: i64 = store
-            .with(|conn| {
-                conn.query_row("SELECT COUNT(*) FROM send_nonces", [], |row| row.get(0))
-            })
-            .expect("count");
+        let left: i64 =
+            store.with(|conn| conn.query_row("SELECT COUNT(*) FROM send_nonces", [], |row| row.get(0))).expect("count");
         assert_eq!(left, 1, "the sweep kept a nonce nobody will ever replay");
     }
 
@@ -757,10 +678,7 @@ mod tests {
         let id = session(&store, "refused");
         assert!(claim_nonce(&store, &id, "n1").expect("first"));
         release_nonce(&store, &id, "n1").expect("release");
-        assert!(
-            claim_nonce(&store, &id, "n1").expect("retry"),
-            "the retry of a refused send was treated as a duplicate"
-        );
+        assert!(claim_nonce(&store, &id, "n1").expect("retry"), "the retry of a refused send was treated as a duplicate");
     }
 
     #[test]
@@ -780,8 +698,7 @@ mod tests {
         crate::session::delete(&store, id.clone()).expect("delete");
         let left = store.with(|conn| count(conn, &id)).expect("count");
         assert_eq!(left, 0);
-        let hits = search(&store, SearchQuery { query: "bye".into(), ..Default::default() })
-            .expect("search");
+        let hits = search(&store, SearchQuery { query: "bye".into(), ..Default::default() }).expect("search");
         assert!(hits.is_empty(), "the index outlived the session");
     }
 
@@ -791,9 +708,7 @@ mod tests {
         let id = session(&store, "prints");
         let blocks = vec![say(BlockRole::User, "one"), say(BlockRole::Assistant, "two")];
         let mut prior = Vec::new();
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut prior))
-            .expect("write");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("write");
         let read = store.with(|conn| fingerprints(conn, &id)).expect("read");
         assert_eq!(read, prior, "a fresh hub would rewrite rows that never changed");
     }
@@ -805,10 +720,7 @@ mod review_tests {
     use crate::blocks::new_block;
 
     fn workspace_of(store: &Store, session_id: &str) -> Option<String> {
-        crate::session::get(store, session_id.to_string())
-            .ok()
-            .flatten()
-            .map(|row| row.workspace_id)
+        crate::session::get(store, session_id.to_string()).ok().flatten().map(|row| row.workspace_id)
     }
 
     fn store() -> Store {
@@ -820,9 +732,7 @@ mod review_tests {
     fn session(store: &Store, name: &str) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace =
-            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
-                .expect("workspace");
+        let workspace = crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into()).expect("workspace");
         crate::session::create(
             store,
             workspace.id,
@@ -838,9 +748,7 @@ mod review_tests {
     }
 
     fn write(store: &Store, session_id: &str, blocks: &[Block]) {
-        store
-            .with(|conn| sync(conn, session_id, blocks, &mut Vec::new()))
-            .expect("sync");
+        store.with(|conn| sync(conn, session_id, blocks, &mut Vec::new())).expect("sync");
     }
 
     fn say(role: BlockRole, text: &str) -> Block {
@@ -860,11 +768,7 @@ mod review_tests {
         let fresh = session(&store, "fresh");
         write(&store, &fresh, &[say(BlockRole::Assistant, "podman")]);
 
-        let hits = search(
-            &store,
-            SearchQuery { query: "kubernetes".into(), ..Default::default() },
-        )
-        .expect("search");
+        let hits = search(&store, SearchQuery { query: "kubernetes".into(), ..Default::default() }).expect("search");
         assert!(
             hits.is_empty(),
             "a deleted session's word still matches, and it points at {:?}",
@@ -880,9 +784,7 @@ mod review_tests {
         let doomed = session(&store, "doomed");
         write(&store, &doomed, &[say(BlockRole::Assistant, "kubernetes")]);
         crate::session::delete(&store, doomed).expect("delete");
-        let check = store.with(|conn| {
-            conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')")
-        });
+        let check = store.with(|conn| conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')"));
         assert!(check.is_ok(), "fts5 integrity-check failed: {:?}", check.err());
     }
 
@@ -893,9 +795,7 @@ mod review_tests {
     fn sync_really_writes_only_the_rows_that_moved() {
         let store = store();
         let id = session(&store, "counted");
-        let mut blocks: Vec<Block> = (0..200)
-            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
-            .collect();
+        let mut blocks: Vec<Block> = (0..200).map(|n| say(BlockRole::Assistant, &format!("line {n}"))).collect();
         let mut prior = Vec::new();
         store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
 
@@ -928,9 +828,7 @@ mod review_tests {
     fn the_index_survives_the_upsert_churn() {
         let store = store();
         let id = session(&store, "churn");
-        let mut blocks: Vec<Block> = (0..50)
-            .map(|n| say(BlockRole::Assistant, &format!("word{n}")))
-            .collect();
+        let mut blocks: Vec<Block> = (0..50).map(|n| say(BlockRole::Assistant, &format!("word{n}"))).collect();
         let mut prior = Vec::new();
         for round in 0..10 {
             for (n, block) in blocks.iter_mut().enumerate() {
@@ -940,12 +838,9 @@ mod review_tests {
         }
         blocks.truncate(10);
         store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("shrink");
-        let check = store.with(|conn| {
-            conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')")
-        });
+        let check = store.with(|conn| conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')"));
         assert!(check.is_ok(), "fts5 integrity-check failed: {:?}", check.err());
-        let stale = search(&store, SearchQuery { query: "round3".into(), ..Default::default() })
-            .expect("stale");
+        let stale = search(&store, SearchQuery { query: "round3".into(), ..Default::default() }).expect("stale");
         assert!(stale.is_empty(), "the index still holds text from round 3: {stale:?}");
     }
 
@@ -983,9 +878,7 @@ mod review_tests {
     fn a_block_inserted_anywhere_but_the_end_rewrites_the_whole_transcript() {
         let store = store();
         let id = session(&store, "shift");
-        let mut blocks: Vec<Block> = (1..=200)
-            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
-            .collect();
+        let mut blocks: Vec<Block> = (1..=200).map(|n| say(BlockRole::Assistant, &format!("line {n}"))).collect();
         let mut prior = Vec::new();
         store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
 
@@ -1006,11 +899,7 @@ mod review_tests {
         let mut one = say(BlockRole::Assistant, "same words");
         let mut two = one.clone();
         two.role = BlockRole::System;
-        assert_ne!(
-            fingerprint(&one),
-            fingerprint(&two),
-            "a role change is invisible to the write path"
-        );
+        assert_ne!(fingerprint(&one), fingerprint(&two), "a role change is invisible to the write path");
         one.text.push('!');
         assert_ne!(fingerprint(&one), fingerprint(&two), "sanity");
     }
@@ -1065,9 +954,7 @@ mod plan_tests {
         store
             .with(|conn| {
                 let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-                    row.get::<_, String>(3)
-                })?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| row.get::<_, String>(3))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()
             })
             .expect("plan")
@@ -1080,8 +967,7 @@ mod plan_tests {
         let store = store();
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let ws = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into())
-            .expect("workspace");
+        let ws = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into()).expect("workspace");
         let mut ids = Vec::new();
         for n in 0..8 {
             let id = crate::session::create(
@@ -1103,9 +989,7 @@ mod plan_tests {
                     b
                 })
                 .collect();
-            store
-                .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
-                .expect("sync");
+            store.with(|conn| sync(conn, &id, &blocks, &mut Vec::new())).expect("sync");
             ids.push(id);
         }
         store.with(|conn| conn.execute_batch("ANALYZE")).expect("analyze");
@@ -1123,11 +1007,7 @@ mod plan_tests {
         );
         let newest_sql = search_sql.replace("bm25(messages_fts) ASC, m.at DESC", "m.at DESC");
         println!("--- search (fts + date + {} sessions) ---", ids.len());
-        let mut binds: Vec<rusqlite::types::Value> = vec![
-            "deploy".to_string().into(),
-            0i64.into(),
-            i64::MAX.into(),
-        ];
+        let mut binds: Vec<rusqlite::types::Value> = vec!["deploy".to_string().into(), 0i64.into(), i64::MAX.into()];
         for id in &ids {
             binds.push(id.clone().into());
         }
@@ -1148,11 +1028,7 @@ mod plan_tests {
             println!("  {line}");
         }
         println!("--- last_activity ---");
-        for line in plan(
-            &store,
-            "SELECT MAX(at) FROM messages WHERE session_id = ?1",
-            &[ids[0].clone().into()],
-        ) {
+        for line in plan(&store, "SELECT MAX(at) FROM messages WHERE session_id = ?1", &[ids[0].clone().into()]) {
             println!("  {line}");
         }
         println!("--- fingerprints (hydrate) ---");
@@ -1180,19 +1056,13 @@ mod plan_tests {
         println!("search over 16000 rows: {} hits in {:?}", hits.len(), start.elapsed());
 
         let start = std::time::Instant::now();
-        let hits = search(
-            &store,
-            SearchQuery { query: "word7".into(), session_ids: ids, ..Default::default() },
-        )
-        .expect("search");
+        let hits = search(&store, SearchQuery { query: "word7".into(), session_ids: ids, ..Default::default() }).expect("search");
         println!("narrow search: {} hits in {:?}", hits.len(), start.elapsed());
 
         // The backfill the v10 migration runs at startup, on a database the
         // size of a few months of use.
         let raw = serde_json::to_string(
-            &(0..2000)
-                .map(|i| new_block(BlockRole::Assistant, format!("row {i} deploy word{i}")))
-                .collect::<Vec<_>>(),
+            &(0..2000).map(|i| new_block(BlockRole::Assistant, format!("row {i} deploy word{i}"))).collect::<Vec<_>>(),
         )
         .unwrap();
         store
@@ -1230,9 +1100,7 @@ mod drop_column_review {
     fn session(store: &Store, name: &str) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        let workspace =
-            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
-                .expect("workspace");
+        let workspace = crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into()).expect("workspace");
         crate::session::create(
             store,
             workspace.id,
@@ -1253,13 +1121,8 @@ mod drop_column_review {
         let raw = serde_json::to_string(blocks).expect("json");
         store
             .with(|conn| {
-                conn.execute_batch(
-                    "ALTER TABLE sessions ADD COLUMN blocks_json TEXT NOT NULL DEFAULT '[]';",
-                )?;
-                conn.execute(
-                    "UPDATE sessions SET blocks_json = ?1 WHERE id = ?2",
-                    params![raw, id],
-                )?;
+                conn.execute_batch("ALTER TABLE sessions ADD COLUMN blocks_json TEXT NOT NULL DEFAULT '[]';")?;
+                conn.execute("UPDATE sessions SET blocks_json = ?1 WHERE id = ?2", params![raw, id])?;
                 Ok(())
             })
             .expect("column");
@@ -1280,9 +1143,7 @@ mod drop_column_review {
             new_block(BlockRole::User, "summarise the plan".to_string()),
             new_block(BlockRole::Assistant, "The plan is".to_string()),
         ];
-        store
-            .with(|conn| sync(conn, &id, &rows, &mut Vec::new()))
-            .expect("rows");
+        store.with(|conn| sync(conn, &id, &rows, &mut Vec::new())).expect("rows");
 
         // What `blocks_json` held when the daemon died: same blocks, further on.
         rows[1].text = "The plan is to ship A, then B, then C.".to_string();
@@ -1312,23 +1173,14 @@ mod drop_column_review {
             let id = session(&store, "half");
             store
                 .with(|conn| {
-                    sync(
-                        conn,
-                        &id,
-                        &[new_block(BlockRole::User, "keep me".to_string())],
-                        &mut Vec::new(),
-                    )?;
+                    sync(conn, &id, &[new_block(BlockRole::User, "keep me".to_string())], &mut Vec::new())?;
                     // The DROP landed; the process died before the version row.
                     conn.execute("DELETE FROM schema_migrations WHERE version = 13", [])
                 })
                 .expect("interrupt");
         }
         let again = Store::open(path);
-        assert!(
-            again.is_ok(),
-            "the database can never be opened again: {}",
-            again.err().unwrap_or_default()
-        );
+        assert!(again.is_ok(), "the database can never be opened again: {}", again.err().unwrap_or_default());
     }
 
     /// A search hit is now an instruction to scroll: `focus()` maps `pos` to a
@@ -1349,23 +1201,11 @@ mod drop_column_review {
             new_block(BlockRole::Reasoning, "the sidebar grouping is memoised".to_string()),
             new_block(BlockRole::Tool, "grep sidebar".to_string()),
         ];
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
-            .expect("rows");
+        store.with(|conn| sync(conn, &id, &blocks, &mut Vec::new())).expect("rows");
 
-        let hits = search(
-            &store,
-            SearchQuery {
-                query: "sidebar".into(),
-                ..Default::default()
-            },
-        )
-        .expect("search");
+        let hits = search(&store, SearchQuery { query: "sidebar".into(), ..Default::default() }).expect("search");
         let roles: Vec<String> = hits.iter().map(|hit| format!("{:?}", hit.role)).collect();
-        assert!(
-            !roles.contains(&"User".to_string()),
-            "search offered a hidden block, which the chat does not render: {roles:?}"
-        );
+        assert!(!roles.contains(&"User".to_string()), "search offered a hidden block, which the chat does not render: {roles:?}");
         // The other two are reachable: a tool row and a thought both carry a
         // `data-block` anchor, and finding the command you ran is the point.
         assert_eq!(hits.len(), 2, "{roles:?}");
@@ -1383,9 +1223,7 @@ mod drop_column_review {
             new_block(BlockRole::Assistant, "two".to_string()),
             new_block(BlockRole::Assistant, "three".to_string()),
         ];
-        store
-            .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
-            .expect("rows");
+        store.with(|conn| sync(conn, &id, &blocks, &mut Vec::new())).expect("rows");
         with_column(&store, &id, &blocks[..1]);
 
         store.with(backfill_missing).expect("backfill");

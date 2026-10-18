@@ -126,12 +126,7 @@ impl LogStore {
         }
         let last = state.segments.last_mut().expect("a segment was just ensured");
         if state.file.is_none() {
-            state.file = Some(
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(segment_path(&self.dir, last.start))?,
-            );
+            state.file = Some(OpenOptions::new().create(true).append(true).open(segment_path(&self.dir, last.start))?);
         }
         // Counted even if the disk refuses it: the cursor is the bytes the
         // process wrote, and a hole reads back short rather than shifting
@@ -164,11 +159,7 @@ impl LogStore {
             if left.is_zero() {
                 return;
             }
-            state = self
-                .changed
-                .wait_timeout(state, left.min(Duration::from_secs(1)))
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
+            state = self.changed.wait_timeout(state, left.min(Duration::from_secs(1))).unwrap_or_else(|e| e.into_inner()).0;
         }
     }
 
@@ -265,10 +256,8 @@ mod tests {
     }
 
     fn files(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
+        let mut names: Vec<String> =
+            fs::read_dir(dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
         names.sort();
         names
     }
@@ -321,10 +310,7 @@ mod tests {
             true
         });
         assert_eq!(end, 8);
-        assert_eq!(
-            seen,
-            vec![(0, "one".into(), true), (4, "two".into(), true), (8, "thr".into(), false)]
-        );
+        assert_eq!(seen, vec![(0, "one".into(), true), (4, "two".into(), true), (8, "thr".into(), false)]);
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -189,9 +189,7 @@ pub fn image_dir() -> PathBuf {
 /// Decoded into `dir` under `stem` with the extension its type says.
 pub fn save_image(dir: &Path, block: &Value, stem: &str) -> Result<PathBuf, String> {
     let data = block.get("data").and_then(Value::as_str).ok_or("no data")?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.trim())
-        .map_err(|e| format!("bad base64: {e}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| format!("bad base64: {e}"))?;
     let mime = block.get("mimeType").and_then(Value::as_str).unwrap_or("");
     let extension = match mime {
         "image/png" => "png",
@@ -209,10 +207,8 @@ pub fn save_image(dir: &Path, block: &Value, stem: &str) -> Result<PathBuf, Stri
 
 /// A name no other call's images share: the tool, then the time.
 pub fn image_stem(tool: &str) -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or(0);
+    let millis =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis()).unwrap_or(0);
     let tool: String = tool.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' }).collect();
     format!("{tool}-{millis}-{}", std::process::id())
 }
@@ -231,10 +227,7 @@ mod tests {
                 vec!["database".into(), "-".into(), "".into()],
             ],
         };
-        assert_eq!(
-            table.render(false),
-            "NAME      STATE    COMMAND\nweb       running  npm run dev\ndatabase  -"
-        );
+        assert_eq!(table.render(false), "NAME      STATE    COMMAND\nweb       running  npm run dev\ndatabase  -");
         assert!(table.render(true).starts_with("\x1b[1mNAME"));
     }
 

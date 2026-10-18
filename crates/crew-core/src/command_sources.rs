@@ -174,13 +174,8 @@ fn skill_files(root: &Path) -> Vec<PathBuf> {
 }
 
 fn sorted_dirs(folder: &Path) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(folder)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
+    let mut dirs: Vec<PathBuf> =
+        fs::read_dir(folder).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
     dirs.sort();
     dirs
 }
@@ -208,9 +203,9 @@ fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         return None;
     }
     let block: Vec<&str> = lines.take_while(|line| line.trim_end() != "---").collect();
-    let index = block.iter().position(|line| {
-        !line.starts_with([' ', '\t']) && line.split_once(':').is_some_and(|(name, _)| name.trim() == key)
-    })?;
+    let index = block
+        .iter()
+        .position(|line| !line.starts_with([' ', '\t']) && line.split_once(':').is_some_and(|(name, _)| name.trim() == key))?;
     let rest = block[index].split_once(':')?.1.trim();
     let value = if rest.is_empty() || rest.starts_with(['>', '|']) {
         block[index + 1..]
@@ -443,10 +438,17 @@ mod tests {
         fn new() -> Self {
             let dir = std::env::temp_dir().join(format!("crew-plugins-{}", uuid::Uuid::new_v4()));
             let cache = Cache(dir);
-            cache.write("cursor-public/101/aaa/skills/search/SKILL.md", "---\nname: search\ndescription: \"Search the workspace.\"\n---\n\nFind things.\n");
-            cache.write("cursor-public/101/aaa/skills/v1/search/SKILL.md", "---\nname: search\ndescription: An old version.\n---\nOld.\n");
+            cache.write(
+                "cursor-public/101/aaa/skills/search/SKILL.md",
+                "---\nname: search\ndescription: \"Search the workspace.\"\n---\n\nFind things.\n",
+            );
+            cache.write(
+                "cursor-public/101/aaa/skills/v1/search/SKILL.md",
+                "---\nname: search\ndescription: An old version.\n---\nOld.\n",
+            );
             cache.write("cursor-public/101/aaa.installed", "");
-            cache.write("cursor-public/notes/bbb/skills/ghost/SKILL.md", "---\nname: ghost\ndescription: Unfinished.\n---\nNo.\n");
+            cache
+                .write("cursor-public/notes/bbb/skills/ghost/SKILL.md", "---\nname: ghost\ndescription: Unfinished.\n---\nNo.\n");
             cache.write("cursor-public/202/ccc/skills/hidden/SKILL.md", "---\nname: hidden\ndescription: Off.\n---\nNo.\n");
             cache.write("cursor-public/202/ccc.installed", "");
             cache.write("cursor-public/303/ddd.installed", "");
@@ -565,6 +567,9 @@ mod tests {
             with_skill_bodies(" look up crew ", &skills),
             "The user invoked the skill `search`. Follow its instructions:\n\nFind things.\n\n---\n\nlook up crew"
         );
-        assert_eq!(with_skill_bodies("  ", &skills), "The user invoked the skill `search`. Follow its instructions:\n\nFind things.");
+        assert_eq!(
+            with_skill_bodies("  ", &skills),
+            "The user invoked the skill `search`. Follow its instructions:\n\nFind things."
+        );
     }
 }

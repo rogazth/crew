@@ -133,23 +133,14 @@ impl BrowserRelay {
                 host.hello = hello;
                 host.registered = order;
             }
-            None => hosts.push(Host {
-                client,
-                hello,
-                registered: order,
-                focused: 0,
-                pages: Vec::new(),
-            }),
+            None => hosts.push(Host { client, hello, registered: order, focused: 0, pages: Vec::new() }),
         }
     }
 
     /// The pages `client` shows for this machine's workspaces, all of them.
     pub fn set_pages(&self, client: u64, pages: Vec<OpenPage>) -> Result<(), String> {
         let mut hosts = self.hosts();
-        let host = hosts
-            .iter_mut()
-            .find(|host| host.client == client)
-            .ok_or("Register as the browser host first")?;
+        let host = hosts.iter_mut().find(|host| host.client == client).ok_or("Register as the browser host first")?;
         let mut gone = self.gone();
         for page in &pages {
             gone.remove(&page.page_id);
@@ -222,10 +213,7 @@ impl BrowserRelay {
     /// The Mac a tab was on, when that Mac went away recently.
     pub fn gone_with(&self, tab: &str) -> Option<String> {
         let now = crate::store::now_millis();
-        self.gone()
-            .get(tab)
-            .filter(|(_, at)| now - *at < GONE_MS)
-            .map(|(name, _)| name.clone())
+        self.gone().get(tab).filter(|(_, at)| now - *at < GONE_MS).map(|(name, _)| name.clone())
     }
 
     /// Runs `tool` on `tab` in `host` (the default host when `None`) and
@@ -288,10 +276,7 @@ impl BrowserRelay {
                 Ok(Reply::Ack) => acked = true,
                 Ok(Reply::Done(outcome)) => break outcome,
                 Err(mpsc::RecvTimeoutError::Timeout) if !acked && Instant::now() < deadline => {
-                    break Err(format!(
-                        "{} did not answer (asleep or offline?). Try again once it is back.",
-                        self.label(&hello)
-                    ));
+                    break Err(format!("{} did not answer (asleep or offline?). Try again once it is back.", self.label(&hello)));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     break Err(format!("The browser did not answer {tool} within {} s.", timeout.as_secs()));
@@ -407,9 +392,7 @@ mod tests {
             assert!(host.resolve(3, call_id, Ok(json!("forged"))).is_err());
             host.resolve(7, call_id, Ok(json!([{ "type": "text", "text": "ok" }]))).unwrap();
         });
-        let out = relay
-            .call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(5))
-            .expect("answered");
+        let out = relay.call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(5)).expect("answered");
         assert_eq!(out[0]["text"], "ok");
         answering.join().unwrap();
     }
@@ -418,9 +401,8 @@ mod tests {
     fn a_host_that_never_answers_times_out() {
         let (relay, _events) = relay();
         relay.register_host(7, Hello::default());
-        let error = relay
-            .call(None, "browser:1", "browser_click", json!({}), None, Duration::from_millis(50))
-            .expect_err("no answer");
+        let error =
+            relay.call(None, "browser:1", "browser_click", json!({}), None, Duration::from_millis(50)).expect_err("no answer");
         assert!(error.contains("did not answer browser_click"), "{error}");
         // A late answer is dropped quietly.
         assert!(relay.resolve(7, 1, Ok(json!(null))).is_ok());
@@ -436,9 +418,8 @@ mod tests {
             host.client_gone(7);
         });
         let started = std::time::Instant::now();
-        let error = relay
-            .call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(10))
-            .expect_err("gone");
+        let error =
+            relay.call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(10)).expect_err("gone");
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(error.contains("went away"), "{error}");
         dropping.join().unwrap();
@@ -478,7 +459,8 @@ mod tests {
         let on = |host| relay.call(Some(host), "browser:x", "browser_snapshot", json!({}), None, Duration::from_secs(5));
         assert_eq!(on(7), Ok(json!(7)));
         assert_eq!(on(9), Ok(json!(9)));
-        let hosted: Vec<(String, u64)> = relay.hosted_pages().into_iter().map(|hosted| (hosted.page.page_id, hosted.host)).collect();
+        let hosted: Vec<(String, u64)> =
+            relay.hosted_pages().into_iter().map(|hosted| (hosted.page.page_id, hosted.host)).collect();
         assert_eq!(hosted, [("browser:a".to_string(), 7), ("browser:b".to_string(), 9)]);
         // A new tab opens where the user was last, else on the newest host.
         assert_eq!(relay.default_host(), Some(9));
@@ -502,9 +484,8 @@ mod tests {
         relay.set_ack_timeout(Duration::from_millis(100));
         relay.register_host(7, Hello { name: "Ada's Mac".into(), acks: true });
         let started = Instant::now();
-        let error = relay
-            .call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(10))
-            .expect_err("asleep");
+        let error =
+            relay.call(None, "browser:1", "browser_snapshot", json!({}), None, Duration::from_secs(10)).expect_err("asleep");
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(error.contains("Ada's Mac did not answer (asleep or offline?)"), "{error}");
     }

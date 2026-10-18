@@ -48,9 +48,7 @@ impl McpHost {
     /// not said anything (or never does, as Cursor) is not `reported`.
     pub fn list(&self, session_id: &str) -> McpStatus {
         let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        map.get(session_id)
-            .and_then(|held| held.status.clone())
-            .unwrap_or(McpStatus { servers: Vec::new(), reported: false })
+        map.get(session_id).and_then(|held| held.status.clone()).unwrap_or(McpStatus { servers: Vec::new(), reported: false })
     }
 
     /// Keeps the whole list the provider just gave, and tells the windows if it

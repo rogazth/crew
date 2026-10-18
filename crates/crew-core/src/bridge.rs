@@ -198,9 +198,7 @@ impl Bridge {
     pub fn mint(&self, session_id: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         let mut tokens = self.tokens();
-        tokens.retain(|_, grant| {
-            !(grant.lease == Lease::Turn && grant.bearer == Bearer::Session(session_id.to_string()))
-        });
+        tokens.retain(|_, grant| !(grant.lease == Lease::Turn && grant.bearer == Bearer::Session(session_id.to_string())));
         tokens.insert(token.clone(), Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Turn });
         token
     }
@@ -319,10 +317,7 @@ impl OpencodeHost {
         if let Some(old) = run.bound.remove(opencode_id) {
             tokens.remove(&old.token);
         }
-        tokens.insert(
-            token.clone(),
-            Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Bound },
-        );
+        tokens.insert(token.clone(), Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Bound });
         run.bound.insert(opencode_id.to_string(), Binding { session_id: session_id.to_string(), token: token.clone() });
         Ok(token)
     }
@@ -372,12 +367,7 @@ fn serve(bridge: Bridge, stream: UnixStream) {
     let Some(bearer) = bridge.whose(&request.token) else {
         return reply(stream, json!({ "error": "Bad token" }));
     };
-    let handler = bridge
-        .shared
-        .handler
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let handler = bridge.shared.handler.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(handler) = handler else {
         return reply(stream, json!({ "error": "Tool handler is not set" }));
     };
@@ -725,11 +715,7 @@ mod tests {
     }
 
     fn said(reply: &Value) -> String {
-        reply["error"]
-            .as_str()
-            .or_else(|| reply["result"]["content"][0]["text"].as_str())
-            .unwrap_or_default()
-            .to_string()
+        reply["error"].as_str().or_else(|| reply["result"]["content"][0]["text"].as_str()).unwrap_or_default().to_string()
     }
 
     #[test]
@@ -755,12 +741,8 @@ mod tests {
         let rig = rig();
         let run = rig.bridge.opencode().start_run();
         let reply = rig.ask(&run.host_token, "tools/list", json!({}), None);
-        let listed: Vec<&str> = reply["result"]["tools"]
-            .as_array()
-            .expect("tools")
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
+        let listed: Vec<&str> =
+            reply["result"]["tools"].as_array().expect("tools").iter().filter_map(|tool| tool["name"].as_str()).collect();
         // A parent's tool and a bot's own are both in it.
         for name in ["start_session", "update_description", "who_am_i", "send_message"] {
             assert!(listed.contains(&name), "{name} missing from {listed:?}");

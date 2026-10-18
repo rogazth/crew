@@ -32,9 +32,7 @@ impl Head {
 /// answered (or the connection was not worth one).
 pub async fn accept(mut stream: TcpStream, token: &str) -> Option<WebSocketStream<TcpStream>> {
     let (head, rest) = tokio::time::timeout(HEAD_WAIT, read_head(&mut stream)).await.ok()??;
-    let upgrade = head
-        .header("upgrade")
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    let upgrade = head.header("upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
     if upgrade {
         let Some(key) = head.header("sec-websocket-key") else {
             let _ = respond(&mut stream, 400, "Bad Request", &[], b"Missing Sec-WebSocket-Key").await;
@@ -253,11 +251,7 @@ fn percent_decode(text: &str) -> Option<String> {
 }
 
 fn content_type(path: &Path) -> &'static str {
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+    let extension = path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     match extension.as_str() {
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",

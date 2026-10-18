@@ -102,10 +102,7 @@ pub fn normalize(url: &str) -> Option<Normalized> {
         "" => "/",
         path => path,
     };
-    let port = port
-        .filter(|&port| port != default_port)
-        .map(|port| format!(":{port}"))
-        .unwrap_or_default();
+    let port = port.filter(|&port| port != default_port).map(|port| format!(":{port}")).unwrap_or_default();
     let bare = host.strip_prefix("www.").filter(|rest| !rest.is_empty()).unwrap_or(&host);
     Some(Normalized {
         key: format!("{scheme}://{host}{port}{path}{query}"),
@@ -148,13 +145,7 @@ fn split_host_port(hostport: &str) -> Option<(&str, Option<u16>)> {
 
 /// Count a visit. A title that is still empty keeps the one the row had: a
 /// page commits before it sets its title.
-pub fn visit(
-    store: &Store,
-    url: &str,
-    title: &str,
-    workspace_id: Option<&str>,
-    now: i64,
-) -> Result<(), String> {
+pub fn visit(store: &Store, url: &str, title: &str, workspace_id: Option<&str>, now: i64) -> Result<(), String> {
     let Some(normal) = normalize(url) else {
         return Ok(());
     };
@@ -189,8 +180,7 @@ pub fn set_title(store: &Store, url: &str, title: &str) -> Result<(), String> {
         return Ok(());
     };
     store.with(|conn| {
-        conn.prepare_cached("UPDATE browser_history SET title = ?2 WHERE url_key = ?1")?
-            .execute(params![normal.key, title])
+        conn.prepare_cached("UPDATE browser_history SET title = ?2 WHERE url_key = ?1")?.execute(params![normal.key, title])
     })?;
     Ok(())
 }
@@ -204,8 +194,7 @@ pub fn prune(store: &Store, now: i64) -> Result<(), String> {
 }
 
 fn prune_in(conn: &Connection, now: i64) -> rusqlite::Result<()> {
-    conn.prepare_cached("DELETE FROM browser_history WHERE last_visited_at < ?1")?
-        .execute(params![now - HISTORY_MAX_AGE_MS])?;
+    conn.prepare_cached("DELETE FROM browser_history WHERE last_visited_at < ?1")?.execute(params![now - HISTORY_MAX_AGE_MS])?;
     conn.prepare_cached(
         "DELETE FROM browser_history WHERE url_key IN (
            SELECT url_key FROM browser_history
@@ -238,9 +227,8 @@ pub fn suggest(store: &Store, text: &str, limit: u32, now: i64) -> Result<Vec<Hi
     let text = text.trim().to_lowercase();
     if text.is_empty() {
         return store.with(|conn| {
-            let mut stmt = conn.prepare_cached(&format!(
-                "SELECT {COLUMNS} FROM browser_history ORDER BY last_visited_at DESC LIMIT ?1"
-            ))?;
+            let mut stmt =
+                conn.prepare_cached(&format!("SELECT {COLUMNS} FROM browser_history ORDER BY last_visited_at DESC LIMIT ?1"))?;
             let rows = stmt.query_map(params![limit], row_to_entry)?;
             rows.collect()
         });
@@ -276,22 +264,14 @@ pub fn suggest(store: &Store, text: &str, limit: u32, now: i64) -> Result<Vec<Hi
                LIMIT ?7"#
         ))?;
         let recency = [4, 14, 31, 90].map(|days| now - days * DAY_MS);
-        let rows = stmt.query_map(
-            params![host, within, recency[0], recency[1], recency[2], recency[3], limit],
-            row_to_entry,
-        )?;
+        let rows = stmt.query_map(params![host, within, recency[0], recency[1], recency[2], recency[3], limit], row_to_entry)?;
         rows.collect()
     })
 }
 
 /// The History page: newest first, a page at a time. `before` is the
 /// `last_visited_at` of the last row already shown.
-pub fn list(
-    store: &Store,
-    text: Option<&str>,
-    before: Option<i64>,
-    limit: u32,
-) -> Result<Vec<HistoryEntry>, String> {
+pub fn list(store: &Store, text: Option<&str>, before: Option<i64>, limit: u32) -> Result<Vec<HistoryEntry>, String> {
     let limit = limit.min(LIST_MAX);
     let within = text
         .map(|text| text.trim().to_lowercase())
@@ -314,19 +294,14 @@ pub fn list(
 }
 
 pub fn delete(store: &Store, url_key: &str) -> Result<(), String> {
-    store.with(|conn| {
-        conn.prepare_cached("DELETE FROM browser_history WHERE url_key = ?1")?
-            .execute(params![url_key])
-    })?;
+    store.with(|conn| conn.prepare_cached("DELETE FROM browser_history WHERE url_key = ?1")?.execute(params![url_key]))?;
     Ok(())
 }
 
 /// `since` clears from that moment on ("the last hour"); `None` clears it all.
 pub fn clear(store: &Store, since: Option<i64>) -> Result<(), String> {
     store.with(|conn| match since {
-        Some(since) => conn
-            .prepare_cached("DELETE FROM browser_history WHERE last_visited_at >= ?1")?
-            .execute(params![since]),
+        Some(since) => conn.prepare_cached("DELETE FROM browser_history WHERE last_visited_at >= ?1")?.execute(params![since]),
         None => conn.prepare_cached("DELETE FROM browser_history")?.execute([]),
     })?;
     Ok(())
@@ -345,18 +320,9 @@ fn escape_like(text: &str) -> String {
     out
 }
 
-pub fn page_save(
-    store: &Store,
-    page_id: &str,
-    entries_json: &str,
-    active_index: i64,
-    now: i64,
-) -> Result<(), String> {
+pub fn page_save(store: &Store, page_id: &str, entries_json: &str, active_index: i64, now: i64) -> Result<(), String> {
     if entries_json.len() > PAGE_MAX_BYTES {
-        return Err(format!(
-            "Page history is {} bytes; the limit is {PAGE_MAX_BYTES}",
-            entries_json.len()
-        ));
+        return Err(format!("Page history is {} bytes; the limit is {PAGE_MAX_BYTES}", entries_json.len()));
     }
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
@@ -370,34 +336,28 @@ pub fn page_save(
         )?
         .execute(params![page_id, entries_json, active_index, now])?;
         // Riding on the save keeps the table bounded without a timer of its own.
-        tx.prepare_cached("DELETE FROM browser_pages WHERE updated_at < ?1")?
-            .execute(params![now - PAGE_MAX_AGE_MS])?;
+        tx.prepare_cached("DELETE FROM browser_pages WHERE updated_at < ?1")?.execute(params![now - PAGE_MAX_AGE_MS])?;
         tx.commit()
     })
 }
 
 pub fn page_get(store: &Store, page_id: &str) -> Result<Option<PageSnapshot>, String> {
     store.with(|conn| {
-        conn.prepare_cached(
-            "SELECT page_id, entries_json, active_index, updated_at FROM browser_pages WHERE page_id = ?1",
-        )?
-        .query_row(params![page_id], |row| {
-            Ok(PageSnapshot {
-                page_id: row.get(0)?,
-                entries_json: row.get(1)?,
-                active_index: row.get(2)?,
-                updated_at: row.get(3)?,
+        conn.prepare_cached("SELECT page_id, entries_json, active_index, updated_at FROM browser_pages WHERE page_id = ?1")?
+            .query_row(params![page_id], |row| {
+                Ok(PageSnapshot {
+                    page_id: row.get(0)?,
+                    entries_json: row.get(1)?,
+                    active_index: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
             })
-        })
-        .optional()
+            .optional()
     })
 }
 
 pub fn page_delete(store: &Store, page_id: &str) -> Result<(), String> {
-    store.with(|conn| {
-        conn.prepare_cached("DELETE FROM browser_pages WHERE page_id = ?1")?
-            .execute(params![page_id])
-    })?;
+    store.with(|conn| conn.prepare_cached("DELETE FROM browser_pages WHERE page_id = ?1")?.execute(params![page_id]))?;
     Ok(())
 }
 
@@ -462,10 +422,7 @@ pub fn find_page(store: &Store, page_id: &str) -> Result<Option<OpenPage>, Strin
 
 /// A workspace's browser tabs, its worktrees' strips included.
 pub fn workspace_pages(store: &Store, workspace_id: &str) -> Result<Vec<OpenPage>, String> {
-    Ok(open_pages(store)?
-        .into_iter()
-        .filter(|page| page.workspace_id == workspace_id)
-        .collect())
+    Ok(open_pages(store)?.into_iter().filter(|page| page.workspace_id == workspace_id).collect())
 }
 
 #[cfg(test)]
@@ -511,20 +468,14 @@ mod tests {
         let key = normalize(url).expect("an http url").key;
         store
             .with(|conn| {
-                conn.query_row(
-                    &format!("SELECT {COLUMNS} FROM browser_history WHERE url_key = ?1"),
-                    params![key],
-                    row_to_entry,
-                )
-                .optional()
+                conn.query_row(&format!("SELECT {COLUMNS} FROM browser_history WHERE url_key = ?1"), params![key], row_to_entry)
+                    .optional()
             })
             .expect("row")
     }
 
     fn count(store: &Store) -> i64 {
-        store
-            .with(|conn| conn.query_row("SELECT COUNT(*) FROM browser_history", [], |row| row.get(0)))
-            .expect("count")
+        store.with(|conn| conn.query_row("SELECT COUNT(*) FROM browser_history", [], |row| row.get(0))).expect("count")
     }
 
     fn keys(entries: &[HistoryEntry]) -> Vec<&str> {
@@ -698,10 +649,7 @@ mod tests {
             ],
         );
         let found = suggest(&store, "Git", 10, NOW).expect("suggest");
-        assert_eq!(
-            keys(&found),
-            ["https://github.com", "https://www.digit.com", "https://a.com", "https://b.com/?q=git"]
-        );
+        assert_eq!(keys(&found), ["https://github.com", "https://www.digit.com", "https://a.com", "https://b.com/?q=git"]);
         let typed = suggest(&store, "  HTTPS://www.GitH ", 10, NOW).expect("suggest");
         assert_eq!(keys(&typed).first(), Some(&"https://github.com"));
         // Nothing left for the host: every row is a URL match, by frecency.
@@ -730,14 +678,7 @@ mod tests {
         let found = suggest(&store, "a", 10, NOW).expect("suggest");
         assert_eq!(
             keys(&found),
-            [
-                "https://a3.com",
-                "https://a4.com",
-                "https://a2.com",
-                "https://a5.com",
-                "https://a6.com",
-                "https://a1.com"
-            ]
+            ["https://a3.com", "https://a4.com", "https://a2.com", "https://a5.com", "https://a6.com", "https://a1.com"]
         );
     }
 
@@ -851,8 +792,7 @@ mod tests {
     fn prune_keeps_only_the_newest_rows_over_the_cap() {
         let store = store();
         let extra = 5;
-        let urls: Vec<String> =
-            (0..HISTORY_MAX_ROWS + extra).map(|n| format!("https://h{n}.com/")).collect();
+        let urls: Vec<String> = (0..HISTORY_MAX_ROWS + extra).map(|n| format!("https://h{n}.com/")).collect();
         let rows: Vec<(&str, &str, i64, i64)> =
             urls.iter().enumerate().map(|(n, url)| (url.as_str(), "", 1, NOW - DAY_MS + n as i64)).collect();
         seed(&store, &rows);
@@ -869,8 +809,7 @@ mod tests {
         let store = store();
         assert_eq!(page_get(&store, "browser:1").expect("get"), None);
         page_save(&store, "browser:1", r#"[{"url":"https://a.com"}]"#, 0, NOW - 10).expect("save");
-        page_save(&store, "browser:1", r#"[{"url":"https://a.com"},{"url":"https://b.com"}]"#, 1, NOW)
-            .expect("save");
+        page_save(&store, "browser:1", r#"[{"url":"https://a.com"},{"url":"https://b.com"}]"#, 1, NOW).expect("save");
         let snapshot = page_get(&store, "browser:1").expect("get").expect("snapshot");
         assert_eq!(
             snapshot,
@@ -917,10 +856,7 @@ mod tests {
 
     fn has_table(store: &Store, name: &str) -> bool {
         store
-            .with(|conn| {
-                conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
-                    .exists(params![name])
-            })
+            .with(|conn| conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?.exists(params![name]))
             .expect("table")
     }
 
@@ -967,10 +903,7 @@ mod tests {
     #[test]
     fn a_step_applied_but_not_recorded_runs_again() {
         let path = database_at_v14();
-        rusqlite::Connection::open(&path)
-            .expect("open")
-            .execute_batch(MIGRATION_V15)
-            .expect("ddl without its version row");
+        rusqlite::Connection::open(&path).expect("open").execute_batch(MIGRATION_V15).expect("ddl without its version row");
         let store = Store::open(path).expect("reopen");
         assert!(has_table(&store, "browser_history"));
         assert!(has_table(&store, "browser_pages"));
@@ -1004,8 +937,8 @@ mod tests {
     fn browser_suggest_stays_fast_on_a_full_history() {
         let store = store();
         let words = [
-            "rust", "react", "sqlite", "async", "tokio", "hooks", "review", "deploy", "issue", "docs", "parser",
-            "layout", "cache", "stream", "router", "schema", "tabs", "terminal", "webview", "history",
+            "rust", "react", "sqlite", "async", "tokio", "hooks", "review", "deploy", "issue", "docs", "parser", "layout",
+            "cache", "stream", "router", "schema", "tabs", "terminal", "webview", "history",
         ];
         // A small LCG: varied rows, the same ones on every run.
         let mut state: u64 = 42;
@@ -1052,10 +985,46 @@ mod tests {
 
         // Typing, a keystroke at a time, plus words, digits, misses and wildcards.
         let texts = [
-            "g", "gi", "git", "github", "github.com/crew", "d", "do", "docs.rs", "s", "st", "stack", "y", "you",
-            "youtube", "l", "local", "localhost:5173", "w", "wiki", "n", "news", "https://www.goo", "www.", "http://",
-            "rust", "react hooks", "tokio", "sqlite cache", "webview", "pull request", "show hn", "12345", "zzzz",
-            "q", "_", "100%", "e", "o", "a", "h",
+            "g",
+            "gi",
+            "git",
+            "github",
+            "github.com/crew",
+            "d",
+            "do",
+            "docs.rs",
+            "s",
+            "st",
+            "stack",
+            "y",
+            "you",
+            "youtube",
+            "l",
+            "local",
+            "localhost:5173",
+            "w",
+            "wiki",
+            "n",
+            "news",
+            "https://www.goo",
+            "www.",
+            "http://",
+            "rust",
+            "react hooks",
+            "tokio",
+            "sqlite cache",
+            "webview",
+            "pull request",
+            "show hn",
+            "12345",
+            "zzzz",
+            "q",
+            "_",
+            "100%",
+            "e",
+            "o",
+            "a",
+            "h",
         ];
         let mut times = Vec::new();
         for round in 0..200 {
@@ -1103,8 +1072,7 @@ mod tests {
         let found = find_page(&store, "browser:b").expect("find").expect("a page");
         assert_eq!(found.workspace_id, "w1");
         assert_eq!(found.context, "w1@/tmp/feat");
-        let mut ids: Vec<String> =
-            workspace_pages(&store, "w1").expect("pages").into_iter().map(|page| page.page_id).collect();
+        let mut ids: Vec<String> = workspace_pages(&store, "w1").expect("pages").into_iter().map(|page| page.page_id).collect();
         ids.sort();
         assert_eq!(ids, ["browser:a", "browser:b"]);
         assert!(find_page(&store, "session:s").expect("find").is_none());

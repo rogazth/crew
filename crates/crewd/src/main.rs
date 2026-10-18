@@ -188,8 +188,7 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     let tries = match failure {
         Failure::Permanent(_) => TRANSIENT_TRIES,
         Failure::Transient(_) => {
-            let before: u32 =
-                std::fs::read_to_string(&failed_starts).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+            let before: u32 = std::fs::read_to_string(&failed_starts).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
             let _ = std::fs::write(&failed_starts, (before + 1).to_string());
             before + 1
         }
@@ -242,10 +241,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
     };
     let _ = std::fs::remove_file(dir.join(FAILED_STARTS));
 
-    let info = DaemonInfo {
-        url: handle.url().to_string(),
-        token: handle.token().to_string(),
-    };
+    let info = DaemonInfo { url: handle.url().to_string(), token: handle.token().to_string() };
     // Asked to stop while it was starting: nobody is told it is up.
     let early = stopped.try_recv().is_ok();
     if !early {
@@ -301,11 +297,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
 }
 
 /// Everything after the bridge: the hosts, the database, the WebSocket.
-fn start(
-    dir: &Path,
-    bridge: &Bridge,
-    listen: Listen,
-) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
+fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
     crew_core::shell_path::prewarm();
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
@@ -329,13 +321,7 @@ fn start(
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
     let handle = serve_on(
-        Config {
-            pty: pty.clone(),
-            store,
-            processes: processes.clone(),
-            agents: agents.clone(),
-            bridge: bridge.clone(),
-        },
+        Config { pty: pty.clone(), store, processes: processes.clone(), agents: agents.clone(), bridge: bridge.clone() },
         listen,
     )
     .map_err(Failure::Transient)?;
@@ -415,10 +401,7 @@ fn tidy_log(path: &Path, cap: u64, keep: u64) {
 /// returns; the thread it leaves behind only waits for one to arrive.
 fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
     use tokio::signal::unix::{signal, SignalKind};
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("signals: {e}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("signals: {e}"))?;
     let (mut term, mut int, mut hup) = {
         let _entered = runtime.enter();
         let listen = |kind| signal(kind).map_err(|e| format!("signals: {e}"));
@@ -464,12 +447,7 @@ fn owner_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
 }
 
-fn wait_for_exit(
-    stop: mpsc::Sender<()>,
-    stopped: mpsc::Receiver<()>,
-    watch_stdin: bool,
-    requests: Option<mpsc::Receiver<()>>,
-) {
+fn wait_for_exit(stop: mpsc::Sender<()>, stopped: mpsc::Receiver<()>, watch_stdin: bool, requests: Option<mpsc::Receiver<()>>) {
     if watch_stdin {
         thread::Builder::new()
             .name("crewd-stdin".into())

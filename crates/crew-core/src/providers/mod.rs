@@ -19,11 +19,7 @@ pub fn as_record_owned(value: &Value) -> Option<Map<String, Value>> {
 }
 
 pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<String> {
-    rec.and_then(|map| map.get(key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    rec.and_then(|map| map.get(key)).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_string)
 }
 
 /// A message and the files attached to it, as one text.
@@ -93,12 +89,20 @@ pub fn assemble(system: String, history: Option<&str>, turn: &str) -> String {
 
 /// The machine's own date, the way a person here would write it.
 pub fn today() -> String {
-    const DAYS: [&str; 7] = [
-        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-    ];
+    const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August", "September",
-        "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -123,10 +127,7 @@ pub fn today() -> String {
 /// another bot shows as a blob of result JSON instead of who it went to and
 /// what it said, in the chat and in the sender's own tail.
 pub fn crew_tool(name: &str) -> Option<&str> {
-    ["mcp__crew__", "crew_"]
-        .iter()
-        .find_map(|prefix| name.strip_prefix(prefix))
-        .filter(|verb| !verb.is_empty())
+    ["mcp__crew__", "crew_"].iter().find_map(|prefix| name.strip_prefix(prefix)).filter(|verb| !verb.is_empty())
 }
 
 /// The Crew tool a call runs, and its arguments. Crew's tools are listed
@@ -171,10 +172,7 @@ pub fn is_letter_tool(verb: &str) -> bool {
 /// The Crew tools that act on sessions without writing a letter, whose rows
 /// read from a [`crew_protocol::ToolDetail::Crew`].
 pub fn is_control_tool(verb: &str) -> bool {
-    matches!(
-        verb,
-        "start_sessions" | "interrupt_session" | "read_session" | "list_peers" | "stop_session" | "update_session"
-    )
+    matches!(verb, "start_sessions" | "interrupt_session" | "read_session" | "list_peers" | "stop_session" | "update_session")
 }
 
 /// A control tool's detail from its call alone: whom it names, before the
@@ -267,9 +265,7 @@ fn control_result(verb: &str, call: crew_protocol::ToolDetail, answer: &Value) -
         }
         "list_peers" => {
             let peers = answer.as_array()?;
-            let of = |kind: &str| {
-                peers.iter().filter(|peer| peer.get("type").and_then(Value::as_str) == Some(kind)).count()
-            };
+            let of = |kind: &str| peers.iter().filter(|peer| peer.get("type").and_then(Value::as_str) == Some(kind)).count();
             let words = [(of("session"), "session"), (of("subagent"), "subagent"), (of("bot"), "bot")]
                 .iter()
                 .filter(|(n, _)| *n > 0)
@@ -484,11 +480,8 @@ pub fn todo_items(value: Option<&Value>) -> Option<Vec<crew_protocol::TodoItem>>
 pub fn unwrap_shell(command: &str) -> String {
     let trimmed = command.trim();
     let Some(rest) = ["bash", "zsh", "sh"].iter().find_map(|shell| {
-        let body = trimmed
-            .strip_prefix("/usr/bin/")
-            .or_else(|| trimmed.strip_prefix("/bin/"))
-            .unwrap_or(trimmed)
-            .strip_prefix(shell)?;
+        let body =
+            trimmed.strip_prefix("/usr/bin/").or_else(|| trimmed.strip_prefix("/bin/")).unwrap_or(trimmed).strip_prefix(shell)?;
         body.strip_prefix(" -lc ").or_else(|| body.strip_prefix(" -c "))
     }) else {
         return command.to_string();
@@ -561,15 +554,11 @@ pub fn parse_json_line(line: &str) -> Option<Map<String, Value>> {
     if !trimmed.starts_with('{') {
         return None;
     }
-    serde_json::from_str::<Value>(trimmed)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
+    serde_json::from_str::<Value>(trimmed).ok().and_then(|value| value.as_object().cloned())
 }
 
 pub fn try_parse_json_record(value: &str) -> Option<Map<String, Value>> {
-    serde_json::from_str::<Value>(value)
-        .ok()
-        .and_then(|parsed| parsed.as_object().cloned())
+    serde_json::from_str::<Value>(value).ok().and_then(|parsed| parsed.as_object().cloned())
 }
 
 pub fn finite_number(value: Option<&Value>) -> Option<f64> {
@@ -588,12 +577,7 @@ pub fn clip(value: &str, max: usize) -> String {
 
 pub fn leaf(path: &str) -> String {
     let normalized = path.replace('\\', "/");
-    normalized
-        .rsplit('/')
-        .next()
-        .filter(|part| !part.is_empty())
-        .unwrap_or(path)
-        .to_string()
+    normalized.rsplit('/').next().filter(|part| !part.is_empty()).unwrap_or(path).to_string()
 }
 
 #[cfg(test)]
@@ -604,7 +588,8 @@ mod tests {
     fn a_subagent_report_loses_the_frame_its_harness_put_around_it() {
         let claude = "[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  10\n  \n  Command: `wc -l a.js`\nagentId: a48 (use SendMessage)\n<usage>subagent_tokens: 1</usage>";
         assert_eq!(subagent_report(claude), "10\n\nCommand: `wc -l a.js`");
-        let opencode = "<task id=\"ses_1\" state=\"completed\">\n<task_result>\nExact line count: **10**\n</task_result>\n</task>";
+        let opencode =
+            "<task id=\"ses_1\" state=\"completed\">\n<task_result>\nExact line count: **10**\n</task_result>\n</task>";
         assert_eq!(subagent_report(opencode), "Exact line count: **10**");
         assert_eq!(subagent_report("just the report"), "just the report");
     }
@@ -653,7 +638,8 @@ mod tests {
             );
         }
         assert!(detail("mcp__crew__list_routines", serde_json::json!({})).is_none());
-        let label = crew_label("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "x" }).as_object().unwrap());
+        let label =
+            crew_label("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "x" }).as_object().unwrap());
         assert_eq!(label.as_deref(), Some("Crew send to session abc"));
     }
 
@@ -702,7 +688,8 @@ mod tests {
     /// JSON string the model wrote, and the MCP call gets it parsed.
     #[test]
     fn arguments_written_as_a_string_are_read_as_the_object_they_hold() {
-        let input = serde_json::json!({ "name": "message_agent", "arguments": "{\"to\": \"abc\", \"text\": \"the branch is green\"}" });
+        let input =
+            serde_json::json!({ "name": "message_agent", "arguments": "{\"to\": \"abc\", \"text\": \"the branch is green\"}" });
         let input = input.as_object().unwrap();
         assert!(matches!(
             crew_tool_detail("mcp__crew__call_tool", input),
@@ -774,10 +761,7 @@ mod tests {
             user_settings: false,
             fast: false,
         });
-        assert!(
-            args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona),
-            "{args:?}"
-        );
+        assert!(args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona), "{args:?}");
         let message = claude::build_claude_user_message("sid", Some(TAIL), "y ahora?", &[], &[]);
         let text = message["message"]["content"][0]["text"].as_str().unwrap_or_default();
         assert!(text.starts_with("## The conversation so far"), "{text}");
@@ -848,10 +832,7 @@ mod tests {
         ];
         for args in runs {
             for arg in &args {
-                assert!(
-                    !matches!(arg.as_str(), "resume" | "--resume" | "--session" | "--continue"),
-                    "{args:?}"
-                );
+                assert!(!matches!(arg.as_str(), "resume" | "--resume" | "--session" | "--continue"), "{args:?}");
             }
         }
         let (method, params) = codex::thread_request(&codex_thread(None, None));
@@ -890,7 +871,6 @@ mod tests {
         let (method, cursor) = cursor::session_request("/w", Some("acp-1"), &serde_json::json!([]));
         assert_eq!(method, "session/load", "{cursor}");
         assert_eq!(cursor["sessionId"], "acp-1", "{cursor}");
-
     }
 
     /// A message row, once its call answers, names the letter it made and
@@ -912,7 +892,9 @@ mod tests {
         assert_eq!((what, delivery.as_deref(), error), (None, Some("queued"), None));
 
         let refused = crew_result_detail("crew_send_message", input, "You can't message yourself.", true);
-        assert!(matches!(refused, Some(ToolDetail::Message { error: Some(ref why), letter_id: None, .. }) if why == "You can't message yourself."));
+        assert!(
+            matches!(refused, Some(ToolDetail::Message { error: Some(ref why), letter_id: None, .. }) if why == "You can't message yourself.")
+        );
 
         let start = serde_json::json!({ "provider": "codex", "prompt": "fix it" });
         let start = start.as_object().unwrap();
@@ -928,7 +910,12 @@ mod tests {
             crew_tool_detail("mcp__crew__start_session", old.as_object().unwrap()),
             Some(ToolDetail::Message { ref what, .. }) if what.as_deref() == Some("handoff")
         ));
-        let started = crew_result_detail("mcp__crew__start_session", start, r#"{ "id": "s9", "letter_id": "L2", "name": "codex: fix it" }"#, false);
+        let started = crew_result_detail(
+            "mcp__crew__start_session",
+            start,
+            r#"{ "id": "s9", "letter_id": "L2", "name": "codex: fix it" }"#,
+            false,
+        );
         assert!(matches!(
             started,
             Some(ToolDetail::Message { ref text, letter_id: Some(ref l), to_name: Some(ref n), .. }) if text == "fix it" && l == "L2" && n == "codex: fix it"
@@ -937,11 +924,7 @@ mod tests {
         assert_eq!(crew_result_detail("mcp__crew__send_message", input, "ok", false), None);
     }
 
-    fn crew_detail(
-        name: &str,
-        input: serde_json::Value,
-        answer: Option<(&str, bool)>,
-    ) -> crew_protocol::ToolDetail {
+    fn crew_detail(name: &str, input: serde_json::Value, answer: Option<(&str, bool)>) -> crew_protocol::ToolDetail {
         let input = input.as_object().unwrap();
         let call = crew_tool_detail(name, input).expect("a call detail");
         match answer {

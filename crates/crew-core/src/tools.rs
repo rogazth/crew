@@ -51,17 +51,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
             "gpt-5.2",
         ],
     ),
-    (
-        "codex",
-        &[
-            "gpt-6-astra",
-            "gpt-6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "gpt-5.5",
-        ],
-    ),
+    ("codex", &["gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]),
     (
         "opencode",
         &[
@@ -81,11 +71,7 @@ pub fn default_model(provider: &str) -> &'static str {
     match provider {
         "claude" => "claude-opus-5-5",
         "cursor" => "auto",
-        _ => PROVIDERS
-            .iter()
-            .find(|(name, _)| *name == provider)
-            .and_then(|(_, models)| models.first().copied())
-            .unwrap_or(""),
+        _ => PROVIDERS.iter().find(|(name, _)| *name == provider).and_then(|(_, models)| models.first().copied()).unwrap_or(""),
     }
 }
 
@@ -382,11 +368,8 @@ pub(crate) fn provider_names() -> Vec<&'static str> {
 /// which is neither the provider nor the spelling — and reports back that the
 /// model does not exist here.
 pub(crate) fn model_sheet() -> String {
-    let sheet = PROVIDERS
-        .iter()
-        .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let sheet =
+        PROVIDERS.iter().map(|(provider, models)| format!("{provider}: {}", models.join(", "))).collect::<Vec<_>>().join("\n");
     format!("{sheet}\n{CURSOR_LISTED}")
 }
 
@@ -398,10 +381,7 @@ const CURSOR_LISTED: &str = "cursor also takes every id `cursor-agent models` li
 /// Each provider's models: Crew's own list, then what its CLI lists for this
 /// account that the list does not have yet.
 fn catalogue() -> Vec<(&'static str, Vec<String>)> {
-    PROVIDERS
-        .iter()
-        .map(|(provider, models)| (*provider, with_listed(provider, models)))
-        .collect()
+    PROVIDERS.iter().map(|(provider, models)| (*provider, with_listed(provider, models))).collect()
 }
 
 fn with_listed(provider: &str, models: &[&str]) -> Vec<String> {
@@ -557,7 +537,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
     ]
 }
-
 
 /// Crew's own tools a caller of this kind is listed, before any family is
 /// registered. [`Toolbox::visible_names`] adds the families'.
@@ -801,8 +780,7 @@ fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
 
 /// The tool's arguments, appended to whatever it said when it refused.
 fn with_arguments(toolbox: &Toolbox, name: &str, error: &str) -> String {
-    let Some(tool) = toolbox.entries().into_iter().map(|entry| entry.tool).find(|tool| tool.name == name)
-    else {
+    let Some(tool) = toolbox.entries().into_iter().map(|entry| entry.tool).find(|tool| tool.name == name) else {
         return error.to_string();
     };
     // Required first, in the order the schema names them, because that is the
@@ -829,12 +807,7 @@ fn run(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Too
     let Some(entry) = entry.filter(|entry| entry.tool.audience.admits(kind)) else {
         return Err(format!(
             "Unknown tool \"{name}\". One of: {}",
-            host.toolbox
-                .visible(kind)
-                .into_iter()
-                .map(|entry| entry.tool.name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            host.toolbox.visible(kind).into_iter().map(|entry| entry.tool.name).collect::<Vec<_>>().join(", ")
         ));
     };
     match entry.family {
@@ -870,12 +843,7 @@ fn bot<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
 /// The standing instructions a bot is handed every turn, rewritten by the
 /// bot itself. Whole, not patched: a description assembled from edits nobody
 /// read end to end is one nobody can predict the next turn from.
-fn update_description(
-    store: &Store,
-    transcripts: &TranscriptHub,
-    caller: &Session,
-    args: &Value,
-) -> Result<Value, String> {
+fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Value) -> Result<Value, String> {
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
     session::update(
         store,
@@ -945,32 +913,20 @@ fn create_bot(
     caller: &Caller,
     args: &Value,
 ) -> Result<Value, String> {
-    let me = caller
-        .session()
-        .ok_or_else(|| "create_bot needs a session to inherit from.".to_string())?;
+    let me = caller.session().ok_or_else(|| "create_bot needs a session to inherit from.".to_string())?;
     let name = text(args.get("name")).ok_or_else(|| "name is required".to_string())?;
-    let description = text(args.get("description"))
-        .ok_or_else(|| "description is required: say what the bot is for".to_string())?;
+    let description =
+        text(args.get("description")).ok_or_else(|| "description is required: say what the bot is for".to_string())?;
     let provider = text(args.get("provider")).unwrap_or_else(|| me.provider.clone());
-    let models = provider_models(&provider).ok_or_else(|| {
-        format!(
-            "Unknown provider \"{provider}\". One of: {}",
-            provider_names().join(", ")
-        )
-    })?;
+    let models = provider_models(&provider)
+        .ok_or_else(|| format!("Unknown provider \"{provider}\". One of: {}", provider_names().join(", ")))?;
     let requested = text(args.get("model"));
     if let Some(requested) = &requested {
         if !models.contains(requested) {
             return Err(unknown_model(requested, &provider));
         }
     }
-    let model = requested.unwrap_or_else(|| {
-        if provider == me.provider {
-            me.model.clone()
-        } else {
-            unnamed_model(&provider)
-        }
-    });
+    let model = requested.unwrap_or_else(|| if provider == me.provider { me.model.clone() } else { unnamed_model(&provider) });
     // Inherited, never asked for. A session that has to stop at every command
     // could otherwise build one that does not, and then send it the command.
     let autonomy = me.autonomy.clone();
@@ -1007,10 +963,7 @@ fn create_bot(
 fn list_routines(store: &Store, caller: &Caller, args: &Value) -> Result<Value, String> {
     let target = resolve_bot(store, caller, args.get("bot_id"))?;
     let rows = routine::list_for_session(store, target.id.clone())?;
-    let listed: Vec<Value> = rows
-        .into_iter()
-        .map(|row| describe_routine(&row, &target))
-        .collect();
+    let listed: Vec<Value> = rows.into_iter().map(|row| describe_routine(&row, &target)).collect();
     Ok(Value::Array(listed))
 }
 
@@ -1033,9 +986,7 @@ fn save_routine(
     let target = resolve_bot(store, caller, args.get("bot_id"))?;
     let id = text(args.get("routine_id"));
     let existing = if let Some(id) = &id {
-        let found = routine::list_for_session(store, target.id.clone())?
-            .into_iter()
-            .find(|row| row.id == *id);
+        let found = routine::list_for_session(store, target.id.clone())?.into_iter().find(|row| row.id == *id);
         if found.is_none() {
             return Err(format!("{} has no routine {id}", target.name));
         }
@@ -1058,9 +1009,10 @@ fn save_routine(
     let now = now_millis();
     // A once routine given a new time is armed again, unless told otherwise.
     let rearmed = given.is_some() && matches!(schedule, Schedule::Once { .. });
-    let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or_else(|| {
-        rearmed || existing.as_ref().map(|row| row.enabled).unwrap_or(true)
-    });
+    let enabled = args
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| rearmed || existing.as_ref().map(|row| row.enabled).unwrap_or(true));
     if let Schedule::Once { at } = schedule {
         if at <= now && (enabled || given.is_some()) {
             return Err(format!(
@@ -1101,16 +1053,10 @@ fn delete_routine(
     let found = find_routine(store, caller, &id)?;
     routine::delete(store, id)?;
     if Some(found.0.id.as_str()) != caller.session_id() {
-        transcripts.append_system(
-            &found.0.id,
-            &format!("Routine · {} removed by {}", found.1.name, by(caller)),
-        );
+        transcripts.append_system(&found.0.id, &format!("Routine · {} removed by {}", found.1.name, by(caller)));
     }
     on_routines();
-    Ok(Value::String(format!(
-        "Deleted \"{}\" from {}.",
-        found.1.name, found.0.name
-    )))
+    Ok(Value::String(format!("Deleted \"{}\" from {}.", found.1.name, found.0.name)))
 }
 
 /// The bot a routine tool acts on: the one named, or the caller itself. Only
@@ -1122,9 +1068,7 @@ fn resolve_bot(store: &Store, caller: &Caller, bot_id: Option<&Value>) -> Result
         _ => None,
     };
     let Some(id) = text(bot_id) else {
-        return me.cloned().ok_or_else(|| {
-            "bot_id is required: routines belong to a bot. Use list_peers for ids.".to_string()
-        });
+        return me.cloned().ok_or_else(|| "bot_id is required: routines belong to a bot. Use list_peers for ids.".to_string());
     };
     if let Some(me) = me.filter(|me| me.id == id) {
         return Ok(me.clone());
@@ -1137,14 +1081,9 @@ fn resolve_bot(store: &Store, caller: &Caller, bot_id: Option<&Value>) -> Result
 }
 
 fn find_routine(store: &Store, caller: &Caller, id: &str) -> Result<(Session, Routine), String> {
-    let bots = session::list(store, caller.workspace_id()?.to_string())?
-        .into_iter()
-        .filter(|session| session.kind == "bot");
+    let bots = session::list(store, caller.workspace_id()?.to_string())?.into_iter().filter(|session| session.kind == "bot");
     for owner in bots {
-        if let Some(routine) = routine::list_for_session(store, owner.id.clone())?
-            .into_iter()
-            .find(|row| row.id == id)
-        {
+        if let Some(routine) = routine::list_for_session(store, owner.id.clone())?.into_iter().find(|row| row.id == id) {
             return Ok((owner, routine));
         }
     }
@@ -1195,12 +1134,7 @@ fn parse_runs(raw: &str) -> Vec<(String, i64)> {
 /// Matching on letters and digits alone forgives the spacing, the dashes and
 /// the case, which is all the difference usually is.
 fn like(wanted: &str) -> Vec<(&'static str, String)> {
-    let squash = |text: &str| {
-        text.chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-    };
+    let squash = |text: &str| text.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
     let wanted = squash(wanted);
     if wanted.is_empty() {
         return Vec::new();
@@ -1220,22 +1154,15 @@ fn like(wanted: &str) -> Vec<(&'static str, String)> {
 pub(crate) fn unknown_model(wanted: &str, provider: &str) -> String {
     let found = like(wanted);
     if !found.is_empty() {
-        let where_ = found
-            .iter()
-            .map(|(provider, model)| format!("{model} (provider {provider})"))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let where_ =
+            found.iter().map(|(provider, model)| format!("{model} (provider {provider})")).collect::<Vec<_>>().join(", ");
         return format!(
             "No model \"{wanted}\" under {provider}. Spelled this way it is: {where_}. \
              Pass provider and model together."
         );
     }
     // Crew's own lists: cursor-agent's runs to hundreds of variants.
-    let mine = PROVIDERS
-        .iter()
-        .find(|(name, _)| *name == provider)
-        .map(|(_, models)| models.join(", "))
-        .unwrap_or_default();
+    let mine = PROVIDERS.iter().find(|(name, _)| *name == provider).map(|(_, models)| models.join(", ")).unwrap_or_default();
     format!(
         "No model \"{wanted}\" anywhere, under {provider} or elsewhere. {provider} has: {mine}.\n\
          Everything there is:\n{}",
@@ -1245,18 +1172,11 @@ pub(crate) fn unknown_model(wanted: &str, provider: &str) -> String {
 
 /// Every id the provider takes, its CLI's own listing included.
 pub(crate) fn provider_models(id: &str) -> Option<Vec<String>> {
-    PROVIDERS
-        .iter()
-        .find(|(name, _)| *name == id)
-        .map(|(provider, models)| with_listed(provider, models))
+    PROVIDERS.iter().find(|(name, _)| *name == id).map(|(provider, models)| with_listed(provider, models))
 }
 
 pub(crate) fn text(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    value.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 fn when(ms: i64) -> String {
@@ -1276,9 +1196,7 @@ mod tests {
     fn workspace(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).expect("root");
-        crate::workspace::create(store, "w".into(), root.to_string_lossy().into())
-            .expect("workspace")
-            .id
+        crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).expect("workspace").id
     }
 
     fn bot(store: &Store, workspace_id: &str, name: &str) -> Session {
@@ -1352,12 +1270,7 @@ mod tests {
     fn listed_as(store: &Store, transcripts: &TranscriptHub, toolbox: &Toolbox, caller: &Caller) -> Vec<String> {
         let host = Host { store, transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox };
         let out = handle(&host, caller, "tools/list", json!({})).expect("list");
-        out["tools"]
-            .as_array()
-            .expect("tools")
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
-            .collect()
+        out["tools"].as_array().expect("tools").iter().map(|tool| tool["name"].as_str().unwrap_or_default().to_string()).collect()
     }
 
     /// Every tool a bot may call is listed, schema and all: a tool it cannot
@@ -1417,14 +1330,7 @@ mod tests {
         transcripts.append_user(&coder.id, "the staging password is in 1password", false, None, None);
         transcripts.flush(&coder.id);
 
-        let out = call(
-            &store,
-            &transcripts,
-            &coder,
-            "search_messages",
-            json!({ "query": "staging password" }),
-        )
-        .expect("call");
+        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "staging password" })).expect("call");
         assert!(!is_error(&out), "{}", body(&out));
         let text = body(&out);
         assert!(text.contains("1password"), "{text}");
@@ -1445,14 +1351,7 @@ mod tests {
         transcripts.append_user(&cuddles.id, "the client is Acme", false, None, None);
         transcripts.flush(&cuddles.id);
 
-        let out = call(
-            &store,
-            &transcripts,
-            &coder,
-            "search_messages",
-            json!({ "query": "Acme" }),
-        )
-        .expect("call");
+        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "Acme" })).expect("call");
         assert!(!is_error(&out), "{}", body(&out));
         assert!(!body(&out).contains("Acme"), "{}", body(&out));
     }
@@ -1465,14 +1364,8 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let out = call(
-            &store,
-            &transcripts,
-            &coder,
-            "update_description",
-            json!({ "text": "You keep the release notes." }),
-        )
-        .expect("call");
+        let out = call(&store, &transcripts, &coder, "update_description", json!({ "text": "You keep the release notes." }))
+            .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
 
         let after = session::get(&store, coder.id.clone()).expect("get").expect("bot");
@@ -1503,8 +1396,8 @@ mod tests {
                 log.lock().unwrap().push(id.to_string());
             }
         }));
-        let out = call(&store, &transcripts, &coder, "update_description", json!({ "text": "You keep the notes." }))
-            .expect("call");
+        let out =
+            call(&store, &transcripts, &coder, "update_description", json!({ "text": "You keep the notes." })).expect("call");
         assert!(!is_error(&out), "{}", body(&out));
         assert_eq!(*heard.lock().unwrap(), vec![coder.id.clone()]);
     }
@@ -1536,10 +1429,7 @@ mod tests {
     /// ends up guessing a spelling.
     #[test]
     fn the_create_schema_names_every_model_there_is() {
-        let tool = catalog()
-            .into_iter()
-            .find(|tool| tool.name == "create_bot")
-            .expect("create_bot");
+        let tool = catalog().into_iter().find(|tool| tool.name == "create_bot").expect("create_bot");
         let schema = describe(&tool, CallerKind::Bot).to_string();
         for (provider, models) in PROVIDERS {
             assert!(schema.contains(provider), "{provider} is not in the schema");
@@ -1629,11 +1519,8 @@ mod tests {
         .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
 
-        let made = session::list(&store, ws.clone())
-            .expect("list")
-            .into_iter()
-            .find(|row| row.name == "Runner")
-            .expect("the bot");
+        let made =
+            session::list(&store, ws.clone()).expect("list").into_iter().find(|row| row.name == "Runner").expect("the bot");
         assert_eq!(made.autonomy, "ask", "autonomy was granted, not inherited");
 
         // Both chats say it happened: the child's, and the one the user is in.
@@ -1666,21 +1553,11 @@ mod tests {
         )
         .expect("coder");
 
-        let out = call(
-            &store,
-            &transcripts,
-            &coder,
-            "create_bot",
-            json!({ "name": "Helper", "description": "You help." }),
-        )
-        .expect("call");
+        let out = call(&store, &transcripts, &coder, "create_bot", json!({ "name": "Helper", "description": "You help." }))
+            .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
 
-        let made = session::list(&store, ws)
-            .expect("list")
-            .into_iter()
-            .find(|row| row.name == "Helper")
-            .expect("the bot");
+        let made = session::list(&store, ws).expect("list").into_iter().find(|row| row.name == "Helper").expect("the bot");
         assert_eq!(made.worktree.as_deref(), Some("/wt/feat"));
     }
 
@@ -1690,14 +1567,8 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot_with_provider(&store, &ws, "Coder", "opencode");
-        let out = call(
-            &store,
-            &transcripts,
-            &coder,
-            "create_bot",
-            json!({ "name": "Helper", "description": "runs errands" }),
-        )
-        .expect("call");
+        let out = call(&store, &transcripts, &coder, "create_bot", json!({ "name": "Helper", "description": "runs errands" }))
+            .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
     }
 
@@ -1723,13 +1594,11 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
 
-        let answer = call(&store, &transcripts, &coder, "no_such_tool", json!({}))
-            .expect("handled");
+        let answer = call(&store, &transcripts, &coder, "no_such_tool", json!({})).expect("handled");
 
         assert!(body(&answer).starts_with("Unknown tool"), "{}", body(&answer));
         assert!(!body(&answer).contains("takes:"), "{}", body(&answer));
     }
-
 
     // ---------------------------------------------------------------
     // Who is calling.
@@ -1815,8 +1684,7 @@ mod tests {
         let out = call_as(&store, &transcripts, &user(Some(&ws)), "list_routines", json!({})).expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("bot_id is required"), "{}", body(&out));
-        let out = call_as(&store, &transcripts, &user(Some(&ws)), "list_routines", json!({ "bot_id": coder.id }))
-            .expect("call");
+        let out = call_as(&store, &transcripts, &user(Some(&ws)), "list_routines", json!({ "bot_id": coder.id })).expect("call");
         assert!(!is_error(&out), "{}", body(&out));
     }
 
@@ -1829,9 +1697,15 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let at = now_millis() + 600_000;
-        let saved = call(&store, &transcripts, &coder, "save_routine", json!({
-            "name": "Check back", "prompt": "did CI pass?", "schedule": { "kind": "once", "at": at }
-        }))
+        let saved = call(
+            &store,
+            &transcripts,
+            &coder,
+            "save_routine",
+            json!({
+                "name": "Check back", "prompt": "did CI pass?", "schedule": { "kind": "once", "at": at }
+            }),
+        )
         .expect("call");
         assert!(!is_error(&saved), "{}", body(&saved));
         let row: Value = serde_json::from_str(&body(&saved)).expect("json");
@@ -1841,9 +1715,15 @@ mod tests {
         assert_eq!(stored[0].next_run_at, Some(at));
         assert_eq!(parse_schedule(&stored[0].schedule), Some(Schedule::Once { at }));
 
-        let past = call(&store, &transcripts, &coder, "save_routine", json!({
-            "name": "Too late", "prompt": "x", "schedule": { "kind": "once", "at": "2020-01-01T09:00" }
-        }))
+        let past = call(
+            &store,
+            &transcripts,
+            &coder,
+            "save_routine",
+            json!({
+                "name": "Too late", "prompt": "x", "schedule": { "kind": "once", "at": "2020-01-01T09:00" }
+            }),
+        )
         .expect("call");
         assert!(is_error(&past));
         assert!(body(&past).contains("at is in the past (Jan 1, 2020, 9:00 AM)"), "{}", body(&past));
@@ -1851,12 +1731,18 @@ mod tests {
         // Fired and switched off, it can still be renamed; given a new time, it is armed again.
         let id = stored[0].id.clone();
         routine::disable(&store, &id).expect("disable");
-        let renamed = call(&store, &transcripts, &coder, "save_routine", json!({ "routine_id": id, "name": "Checked" }))
-            .expect("call");
+        let renamed =
+            call(&store, &transcripts, &coder, "save_routine", json!({ "routine_id": id, "name": "Checked" })).expect("call");
         assert!(!is_error(&renamed), "{}", body(&renamed));
-        let again = call(&store, &transcripts, &coder, "save_routine", json!({
-            "routine_id": id, "schedule": { "kind": "once", "at": at + 60_000 }
-        }))
+        let again = call(
+            &store,
+            &transcripts,
+            &coder,
+            "save_routine",
+            json!({
+                "routine_id": id, "schedule": { "kind": "once", "at": at + 60_000 }
+            }),
+        )
         .expect("call");
         assert!(!is_error(&again), "{}", body(&again));
         let stored = routine::list_for_session(&store, coder.id.clone()).expect("list");
@@ -1891,7 +1777,9 @@ mod tests {
                 "list_kettles" => Ok(json!(["blue"]).into()),
                 "boil_kettle" => {
                     let kettle = text(args.get("kettle")).ok_or("kettle is required")?;
-                    Ok(ToolOutput::Content(vec![json!({ "type": "text", "text": format!("{kettle} boiled by {}", caller.label()) })]))
+                    Ok(ToolOutput::Content(vec![
+                        json!({ "type": "text", "text": format!("{kettle} boiled by {}", caller.label()) }),
+                    ]))
                 }
                 _ => Err("no".into()),
             }
@@ -1915,15 +1803,16 @@ mod tests {
         assert!(!listed_as(&store, &transcripts, &toolbox, &user(Some(&ws))).contains(&"boil_kettle".to_string()));
 
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
-        let out = handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
-            .expect("call");
+        let out =
+            handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } })).expect("call");
         assert_eq!(body(&out), format!("blue boiled by Coder (bot {})", coder.id));
         // Its refusals carry its arguments, like Crew's own.
         let out = handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": {} })).expect("call");
         assert!(body(&out).contains("boil_kettle takes: kettle."), "{}", body(&out));
         // And its audience holds.
-        let out = handle(&host, &user(Some(&ws)), "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
-            .expect("call");
+        let out =
+            handle(&host, &user(Some(&ws)), "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
+                .expect("call");
         assert!(is_error(&out), "{}", body(&out));
     }
 

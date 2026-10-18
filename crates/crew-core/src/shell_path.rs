@@ -69,18 +69,11 @@ fn split_path(path: &str) -> Vec<PathBuf> {
 }
 
 pub fn joined() -> String {
-    search_dirs()
-        .iter()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(":")
+    search_dirs().iter().map(|dir| dir.to_string_lossy().into_owned()).collect::<Vec<_>>().join(":")
 }
 
 pub fn resolve(name: &str) -> Option<PathBuf> {
-    search_dirs()
-        .into_iter()
-        .map(|dir| dir.join(name))
-        .find(|path| is_executable(path))
+    search_dirs().into_iter().map(|dir| dir.join(name)).find(|path| is_executable(path))
 }
 
 /// The first executable called `name` that `accept` takes, the shell PATH
@@ -123,9 +116,7 @@ fn opencode_in(dirs: &[PathBuf]) -> Result<PathBuf, String> {
 }
 
 fn find_in(dirs: &[PathBuf], name: &str, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
-    dirs.iter()
-        .map(|dir| dir.join(name))
-        .find(|path| is_executable(path) && accept(path))
+    dirs.iter().map(|dir| dir.join(name)).find(|path| is_executable(path) && accept(path))
 }
 
 /// The first line `path --version` prints, or None when it does not answer in time.
@@ -160,9 +151,7 @@ fn version_line_within(path: &Path, timeout: Duration) -> Option<String> {
 }
 
 fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    std::fs::metadata(path).map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0).unwrap_or(false)
 }
 
 fn home_dir() -> Option<String> {

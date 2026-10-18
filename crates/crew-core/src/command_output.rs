@@ -75,9 +75,15 @@ mod tests {
     #[test]
     fn a_live_commands_output_is_a_note_bare_or_tagged_and_nothing_when_empty() {
         assert_eq!(local_command_output("\u{1b}[1mContext\u{1b}[22m\n12k / 200k\n").as_deref(), Some("Context\n12k / 200k"));
-        assert_eq!(local_command_output("<local-command-stdout>Set model to opus</local-command-stdout>").as_deref(), Some("Set model to opus"));
         assert_eq!(
-            local_command_output("<local-command-stdout>out</local-command-stdout><local-command-stderr>oops</local-command-stderr>").as_deref(),
+            local_command_output("<local-command-stdout>Set model to opus</local-command-stdout>").as_deref(),
+            Some("Set model to opus")
+        );
+        assert_eq!(
+            local_command_output(
+                "<local-command-stdout>out</local-command-stdout><local-command-stderr>oops</local-command-stderr>"
+            )
+            .as_deref(),
             Some("out\noops")
         );
         assert_eq!(local_command_output("<local-command-stdout></local-command-stdout>"), None);

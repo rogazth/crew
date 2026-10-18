@@ -108,8 +108,7 @@ impl CursorDecoder {
         for part in parts.iter().filter_map(as_record) {
             match part.get("type").and_then(Value::as_str) {
                 Some("text") => {
-                    let Some(text) = part.get("text").and_then(Value::as_str).filter(|text| !text.trim().is_empty())
-                    else {
+                    let Some(text) = part.get("text").and_then(Value::as_str).filter(|text| !text.trim().is_empty()) else {
                         continue;
                     };
                     out.push(self.event(HarnessEvent::MessageDelta { text: text.to_string() }));
@@ -226,11 +225,7 @@ fn detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail> {
                 hunks: contents.map(|after| vec![EditHunk { before: String::new(), after }]),
             })
         }
-        "Glob" => Some(ToolDetail::Search {
-            query: string_field(Some(input), "glob_pattern")?,
-            matches: None,
-            output: None,
-        }),
+        "Glob" => Some(ToolDetail::Search { query: string_field(Some(input), "glob_pattern")?, matches: None, output: None }),
         "TodoWrite" => Some(ToolDetail::Todo { items: todo_items(input.get("todos"))? }),
         _ => tool_detail(&acp(name, input), None, None),
     }
@@ -284,9 +279,7 @@ fn closer(stamp: i64, now: i64) -> i64 {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis() as i64)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64)
 }
 
 /// `Monday, Aug 24, 2026, 1:05 PM (UTC-4)`, the only date the file keeps.

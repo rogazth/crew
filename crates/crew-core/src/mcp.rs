@@ -51,11 +51,7 @@ impl Link {
         let var = |key: &str| {
             std::env::var(key).map_err(|_| format!("{key} is not set; run this from a bot or a terminal session Crew started"))
         };
-        Ok(Self {
-            socket: var("CREW_SOCKET")?,
-            token: var("CREW_TOKEN")?,
-            workspace: None,
-        })
+        Ok(Self { socket: var("CREW_SOCKET")?, token: var("CREW_TOKEN")?, workspace: None })
     }
 
     /// One connection per call: a line out, a line back.
@@ -85,9 +81,7 @@ impl Link {
         stream.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
 
         let mut reply = String::new();
-        BufReader::new(stream)
-            .read_line(&mut reply)
-            .map_err(|e| format!("Crew did not answer ({e})"))?;
+        BufReader::new(stream).read_line(&mut reply).map_err(|e| format!("Crew did not answer ({e})"))?;
         let body: Value = serde_json::from_str(&reply).map_err(|e| format!("Bad reply: {e}"))?;
         if let Some(error) = body.get("error").and_then(Value::as_str) {
             return Err(error.to_string());
@@ -224,14 +218,11 @@ fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, Strin
         "tools/list" => link.call(method, params).map_err(|e| (-32603, e)),
         // A failed call is an answer the model should read, not a protocol error.
         "tools/call" => {
-            let opencode_session = params
-                .get("_meta")
-                .and_then(|meta| meta.get(OPENCODE_SESSION_META))
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            Ok(link.call_from(method, params, opencode_session.as_deref()).unwrap_or_else(|e| {
-                json!({ "content": [{ "type": "text", "text": e }], "isError": true })
-            }))
+            let opencode_session =
+                params.get("_meta").and_then(|meta| meta.get(OPENCODE_SESSION_META)).and_then(Value::as_str).map(str::to_string);
+            Ok(link
+                .call_from(method, params, opencode_session.as_deref())
+                .unwrap_or_else(|e| json!({ "content": [{ "type": "text", "text": e }], "isError": true })))
         }
         _ => Err((-32601, format!("Method not found: {method}"))),
     }

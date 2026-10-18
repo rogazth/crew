@@ -20,23 +20,20 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, CommandEntry, ContextReading, HarnessEvent, ToolDetail, ToolStatus,
-};
+use crew_protocol::{ApprovalDecision, ApprovalResolution, CommandEntry, ContextReading, HarnessEvent, ToolDetail, ToolStatus};
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Launch, Live, QuestionReply,
-    TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Launch, Live, QuestionReply, TurnHost,
+    TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::command_sources::{cursor_commands, cursor_plugin_skills, cursor_skill_bodies, with_skill_bodies};
 use crate::providers::cursor::{
-    authenticate_params, build_cursor_prompt, build_cursor_spawn_args, cancel_params, classify_request,
-    initialize_params, mcp_servers, new_session_id, permission_answer, permission_response, plan_accepted,
-    plan_detail, prompt_params, questions_cancelled, questions_response, rpc_error_message, session_request,
-    read_store_context, tool_detail, tool_end, tool_label, tool_name, turn_end, unsupported_error, usage_update,
-    AcpQuestion, AcpTool, CursorAsk, CursorSpawn, TurnEnd,
+    authenticate_params, build_cursor_prompt, build_cursor_spawn_args, cancel_params, classify_request, initialize_params,
+    mcp_servers, new_session_id, permission_answer, permission_response, plan_accepted, plan_detail, prompt_params,
+    questions_cancelled, questions_response, read_store_context, rpc_error_message, session_request, tool_detail, tool_end,
+    tool_label, tool_name, turn_end, unsupported_error, usage_update, AcpQuestion, AcpTool, CursorAsk, CursorSpawn, TurnEnd,
 };
 use crate::providers::{as_record, string_field, Autonomy};
 
@@ -154,9 +151,7 @@ impl CursorLive {
     /// Whether the process runs as a launch now would run it: Cursor takes
     /// the model and the autonomy on argv, and the folder is the process's.
     fn runs_as(&self, now: &Launch) -> bool {
-        self.applied
-            .as_ref()
-            .is_some_and(|had| had.model == now.model && had.autonomy == now.autonomy && had.cwd == now.cwd)
+        self.applied.as_ref().is_some_and(|had| had.model == now.model && had.autonomy == now.autonomy && had.cwd == now.cwd)
     }
 
     /// Everything waiting on the process, let go: it is gone, or about to be.
@@ -212,10 +207,8 @@ impl TurnHost {
     /// keeps its menu. A bot's process keeps nothing: its persona must not see
     /// the user's commands.
     fn cursor_catalog(&self, session_id: &str, cwd: &str, entries: Vec<CommandEntry>) {
-        let bot = crate::session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .is_some_and(|session| session.kind == "bot");
+        let bot =
+            crate::session::get(&self.store, session_id.to_string()).ok().flatten().is_some_and(|session| session.kind == "bot");
         if bot {
             return;
         }
@@ -278,14 +271,20 @@ impl TurnHost {
         // No system channel: the persona and the tool sheet are the first
         // user message of a conversation, a bot's every turn.
         let persona = self.persona(&session, Harness::Cursor, mcp.is_some(), &params.cwd);
-        params.text = self.cursor_skill_text(&params.text, params.command.as_deref(), params.skills.as_deref().unwrap_or_default());
+        params.text =
+            self.cursor_skill_text(&params.text, params.command.as_deref(), params.skills.as_deref().unwrap_or_default());
         let texts = if carries {
             Texts {
                 fresh: self.child_prompt(persona.as_deref(), false, &params),
                 resumed: self.child_prompt(persona.as_deref(), true, &params),
             }
         } else {
-            let text = build_cursor_prompt(persona.as_deref().unwrap_or_default(), history.as_deref(), &params.text, &path_list(&params, &HashSet::new()));
+            let text = build_cursor_prompt(
+                persona.as_deref().unwrap_or_default(),
+                history.as_deref(),
+                &params.text,
+                &path_list(&params, &HashSet::new()),
+            );
             Texts { fresh: text.clone(), resumed: text }
         };
         let process = match kept {
@@ -382,19 +381,14 @@ impl TurnHost {
         let env = self.agent_env(session_id);
         let mut mcp_env: Vec<(String, String)> = env.clone().into_iter().collect();
         mcp_env.sort();
-        let args = build_cursor_spawn_args(&CursorSpawn {
-            model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-            autonomy,
-        });
+        let args =
+            build_cursor_spawn_args(&CursorSpawn { model: Some(session.model.clone()).filter(|m| !m.is_empty()), autonomy });
         self.agents.spawn(session_id.to_string(), path, args, cwd.to_string(), Some(env))?;
         Ok(mcp_servers(mcp, &mcp_env))
     }
 
     fn acp_note_pending(&self, session_id: &str) -> bool {
-        crate::store::get(&self.store, format!("{}{session_id}", crate::store::CURSOR_ACP_NOTE))
-            .ok()
-            .flatten()
-            .is_some()
+        crate::store::get(&self.store, format!("{}{session_id}", crate::store::CURSOR_ACP_NOTE)).ok().flatten().is_some()
     }
 
     /// The handshake, the session, and the prompt. Returns once the prompt is
@@ -420,14 +414,9 @@ impl TurnHost {
         }
         self.cursor_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false)
             .map_err(|error| self.cursor_failure(session_id, "Cursor Agent did not start", &error))?;
-        self.cursor_call(session_id, "authenticate", authenticate_params(), OPEN_TIMEOUT, false)
-            .map_err(|error| {
-                self.cursor_failure(
-                    session_id,
-                    "Cursor Agent could not log in (run `cursor-agent login` in a terminal)",
-                    &error,
-                )
-            })?;
+        self.cursor_call(session_id, "authenticate", authenticate_params(), OPEN_TIMEOUT, false).map_err(|error| {
+            self.cursor_failure(session_id, "Cursor Agent could not log in (run `cursor-agent login` in a terminal)", &error)
+        })?;
         let mut text = &texts.resumed;
         let mut acp_session = None;
         if let Some(id) = resume {
@@ -463,12 +452,7 @@ impl TurnHost {
 
     /// The session is open: it is bound to Crew's, and the prompt goes in.
     fn cursor_prompt(&self, session_id: &str, acp_session: &str, text: &str, migrated: bool, opened: bool) -> Result<(), String> {
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::SessionProviderBound {
-                provider_session_id: acp_session.to_string(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: acp_session.to_string() });
         self.transcripts.apply(session_id, HarnessEvent::SessionStarted {});
         if migrated && !opened {
             self.transcripts.apply(session_id, HarnessEvent::SessionNote { message: ACP_NOTE.into() });
@@ -504,16 +488,11 @@ impl TurnHost {
         let Some(acp_session) = acp_session else {
             return;
         };
-        let dir = self
-            .cursor_acp_sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|home| !home.is_empty())
-                    .map(|home| std::path::Path::new(&home).join(".cursor").join("acp-sessions"))
-            });
+        let dir = self.cursor_acp_sessions.lock().unwrap_or_else(|e| e.into_inner()).clone().or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(|home| std::path::Path::new(&home).join(".cursor").join("acp-sessions"))
+        });
         let Some((used, window)) = dir.and_then(|dir| read_store_context(&dir, &acp_session)) else {
             return;
         };
@@ -601,15 +580,11 @@ impl TurnHost {
     }
 
     fn cursor_reply(&self, session_id: &str, rpc_id: &Value, result: Value) {
-        let _ = self
-            .agents
-            .write(session_id, &json!({ "jsonrpc": "2.0", "id": rpc_id, "result": result }).to_string());
+        let _ = self.agents.write(session_id, &json!({ "jsonrpc": "2.0", "id": rpc_id, "result": result }).to_string());
     }
 
     fn cursor_reply_error(&self, session_id: &str, rpc_id: &Value, error: Value) {
-        let _ = self
-            .agents
-            .write(session_id, &json!({ "jsonrpc": "2.0", "id": rpc_id, "error": error }).to_string());
+        let _ = self.agents.write(session_id, &json!({ "jsonrpc": "2.0", "id": rpc_id, "error": error }).to_string());
     }
 
     /// Stop a Cursor turn: `session/cancel`, and the turn ends when the
@@ -768,10 +743,7 @@ impl TurnHost {
             let Some(Live::Cursor(live)) = map.get(session_id) else {
                 return;
             };
-            (
-                classify_request(method, &params, &live.tools, &live.autonomy),
-                live.cancelled || live.settled,
-            )
+            (classify_request(method, &params, &live.tools, &live.autonomy), live.cancelled || live.settled)
         };
         match ask {
             CursorAsk::Unsupported => self.cursor_reply_error(session_id, &rpc_id, unsupported_error(method)),
@@ -782,9 +754,7 @@ impl TurnHost {
                     self.cursor_plan(session_id, call_id, title, text);
                 }
             }
-            CursorAsk::Approval { .. } if cancelled => {
-                self.cursor_reply(session_id, &rpc_id, permission_response(None))
-            }
+            CursorAsk::Approval { .. } if cancelled => self.cursor_reply(session_id, &rpc_id, permission_response(None)),
             CursorAsk::Questions(_) if cancelled => self.cursor_reply(session_id, &rpc_id, questions_cancelled()),
             CursorAsk::Questions(questions) if questions.is_empty() => {
                 self.cursor_reply(session_id, &rpc_id, questions_response(&questions, None))
@@ -792,9 +762,7 @@ impl TurnHost {
             CursorAsk::Approval { name, title, input, allow, reject } => {
                 let host = self.clone();
                 let session_id = session_id.to_string();
-                thread::spawn(move || {
-                    host.cursor_approval_wait(&session_id, rpc_id, name, title, input, allow, reject)
-                });
+                thread::spawn(move || host.cursor_approval_wait(&session_id, rpc_id, name, title, input, allow, reject));
             }
             CursorAsk::Questions(questions) => {
                 let host = self.clone();
@@ -852,24 +820,11 @@ impl TurnHost {
             "title": title,
             "input": input,
         });
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::ApprovalRequested {
-                request_id: ui_id,
-                name,
-                title,
-                input: Some(input),
-            },
-        );
+        self.transcripts
+            .apply(session_id, HarnessEvent::ApprovalRequested { request_id: ui_id, name, title, input: Some(input) });
         self.child_asks(session_id, asked);
         let decision = rx.recv().unwrap_or(ApprovalResolution::Cancelled);
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::ApprovalResolved {
-                request_id: ui_id,
-                decision: decision.clone(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::ApprovalResolved { request_id: ui_id, decision: decision.clone() });
         let decided = match decision {
             ApprovalResolution::Cancelled => {
                 self.cursor_reply(session_id, &rpc_id, permission_response(None));
@@ -898,36 +853,18 @@ impl TurnHost {
         let shown: Vec<crew_protocol::Question> = questions.iter().map(|asked| asked.question.clone()).collect();
         self.transcripts.set_status(session_id, "needs-input", None);
         let asked = json!({ "request_id": ui_id, "kind": "question", "questions": shown });
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::QuestionRequested {
-                request_id: ui_id,
-                questions: shown,
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::QuestionRequested { request_id: ui_id, questions: shown });
         self.child_asks(session_id, asked);
         let answers = match rx.recv().unwrap_or(QuestionReply::Cancelled) {
             QuestionReply::Cancelled => {
-                self.transcripts.apply(
-                    session_id,
-                    HarnessEvent::QuestionResolved {
-                        request_id: ui_id,
-                        answers: None,
-                    },
-                );
+                self.transcripts.apply(session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: None });
                 self.cursor_reply(session_id, &rpc_id, questions_cancelled());
                 return;
             }
             QuestionReply::Dismiss => None,
             QuestionReply::Answers(answers) => Some(answers),
         };
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::QuestionResolved {
-                request_id: ui_id,
-                answers: answers.clone(),
-            },
-        );
+        self.transcripts.apply(session_id, HarnessEvent::QuestionResolved { request_id: ui_id, answers: answers.clone() });
         self.transcripts.set_status(session_id, "working", None);
         self.cursor_reply(session_id, &rpc_id, questions_response(&questions, answers.as_ref()));
     }
@@ -1352,12 +1289,21 @@ mod tests {
     fn a_loads_replay_is_muted_until_its_answer() {
         let (host, cap) = host("s");
         running(&host, "s", Some(3));
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "old ask" } })));
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "old answer" } })));
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "old ask" } })),
+        );
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "old answer" } })),
+        );
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call", "toolCallId": "replay-0-1", "title": "`ls`", "kind": "execute", "rawInput": { "command": "ls" } })));
         assert_eq!(cap.take(), vec![]);
         host.handle_cursor_line("s", &json!({ "jsonrpc": "2.0", "id": 3, "result": {} }).to_string());
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "new" } })));
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "new" } })),
+        );
         assert_eq!(cap.take(), vec![HarnessEvent::MessageDelta { text: "new".into() }]);
     }
 
@@ -1369,13 +1315,21 @@ mod tests {
         running(&host, "s", None);
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call", "toolCallId": "m", "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": {} })));
         assert_eq!(cap.take(), vec![]);
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "title": "crew: message_agent", "rawInput": {
-            "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } })));
+        host.handle_cursor_line(
+            "s",
+            &update(
+                json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "title": "crew: message_agent", "rawInput": {
+            "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } }),
+            ),
+        );
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "status": "completed", "rawOutput": { "success": true } })));
         let events = cap.take();
         let HarnessEvent::ToolStarted { name, title, .. } = &events[0] else { panic!("{events:?}") };
         assert_eq!((name.as_str(), title.as_str()), ("mcp__crew__message_agent", "Crew message agent abc"));
-        assert!(matches!(events.last(), Some(HarnessEvent::ToolUpdated { status: Some(ToolStatus::Completed), .. })), "{events:?}");
+        assert!(
+            matches!(events.last(), Some(HarnessEvent::ToolUpdated { status: Some(ToolStatus::Completed), .. })),
+            "{events:?}"
+        );
     }
 
     /// A stop cancels the prompt; the call in flight gets no last update from
@@ -1386,16 +1340,27 @@ mod tests {
         let (host, cap) = host("s");
         running(&host, "s", None);
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call", "toolCallId": "t", "title": "`sleep 30`", "kind": "execute", "status": "pending", "rawInput": { "command": "sleep 30" } })));
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t", "status": "in_progress" })));
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t", "status": "in_progress" })),
+        );
         cap.take();
         // No process to write to: the caller would settle it; the call is closed either way.
         host.cursor_interrupt("s");
         assert_eq!(
             cap.take(),
-            vec![HarnessEvent::ToolUpdated { call_id: "t".into(), title: None, status: Some(ToolStatus::Interrupted), detail: None }]
+            vec![HarnessEvent::ToolUpdated {
+                call_id: "t".into(),
+                title: None,
+                status: Some(ToolStatus::Interrupted),
+                detail: None
+            }]
         );
         // What it says after the stop is not the turn's.
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "late" } })));
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "late" } })),
+        );
         assert_eq!(cap.take(), vec![]);
     }
 
@@ -1403,8 +1368,14 @@ mod tests {
     fn the_prompts_answer_ends_the_turn() {
         let (host, cap) = host("s");
         running(&host, "s", None);
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "hmm" } })));
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "done" } })));
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "hmm" } })),
+        );
+        host.handle_cursor_line(
+            "s",
+            &update(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "done" } })),
+        );
         host.handle_cursor_line("s", &json!({ "jsonrpc": "2.0", "id": 7, "result": { "stopReason": "end_turn" } }).to_string());
         assert_eq!(
             cap.take(),
@@ -1450,9 +1421,8 @@ mod tests {
     fn cursor_session(host: &TurnHost, kind: &str) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-cursor-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
-        let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
-            .expect("workspace")
-            .id;
+        let workspace =
+            crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into()).expect("workspace").id;
         let session = crate::session::create(
             host.test_store(),
             workspace,
@@ -1778,8 +1748,15 @@ mod tests {
         let k = Kept::child();
         k.say("one");
         let row = k.row();
-        crate::session::set_options(k.host.test_store(), k.session.clone(), row.model, row.effort, row.service_tier, "ask".into())
-            .expect("options");
+        crate::session::set_options(
+            k.host.test_store(),
+            k.session.clone(),
+            row.model,
+            row.effort,
+            row.service_tier,
+            "ask".into(),
+        )
+        .expect("options");
         k.say("two");
         let launches = k.launches();
         assert_eq!(launches.len(), 2, "{:?}", k.log());

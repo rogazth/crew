@@ -129,15 +129,11 @@ fn detached_from_repo(path: &str) -> bool {
 }
 
 fn count(tree: &mut Worktree, main_head: Option<&str>) {
-    tree.dirty = git(&tree.path, &["status", "--porcelain"])
-        .map(|out| out.lines().count() as u32)
-        .unwrap_or(0);
+    tree.dirty = git(&tree.path, &["status", "--porcelain"]).map(|out| out.lines().count() as u32).unwrap_or(0);
     let base = if tree.main {
         Some("HEAD".to_string())
     } else {
-        main_head
-            .and_then(|head| git(&tree.path, &["merge-base", "HEAD", head]))
-            .map(|out| out.trim().to_string())
+        main_head.and_then(|head| git(&tree.path, &["merge-base", "HEAD", head])).map(|out| out.trim().to_string())
     };
     if let Some(stat) = base.and_then(|base| git(&tree.path, &["diff", "--shortstat", &base])) {
         (tree.add, tree.del) = shortstat(&stat);
@@ -174,8 +170,7 @@ pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, Stri
         return Err("Branch name is required".into());
     }
     let main = main_checkout(path)?;
-    run(&main, &["check-ref-format", "--branch", branch])
-        .map_err(|_| format!("Not a valid branch name: {branch}"))?;
+    run(&main, &["check-ref-format", "--branch", branch]).map_err(|_| format!("Not a valid branch name: {branch}"))?;
     let repo = Path::new(&main).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let dir = root.join(repo).join(slug(branch));
     if dir.exists() {
@@ -212,10 +207,8 @@ pub fn remove(repo: &str, path: &str, force: bool) -> Result<String, String> {
         .map(|out| parse(&out))
         .map_err(|_| format!("{path} is not a git worktree"))?;
     let wanted = canonical(path);
-    let tree = trees
-        .iter()
-        .find(|tree| canonical(&tree.path) == wanted)
-        .ok_or_else(|| format!("{path} is not a git worktree"))?;
+    let tree =
+        trees.iter().find(|tree| canonical(&tree.path) == wanted).ok_or_else(|| format!("{path} is not a git worktree"))?;
     if tree.main {
         return Err("The main checkout cannot be removed".into());
     }
@@ -241,21 +234,13 @@ pub fn remove(repo: &str, path: &str, force: bool) -> Result<String, String> {
 
 /// The main checkout of the repo `path` is in, whichever worktree `path` is.
 pub fn main_checkout(path: &str) -> Result<String, String> {
-    let out = run(path, &["worktree", "list", "--porcelain"])
-        .map_err(|_| format!("{path} is not a git repository"))?;
-    parse(&out)
-        .into_iter()
-        .next()
-        .map(|tree| tree.path)
-        .ok_or_else(|| format!("{path} has no checkout to branch from"))
+    let out = run(path, &["worktree", "list", "--porcelain"]).map_err(|_| format!("{path} is not a git repository"))?;
+    parse(&out).into_iter().next().map(|tree| tree.path).ok_or_else(|| format!("{path} has no checkout to branch from"))
 }
 
 /// A branch as one folder name: `feat/avatars` is `feat-avatars`.
 pub fn slug(branch: &str) -> String {
-    branch
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
-        .collect()
+    branch.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect()
 }
 
 fn has_ref(dir: &str, name: &str) -> bool {
@@ -268,10 +253,7 @@ fn remote_branch(dir: &str, branch: &str) -> Option<String> {
     let remotes = git(dir, &["remote"])?;
     let mut remotes: Vec<&str> = remotes.lines().map(str::trim).filter(|r| !r.is_empty()).collect();
     remotes.sort_by_key(|remote| *remote != "origin");
-    remotes
-        .into_iter()
-        .map(|remote| format!("refs/remotes/{remote}/{branch}"))
-        .find(|name| has_ref(dir, name))
+    remotes.into_iter().map(|remote| format!("refs/remotes/{remote}/{branch}")).find(|name| has_ref(dir, name))
 }
 
 fn canonical(path: &str) -> PathBuf {

@@ -22,9 +22,8 @@ pub struct Workspace {
 pub fn list(store: &Store) -> Result<Vec<Workspace>, String> {
     store.with(|conn| {
         let home = read_state(conn, HOME_WORKSPACE_KEY)?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, name, path, created_at FROM workspaces ORDER BY sort_order ASC, created_at ASC",
-        )?;
+        let mut stmt =
+            conn.prepare_cached("SELECT id, name, path, created_at FROM workspaces ORDER BY sort_order ASC, created_at ASC")?;
         let rows = stmt.query_map([], |row| row_to_workspace(row, home.as_deref()))?;
         rows.collect()
     })
@@ -32,13 +31,7 @@ pub fn list(store: &Store) -> Result<Vec<Workspace>, String> {
 
 fn row_to_workspace(row: &rusqlite::Row, home: Option<&str>) -> rusqlite::Result<Workspace> {
     let id: String = row.get(0)?;
-    Ok(Workspace {
-        home: home == Some(id.as_str()),
-        id,
-        name: row.get(1)?,
-        path: row.get(2)?,
-        created_at: row.get(3)?,
-    })
+    Ok(Workspace { home: home == Some(id.as_str()), id, name: row.get(1)?, path: row.get(2)?, created_at: row.get(3)? })
 }
 
 pub fn get(store: &Store, id: String) -> Result<Option<Workspace>, String> {
@@ -62,10 +55,8 @@ pub fn home(store: &Store, folder: &std::path::Path) -> Result<Workspace, String
     }
     std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     let path = folder.to_string_lossy().into_owned();
-    let existing: Option<String> = store.with(|conn| {
-        conn.query_row("SELECT id FROM workspaces WHERE path = ?1", params![path], |row| row.get(0))
-            .optional()
-    })?;
+    let existing: Option<String> = store
+        .with(|conn| conn.query_row("SELECT id FROM workspaces WHERE path = ?1", params![path], |row| row.get(0)).optional())?;
     let id = match existing {
         Some(id) => id,
         None => create(store, "Home".into(), path)?.id,
@@ -83,21 +74,10 @@ pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, St
         return Err(format!("{path}: Not a directory"));
     }
 
-    let workspace = Workspace {
-        id: uuid::Uuid::new_v4().to_string(),
-        name,
-        path,
-        created_at: now_millis(),
-        home: false,
-    };
+    let workspace = Workspace { id: uuid::Uuid::new_v4().to_string(), name, path, created_at: now_millis(), home: false };
 
     let existing: Option<String> = store.with(|conn| {
-        conn.query_row(
-            "SELECT name FROM workspaces WHERE path = ?1",
-            params![workspace.path],
-            |row| row.get(0),
-        )
-        .optional()
+        conn.query_row("SELECT name FROM workspaces WHERE path = ?1", params![workspace.path], |row| row.get(0)).optional()
     })?;
     if let Some(name) = existing {
         return Err(format!("Already open as \"{name}\""));
@@ -106,13 +86,7 @@ pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, St
     store.with(|conn| {
         conn.execute(
             "INSERT INTO workspaces (id, name, path, created_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                workspace.id,
-                workspace.name,
-                workspace.path,
-                workspace.created_at,
-                workspace.created_at
-            ],
+            params![workspace.id, workspace.name, workspace.path, workspace.created_at, workspace.created_at],
         )
     })?;
 
@@ -124,12 +98,7 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     if name.is_empty() {
         return Err("Workspace name is required".into());
     }
-    store.with(|conn| {
-        conn.execute(
-            "UPDATE workspaces SET name = ?2 WHERE id = ?1",
-            params![id, name],
-        )
-    })?;
+    store.with(|conn| conn.execute("UPDATE workspaces SET name = ?2 WHERE id = ?1", params![id, name]))?;
     Ok(())
 }
 
@@ -168,10 +137,8 @@ pub fn resolve(store: &Store, id_or_path: &str) -> Result<Option<String>, String
         return Ok(None);
     }
     let path = canonical(path);
-    let mut roots: Vec<(std::path::PathBuf, String)> = list(store)?
-        .into_iter()
-        .map(|workspace| (canonical(std::path::Path::new(&workspace.path)), workspace.id))
-        .collect();
+    let mut roots: Vec<(std::path::PathBuf, String)> =
+        list(store)?.into_iter().map(|workspace| (canonical(std::path::Path::new(&workspace.path)), workspace.id)).collect();
     for session in crate::session::list_all(store)? {
         if let Some(worktree) = session.worktree {
             roots.push((canonical(std::path::Path::new(&worktree)), session.workspace_id));

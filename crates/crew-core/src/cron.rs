@@ -1,6 +1,4 @@
-const MONTHS: &[&str] = &[
-    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-];
+const MONTHS: &[&str] = &["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const DAYS: &[&str] = &["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const SEARCH_DAYS: i32 = 1830;
 
@@ -26,15 +24,7 @@ pub fn parse_cron(expression: &str) -> Option<CronSpec> {
     let dom = parse_field(parts[2], 1, 31, None, 0)?;
     let month = parse_field(parts[3], 1, 12, Some(MONTHS), 1)?;
     let dow = parse_field(parts[4], 0, 6, Some(DAYS), 0)?;
-    Some(CronSpec {
-        minute,
-        hour,
-        dom,
-        month,
-        dow,
-        dom_restricted: parts[2] != "*",
-        dow_restricted: parts[4] != "*",
-    })
+    Some(CronSpec { minute, hour, dom, month, dow, dom_restricted: parts[2] != "*", dow_restricted: parts[4] != "*" })
 }
 
 pub fn is_valid_cron(expression: &str) -> bool {
@@ -46,11 +36,7 @@ pub fn next_cron(spec: &CronSpec, from_ms: i64) -> Option<i64> {
     let start = cursor;
     for day in 0..SEARCH_DAYS {
         if matches_day(spec, cursor) {
-            let (floor_hour, floor_minute) = if day == 0 {
-                hour_minute(start)
-            } else {
-                (0, 0)
-            };
+            let (floor_hour, floor_minute) = if day == 0 { hour_minute(start) } else { (0, 0) };
             for &hour in &spec.hour {
                 if hour < floor_hour {
                     continue;
@@ -68,13 +54,7 @@ pub fn next_cron(spec: &CronSpec, from_ms: i64) -> Option<i64> {
     None
 }
 
-fn parse_field(
-    field: &str,
-    min: u32,
-    max: u32,
-    names: Option<&[&str]>,
-    name_base: u32,
-) -> Option<Vec<u32>> {
+fn parse_field(field: &str, min: u32, max: u32, names: Option<&[&str]>, name_base: u32) -> Option<Vec<u32>> {
     let mut values = std::collections::BTreeSet::new();
     for part in field.split(',') {
         let (range, step) = match part.split_once('/') {

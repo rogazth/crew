@@ -75,11 +75,7 @@ pub fn dir_list(path: &str) -> Result<DirListing, String> {
         })
         .collect();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
-    Ok(DirListing {
-        repo: is_repo(&dir),
-        path: dir.to_string_lossy().into_owned(),
-        entries,
-    })
+    Ok(DirListing { repo: is_repo(&dir), path: dir.to_string_lossy().into_owned(), entries })
 }
 
 /// The token a daemon that outlives its clients keeps across restarts, so a

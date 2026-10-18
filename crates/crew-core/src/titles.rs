@@ -116,11 +116,7 @@ fn ask_claude(child: &mut Child, description: &str) -> Result<String, String> {
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
         match parse_control_response(&record) {
             Some((id, answer)) if id == "2" => {
-                return answer?
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .and_then(clean)
-                    .ok_or_else(|| "claude title: no name".into())
+                return answer?.get("title").and_then(Value::as_str).and_then(clean).ok_or_else(|| "claude title: no name".into())
             }
             _ => {}
         }

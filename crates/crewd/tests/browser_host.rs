@@ -47,11 +47,8 @@ async fn send(ws: &mut Ws, id: u32, method: &str, params: Value) {
 /// The next text frame that `keep` accepts, skipping the rest.
 async fn next_where(ws: &mut Ws, keep: impl Fn(&Value) -> bool) -> Value {
     loop {
-        let message = tokio::time::timeout(Duration::from_secs(10), ws.next())
-            .await
-            .expect("timed out")
-            .expect("closed")
-            .expect("ws");
+        let message =
+            tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("timed out").expect("closed").expect("ws");
         let Message::Text(text) = message else { continue };
         let value: Value = serde_json::from_str(&text).expect("json");
         if keep(&value) {
@@ -84,7 +81,13 @@ async fn a_tool_call_goes_to_the_host_and_its_answer_comes_back() {
     assert_eq!(response(&mut window, 1).await["ok"], true);
 
     // No host yet: the call says what to do about it.
-    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } })).await;
+    send(
+        &mut window,
+        2,
+        "browser_tool",
+        json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } }),
+    )
+    .await;
     let refused = response(&mut window, 2).await;
     assert_eq!(refused["error"], "Open Crew to use the browser.");
 
@@ -92,7 +95,13 @@ async fn a_tool_call_goes_to_the_host_and_its_answer_comes_back() {
     send(&mut host, 1, "browser_host_register", json!({})).await;
     assert_eq!(response(&mut host, 1).await["ok"], true);
 
-    send(&mut window, 3, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } })).await;
+    send(
+        &mut window,
+        3,
+        "browser_tool",
+        json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } }),
+    )
+    .await;
     let call = event(&mut host, "browser-call").await;
     assert_eq!(call["tab"], "browser:a");
     assert_eq!(call["tool"], "browser_snapshot");
@@ -134,7 +143,13 @@ async fn a_failed_tool_and_a_departed_host_both_answer_the_caller() {
     send(&mut host, 1, "browser_host_register", json!({})).await;
     response(&mut host, 1).await;
 
-    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_act", "args": { "tab": "browser:b", "action": "click", "uid": "9_9" } })).await;
+    send(
+        &mut window,
+        2,
+        "browser_tool",
+        json!({ "workspaceId": "w1", "tool": "browser_act", "args": { "tab": "browser:b", "action": "click", "uid": "9_9" } }),
+    )
+    .await;
     let call = event(&mut host, "browser-call").await;
     send(&mut host, 2, "browser_result", json!({ "callId": call["callId"], "ok": false, "error": "Take a new snapshot" })).await;
     assert_eq!(response(&mut window, 2).await["error"], "Take a new snapshot");
@@ -157,7 +172,13 @@ async fn a_tab_the_window_closed_is_nobodys_default_any_more() {
     send(&mut host, 1, "browser_host_register", json!({})).await;
     response(&mut host, 1).await;
 
-    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:c" } })).await;
+    send(
+        &mut window,
+        2,
+        "browser_tool",
+        json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:c" } }),
+    )
+    .await;
     let call = event(&mut host, "browser-call").await;
     // It says when crewd stops waiting, so a call still queued by then is skipped.
     assert!(call["deadline"].as_i64().unwrap_or_default() > 0, "{call}");
@@ -200,7 +221,13 @@ async fn every_host_reports_its_tabs_and_a_call_goes_to_the_one_that_shows_it() 
     assert!(listed.contains("browser:a") && listed.contains("on Ada's Mac"), "{listed}");
     assert!(listed.contains("browser:s") && listed.contains("on Studio"), "{listed}");
 
-    send(&mut window, 3, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:s" } })).await;
+    send(
+        &mut window,
+        3,
+        "browser_tool",
+        json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:s" } }),
+    )
+    .await;
     let call = event(&mut studio, "browser-call").await;
     assert_eq!(call["tab"], "browser:s");
     send(&mut studio, 3, "browser_ack", json!({ "callId": call["callId"] })).await;
@@ -211,7 +238,13 @@ async fn every_host_reports_its_tabs_and_a_call_goes_to_the_one_that_shows_it() 
     ada.close(None).await.expect("close");
     drop(ada);
     let error = loop {
-        send(&mut window, 4, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } })).await;
+        send(
+            &mut window,
+            4,
+            "browser_tool",
+            json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:a" } }),
+        )
+        .await;
         let answer = response(&mut window, 4).await;
         let error = answer["error"].as_str().unwrap_or_default().to_string();
         if error.contains("no longer connected") {
