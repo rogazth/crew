@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -16,6 +17,7 @@ import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
 import type { Opener } from "../../chrome/ModelPicker";
 import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
+import { composerHints } from "../../lib/composerHints";
 import { accessesOf, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextAccess } from "../../lib/sessionOptions";
 import {
@@ -317,6 +319,7 @@ export function Composer({
   // The one round button: Stop while a turn runs and there is nothing to send, Send as soon as there is.
   const stopping = working && draft.trim().length === 0 && files.length === 0;
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
+  const hints = composerHints({ working, escBack, whileWorking });
 
   return (
     <div className={`relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
@@ -452,35 +455,17 @@ export function Composer({
         <span className="truncate text-placeholder">
           {optionsPending ? (
             <>The new settings apply with your next message, which restarts {session.name} where it left off</>
-          ) : working ? (
-            <>
-              <kbd className="font-sans">esc</kbd> {escBack ? "back" : "stop"}
-              {whileWorking === "steer" && (
-                <>
-                  {" "}· <kbd className="font-sans">↵</kbd> add to the turn · <kbd className="font-sans">⌘↵</kbd> next turn
-                </>
-              )}
-              {whileWorking === "queue" && (
-                <>
-                  {" "}· <kbd className="font-sans">↵</kbd> queue
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              {escBack && (
-                <>
-                  <kbd className="font-sans">esc</kbd> back ·{" "}
-                </>
-              )}
-              <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · / command
-              {onOptions && (
-                <>
-                  {" "}· <kbd className="font-sans">⇧⇥</kbd> access
-                </>
-              )}
-            </>
-          )}
+          ) : hints.length > 0 ? (
+            // Only while a turn runs: an idle composer's keys do what they seem to.
+            <span data-key-hints>
+              {hints.map(({ key, does }, index) => (
+                <Fragment key={key}>
+                  {index > 0 && " · "}
+                  <kbd className="font-sans">{key}</kbd> {does}
+                </Fragment>
+              ))}
+            </span>
+          ) : null}
         </span>
       </div>
     </div>

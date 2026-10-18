@@ -114,6 +114,11 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   await stop.waitFor();
   const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
   const before = await interrupts();
+  // The key hints show only while the turn runs.
+  const hints = visible("[data-status-line] [data-key-hints]");
+  await hints.waitFor();
+  assert.match(await hints.innerText(), /esc stop/);
+  await shoot("composer-working");
 
   await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
   await sheet().waitFor();
@@ -126,6 +131,9 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   await composer().press("Escape");
   await stop.waitFor({ state: "detached" });
   await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
+  await hints.waitFor({ state: "detached" });
+  assert.doesNotMatch(await visible("[data-status-line]").innerText(), /send|new line/, "an idle composer shows no key hints");
+  await shoot("composer-idle");
 });
 
 /** With E2E_SHOTS set, the window as it is, light and dark. */

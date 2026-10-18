@@ -145,7 +145,9 @@ transcript. The prototype is never committed.
     it once.
 13. **Esc goes back one level, always.** In a thread, Esc never stops the
     child's turn (the composer's Stop button does, and the hint line says
-    `esc back · ↵ add to its turn`). The thread's open sheet or picker takes
+    `esc back · ↵ add to its turn`; decided 2026-10-17: the key hints under
+    the composer show only while a turn runs, in a thread or a chat, and an
+    idle composer shows none). The thread's open sheet or picker takes
     Esc first, as the composer's sheets do today. Threads stack: an
     independent session opened in place may show its own subagents, and
     opening one makes the crumb `orchestrator / refunds-api / scout`; each
