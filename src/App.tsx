@@ -55,6 +55,8 @@ import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
 import { useTour } from "./hooks/useTour";
 import type { Process } from "./lib/processes";
+// PROTOTYPE — throwaway: the review picker, dev builds only.
+import { ReviewPicker } from "./prototype/design-system/review/ReviewPicker";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
 const NO_PROCESSES: Process[] = [];
@@ -589,6 +591,55 @@ export function App() {
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
       <UpdateDialog />
+
+      {import.meta.env.DEV && (
+        <ReviewPicker
+          control={{
+            workspaces: workspaces.workspaces,
+            activeId: workspaceId,
+            remoteOf: envs.remoteOf,
+            sessions,
+            worktrees: worktrees.list,
+            currentTree: current?.path ?? null,
+            processes: processes.processes,
+            panes: tabs.panes,
+            activate: workspaces.activate,
+            selectWorktree: work.selectWorktree,
+            reset: () => {
+              closePage();
+              setPalette(null);
+              setDialog(null);
+              sheet.close();
+              confirms.close();
+              envs.closePicker();
+              setSidebarOpen(true);
+              if (explorer.open) explorer.close();
+            },
+            openSession: nav.openSession,
+            newSession: () => void newSession(),
+            openTab: (tab) => {
+              closePage();
+              tabs.open(tab);
+            },
+            openStub: nav.openStub,
+            openFile: (relative) => treePath && openFile({ path: `${treePath}/${relative}`, relative, name: relative.split("/").pop() ?? relative }),
+            openProcessRun: nav.openProcessRun,
+            openExplorer: (mode) => {
+              closePage();
+              explorer.setMode(mode);
+            },
+            openSettings,
+            addMachine: envs.addMachine,
+            openRoutines,
+            editBot: sheet.editBot,
+            newBot: () => sheet.newBot(),
+            openPalette: (mode) => setPalette(mode),
+            openDialog: (which) => setDialog(which),
+            openMachines: envs.openWorkspace,
+            askDelete: confirms.askSession,
+          }}
+        />
+      )}
 
       <BotSheetHost
         sheet={sheet}

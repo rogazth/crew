@@ -12,6 +12,7 @@
 // cargo build -p crewd.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -429,6 +430,16 @@ const tunnel = await processDef("Tunnel", "cloudflared tunnel --url http://local
 // nobody answers at: offline, with the workspace the window last saw there.
 const MACHINE_PORT = 1431;
 const MACHINE_TOKEN = "seed-devbox-token";
+// A devbox left up by another app:design would answer instead, and take the seed.
+const taken = await new Promise((resolve) => {
+  const probe = createServer().once("error", () => resolve(true));
+  probe.listen(MACHINE_PORT, "127.0.0.1", () => probe.close(() => resolve(false)));
+});
+if (taken) {
+  console.error(`seed: port ${MACHINE_PORT} is taken, likely by another app:design's devbox. Quit it and seed again.`);
+  daemon.kill("SIGTERM");
+  process.exit(1);
+}
 const machineDir = join(DATA, "machines/devbox");
 mkdirSync(machineDir, { recursive: true });
 writeFileSync(join(machineDir, "token"), MACHINE_TOKEN, { mode: 0o600 });
@@ -1328,7 +1339,7 @@ const rwBg = {
     state: "running",
     activity: "Reading app/Services/TransferService.php",
   }),
-  rows: tool("Task", "Count rows per account", { kind: "agent", description: "Count rows per account", agentType: "general-purpose", prompt: "How many transactions does each account have, and the biggest month?", background: true, state: "completed" }),
+  rows: tool("Task", "Count rows per account", { kind: "agent", description: "Count rows per account", agentType: "general-purpose", prompt: "How many transactions does each account have, and the biggest month?", background: true, state: "done" }),
   serve: tool("Bash", "App server", { kind: "command", command: "php artisan serve --port 8010", output: "Command running in background with ID: bg-serve" }),
   vite: tool("Bash", "Vite", { kind: "command", command: "npm run dev", output: "Command running in background with ID: bg-vite" }),
   queue: tool("Bash", "Queue worker", { kind: "command", command: "php artisan queue:work --tries=3", output: "Command running in background with ID: bg-queue" }),
@@ -1667,6 +1678,8 @@ beaconBlocks.push({ ...tool("Edit", "Edit cli/main.go", { kind: "edit", path: "c
 transcript(atlas.id, atlasBlocks);
 transcript(beacon.id, beaconBlocks);
 transcript(comet.id, cometBlocks);
+// Twenty letters in a row woke Comet without the user: it is paused until they write.
+sql.push(`INSERT OR REPLACE INTO app_state (key, value) VALUES (${q(`auto_turns:${comet.id}`)}, '20');`);
 
 // ---------- devbox, straight to its own database ----------
 

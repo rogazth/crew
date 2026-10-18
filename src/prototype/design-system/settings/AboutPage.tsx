@@ -74,7 +74,7 @@ function Hero({ channel }: { channel: "stable" | "beta" }) {
           {channel === "beta" ? "Beta" : "Stable"}
         </Chip>
         <span className="size-0.5 rounded-full bg-text-muted" />
-        <span className="font-mono">adc0090</span>
+        <span className="font-mono">{BUILD.find(([label]) => label === "Commit")?.[1]}</span>
       </div>
     </header>
   );

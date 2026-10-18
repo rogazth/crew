@@ -129,14 +129,14 @@ export function boot() {
 
 /** The release a simulated update offers. */
 export const RELEASE = {
-  version: "0.3.14",
-  current: "0.3.13",
-  size: "48.2 MB",
-  date: "October 14, 2026",
+  version: "0.3.16",
+  current: "0.3.15",
+  size: "48.6 MB",
+  date: "October 20, 2026",
   notes: [
-    { kind: "new", text: "Big attachments upload to remote machines in pieces, with progress." },
-    { kind: "new", text: "Files picked in the dialog are sent to the remote machine too." },
-    { kind: "improved", text: "A nameless shell shows its command as the row's preview." },
-    { kind: "fixed", text: "Background subagents no longer leave a stray wake note." },
+    { kind: "new", text: "Agents on remote machines drive their workspace's tabs in Crew's browser." },
+    { kind: "improved", text: "Pages see Google Chrome, so bot checks stop challenging Crew's browser." },
+    { kind: "improved", text: "The composer shows its key hints only while a turn runs." },
+    { kind: "fixed", text: "crewd keeps installing on a remote machine when lingering is refused." },
   ],
 } as const;

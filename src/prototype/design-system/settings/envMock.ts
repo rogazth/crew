@@ -41,7 +41,7 @@ export type EnvMock = {
   busy: string | null;
 };
 
-export const CURRENT_CREWD = "0.3.13";
+export const CURRENT_CREWD = "0.3.15";
 
 const INITIAL: EnvMock[] = [
   {
@@ -105,7 +105,7 @@ const INITIAL: EnvMock[] = [
     os: "Debian 12",
     arch: "aarch64",
     platform: "linux",
-    crewd: "0.3.11",
+    crewd: "0.3.13",
     state: "connected",
     latency: 142,
     relay: true,
@@ -373,8 +373,8 @@ export function runSetup(target: SetupTarget, onStep: (steps: SetupStep[]) => vo
       set("probe", { state: "running" });
     });
     at(2700, () => {
-      set("probe", { state: "done", detail: hasCrewd ? `crewd 0.3.12 at ~/.crew/bin/crewd` : "Not installed · Ubuntu 24.04 x86_64" });
-      set("install", { state: "running", progress: 0, detail: hasCrewd ? "Updating to 0.3.13" : "Uploading crewd 0.3.13 (18.1 MB)" });
+      set("probe", { state: "done", detail: hasCrewd ? `crewd 0.3.14 at ~/.crew/bin/crewd` : "Not installed · Ubuntu 24.04 x86_64" });
+      set("install", { state: "running", progress: 0, detail: hasCrewd ? "Updating to 0.3.15" : "Uploading crewd 0.3.15 (18.1 MB)" });
     });
     const installMs = hasCrewd ? 1200 : 3000;
     for (let i = 1; i <= 20; i += 1)
@@ -382,7 +382,7 @@ export function runSetup(target: SetupTarget, onStep: (steps: SetupStep[]) => vo
         const progress = i / 20;
         set("install", {
           progress,
-          detail: progress < 1 ? `Uploading crewd 0.3.13 · ${(18.1 * progress).toFixed(1)} of 18.1 MB` : "Installed at ~/.crew/bin/crewd",
+          detail: progress < 1 ? `Uploading crewd 0.3.15 · ${(18.1 * progress).toFixed(1)} of 18.1 MB` : "Installed at ~/.crew/bin/crewd",
         });
       });
     const t = 2700 + installMs;

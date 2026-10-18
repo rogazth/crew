@@ -414,19 +414,36 @@ export function syncInstalled(found: ProviderId[]) {
 /* ── Crew itself ────────────────────────────────────────────────────── */
 
 export const BUILD: [string, string][] = [
-  ["Version", "0.3.13 (arm64)"],
-  ["Commit", "adc0090"],
-  ["Built", "October 13, 2026"],
+  ["Version", "0.3.15 (arm64)"],
+  ["Commit", "1b41045"],
+  ["Built", "October 17, 2026"],
   ["Electron", "44.2.0"],
   ["Chromium", "150.0.7811.42"],
   ["Node", "24.11.0"],
-  ["Daemon", "crewd 0.3.13"],
+  ["Daemon", "crewd 0.3.15"],
   ["macOS", "14.6 (23G80)"],
 ];
 
 export type ChangeKind = "new" | "improved" | "fixed";
 
 export const CHANGELOG: { version: string; date: string; notes: { kind: ChangeKind; text: string }[] }[] = [
+  {
+    version: "0.3.15",
+    date: "October 17, 2026",
+    notes: [
+      { kind: "improved", text: "The composer shows its key hints only while a turn runs." },
+      { kind: "fixed", text: "crewd keeps installing on a remote machine when lingering is refused, and warns it may stop at logout." },
+    ],
+  },
+  {
+    version: "0.3.14",
+    date: "October 15, 2026",
+    notes: [
+      { kind: "new", text: "Agents on remote machines drive their workspace's tabs in Crew's browser." },
+      { kind: "improved", text: "Pages see Google Chrome, so bot checks stop challenging Crew's browser." },
+      { kind: "fixed", text: "After /clear, a relaunch follows claude to its new conversation." },
+    ],
+  },
   {
     version: "0.3.13",
     date: "October 13, 2026",

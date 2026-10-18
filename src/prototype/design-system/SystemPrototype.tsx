@@ -551,8 +551,8 @@ function Updater() {
             <div className="flex items-start gap-3 p-4 pb-3">
               <CrewGlyph className="size-9" />
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[15px] font-semibold tracking-[-0.01em]">Crew 0.3.14</span>
-                <span className="text-[12px] text-text-muted">You are on 0.3.13 · 48.2 MB</span>
+                <span className="text-[15px] font-semibold tracking-[-0.01em]">Crew 0.3.16</span>
+                <span className="text-[12px] text-text-muted">You are on 0.3.15 · 48.6 MB</span>
               </div>
               <IconButton icon={XIcon} label="Close" className="size-7" />
             </div>
@@ -596,14 +596,14 @@ function UpdatePill({ phase }: { phase: "available" | "downloading" | "ready" })
           <RotateCwIcon className="size-3.5" />
         </span>
         <span className="font-medium">Restart to update</span>
-        <span className="ml-auto text-[12px] opacity-75">0.3.14</span>
+        <span className="ml-auto text-[12px] opacity-75">0.3.16</span>
       </button>
     );
   if (phase === "downloading")
     return (
       <div className="flex h-9 w-60 items-center gap-2.5 rounded-full bg-canvas pr-3 pl-1.5 ring-1 ring-hairline">
         <ProgressRing value={0.42} />
-        <span>Downloading 0.3.14</span>
+        <span>Downloading 0.3.16</span>
         <span className="ml-auto text-[12px] text-text-muted tabular-nums">42%</span>
       </div>
     );
@@ -612,7 +612,7 @@ function UpdatePill({ phase }: { phase: "available" | "downloading" | "ready" })
       <span className="grid size-6 place-items-center rounded-full bg-accent/14 text-accent">
         <ArrowDownToLineIcon className="size-3.5" />
       </span>
-      <span>Crew 0.3.14 is out</span>
+      <span>Crew 0.3.16 is out</span>
       <span className="ml-auto size-2 rounded-full bg-accent" />
     </button>
   );

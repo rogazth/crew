@@ -36,7 +36,7 @@ export function Toaster({ onOpen }: { onOpen: (target: NotificationTarget) => vo
   return (
     <Toast.Provider toastManager={toastManager} limit={3}>
       <Toast.Portal>
-        <Toast.Viewport className="fixed right-4 bottom-4 z-50 w-[340px] max-w-[calc(100vw-32px)] outline-none">
+        <Toast.Viewport data-toaster className="fixed right-4 bottom-4 z-50 w-[340px] max-w-[calc(100vw-32px)] outline-none">
           <Toasts onOpen={onOpen} />
         </Toast.Viewport>
       </Toast.Portal>

@@ -251,7 +251,7 @@
   background: var(--color-sidebar);
 }
 /* The workspace under the tabs, and a page (settings, routines) on its own. */
-[data-direction] main > div:not([hidden]) > div.min-h-0.flex-1:last-child,
+[data-direction] main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child,
 [data-direction] main > div.h-full {
   margin: 0 8px 8px 8px;
   border-radius: 14px;
@@ -270,7 +270,7 @@
 [data-direction] aside[data-sidebar="sidebar"] > button[data-sidebar="resize-handle"]::after {
   display: none;
 }
-[data-direction] main > div:not([hidden]) > div.min-h-0.flex-1:last-child::after,
+[data-direction] main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child::after,
 [data-direction] main > div.h-full::after {
   --edge: color-mix(in oklab, var(--color-focus) 35%, transparent);
   content: "";
@@ -286,13 +286,13 @@
   transition: opacity 140ms var(--ease-out);
 }
 [data-direction] body:has(button[data-sidebar="resize-handle"]:is(:hover, :active)) :is(
-    main > div:not([hidden]) > div.min-h-0.flex-1:last-child,
+    main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child,
     main > div.h-full
   )::after {
   opacity: 1;
 }
 /* Beside the sidebar, the sidebar is the gutter. */
-[data-direction] aside[data-sidebar="sidebar"] ~ main > div:not([hidden]) > div.min-h-0.flex-1:last-child,
+[data-direction] aside[data-sidebar="sidebar"] ~ main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child,
 [data-direction] aside[data-sidebar="sidebar"] ~ main > div.h-full {
   margin-left: 0;
 }
@@ -406,4 +406,16 @@
 }
 [data-direction] [data-filter-chip]:focus-visible {
   box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+
+/* The review picker sits where toasts land (dev builds only): they rise above it. */
+:root[data-review-bar] [data-toaster] {
+  bottom: 56px;
+}
+
+/* Cursor's mark is ink on nothing: on a dark ground it turns light, like a glyph would. */
+@media (prefers-color-scheme: dark) {
+  [data-direction] img[src*="cursor"] {
+    filter: invert(1);
+  }
 }

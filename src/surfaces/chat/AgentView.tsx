@@ -168,7 +168,13 @@ export function AgentView({
 
   const tokens = tokensLabel(entry);
   const model = modelLine(entry);
-  const state = entry.state[0]!.toUpperCase() + entry.state.slice(1);
+  // Still running, but what waits on the user says so: the same words as the status line.
+  const state =
+    entry.attention === 'approval'
+      ? 'Needs approval'
+      : entry.attention === 'question'
+        ? 'Asks'
+        : entry.state[0]!.toUpperCase() + entry.state.slice(1);
   const branch = worktree ? worktree.split('/').pop() : null;
   const meta: ReactNode[] = [KIND_LABEL[entry.kind]];
   if (entry.kind === 'shell') meta.push(command?.command ?? entry.title);
@@ -208,7 +214,7 @@ export function AgentView({
           {model && <span className="shrink-0 text-[12px] text-text-muted">{model}</span>}
           <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums">
-            <StateDot state={entry.state} />
+            {entry.attention ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" /> : <StateDot state={entry.state} />}
             <span className="text-text">{state}</span>
             {elapsed}
           </span>

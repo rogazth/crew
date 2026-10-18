@@ -5,6 +5,9 @@
 //   npm run app:design -- --reseed                  → wipes the profile and seeds it again
 //   npm run app:design -- --missing=cursor,opencode → those CLIs read as not installed
 //
+// In the app, ⌃⌥S opens the review picker: every state worth looking at in
+// this profile, one pick away (⌃⌥← and ⌃⌥→ step through them in order).
+//
 // Next to the app it brings up what the seed cannot leave running
 // (seed-live.json): devbox, a second crewd served the way a remote machine's
 // is, and the crew workspace's process runs.

@@ -537,57 +537,18 @@ export function Composer({
             </span>
           ) : (
             !centered && (
-              <span className="ds-hints">
-                {working ? (
-                  <>
-                    {whileWorking === "steer" && (
-                      <>
-                        <span>
-                          <kbd>↵</kbd>add to the turn
-                        </span>
-                        <span>
-                          <kbd>⌘↵</kbd>next turn
-                        </span>
-                      </>
-                    )}
-                    {whileWorking === "queue" && (
-                      <span>
-                        <kbd>↵</kbd>queue
-                      </span>
-                    )}
-                    {/* The strip over the composer already says how to stop. */}
-                    {escBack && (
-                      <span>
-                        <kbd>esc</kbd>back
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <span>
-                      <kbd>↵</kbd>send
+              // Only while a turn runs, as the shipped composer: then the keys do
+              // something other than they seem to. The strip over the composer
+              // already says how to stop, so esc shows only when it goes back.
+              <span className="ds-hints" data-shown>
+                {hints
+                  .filter(({ key, does }) => key !== "esc" || does === "back")
+                  .map(({ key, does }) => (
+                    <span key={key}>
+                      <kbd>{key}</kbd>
+                      {does}
                     </span>
-                    <span>
-                      <kbd>⇧↵</kbd>new line
-                    </span>
-                    <span>
-                      <kbd>@</kbd>file
-                    </span>
-                    <span>
-                      <kbd>/</kbd>command
-                    </span>
-                    {onOptions && (
-                      <span>
-                        <kbd>⇧⇥</kbd>access
-                      </span>
-                    )}
-                    {escBack && (
-                      <span>
-                        <kbd>esc</kbd>back
-                      </span>
-                    )}
-                  </>
-                )}
+                  ))}
               </span>
             )
           )}

@@ -22,9 +22,10 @@ import {
   TriangleAlertIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Button, Field, Footer, IconButton, Overlay, PANEL, ROW, Switch, TextInput } from "../../../chrome/kit";
 import { ProviderIcon } from "../../../chrome/ProviderIcon";
+import { subscribeAdd, takeAddRequest } from "../../../lib/remoteUi";
 import { AddMachineFlow } from "./AddMachineFlow";
 import {
   CURRENT_CREWD,
@@ -49,7 +50,9 @@ let prefs = { relay: true, wake: true };
 export function EnvironmentsPage() {
   const envs = useEnvs();
   const providers = useAllProviders();
-  const [adding, setAdding] = useState(false);
+  // "Add a machine…" from the machine picker lands here, as on the shipped page.
+  const [adding, setAdding] = useState(() => takeAddRequest());
+  useEffect(() => subscribeAdd(() => setAdding(true)), []);
   const [renaming, setRenaming] = useState<EnvMock | null>(null);
   const [removing, setRemoving] = useState<EnvMock | null>(null);
   const [logs, setLogs] = useState<EnvMock | null>(null);
