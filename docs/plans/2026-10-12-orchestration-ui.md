@@ -279,10 +279,9 @@ F's `Hang`). Names of agents and bots are `PeerName`s (mark or face + name, in
 
 ## Open questions
 
-- **Can the user write to a native subagent?** Claude's subagents take no
-  input once started; Codex's agent threads might (`turn/steer` on the child
-  thread). Recommendation: no composer for any native subagent in this
-  round; revisit per provider when one proves it, by flipping `writable`.
+- **Can the user write to a native subagent?** Decided 2026-10-17: no, for
+  any provider, now or later. A native subagent is its parent's to talk to;
+  its thread has no composer.
 - **Should a session's x in the sheet interrupt or stop it?** Recommendation:
   interrupt (decision 7). It is the user's session; ending its process is the
   sidebar's job.
