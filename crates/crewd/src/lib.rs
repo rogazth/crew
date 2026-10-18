@@ -30,11 +30,11 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names,
-    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId, SessionOptions,
-    SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail, TurnAnswer,
-    TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
+    self as proto, Auth, BotNotes, BotNotesSet, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
+    NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
+    PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
+    SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
+    TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -453,6 +453,17 @@ impl ToolDispatch {
         };
         run(&host)
     }
+}
+
+/// A bot's notes, after writing `entries` when given. Only a bot has notes.
+fn bot_notes(store: &Store, id: &str, entries: Option<Vec<String>>) -> Result<BotNotes, String> {
+    use crew_core::notes;
+    let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
+    let entries = match entries {
+        Some(entries) => notes::set(store, &row.id, entries)?,
+        None => notes::get(store, &row.id)?,
+    };
+    Ok(BotNotes { used: notes::used(&entries) as u32, cap: notes::CAP as u32, entries })
 }
 
 fn proto_session(row: &crew_core::session::Session) -> proto::Session {
@@ -1391,6 +1402,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
             }
             Ok(Value::Null)
+        }
+        "bot_notes_get" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || bot_notes(&store, &id, None)).await?)
+        }
+        // The user's edit, every entry at once: the sheet sends what it shows.
+        "bot_notes_set" => {
+            let BotNotesSet { id, entries } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || bot_notes(&store, &id, Some(entries))).await?)
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
@@ -2526,6 +2548,36 @@ mod tests {
             (updated.session.id.as_str(), updated.session.description.as_str()),
             (session_id.as_str(), "You keep the notes.")
         );
+        handle.shutdown();
+    }
+
+    /// What a bot writes with `memory` is what the sheet reads, and the
+    /// user's edit from the sheet is what the bot reads next.
+    #[tokio::test]
+    async fn the_bot_sheet_reads_and_writes_the_notes_the_bot_keeps() {
+        let dir = test_dir("bot-notes");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+        let info = bridge.info().expect("info");
+        let payload = serde_json::json!({
+            "token": bridge.mint(&session_id),
+            "method": "tools/call",
+            "params": { "name": "memory", "arguments": { "action": "add", "content": "el item es 7731942" } }
+        });
+        let reply = unix_call(&info.socket_path, &payload);
+        assert!(reply["result"]["isError"].as_bool() != Some(true), "reply: {reply}");
+        let read = rpc(&mut ws, 50, "bot_notes_get", serde_json::json!({ "id": session_id })).await;
+        let notes: BotNotes = serde_json::from_value(read.result.expect("notes")).expect("notes");
+        assert_eq!(notes, BotNotes { entries: vec!["el item es 7731942".into()], used: 18, cap: 4_000 });
+
+        let edit = serde_json::json!({ "id": session_id, "entries": ["el item es 7731942 ", "", "comprado"] });
+        let set: BotNotes = serde_json::from_value(rpc(&mut ws, 51, "bot_notes_set", edit).await.result.expect("set")).unwrap();
+        assert_eq!(set.entries, vec!["el item es 7731942", "comprado"]);
+        let again = rpc(&mut ws, 53, "bot_notes_get", serde_json::json!({ "id": session_id })).await;
+        assert_eq!(serde_json::from_value::<BotNotes>(again.result.expect("notes")).unwrap(), set);
+        let over = serde_json::json!({ "id": session_id, "entries": ["x".repeat(4_001)] });
+        assert!(rpc(&mut ws, 52, "bot_notes_set", over).await.result.is_none(), "over the cap");
         handle.shutdown();
     }
 

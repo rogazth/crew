@@ -889,6 +889,7 @@ impl TurnHost {
         let branch = crate::worktree::current_branch(cwd);
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
+            let notes = crate::notes::get(&self.store, &session.id).unwrap_or_default();
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
                 id: &session.id,
@@ -896,6 +897,7 @@ impl TurnHost {
                 place,
                 harness,
                 tools: &tools,
+                notes: &notes,
             }));
         }
         let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
@@ -4799,6 +4801,7 @@ mod mailbox_tests {
         assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
         let prompt = second["prompt"].as_str().unwrap();
         assert!(system.contains("`crew_read_session`") && !prompt.contains("You are Coder,"), "{prompt}");
+        assert!(system.contains("### Your notes [0% - 0/4,000]"), "the notes are on every turn: {system}");
         assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
         assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
         assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");

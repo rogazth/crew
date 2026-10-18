@@ -471,7 +471,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "update_description",
-            description: "Rewrite your own description: the standing instructions you are handed at the top of every turn. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
+            description: "Rewrite your own description: who you are and the standing rules you work by, handed to you at the top of every turn. Not for facts, progress or anything that changes; those go in your notes, with memory. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -481,6 +481,20 @@ pub(crate) fn catalog() -> Vec<Tool> {
             }),
             audience: Audience::BOTS,
             cli: vec![cli("bots", "set-description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\"")],
+        },
+        Tool {
+            name: "memory",
+            description: "Your notes: what you keep for later turns, shown to you at the top of every turn. For facts the conversation will not hold for long: ids, prices, what you were allowed, decisions, what is pending. add an entry; patch the one entry that holds old_text into content; remove the one that holds old_text; show them. An exact repeat is not added twice. They hold at most 4,000 characters: a write over that is refused with your notes as they are, so merge, shorten or remove entries first.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["add", "patch", "remove", "show"], "description": "show by default." },
+                    "content": { "type": "string", "description": "add: the new entry. patch: what the entry becomes." },
+                    "old_text": { "type": "string", "description": "patch, remove: a piece of the entry, enough to tell it from the others." }
+                }
+            }),
+            audience: Audience::BOTS,
+            cli: vec![cli("bots", "notes").rest(&["action", "content"]).eg("crew bots notes\n  crew bots notes add the staging password is in 1Password\n  crew bots notes patch --old-text staging the staging password moved to Vault\n  crew bots notes remove --old-text staging")],
         },
         Tool {
             name: "list_routines",
@@ -560,8 +574,16 @@ const ON_DEMAND_META: &str = "anthropic/alwaysLoad";
 /// lookalike of (`delegate`, `send_message`), which a model that cannot see
 /// ours reaches for instead.
 pub fn on_demand(name: &str) -> bool {
-    const LOADED: &[&str] =
-        &["list_peers", "send_message", "delegate", "start_session", "read_session", "stop_session", "update_description"];
+    const LOADED: &[&str] = &[
+        "list_peers",
+        "send_message",
+        "delegate",
+        "start_session",
+        "read_session",
+        "stop_session",
+        "update_description",
+        "memory",
+    ];
     !LOADED.contains(&name)
 }
 
@@ -802,6 +824,7 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
     match name {
         "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
+        "memory" => memory(store, bot(caller, name)?, args),
         "list_routines" => list_routines(store, caller, args),
         "save_routine" => save_routine(store, host.transcripts, host.on_routines, caller, args),
         "delete_routine" => delete_routine(store, host.transcripts, host.on_routines, caller, args),
@@ -840,6 +863,45 @@ fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Sessi
         "description": body,
         "note": "This is what you will be told you are at the top of your next turn."
     }))
+}
+
+/// `memory`: a bot's notes, read or written an entry at a time.
+fn memory(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
+    use crate::notes::{self, Edit, Refused};
+    let entries = notes::get(store, &caller.id)?;
+    let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+    let old = args.get("old_text").and_then(Value::as_str).unwrap_or("");
+    let edit = match text(args.get("action")).as_deref().unwrap_or("show") {
+        "show" => return Ok(listing(&entries, None)),
+        "add" => Edit::Add(content),
+        "patch" => Edit::Patch { old, new: content },
+        "remove" => Edit::Remove(old),
+        other => return Err(format!("Unknown action \"{other}\". One of: add, patch, remove, show")),
+    };
+    match notes::apply(&entries, edit) {
+        Ok(next) if next == entries => Ok(listing(&next, Some("Nothing changed: that entry is already there."))),
+        Ok(next) => {
+            let next = notes::set(store, &caller.id, next)?;
+            Ok(listing(&next, Some("Saved. You will see these at the top of your next turn.")))
+        }
+        Err(Refused::Asked(why)) => Err(why),
+        // The notes come back with the refusal: the bot cannot make room
+        // without seeing what takes it.
+        Err(Refused::Full { needed }) => Err(format!(
+            "Your notes are full: that needs {needed} more characters than they hold. Make room first (merge entries \
+             that overlap, shorten them, remove what is done), then try again.\nYour notes {}:\n{}",
+            notes::usage(&entries),
+            entries.join(notes::SEPARATOR)
+        )),
+    }
+}
+
+fn listing(entries: &[String], note: Option<&str>) -> Value {
+    let mut out = json!({ "usage": crate::notes::usage(entries), "entries": entries });
+    if let Some(note) = note {
+        out["note"] = json!(note);
+    }
+    out
 }
 
 fn create_bot(
@@ -1255,6 +1317,46 @@ mod tests {
             assert!(body(&out).starts_with(&format!("Unknown tool \"{gateway}\"")), "{}", body(&out));
         }
         assert_eq!(crate::mailbox::waiting_count(&store, &cuddles.id).unwrap(), 0, "the gateway still delivers");
+    }
+
+    /// A bot writes its notes an entry at a time; a write that needs a choice
+    /// it did not make, or more room than there is, is refused with what to do.
+    #[test]
+    fn a_bot_keeps_notes_an_entry_at_a_time() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let home = bot(&store, &ws, "Home");
+        let run = |args: Value| call(&store, &transcripts, &home, "memory", args).expect("call");
+        let out = run(json!({ "action": "add", "content": "silla: id 7731942" }));
+        assert!(!is_error(&out), "{}", body(&out));
+        run(json!({ "action": "add", "content": "mesa: id 5512" }));
+        let again = run(json!({ "action": "add", "content": "mesa: id 5512" }));
+        assert!(body(&again).contains("Nothing changed"), "{}", body(&again));
+        let both = run(json!({ "action": "remove", "old_text": "id" }));
+        assert!(is_error(&both) && body(&both).contains("2 entries"), "{}", body(&both));
+        run(json!({ "action": "patch", "old_text": "silla", "content": "silla: comprada" }));
+        assert_eq!(crate::notes::get(&store, &home.id).unwrap(), vec!["silla: comprada", "mesa: id 5512"]);
+        let shown = run(json!({}));
+        assert!(body(&shown).contains("silla: comprada") && body(&shown).contains("/4,000]"), "{}", body(&shown));
+
+        let full = run(json!({ "action": "add", "content": "x".repeat(crate::notes::CAP) }));
+        assert!(is_error(&full), "{}", body(&full));
+        assert!(body(&full).contains("Your notes are full") && body(&full).contains("silla: comprada"), "{}", body(&full));
+        assert_eq!(crate::notes::get(&store, &home.id).unwrap().len(), 2, "a refused write changes nothing");
+    }
+
+    /// Notes are a bot's: a terminal is not listed the tool, and the user
+    /// edits them in the bot sheet.
+    #[test]
+    fn notes_are_for_bots() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let shell = terminal(&store, &ws, "Shell");
+        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "memory"));
+        assert!(!visible_names(CallerKind::User).contains(&"memory"));
+        assert!(visible_names(CallerKind::Bot).contains(&"memory"));
     }
 
     /// A description written by another model is fine; one the bot cannot

@@ -480,6 +480,24 @@ pub struct SessionUpdate {
     pub autonomy: String,
 }
 
+/// A bot's notes, as the bot sheet shows them: its entries, oldest first,
+/// and the characters they take of the most they may.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotNotes {
+    pub entries: Vec<String>,
+    pub used: u32,
+    pub cap: u32,
+}
+
+/// `bot_notes_set`: the user's edit of a bot's notes, every entry.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotNotesSet {
+    pub id: String,
+    pub entries: Vec<String>,
+}
+
 /// What a session's composer changes: its model, effort, service tier and autonomy.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]

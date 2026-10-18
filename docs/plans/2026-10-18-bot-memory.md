@@ -83,7 +83,7 @@ back on the one thing that always survived: their description.
   longer offered as memory.
 
 **3. Notes.**
-- A `bot_notes` table, one row per bot (migration 30), holding entries
+- A `bot_notes` table, one row per bot (migration 39), holding entries
   separated by `§`.
 - `memory {action: show|add|patch|remove, old_text?, content?}`, for bots
   only. patch and remove match a unique substring (an ambiguous one is refused
