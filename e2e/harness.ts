@@ -784,10 +784,24 @@ export async function newSession(crew: Crew, workspaceId: string): Promise<Sessi
   return session;
 }
 
+/**
+ * ⌘T, once the launcher has the keys. Its field is on screen before it has
+ * focus, which moves in on the next animation frame: a key pressed in between
+ * goes to what had focus, the terminal behind it, and the launcher never hears it.
+ */
+export async function openLauncher(crew: Crew): Promise<Locator> {
+  await pressChord(crew, `${MOD}+t`);
+  const field = crew.window.getByLabel("Open a tab");
+  await waitFor(() => field.evaluate((input) => input === document.activeElement), {
+    message: "the launcher takes the keys",
+    interval: 10,
+  });
+  return field;
+}
+
 /** ⌘T ↵: a shell in the tab on screen. */
 export async function openShell(crew: Crew): Promise<void> {
-  await pressChord(crew, `${MOD}+t`);
-  await crew.window.getByLabel("Open a tab").waitFor();
+  await openLauncher(crew);
   await crew.window.keyboard.press("Enter");
   await waitFor(
     () =>

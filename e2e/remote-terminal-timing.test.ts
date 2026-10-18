@@ -9,7 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Page } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
 
 type Trace = { t: number; kind: "send" | "recv" | "frame"; url: string; id?: number | undefined; method?: string | undefined; ok?: boolean | undefined; stream?: number };
 
@@ -184,9 +184,8 @@ async function timedOpen(crew: Crew, dialPort: number, label: string, ready?: Re
   await trace(crew.window);
   await takeTrace(crew.window);
   const start = await now(crew.window);
-  await pressChord(crew, `${MOD}+t`);
   // Terminal is the launcher's first item, so ↵ on the empty query opens one.
-  await crew.window.getByLabel("Open a tab").waitFor();
+  await openLauncher(crew);
   await crew.window.keyboard.press("Enter");
   const first = await firstFrame(crew, dialPort, start, label);
   return ready ? readyAt(crew, dialPort, start, ready, label) : first;

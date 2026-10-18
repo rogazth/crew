@@ -6,11 +6,10 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { launchCrew, MOD, pressChord, typeInTerminal, waitFor, withSystemClipboard, type Crew } from "./harness.ts";
+import { launchCrew, openLauncher, typeInTerminal, waitFor, withSystemClipboard, type Crew } from "./harness.ts";
 
 async function openShell(crew: Crew): Promise<void> {
-  await pressChord(crew, `${MOD}+t`);
-  await crew.window.getByLabel("Open a tab").waitFor();
+  await openLauncher(crew);
   await crew.window.keyboard.press("Enter");
 }
 
