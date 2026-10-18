@@ -96,6 +96,15 @@ export function exitedless(block: Block): string {
   return block.letterKind === "report" ? block.text.replace(/^It exited \([^)\n]*\)\.\s*/, "") : block.text;
 }
 
+/**
+ * A question letter's words without the options the daemon lists under each
+ * question ("   Options: Red; Blue"): the model reads them to answer, while the
+ * chat shows the child's options as buttons under the letter.
+ */
+export function optionless(text: string): string {
+  return text.replace(/\n[ \t]+Options(?: \([^)\n]*\))?: [^\n]*/g, "");
+}
+
 /** A report letter: what a Crew subagent's last turn sent its parent. */
 export function isReportLetter(block: Block): boolean {
   return block.role === "user" && block.fromBot !== undefined && block.letterId !== undefined && block.letterKind === "report";
