@@ -1,11 +1,13 @@
 import { RefreshCwIcon, ShuffleIcon } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { BotAvatar } from "./BotAvatar";
+import { BotNotes } from "./BotNotes";
 import { Button, Card, Field, Footer, Overlay, Select, TextArea, Toggle, type Option } from "./kit";
 import { AccessPicker } from "./ComposerControls";
 import { ModelPicker } from "./ModelPicker";
 import type { useBotSheet } from "../hooks/useBotSheet";
 import { useBotAvatar } from "../hooks/useBotAvatar";
+import { useBotNotes } from "../hooks/useBotNotes";
 import { useBotFaces } from "../hooks/useBotFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { BOT_AVATARS, dealSeeds, type BotAvatarId, type BotFace } from "../lib/botAvatar";
@@ -102,6 +104,7 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const update = (patch: Partial<BotDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
+  const notes = useBotNotes(session);
 
   const name = draft.name.trim();
   const named = nameError(name, existingNames, session?.name);
@@ -111,6 +114,8 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
     if (named || saving) return;
     setSaving(true);
     try {
+      // Refused, the notes say why under them and the sheet stays open.
+      await notes.save();
       // onSave holds the spinner for MIN_SAVE_MS so the row, the tab and this close land together.
       await onSave({ ...draft, name });
       onClose();
@@ -172,7 +177,7 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
             />
           </Field>
 
-          <Field label="Description" hint="Its role and how to work. Read every turn.">
+          <Field label="Description" hint="Who it is and the rules it works by. Read every turn.">
             <TextArea
               rows={3}
               value={draft.description}
@@ -180,6 +185,8 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
               onChange={(event) => update({ description: event.target.value })}
             />
           </Field>
+
+          <BotNotes notes={notes} />
 
           <Card>
             <Toggle

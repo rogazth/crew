@@ -6,6 +6,7 @@ import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BackgroundList,
   BackgroundOutput,
+  BotNotes,
   BrowserLeases,
   CommandCatalog,
   CookieRead,
@@ -137,6 +138,13 @@ export const updateSession = (
     autonomy: Autonomy;
   },
 ): Promise<void> => client.request("session_update", { id, ...input });
+
+/** A bot's notes: what it keeps for later turns, apart from its description. */
+export const getBotNotes = (id: string): Promise<BotNotes> => client.request("bot_notes_get", { id });
+
+/** The user's edit of a bot's notes, every entry; refused over the cap. */
+export const setBotNotes = (id: string, entries: string[]): Promise<BotNotes> =>
+  client.request("bot_notes_set", { id, entries });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });
