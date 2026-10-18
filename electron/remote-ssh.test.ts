@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isTailnetIp, linuxArch, remoteLayout, serviceUnit, swapBinary, writeLayoutCommand } from "./remote-ssh";
+import { isTailnetIp, LINGER_COMMAND, lingerWarning, linuxArch, remoteLayout, serviceUnit, swapBinary, writeLayoutCommand } from "./remote-ssh";
 
 describe("linux installer", () => {
   it("maps uname to the builds Crew ships", () => {
@@ -77,5 +77,51 @@ describe("the layout a remote data dir is given", () => {
     writeFileSync(file, '{"workDir":"/kept"}\n');
     run();
     expect(readFileSync(file, "utf8")).toBe('{"workDir":"/kept"}\n');
+  });
+});
+
+// Routines fire from crewd, so it has to outlive the user's last ssh session.
+describe("lingering", () => {
+  // A loginctl that answers as `enable` and `state` say, and logs what it was asked.
+  const run = (enable: "ok" | "denied", state: "yes" | "no") => {
+    const bin = mkdtempSync(path.join(tmpdir(), "crew-loginctl-"));
+    const log = path.join(bin, "calls");
+    const loginctl = path.join(bin, "loginctl");
+    writeFileSync(
+      loginctl,
+      `#!/bin/sh\necho "$*" >> "${log}"\ncase "$1" in\n  enable-linger) ${enable === "ok" ? "exit 0" : 'echo "Could not enable linger: Access denied" >&2; exit 1'} ;;\n  show-user) echo Linger=${state} ;;\nesac\n`,
+      { mode: 0o755 },
+    );
+    const output = execFileSync("sh", ["-c", LINGER_COMMAND], { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` }, encoding: "utf8" });
+    const user = execFileSync("id", ["-un"], { encoding: "utf8" }).trim();
+    return { output, calls: readFileSync(log, "utf8").trim().split("\n"), user };
+  };
+
+  it("turns it on for the ssh user and finds it on", () => {
+    const { output, calls, user } = run("ok", "yes");
+    expect(calls[0]).toBe(`enable-linger ${user}`);
+    expect(output.trim()).toBe("linger=yes");
+    expect(lingerWarning(output, user)).toBeNull();
+  });
+
+  // A reinstall or update over a machine an admin already set up.
+  it("takes lingering an admin already turned on, even when the user may not turn it on", () => {
+    const { output } = run("denied", "yes");
+    expect(lingerWarning(output, "me")).toBeNull();
+  });
+
+  it("goes on without it when polkit refuses, and says how to turn it on", () => {
+    const { output } = run("denied", "no");
+    const warning = lingerWarning(output, "ubuntu");
+    expect(warning).toContain("Access denied");
+    expect(warning).toContain("sudo loginctl enable-linger ubuntu");
+  });
+
+  it("never asks for sudo itself", () => {
+    expect(LINGER_COMMAND).not.toContain("sudo");
+  });
+
+  it("warns when the check could not run at all", () => {
+    expect(lingerWarning("Connection reset by peer", "me")).toContain("(Connection reset by peer)");
   });
 });

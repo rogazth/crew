@@ -127,7 +127,15 @@ export function AddMachine({ tailnet, links, onRefresh, onCancel, onInstalled, o
   }
 
   if (stage === "done" && created) {
-    return <Ready env={created} clis={steps.clis?.detail ?? ""} onOpenWorkspace={() => onOpenWorkspace(created.id)} onClose={onCancel} />;
+    return (
+      <Ready
+        env={created}
+        clis={steps.clis?.detail ?? ""}
+        warning={steps.service?.detail ?? null}
+        onOpenWorkspace={() => onOpenWorkspace(created.id)}
+        onClose={onCancel}
+      />
+    );
   }
 
   if (stage !== "form") {
@@ -381,7 +389,20 @@ function Progress({ steps, failed }: { steps: Partial<Record<InstallStepId, Inst
   );
 }
 
-function Ready({ env, clis, onOpenWorkspace, onClose }: { env: RemoteEnv; clis: string; onOpenWorkspace: () => void; onClose: () => void }) {
+// `warning`: what the service step said, which it only does when lingering is off.
+function Ready({
+  env,
+  clis,
+  warning,
+  onOpenWorkspace,
+  onClose,
+}: {
+  env: RemoteEnv;
+  clis: string;
+  warning: string | null;
+  onOpenWorkspace: () => void;
+  onClose: () => void;
+}) {
   const found = new Set(clis === "none found" ? [] : clis.split(",").map((item) => item.trim()).filter(Boolean));
   const missing = PROVIDERS.filter((provider) => !found.has(provider.binary)).map((provider) => provider.binary);
   return (
@@ -413,6 +434,11 @@ function Ready({ env, clis, onOpenWorkspace, onClose }: { env: RemoteEnv; clis: 
           Open workspace
         </Button>
       </div>
+      {warning && (
+        <p className="flex items-start gap-1.5 px-1 text-[12px] text-text-muted">
+          <CircleAlertIcon className="mt-0.5 size-3 shrink-0 text-warning" /> {warning}
+        </p>
+      )}
     </div>
   );
 }

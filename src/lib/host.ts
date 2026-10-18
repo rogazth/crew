@@ -72,7 +72,8 @@ export type RemotesHost = {
   sshHosts(): Promise<SshHost[]>;
   install(input: InstallInput): Promise<RemoteEnv>;
   onProgress(cb: (step: InstallStep) => void): () => void;
-  update(id: string): Promise<void>;
+  /** `warning`: crewd was updated and runs, but lingering is off, so it may stop at logout. */
+  update(id: string): Promise<{ warning: string | null }>;
   restart(id: string): Promise<void>;
   /**
    * `wipe` deletes `~/.crew` on the machine. Leaving it is the ordinary answer.

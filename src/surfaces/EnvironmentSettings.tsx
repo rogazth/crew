@@ -140,16 +140,13 @@ export function EnvironmentSettings({ workspaces, onOpenTerminal }: Props) {
   }
 
   function update(link: EnvLink) {
-    return run(
-      link,
-      "Updating",
-      async () => {
-        await host?.update(link.id);
-        await refreshRemotes();
-        reconnect(link.id);
-      },
-      `${link.name} runs the new crewd.`,
-    );
+    return run(link, "Updating", async () => {
+      const warning = (await host?.update(link.id))?.warning ?? null;
+      await refreshRemotes();
+      reconnect(link.id);
+      // Updated and running either way; lingering off is said in place of the usual.
+      setNotice(warning ? { tone: "error", text: `${link.name}: ${warning}` } : { tone: "info", text: `${link.name} runs the new crewd.` });
+    });
   }
 
   return (

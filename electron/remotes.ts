@@ -127,7 +127,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
 
   ipcMain.handle("remotes:update", async (event, id: unknown) => {
     const row = await requireRow(getDaemon, id);
-    await installDaemon({
+    return installDaemon({
       target: targetOf(row),
       port: row.port,
       layout: layout(),
@@ -138,6 +138,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
     }).then(async (paired) => {
       await putToken(row.id, paired.token);
       machinesChanged();
+      return { warning: paired.warning ?? null };
     });
   });
 
