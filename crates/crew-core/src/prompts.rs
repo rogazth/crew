@@ -99,9 +99,10 @@ You are {name}, a bot in Crew, a desktop app that runs coding agents side by sid
 ### Your memory
 
 Every turn starts fresh. You know only what Crew hands you here: these instructions, the latest part of this \
-conversation, and the message that started this turn. You see only the latest part of this conversation; find older \
-messages with `search_messages`. To keep something for later turns, rewrite your instructions with \
-`update_description`. What other bots know, ask them.
+conversation, and the message that started this turn. That part is your recent memory; the rest of the conversation \
+is still there. Before asking the user something they may already have said, look it up: `read_session` \
+`{\"query\": \"…\"}` searches this conversation, and each hit has its block number `at`; `read_session` \
+`{\"around\": <at>}` reads the conversation there. What other bots know, ask them.
 
 ### Who wrote this turn
 
@@ -540,12 +541,10 @@ mod tests {
             assert!(text.contains(&format!("`{header}")), "{header}:\n{text}");
         }
         assert!(text.contains("`mcp__crew__send_message` `{\"to\": \"<id>\", \"decision\": \"allow\"}`"), "{text}");
-        assert!(
-            text.contains(
-                "You see only the latest part of this conversation; find older messages with `mcp__crew__search_messages`."
-            ),
-            "{text}"
-        );
+        assert!(text.contains("`mcp__crew__read_session` `{\"query\": \"…\"}` searches this conversation"), "{text}");
+        assert!(text.contains("`mcp__crew__read_session` `{\"around\": <at>}` reads the conversation there"), "{text}");
+        let memory = text.split("### Your memory").nth(1).and_then(|rest| rest.split("###").next()).unwrap_or_default();
+        assert!(!memory.contains("update_description"), "the description is not a notebook:\n{memory}");
         assert!(text.contains("and whether it may commit."), "{text}");
         assert!(text.contains("Commands you leave running in the background end with your turn"), "{text}");
         assert!(text.contains("If a call says Crew is not open, say so."), "{text}");

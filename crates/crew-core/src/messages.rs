@@ -284,6 +284,27 @@ pub fn fts_query(raw: &str) -> Option<String> {
 }
 
 pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, String> {
+    Ok(find(store, query, &Find { tokens: 12, roles: &[], whole: 0 })?.into_iter().map(|found| found.hit).collect())
+}
+
+/// How a model's search differs from the window's: a longer snippet, only
+/// some roles, and a short message whole instead of a snippet of it.
+pub struct Find<'a> {
+    /// Tokens in the snippet; FTS5 takes at most 64.
+    pub tokens: u32,
+    /// The roles to look in, as stored (`user`, `assistant`, `tool`, …); empty is all.
+    pub roles: &'a [&'a str],
+    /// A message at most this many characters long comes back whole.
+    pub whole: usize,
+}
+
+pub struct Found {
+    pub hit: SearchHit,
+    /// The whole text, when it is short enough for [`Find::whole`].
+    pub text: Option<String>,
+}
+
+pub fn find(store: &Store, query: SearchQuery, find: &Find) -> Result<Vec<Found>, String> {
     let Some(expression) = fts_query(&query.query) else {
         return Ok(Vec::new());
     };
@@ -294,7 +315,8 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
     // built rather than cached. Every value is still bound.
     let mut sql = format!(
         "SELECT m.session_id, s.name, m.pos, m.id, m.role, m.at,
-                snippet(messages_fts, 0, '{}', '{}', '…', 12)
+                snippet(messages_fts, 0, '{}', '{}', '…', {}),
+                CASE WHEN length(m.text) <= ?2 THEN m.text END
          FROM messages_fts
          JOIN messages m ON m.rowid = messages_fts.rowid
          JOIN sessions s ON s.id = m.session_id
@@ -302,9 +324,11 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
            -- A hidden block is not part of the conversation anyone reads: a
            -- routine's wake-up prompt is sent that way.
            AND json_extract(m.extra_json, '$.hidden') IS NOT 1",
-        MARK_OPEN, MARK_CLOSE
+        MARK_OPEN,
+        MARK_CLOSE,
+        find.tokens.clamp(1, 64)
     );
-    let mut binds: Vec<rusqlite::types::Value> = vec![expression.into()];
+    let mut binds: Vec<rusqlite::types::Value> = vec![expression.into(), (find.whole as i64).into()];
     if let Some(from) = query.from {
         binds.push(from.into());
         sql.push_str(&format!(" AND m.at >= ?{}", binds.len()));
@@ -317,13 +341,16 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
         binds.push(workspace_id.clone().into());
         sql.push_str(&format!(" AND s.workspace_id = ?{}", binds.len()));
     }
-    if !query.session_ids.is_empty() {
-        let first = binds.len() + 1;
-        for id in &query.session_ids {
-            binds.push(id.clone().into());
+    for (column, values) in
+        [("m.session_id", query.session_ids.clone()), ("m.role", find.roles.iter().map(|role| role.to_string()).collect())]
+    {
+        if values.is_empty() {
+            continue;
         }
+        let first = binds.len() + 1;
+        binds.extend(values.into_iter().map(Into::into));
         let holes: Vec<String> = (first..=binds.len()).map(|n| format!("?{n}")).collect();
-        sql.push_str(&format!(" AND m.session_id IN ({})", holes.join(", ")));
+        sql.push_str(&format!(" AND {column} IN ({})", holes.join(", ")));
     }
     binds.push(limit.into());
     binds.push(offset.into());
@@ -338,14 +365,17 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
     store.with(|conn| {
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok(SearchHit {
-                session_id: row.get(0)?,
-                session_name: row.get(1)?,
-                pos: row.get(2)?,
-                id: row.get(3)?,
-                role: role_from(&row.get::<_, String>(4)?),
-                at: row.get(5)?,
-                snippet: row.get(6)?,
+            Ok(Found {
+                hit: SearchHit {
+                    session_id: row.get(0)?,
+                    session_name: row.get(1)?,
+                    pos: row.get(2)?,
+                    id: row.get(3)?,
+                    role: role_from(&row.get::<_, String>(4)?),
+                    at: row.get(5)?,
+                    snippet: row.get(6)?,
+                },
+                text: row.get(7)?,
             })
         })?;
         rows.collect()

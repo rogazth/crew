@@ -483,21 +483,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
             cli: vec![cli("bots", "set-description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\"")],
         },
         Tool {
-            name: "search_messages",
-            description: "Search your own conversation: everything you, the user and whoever wrote to you have said in it. Use it before asking the user something they may already have said. What another bot knows is not in here; that you ask it for.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Words to look for." },
-                    "days": { "type": "integer", "minimum": 1, "description": "Only the last N days. Omit for all of time." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
-                },
-                "required": ["query"]
-            }),
-            audience: Audience::BOTS_AND_USER,
-            cli: vec![cli("messages", "search").rest(&["query"]).eg("crew messages search deploy key --days 7")],
-        },
-        Tool {
             name: "list_routines",
             description: "List the routines of a bot: standing orders that wake it on a schedule with a saved prompt. Defaults to your own.",
             schema: json!({
@@ -575,16 +560,8 @@ const ON_DEMAND_META: &str = "anthropic/alwaysLoad";
 /// lookalike of (`delegate`, `send_message`), which a model that cannot see
 /// ours reaches for instead.
 pub fn on_demand(name: &str) -> bool {
-    const LOADED: &[&str] = &[
-        "list_peers",
-        "send_message",
-        "delegate",
-        "start_session",
-        "read_session",
-        "stop_session",
-        "search_messages",
-        "update_description",
-    ];
+    const LOADED: &[&str] =
+        &["list_peers", "send_message", "delegate", "start_session", "read_session", "stop_session", "update_description"];
     !LOADED.contains(&name)
 }
 
@@ -618,6 +595,7 @@ impl ToolFamily for CatalogOnly {
 #[cfg(test)]
 pub(crate) const REMOVED_TOOLS: &[&str] = &[
     "message_agent",
+    "search_messages",
     "send_to_session",
     "wait_for_session",
     "respond_to_session",
@@ -824,7 +802,6 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
     match name {
         "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
-        "search_messages" => search_messages(store, caller, args),
         "list_routines" => list_routines(store, caller, args),
         "save_routine" => save_routine(store, host.transcripts, host.on_routines, caller, args),
         "delete_routine" => delete_routine(store, host.transcripts, host.on_routines, caller, args),
@@ -863,47 +840,6 @@ fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Sessi
         "description": body,
         "note": "This is what you will be told you are at the top of your next turn."
     }))
-}
-
-fn search_messages(store: &Store, caller: &Caller, args: &Value) -> Result<Value, String> {
-    let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 50) as u32;
-    let days = args.get("days").and_then(Value::as_u64);
-    // A bot searches one conversation, its own. The transcript is the only
-    // memory a bot has, and the mailbox is the only way into somebody
-    // else's: a search across the workspace would be a second channel that
-    // shows up in no chat. The user already reads every chat in the window, so
-    // for them the workspace is the one conversation.
-    let session_ids = match caller {
-        Caller::User { .. } => Vec::new(),
-        _ => vec![caller.session_id().unwrap_or_default().to_string()],
-    };
-    let hits = crate::messages::search(
-        store,
-        crew_protocol::SearchQuery {
-            query,
-            workspace_id: Some(caller.workspace_id()?.to_string()),
-            session_ids,
-            from: days.map(|days| now_millis() - (days as i64) * 86_400_000),
-            to: None,
-            limit: Some(limit),
-            offset: None,
-            sort: None,
-        },
-    )?;
-    let rows: Vec<Value> = hits
-        .into_iter()
-        .map(|hit| {
-            json!({
-                "session": hit.session_name,
-                "when": when(hit.at),
-                "role": format!("{:?}", hit.role).to_lowercase(),
-                // The marks are for painting a UI; a model reads the words.
-                "text": hit.snippet.replace([crate::messages::MARK_OPEN, crate::messages::MARK_CLOSE], "")
-            })
-        })
-        .collect();
-    Ok(Value::Array(rows))
 }
 
 fn create_bot(
@@ -1283,7 +1219,7 @@ mod tests {
         let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
         assert_eq!(names, visible_names(CallerKind::Bot), "the sheet and the listing are one list");
-        for name in ["create_bot", "update_description", "search_messages", "save_routine"] {
+        for name in ["create_bot", "update_description", "save_routine"] {
             assert!(names.iter().any(|listed| listed == name), "{name}: {names:?}");
         }
         for gone in ["find_tool", "call_tool"].iter().chain(REMOVED_TOOLS) {
@@ -1319,41 +1255,6 @@ mod tests {
             assert!(body(&out).starts_with(&format!("Unknown tool \"{gateway}\"")), "{}", body(&out));
         }
         assert_eq!(crate::mailbox::waiting_count(&store, &cuddles.id).unwrap(), 0, "the gateway still delivers");
-    }
-
-    #[test]
-    fn a_bot_can_search_what_was_said() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        transcripts.append_user(&coder.id, "the staging password is in 1password", false, None, None);
-        transcripts.flush(&coder.id);
-
-        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "staging password" })).expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        let text = body(&out);
-        assert!(text.contains("1password"), "{text}");
-        // The UI's hit markers never reach a model.
-        assert!(!text.contains(crate::messages::MARK_OPEN));
-    }
-
-    /// The mailbox is the only way into another bot's conversation. A search
-    /// that reached it would be a second channel, read-only and silent, that
-    /// shows up in no chat.
-    #[test]
-    fn a_search_stops_at_the_edge_of_its_own_conversation() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        transcripts.append_user(&cuddles.id, "the client is Acme", false, None, None);
-        transcripts.flush(&cuddles.id);
-
-        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "Acme" })).expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        assert!(!body(&out).contains("Acme"), "{}", body(&out));
     }
 
     /// A description written by another model is fine; one the bot cannot
@@ -1623,7 +1524,7 @@ mod tests {
     }
 
     /// A terminal session has no turns: nothing that leaves a note for the
-    /// next one, and no Crew transcript to search.
+    /// next one.
     #[test]
     fn a_terminal_is_listed_what_it_can_use() {
         let store = store();
@@ -1633,7 +1534,7 @@ mod tests {
         let names = listed(&store, &transcripts, &shell);
         assert_eq!(names, visible_names(CallerKind::Terminal));
         assert!(names.iter().any(|name| name == "create_bot"), "{names:?}");
-        for none in ["update_description", "search_messages"] {
+        for none in ["update_description"] {
             assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
         }
     }
@@ -1645,7 +1546,7 @@ mod tests {
         let ws = workspace(&store);
         let names = listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws)));
         assert_eq!(names, visible_names(CallerKind::User));
-        assert!(names.iter().any(|name| name == "search_messages"), "{names:?}");
+        assert!(names.iter().any(|name| name == "list_routines"), "{names:?}");
         for none in ["create_bot", "update_description"] {
             assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
         }
@@ -1669,7 +1570,7 @@ mod tests {
     fn the_user_without_a_workspace_is_told_how_to_name_one() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
-        let out = call_as(&store, &transcripts, &user(None), "search_messages", json!({ "query": "x" })).expect("call");
+        let out = call_as(&store, &transcripts, &user(None), "list_routines", json!({ "bot_id": "x" })).expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("--workspace"), "{}", body(&out));
     }
@@ -1900,7 +1801,7 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
         let tools = out["tools"].as_array().expect("tools");
         let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
-        assert!(named("list_routines").is_some() && named("search_messages").is_some());
+        assert!(named("list_routines").is_some() && named("save_routine").is_some());
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");
         assert!(named("create_bot").is_none(), "not the user's");
@@ -1939,7 +1840,7 @@ mod tests {
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let out = handle(&host, &coder, "tools/list", json!({})).expect("list");
         let tool = |name: &str| out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).cloned().expect(name);
-        for loaded in ["delegate", "send_message", "list_peers", "start_session", "search_messages"] {
+        for loaded in ["delegate", "send_message", "list_peers", "start_session", "read_session"] {
             assert!(tool(loaded).get("_meta").is_none(), "{loaded}");
         }
         for deferred in ["browser_act", "save_routine", "create_bot", "start_sessions"] {

@@ -58,6 +58,17 @@ pub const WAIT_MAX_S: u64 = 3600;
 /// What `read_session` hands back without `max_bytes`, and at most.
 const READ_DEFAULT: usize = 16 * 1024;
 const READ_MAX: usize = 256 * 1024;
+/// How many blocks `around` reads either side of its block, by default and at most.
+const AROUND_DEFAULT: u64 = 5;
+const AROUND_MAX: u64 = 50;
+/// Hits a search answers, by default and at most.
+const HITS_DEFAULT: u64 = 8;
+const HITS_MAX: u64 = 50;
+/// A hit's snippet, in tokens, and the length under which a hit is its whole message.
+const SNIPPET_TOKENS: u32 = 40;
+const WHOLE_CHARS: usize = 1_500;
+/// The neighbours the best hit comes with, either side.
+const TOP_WINDOW: usize = 3;
 /// How long an idle child is kept before it exits, unless
 /// `CREW_SESSION_IDLE_MINUTES` says otherwise.
 pub const IDLE_MINUTES: u64 = 30;
@@ -217,11 +228,6 @@ impl SessionTools {
         session::get(&self.store, id.trim().to_string())?
             .filter(|row| row.workspace_id == workspace)
             .ok_or_else(|| format!("No session {id} in this workspace. list_peers has who is here."))
-    }
-
-    /// What a session said and did, as the blocks `read_session` numbers.
-    fn blocks_of(&self, row: &Session) -> Result<Vec<Block>, String> {
-        Ok(self.turns.transcripts().since(&row.id, 0).0)
     }
 
     /// Whether the caller is the one a session reports to, whose `seen` it is.
@@ -1347,57 +1353,102 @@ impl SessionTools {
         self.wait_events(caller, &targets, since, Duration::from_secs(timeout))
     }
 
+    /// `read_session`: a search, the blocks around one, a cursor, a period
+    /// or the tail, of one conversation. Without `session` it is the caller's
+    /// own; the user has none, and searches the whole workspace instead.
     fn read(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
-        let id = text(args.get("session")).ok_or("session is required")?;
-        let row = self.visible(caller, &id)?;
-        let since = args.get("since").and_then(Value::as_i64).map(|n| n.max(0) as usize);
+        let row = match text(args.get("session")) {
+            Some(id) => Some(self.visible(caller, &id)?),
+            None => match caller.session() {
+                Some(me) => Some(session::get(&self.store, me.id.clone())?.unwrap_or_else(|| me.clone())),
+                None => None,
+            },
+        };
         let budget =
             args.get("max_bytes").and_then(Value::as_u64).map(|n| (n as usize).clamp(1, READ_MAX)).unwrap_or(READ_DEFAULT);
         let tools = args.get("include_tools").and_then(Value::as_bool).unwrap_or(false);
-        let blocks = self.blocks_of(&row)?;
-        let total = blocks.len();
-        let running = matches!(row.status.as_str(), "starting" | "working" | "needs-input");
-        // A block still being written ends the read before it, so the next
-        // read with this cursor reads it again, whole.
-        let settled = if running { blocks.iter().position(open).unwrap_or(total) } else { total };
-        let (start, end) = match since {
-            Some(from) => {
-                let from = from.min(total);
-                let mut end = from;
-                let mut spent = 0;
-                while end < settled.max(from) {
-                    let line = render(&blocks[end], end + 1, tools);
-                    if spent + line.len() > budget && end > from {
-                        break;
-                    }
-                    spent += line.len() + 1;
-                    end += 1;
-                }
-                (from, end)
-            }
-            None => {
-                let end = settled;
-                let mut start = end;
-                let mut spent = 0;
-                while start > 0 {
-                    let line = render(&blocks[start - 1], start, tools);
-                    if spent + line.len() > budget && start < end {
-                        break;
-                    }
-                    spent += line.len() + 1;
-                    start -= 1;
-                }
-                (start, end)
-            }
+        let roles = roles(args)?;
+        let read = Read { budget, tools, roles: roles.as_deref() };
+        if let Some(query) = text(args.get("query")) {
+            return self.search(caller, row.as_ref(), &query, args, &read);
+        }
+        let row = row.ok_or("session is required: you have no conversation of your own to read. list_peers has who is here.")?;
+        if let Some(at) = args.get("around").filter(|at| !at.is_null()) {
+            let at = at.as_i64().filter(|at| *at >= 1).ok_or("around is a block number from a line or a hit (#12 is 12)")?;
+            let window = args.get("window").and_then(Value::as_u64).map(|n| n.clamp(1, AROUND_MAX)).unwrap_or(AROUND_DEFAULT);
+            return self.around(caller, &row, at as usize, window as usize, &read);
+        }
+        let since = args.get("since").and_then(Value::as_i64).map(|n| n.max(0) as usize);
+        let days = args.get("days").and_then(Value::as_u64).filter(|days| *days > 0);
+        // A period without a query is read like a cursor from its first block,
+        // but it is a look back: what it reads is not marked seen.
+        let (from, advances) = match (since, days) {
+            (Some(from), _) => (Some(ReadFrom::Cursor(from)), true),
+            (None, Some(days)) => (Some(ReadFrom::Time(now_millis() - days as i64 * 86_400_000)), false),
+            (None, None) => (None, true),
         };
-        let text: Vec<String> = (start..end).map(|at| render(&blocks[at], at + 1, tools)).collect();
-        self.saw(caller, &row, end as i64);
+        let running = matches!(row.status.as_str(), "starting" | "working" | "needs-input");
+        let (text, start, end, total) = self.turns.transcripts().read(&row.id, |blocks| {
+            let total = blocks.len();
+            // A block still being written ends the read before it, so the next
+            // read with this cursor reads it again, whole.
+            let settled = if running { blocks.iter().position(open).unwrap_or(total) } else { total };
+            let (start, end, lines) = match from {
+                Some(from) => {
+                    let from = match from {
+                        ReadFrom::Cursor(from) => from.min(total),
+                        ReadFrom::Time(cutoff) => {
+                            blocks.iter().position(|block| block.at.is_some_and(|at| at >= cutoff)).unwrap_or(total)
+                        }
+                    };
+                    let mut end = from;
+                    let mut spent = 0;
+                    let mut lines = Vec::new();
+                    while end < settled.max(from) {
+                        if let Some(line) = read.line(&blocks[end], end + 1) {
+                            if spent + line.len() > read.budget && !lines.is_empty() {
+                                break;
+                            }
+                            spent += line.len() + 1;
+                            lines.push(line);
+                        }
+                        end += 1;
+                    }
+                    (from, end, lines)
+                }
+                None => {
+                    let end = settled;
+                    let mut start = end;
+                    let mut spent = 0;
+                    let mut lines = Vec::new();
+                    while start > 0 {
+                        if let Some(line) = read.line(&blocks[start - 1], start) {
+                            if spent + line.len() > read.budget && !lines.is_empty() {
+                                break;
+                            }
+                            spent += line.len() + 1;
+                            lines.push(line);
+                        }
+                        start -= 1;
+                    }
+                    lines.reverse();
+                    (start, end, lines)
+                }
+            };
+            (lines.join("\n"), start, end, total)
+        });
+        if advances {
+            self.saw(caller, &row, end as i64);
+        }
         let status = self.peer_status(caller, &row);
         let mut note = if end < total {
             "There is more after cursor: call again with since = cursor.".to_string()
         } else {
             "That is everything so far. Pass cursor as since next time to read only what is new.".to_string()
         };
+        if from.is_none() && start > 0 {
+            note.push_str(" Older blocks are before start: query finds them, around reads them.");
+        }
         match status.as_str() {
             "question" => note.push_str(&format!(
                 " It is waiting on a question: answer it with send_message to {} (text for one question, answers for several).",
@@ -1413,12 +1464,120 @@ impl SessionTools {
         Ok(json!({
             "session": row.id,
             "status": status,
-            "text": text.join("\n"),
+            "text": text,
             "start": start,
             "cursor": end,
             "more": end < total,
             "note": note
         }))
+    }
+
+    /// The blocks either side of `at`, to scroll a conversation from a hit or
+    /// a line. A look back: nothing it reads is marked seen.
+    fn around(&self, caller: &Caller, row: &Session, at: usize, window: usize, read: &Read) -> Result<Value, String> {
+        let (text, start, end, total) = self
+            .turns
+            .transcripts()
+            .read(&row.id, |blocks| read.around(blocks, at, window).map(|(text, start, end)| (text, start, end, blocks.len())))
+            .ok_or_else(|| format!("{} has no block #{at}; its lines run from #1 on.", row.name))?;
+        let mut note = format!("Blocks #{} to #{end} of {total}.", start + 1);
+        if start > 0 {
+            note.push_str(&format!(" Earlier: around {}.", start.saturating_sub(window).max(1)));
+        }
+        if end < total {
+            note.push_str(&format!(" Later: around {}, or since {end} to read on.", (end + window + 1).min(total)));
+        }
+        Ok(json!({
+            "session": row.id,
+            "status": self.peer_status(caller, row),
+            "text": text,
+            "start": start,
+            "cursor": end,
+            "more": end < total,
+            "note": note
+        }))
+    }
+
+    /// Search one conversation (`row`), or, for the user with none named, the
+    /// whole workspace. Each hit has the number its block reads as, so
+    /// `around` scrolls to it; the best one comes with its neighbours.
+    fn search(&self, caller: &Caller, row: Option<&Session>, query: &str, args: &Value, read: &Read) -> Result<Value, String> {
+        let days = args.get("days").and_then(Value::as_u64).filter(|days| *days > 0);
+        let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(HITS_DEFAULT).clamp(1, HITS_MAX) as u32;
+        let mut roles: Vec<&str> = read.roles.map(|roles| roles.to_vec()).unwrap_or_else(|| vec!["user", "assistant"]);
+        if read.tools && !roles.contains(&"tool") {
+            roles.push("tool");
+        }
+        let found = crate::messages::find(
+            &self.store,
+            crew_protocol::SearchQuery {
+                query: query.to_string(),
+                workspace_id: Some(caller.workspace_id()?.to_string()),
+                session_ids: row.map(|row| vec![row.id.clone()]).unwrap_or_default(),
+                from: days.map(|days| now_millis() - days as i64 * 86_400_000),
+                to: None,
+                limit: Some(limit),
+                offset: None,
+                sort: None,
+            },
+            &crate::messages::Find { tokens: SNIPPET_TOKENS, roles: &roles, whole: WHOLE_CHARS },
+        )?;
+        // Every search, so whether words are enough (or vectors are needed)
+        // can be judged from what bots actually looked for and found.
+        eprintln!(
+            "[search] {} in {}: {query:?} → {} hit(s)",
+            caller.label(),
+            row.map(|row| row.id.as_str()).unwrap_or("the workspace"),
+            found.len()
+        );
+        let mut spent = 0;
+        let mut hits = Vec::new();
+        for found in &found {
+            let hit = &found.hit;
+            // The marks are for painting a UI; a model reads the words.
+            let words = found
+                .text
+                .clone()
+                .unwrap_or_else(|| hit.snippet.replace([crate::messages::MARK_OPEN, crate::messages::MARK_CLOSE], ""));
+            let words = words.trim().to_string();
+            if spent + words.len() > read.budget && !hits.is_empty() {
+                break;
+            }
+            spent += words.len() + 64;
+            let mut out = json!({
+                "at": hit.pos,
+                "when": crate::schedule::local_time(hit.at),
+                "role": format!("{:?}", hit.role).to_lowercase(),
+                "text": words,
+            });
+            if row.is_none() {
+                out["session"] = json!(hit.session_id);
+                out["session_name"] = json!(hit.session_name);
+            }
+            hits.push(out);
+        }
+        let mut out = json!({ "query": query, "hits": hits });
+        if let Some(row) = row {
+            out["session"] = json!(row.id);
+        }
+        let Some(top) = found.first().map(|found| &found.hit) else {
+            out["note"] =
+                json!("Nothing matched. Try other words: a name, a number, the word the user would have used; or drop days.");
+            return Ok(out);
+        };
+        // The best hit with its neighbours, in what the budget has left.
+        let left = Read { budget: read.budget.saturating_sub(spent).max(1024), tools: read.tools, roles: None };
+        let at = top.pos.max(1) as usize;
+        if let Some((text, start, end)) =
+            self.turns.transcripts().read(&top.session_id, |blocks| left.around(blocks, at, TOP_WINDOW))
+        {
+            out["top"] = json!({ "at": at, "start": start, "cursor": end, "text": text });
+        }
+        let other = if row.is_none() { ", with its session," } else { "" };
+        out["note"] = json!(format!(
+            "at is the block number lines read as: around (with at{other}) reads the conversation there; since reads on from a cursor."
+        ));
+        Ok(out)
     }
 
     fn stop(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
@@ -1685,6 +1844,90 @@ fn open(block: &Block) -> bool {
     block.streaming == Some(true) || block.tool.as_ref().is_some_and(|tool| tool.status == ToolStatus::Pending)
 }
 
+/// Where a forward read starts: a cursor, or the first block of a period.
+#[derive(Clone, Copy)]
+enum ReadFrom {
+    Cursor(usize),
+    Time(i64),
+}
+
+/// How `read_session` renders the lines it reads.
+struct Read<'a> {
+    budget: usize,
+    tools: bool,
+    /// The roles to show; `None` is every one.
+    roles: Option<&'a [&'a str]>,
+}
+
+impl Read<'_> {
+    /// A block's numbered line, unless its role is filtered out.
+    fn line(&self, block: &Block, position: usize) -> Option<String> {
+        if let Some(roles) = self.roles {
+            if !roles.contains(&role_name(&block.role)) {
+                return None;
+            }
+        }
+        Some(render(block, position, self.tools))
+    }
+
+    /// The lines from `window` blocks before `at` (1-based) to as many after,
+    /// dropping the farthest first when they do not fit. `None` when there is
+    /// no block `at`. Answers the text and the 0-based range it covers.
+    fn around(&self, blocks: &[Block], at: usize, window: usize) -> Option<(String, usize, usize)> {
+        if at == 0 || at > blocks.len() {
+            return None;
+        }
+        let index = at - 1;
+        let (mut start, mut end) = (index.saturating_sub(window), (index + window + 1).min(blocks.len()));
+        let mut lines: Vec<(usize, String)> =
+            (start..end).filter_map(|i| self.line(&blocks[i], i + 1).map(|line| (i, line))).collect();
+        let mut spent: usize = lines.iter().map(|(_, line)| line.len() + 1).sum();
+        while spent > self.budget && lines.len() > 1 {
+            let (first, last) = (lines[0].0, lines[lines.len() - 1].0);
+            let (gone, edge) =
+                if index - first >= last - index { (lines.remove(0), true) } else { (lines.pop().unwrap_or_default(), false) };
+            spent -= gone.1.len() + 1;
+            if edge {
+                start = gone.0 + 1;
+            } else {
+                end = gone.0;
+            }
+        }
+        Some((lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>().join("\n"), start, end))
+    }
+}
+
+/// A role as `roles` names it, and as the message rows store it.
+fn role_name(role: &BlockRole) -> &'static str {
+    match role {
+        BlockRole::User => "user",
+        BlockRole::Assistant => "assistant",
+        BlockRole::Reasoning => "reasoning",
+        BlockRole::Tool | BlockRole::Approval | BlockRole::Question => "tool",
+        BlockRole::System => "system",
+    }
+}
+
+const ROLES: &[&str] = &["user", "assistant", "tool", "system", "reasoning"];
+
+/// `roles`, checked. `None` when not given.
+fn roles(args: &Value) -> Result<Option<Vec<&'static str>>, String> {
+    let Some(given) = args.get("roles").filter(|roles| !roles.is_null()) else {
+        return Ok(None);
+    };
+    let names: Vec<&str> = match given {
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+        Value::String(one) => one.split(',').map(str::trim).collect(),
+        _ => Vec::new(),
+    };
+    let mut roles = Vec::new();
+    for name in names.into_iter().filter(|name| !name.is_empty()) {
+        let role = ROLES.iter().find(|role| **role == name).ok_or_else(|| format!("roles are some of: {}", ROLES.join(", ")))?;
+        roles.push(*role);
+    }
+    Ok((!roles.is_empty()).then_some(roles))
+}
+
 /// One block as a numbered line of the transcript.
 fn render(block: &Block, position: usize, tools: bool) -> String {
     let (who, body) = match block.role {
@@ -1903,19 +2146,27 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "read_session",
-            description: "Read any session or bot in this workspace as numbered lines: what was said to it, what it said, each tool it ran as one line (include_tools adds their output). Without since: the tail, up to max_bytes (16 KB by default, 256 KB at most). With since: what came after that cursor. cursor is where the read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, so another session reading it never swallows a report. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
+            description: "Read a conversation in this workspace as numbered lines (#12 is block 12): what was said, and each tool that ran as one line (include_tools adds their output). Without session: your own conversation; with an id, any session or bot here. What it reads: query searches it (words, not meaning) and answers hits, each with at, when, role and the words around the match (a short message whole), the best hit with its neighbours; around reads the blocks either side of a block number, to scroll from a hit or a line; since reads on from a cursor; days alone reads that many days back, oldest first; nothing reads the tail. Up to max_bytes (16 KB by default, 256 KB at most). cursor is where a read stopped: pass it back as since to read only what is new; more says there is more. Only the session a subagent reports to advances what it has seen, with since or the tail, so another session reading it never swallows a report. status says whether it is waiting on a question (answer it with send_message), on an approval you can decide (send_message with decision), or on the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "session": session_arg(),
+                    "session": { "type": "string", "description": "The session's or bot's id, from delegate, start_session or list_peers. Omit for your own conversation." },
+                    "query": { "type": "string", "description": "Words to look for: a name, an id, a number, what the user called it." },
+                    "around": { "type": "integer", "minimum": 1, "description": "A block number (a hit's at, or #N of a line): read the blocks either side of it." },
+                    "window": { "type": "integer", "minimum": 1, "maximum": AROUND_MAX, "description": "With around: blocks either side. 5 by default." },
                     "since": { "type": "integer", "minimum": 0, "description": "A cursor from delegate or an earlier read." },
+                    "days": { "type": "integer", "minimum": 1, "description": "With query: only the last N days. Alone: read from N days ago on." },
+                    "roles": { "type": "array", "items": { "type": "string", "enum": ROLES }, "description": "Only these lines. A search looks in user and assistant by default; the rest read every role." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": HITS_MAX, "description": "With query: most hits, 8 by default." },
                     "max_bytes": { "type": "integer", "minimum": 1, "maximum": READ_MAX },
-                    "include_tools": { "type": "boolean", "description": "Add each tool's output under its line." }
-                },
-                "required": ["session"]
+                    "include_tools": { "type": "boolean", "description": "Add each tool's output under its line; a search also looks in tool rows." }
+                }
             }),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "read").pos(&["session"]).eg("crew sessions read 3f2a…\n  crew sessions read 3f2a… --since 12 --include-tools")],
+            cli: vec![
+                cli("sessions", "read").pos(&["session"]).eg("crew sessions read 3f2a…\n  crew sessions read 3f2a… --since 12 --include-tools\n  crew sessions read 3f2a… --around 412"),
+                cli("messages", "search").rest(&["query"]).eg("crew messages search deploy key --days 7\n  crew messages search --session 3f2a… staging password"),
+            ],
         },
         Tool {
             name: "stop_session",
@@ -5111,6 +5362,129 @@ time.sleep(600)
         let page = w.call(&parent, "read_session", json!({ "session": id, "since": 0, "max_bytes": 10 })).expect("read");
         assert_eq!(page["cursor"], 1);
         assert_eq!(page["more"], true);
+    }
+
+    /// A bot's conversation, written straight into its transcript: a tool
+    /// call between every pair of messages, as a real turn has.
+    fn conversation(w: &World, bot: &Caller, lines: &[&str]) -> String {
+        let id = bot.session_id().unwrap().to_string();
+        let transcripts = w.turns.transcripts();
+        for (n, line) in lines.iter().enumerate() {
+            match n % 2 {
+                0 => transcripts.append_user(&id, line, false, None, None),
+                _ => {
+                    transcripts.apply(
+                        &id,
+                        crew_protocol::HarnessEvent::ToolStarted {
+                            call_id: format!("c{n}"),
+                            name: "browser_navigate".into(),
+                            title: format!("navigate {n}"),
+                            detail: None,
+                        },
+                    );
+                    transcripts.apply(
+                        &id,
+                        crew_protocol::HarnessEvent::ToolUpdated {
+                            call_id: format!("c{n}"),
+                            title: None,
+                            status: Some(ToolStatus::Completed),
+                            detail: None,
+                        },
+                    );
+                    transcripts.apply(&id, crew_protocol::HarnessEvent::MessageDelta { text: line.to_string() });
+                    transcripts.apply(&id, crew_protocol::HarnessEvent::MessageCompleted {});
+                }
+            }
+        }
+        transcripts.flush(&id);
+        id
+    }
+
+    /// The search answers where each hit is, by the number its line reads
+    /// as, and the best one with its neighbours; around scrolls from there.
+    #[test]
+    fn read_session_finds_a_message_and_reads_around_it() {
+        let w = world();
+        let bot = w.session("bot", "Home", "full");
+        let id = conversation(
+            &w,
+            &bot,
+            &["busca la silla", "La encontré.", "el id del item es 7731942", "Guardado.", "y el precio?", "Son 40 dólares."],
+        );
+        let found = w.call(&bot, "read_session", json!({ "query": "7731942" })).expect("search");
+        let hits = found["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{found}");
+        let at = hits[0]["at"].as_i64().unwrap();
+        // Short, so whole; and its number is the one read_session prints.
+        assert_eq!(hits[0]["text"], "el id del item es 7731942", "{found}");
+        assert_eq!(hits[0]["role"], "user");
+        let tail = w.call(&bot, "read_session", json!({ "session": id })).expect("tail");
+        assert!(tail["text"].as_str().unwrap().contains(&format!("#{at} [user] el id del item es 7731942")), "{tail}");
+        let top = found["top"]["text"].as_str().unwrap();
+        assert!(top.contains("La encontré.") && top.contains("Guardado."), "the neighbours: {found}");
+
+        let around = w.call(&bot, "read_session", json!({ "around": at, "window": 1 })).expect("around");
+        let text = around["text"].as_str().unwrap();
+        assert_eq!(text.lines().count(), 3, "{around}");
+        assert!(text.starts_with(&format!("#{} ", at - 1)) && text.contains("7731942"), "{around}");
+        assert_eq!(around["start"], at - 2);
+        assert_eq!(around["cursor"], at + 1);
+        let gone = w.call(&bot, "read_session", json!({ "around": 999 }));
+        assert!(gone.is_err_and(|e| e.contains("no block #999")));
+    }
+
+    /// A search looks in what was said: tool rows only when asked for.
+    #[test]
+    fn read_session_searches_what_was_said_unless_asked_for_tools() {
+        let w = world();
+        let bot = w.session("bot", "Home", "full");
+        conversation(&w, &bot, &["abre marketplace", "Abierto."]);
+        let said = w.call(&bot, "read_session", json!({ "query": "navigate" })).expect("search");
+        assert!(said["hits"].as_array().unwrap().is_empty(), "{said}");
+        assert!(said["note"].as_str().unwrap().contains("Nothing matched"), "{said}");
+        let tools = w.call(&bot, "read_session", json!({ "query": "navigate", "include_tools": true })).expect("search");
+        assert_eq!(tools["hits"][0]["role"], "tool", "{tools}");
+        let roles = w.call(&bot, "read_session", json!({ "query": "navigate", "roles": ["tool"] })).expect("search");
+        assert_eq!(roles["hits"].as_array().unwrap().len(), 1, "{roles}");
+        let wrong = w.call(&bot, "read_session", json!({ "query": "x", "roles": ["robot"] }));
+        assert!(wrong.is_err_and(|e| e.contains("roles are some of")));
+    }
+
+    /// Without a session a bot searches its own conversation; with one, that
+    /// one, as reading does. The user, who has none, searches the workspace.
+    #[test]
+    fn read_session_searches_where_it_reads() {
+        let w = world();
+        let home = w.session("bot", "Home", "full");
+        let innata = w.session("bot", "Innata", "full");
+        conversation(&w, &home, &["el cliente es Acme", "Anotado."]);
+        let theirs = conversation(&w, &innata, &["la tarea de octubre es Acme", "Hecho."]);
+        let mine = w.call(&home, "read_session", json!({ "query": "Acme" })).expect("search");
+        assert_eq!(mine["hits"].as_array().unwrap().len(), 1, "{mine}");
+        assert!(mine["hits"][0]["text"].as_str().unwrap().contains("cliente"), "{mine}");
+        let other = w.call(&home, "read_session", json!({ "session": theirs, "query": "Acme" })).expect("search");
+        assert!(other["hits"][0]["text"].as_str().unwrap().contains("octubre"), "{other}");
+        let everyone = w.call(&w.user(), "read_session", json!({ "query": "Acme" })).expect("the user");
+        let hits = everyone["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 2, "{everyone}");
+        assert!(hits.iter().all(|hit| hit["session"].is_string() && hit["session_name"].is_string()), "{everyone}");
+        let nothing = w.call(&w.user(), "read_session", json!({}));
+        assert!(nothing.is_err_and(|e| e.contains("session is required")));
+    }
+
+    /// days alone reads that period oldest first, and leaves `seen` alone; a
+    /// long message is a snippet, not the whole of it.
+    #[test]
+    fn read_session_reads_a_period_and_snips_a_long_hit() {
+        let w = world();
+        let bot = w.session("bot", "Innata", "full");
+        let long = format!("{} la factura de octubre {}", "antes ".repeat(400), "después ".repeat(400));
+        conversation(&w, &bot, &["primero", "Vale.", &long, "Listo."]);
+        let period = w.call(&bot, "read_session", json!({ "days": 1 })).expect("period");
+        assert!(period["text"].as_str().unwrap().starts_with("#1 [user] primero"), "{period}");
+        let found = w.call(&bot, "read_session", json!({ "query": "factura" })).expect("search");
+        let text = found["hits"][0]["text"].as_str().unwrap();
+        assert!(text.contains("factura") && text.len() < 600, "{text}");
     }
 
     #[test]

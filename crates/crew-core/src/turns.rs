@@ -1249,7 +1249,13 @@ impl TurnHost {
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A session that
         // carries on its provider's own conversation is handed none.
-        let history = if carries { None } else { self.transcripts.read(&params.session_id, working_set::history) };
+        let history = if carries {
+            None
+        } else {
+            self.transcripts.read(&params.session_id, |blocks| {
+                working_set::history(blocks, crate::prompts::Harness::for_provider(&session.provider))
+            })
+        };
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the
@@ -4792,7 +4798,7 @@ mod mailbox_tests {
         let system = second["system"].as_str().unwrap();
         assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
         let prompt = second["prompt"].as_str().unwrap();
-        assert!(system.contains("`crew_search_messages`") && !prompt.contains("You are Coder,"), "{prompt}");
+        assert!(system.contains("`crew_read_session`") && !prompt.contains("You are Coder,"), "{prompt}");
         assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
         assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
         assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
