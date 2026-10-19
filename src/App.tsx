@@ -57,7 +57,7 @@ import { useTour } from "./hooks/useTour";
 import type { Process } from "./lib/processes";
 // PROTOTYPE — throwaway: the review picker, dev builds only.
 import { ReviewPicker } from "./prototype/design-system/review/ReviewPicker";
-import { PaneWorktree, PanePlaceContext } from "./prototype/design-system/sidebar/PaneWorktree";
+import { PanePlaceContext } from "./prototype/design-system/sidebar/PaneWorktree";
 import { WorkspaceStart, focusWorkspaceStart } from "./prototype/design-system/chat/WorkspaceStart";
 import { useRedesign } from "./prototype/design-system/direction";
 import type { AgentChoice } from "./lib/providers";
@@ -496,10 +496,6 @@ export function App() {
             {/* The content, not the tab, says its worktree. */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <PanePlaceContext value={panePick}>
-            {/* Only a session says its worktree: a bot, a browser, a file and the empty state have no line, and no bar where one would be. */}
-            {!isHome && panePlace && paneSession && paneSession.kind !== "bot" && !paneMove && (
-              <PaneWorktree place={panePlace} places={panePlaces} onMove={paneMove} />
-            )}
             <WorkspacePanes
               tab={tabs.active}
               empty={
