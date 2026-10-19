@@ -259,7 +259,6 @@ export function App() {
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
 
   const { newSession, launch } = useLaunch({
-    sessions,
     worktree: work.placeIn,
     create,
     markBlank,

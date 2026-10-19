@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{params, OptionalExtension};
@@ -592,12 +591,7 @@ pub fn switch_provider(
         return Err(format!("Unknown provider {provider}"));
     }
     let name = if row.provider != provider && is_placeholder_name(&row.name, &row.provider) {
-        let taken: HashSet<String> = list(store, row.workspace_id.clone())?
-            .into_iter()
-            .filter(|s| s.kind == "terminal" && s.id != id)
-            .map(|s| s.name)
-            .collect();
-        next_placeholder_name(&taken, &provider)
+        PLACEHOLDER_NAME.to_string()
     } else {
         row.name
     };
@@ -615,13 +609,8 @@ pub fn switch_provider(
     Ok(())
 }
 
-/// The first of `provider`, `provider 2`, `provider 3`… no session has: what a new one is called.
-fn next_placeholder_name(taken: &HashSet<String>, provider: &str) -> String {
-    if !taken.contains(provider) {
-        return provider.to_string();
-    }
-    (2..).map(|n| format!("{provider} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
-}
+/// What a new session is called until its provider, or the user, names it.
+pub const PLACEHOLDER_NAME: &str = "New session";
 
 pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
@@ -682,8 +671,12 @@ fn adopt_title(store: &Store, row: &Session, title: String) -> Result<Option<Str
     Ok(adopt.then_some(title))
 }
 
-/// `claude`, `claude 2`, …: what Crew names a session before its provider does.
+/// `New session`, or the `claude`, `claude 2`, … older sessions were given: what Crew names a
+/// session before its provider does.
 pub(crate) fn is_placeholder_name(name: &str, provider: &str) -> bool {
+    if name == PLACEHOLDER_NAME {
+        return true;
+    }
     match name.strip_prefix(provider) {
         Some("") => true,
         Some(rest) => rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
@@ -1055,13 +1048,12 @@ mod tests {
     #[test]
     fn switching_a_new_sessions_provider_renames_it_and_forgets_the_old_cli() {
         let (store, workspace) = world();
-        terminal(&store, &workspace, "codex", "codex");
         let s = terminal(&store, &workspace, "claude 2", "claude");
         set_provider_session(&store, s.id.clone(), "claude-1".into()).expect("bind");
         switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), String::new(), "full".into())
             .expect("switch");
         let read = get(&store, s.id.clone()).expect("get").expect("row");
-        assert_eq!((read.provider.as_str(), read.name.as_str(), read.autonomy.as_str()), ("codex", "codex 2", "full"));
+        assert_eq!((read.provider.as_str(), read.name.as_str(), read.autonomy.as_str()), ("codex", "New session", "full"));
         assert_eq!(read.provider_session_id, None);
         // A name typed by hand stays whatever runs under it.
         rename(&store, s.id.clone(), "Mine".into()).expect("rename");
@@ -1076,6 +1068,8 @@ mod tests {
 
     #[test]
     fn placeholder_names_are_the_provider_and_a_number() {
+        assert!(is_placeholder_name("New session", "claude"));
+        assert!(!is_placeholder_name("New session 2", "claude"));
         assert!(is_placeholder_name("claude", "claude"));
         assert!(is_placeholder_name("claude 13", "claude"));
         assert!(!is_placeholder_name("claude 1a", "claude"));

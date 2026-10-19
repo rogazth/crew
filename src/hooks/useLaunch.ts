@@ -4,12 +4,11 @@ import type { AttachedFile } from "../lib/blocks";
 import { setFirstPrompt } from "../lib/firstPrompt";
 import { choiceForNewSession, type AgentChoice, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
-import { nextSessionName } from "../lib/workspaces";
+import { PLACEHOLDER_SESSION_NAME } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
 import type { useSessions } from "./useSessions";
 
 type Deps = {
-  sessions: Session[];
   /** Where a new session runs: the worktree on screen. */
   worktree: string | null;
   create: ReturnType<typeof useSessions>["create"];
@@ -28,7 +27,6 @@ type Deps = {
 
 /** New sessions and the tab launcher's picks. */
 export function useLaunch({
-  sessions,
   worktree,
   create,
   markBlank,
@@ -54,7 +52,7 @@ export function useLaunch({
     async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string, files?: AttachedFile[]) => {
       const choice = choiceForNewSession(pick, defaultAgent);
       const session = await create("terminal", {
-        name: nextSessionName(sessions, choice.provider),
+        name: PLACEHOLDER_SESSION_NAME,
         provider: choice.provider,
         model: choice.model,
         effort: choice.effort,
@@ -69,7 +67,7 @@ export function useLaunch({
       openSession(session);
       return session;
     },
-    [create, defaultAgent, markBlank, openSession, sessions, worktree],
+    [create, defaultAgent, markBlank, openSession, worktree],
   );
 
   // A new session is the start screen: a provider picked for it becomes the composer's choice, nothing is created yet.
@@ -91,10 +89,10 @@ export function useLaunch({
       if (item.kind === "browser") openBrowser(item.url, item.incognito);
       if (item.kind === "explorer") openExplorer();
       if (item.kind === "new-bot") newBot();
-      if (item.kind === "new-session") startSession(item.provider);
+      if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
-    [newBot, startSession, openSession, openStub, openTerminal, openBrowser, openExplorer, worktree],
+    [newBot, newSession, openSession, openStub, openTerminal, openBrowser, openExplorer, worktree],
   );
 
   return { newSession, startSession, launch };

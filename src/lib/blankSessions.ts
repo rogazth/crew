@@ -1,11 +1,12 @@
+import { PLACEHOLDER_SESSION_NAME } from "./workspaces";
 import type { Session, SessionStatus } from "./types";
 
 /** What a session rests in before anything is said in it. */
 const UNSPOKEN: ReadonlySet<SessionStatus> = new Set(["starting", "idle", "exited"]);
 
-/** A name Crew made up for the provider, as `nextSessionName` does: claude, claude 2, … */
+/** A name Crew made up: `New session`, or the claude, claude 2, … older sessions were given. */
 export function isDerivedName(name: string, base: string): boolean {
-  if (name === base) return true;
+  if (name === PLACEHOLDER_SESSION_NAME || name === base) return true;
   return name.startsWith(`${base} `) && /^\d+$/.test(name.slice(base.length + 1));
 }
 
