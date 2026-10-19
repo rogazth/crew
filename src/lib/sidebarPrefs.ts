@@ -4,6 +4,12 @@ import { filterSessions } from "./workspaces";
 
 export type Ordering = "manual" | "updated" | "name";
 export type Detail = "names" | "diff" | "updated" | "status";
+/** How the sessions are laid out; each says on a session's second line only what its group does not. */
+export type Grouping = "none" | "worktree" | "status";
+
+/** Sessions under their worktree until the view menu says otherwise. */
+export const DEFAULT_GROUPING: Grouping = "worktree";
+
 /** Which worktrees the panel lists: every one, the one on screen, or those with something running. */
 export type Scope = "all" | "current" | "busy";
 /** How long ago a session last moved, at most, to still be listed. */
@@ -24,6 +30,11 @@ export type SidebarPrefs = {
   hiddenProviders: string[];
   recency: Recency;
   limit: Limit;
+  groupBy: Grouping;
+  /** Under "none" and "status" a session's second line names its worktree; this turns that off. */
+  showWorktree: boolean;
+  /** Worktrees left out of the list, by path. */
+  hiddenTrees: string[];
 };
 
 export const DEFAULT_PREFS: SidebarPrefs = {
@@ -34,6 +45,9 @@ export const DEFAULT_PREFS: SidebarPrefs = {
   hiddenProviders: [],
   recency: "any",
   limit: 10,
+  groupBy: DEFAULT_GROUPING,
+  showWorktree: true,
+  hiddenTrees: [],
 };
 
 /** The panel's two fixed sections: bots as a grid of faces, sessions as rows. */
@@ -51,7 +65,10 @@ export function isDefault(prefs: SidebarPrefs): boolean {
     prefs.hiddenKinds.length === 0 &&
     prefs.hiddenProviders.length === 0 &&
     prefs.recency === DEFAULT_PREFS.recency &&
-    prefs.limit === DEFAULT_PREFS.limit
+    prefs.limit === DEFAULT_PREFS.limit &&
+    prefs.groupBy === DEFAULT_PREFS.groupBy &&
+    prefs.showWorktree === DEFAULT_PREFS.showWorktree &&
+    prefs.hiddenTrees.length === 0
   );
 }
 
@@ -85,10 +102,42 @@ export function parsePrefs(raw: string | null): SidebarPrefs {
         : [],
       recency: pick(parsed.recency, ["any", "day", "3days", "week"], DEFAULT_PREFS.recency),
       limit: LIMITS.find((limit) => limit === parsed.limit) ?? DEFAULT_PREFS.limit,
+      groupBy: pick(parsed.groupBy, ["none", "worktree", "status"], DEFAULT_GROUPING),
+      showWorktree: typeof parsed.showWorktree === "boolean" ? parsed.showWorktree : true,
+      hiddenTrees: Array.isArray(parsed.hiddenTrees)
+        ? parsed.hiddenTrees.filter((p): p is string => typeof p === "string")
+        : [],
     };
   } catch {
     return DEFAULT_PREFS;
   }
+}
+
+/** Where the redesign's dev build kept these three in this browser, before they lived in the store. */
+export const LEGACY_KEYS = {
+  groupBy: "crew-proto-grouping",
+  hiddenTrees: "crew-proto-hidden-trees",
+  showWorktree: "crew-proto-show-worktree",
+} as const;
+
+/** The picks those keys still hold, each stored as JSON; nothing for one that is missing or unreadable. */
+export function legacyPrefs(read: (key: string) => string | null): Partial<SidebarPrefs> {
+  const out: Partial<SidebarPrefs> = {};
+  const json = (key: string): unknown => {
+    try {
+      const raw = read(key);
+      return raw === null ? undefined : (JSON.parse(raw) as unknown);
+    } catch {
+      return undefined;
+    }
+  };
+  const groupBy = json(LEGACY_KEYS.groupBy);
+  if (groupBy === "none" || groupBy === "worktree" || groupBy === "status") out.groupBy = groupBy;
+  const hidden = json(LEGACY_KEYS.hiddenTrees);
+  if (Array.isArray(hidden)) out.hiddenTrees = hidden.filter((p): p is string => typeof p === "string");
+  const show = json(LEGACY_KEYS.showWorktree);
+  if (typeof show === "boolean") out.showWorktree = show;
+  return out;
 }
 
 function pick<T extends string>(value: unknown, allowed: T[], fallback: T): T {

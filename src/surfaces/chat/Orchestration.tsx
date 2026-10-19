@@ -52,8 +52,7 @@ import { useChatActions, useLetterScope, WorkContext } from "./context";
 import { Note, UserMessage } from "./Message";
 import { StateDot } from "./Panel";
 import type { Session } from "../../lib/types";
-import { useRedesign } from "../../prototype/design-system/direction";
-import { AgentRow } from "../../prototype/design-system/work/AgentRow";
+import { AgentRow } from "./AgentRow";
 
 /** streamdown is half a megabyte: a long text loads it when it is first drawn. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -162,31 +161,12 @@ export function AgentLine({
   entry?: PanelEntry | undefined;
   onOpen?: (() => void) | undefined;
 }) {
-  const redesign = useRedesign();
   const { sessions, owner } = useLetterScope();
-  if (redesign) {
-    const sessionId = entry?.id.startsWith("session:") ? entry.id.slice("session:".length) : peer?.id;
-    const session = sessionId ? sessions.find((row) => row.id === sessionId) : undefined;
-    // A native subagent wears its parent's mark.
-    const parent = sessions.find((row) => row.id === owner?.id)?.provider;
-    return <AgentRow state={state} title={title} meta={meta} peer={peer} entry={entry} session={session} fallback={parent} onOpen={onOpen} />;
-  }
-  const body = (
-    <>
-      <StateDot state={state} />
-      {peer ? <PeerMark peer={peer} className="size-3.5" /> : null}
-      <span className="min-w-0 shrink truncate text-text">{title}</span>
-      <span className="min-w-0 flex-1" />
-      <span className="max-w-[55%] shrink-0 truncate text-text-muted tabular-nums">{meta}</span>
-    </>
-  );
-  const className = "flex w-full items-center gap-2.5 px-3 py-2 text-left text-[12.5px] leading-[18px]";
-  if (!onOpen) return <div data-agent-card className={className}>{body}</div>;
-  return (
-    <button type="button" data-agent-card onClick={onOpen} className={`${className} transition-colors hover:bg-hover`}>
-      {body}
-    </button>
-  );
+  const sessionId = entry?.id.startsWith("session:") ? entry.id.slice("session:".length) : peer?.id;
+  const session = sessionId ? sessions.find((row) => row.id === sessionId) : undefined;
+  // A native subagent wears its parent's mark.
+  const parent = sessions.find((row) => row.id === owner?.id)?.provider;
+  return <AgentRow state={state} title={title} meta={meta} peer={peer} entry={entry} session={session} fallback={parent} onOpen={onOpen} />;
 }
 
 /** A long text, folded at seven lines with a way to read it all. */
@@ -527,8 +507,9 @@ function ChildAsk({ child, ask, by, onBy }: { child: Session; ask: Block; by: bo
                 onBy();
                 answer(child, ask.question!.requestId, { [question.question]: option.label });
               }}
+              data-picked={picked === option.label ? "" : undefined}
               className={`h-7 rounded-md px-2.5 text-[12.5px] ring-1 transition-colors ${
-                picked === option.label ? "bg-selected text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
+                picked === option.label ? "text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
               }`}
             >
               {option.label}

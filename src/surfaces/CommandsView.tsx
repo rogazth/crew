@@ -29,11 +29,10 @@ import {
 } from "../lib/processes";
 import { elapsed } from "../lib/time";
 import type { Session } from "../lib/types";
-import { useRedesign } from "../prototype/design-system/direction";
-import { EmptyCommands } from "../prototype/design-system/work/EmptyCommands";
+import { EmptyCommands } from "./EmptyCommands";
 
 /** A worktree a command can run in: `worktree` null is the main checkout. */
-export type Place = { worktree: string | null; label: string; hue: number };
+export type Place = { worktree: string | null; label: string };
 
 type Props = {
   workspaceId: string;
@@ -61,7 +60,6 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
   const asking = list?.filter(awaitsUser) ?? [];
   const startable = startableIn(list ?? [], here.worktree).length;
   const live = liveRuns(list ?? []).length;
-  const redesign = useRedesign();
 
   const pick = (id: string, process: Process) => {
     if (id === "edit") setEditing({ process });
@@ -111,12 +109,8 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
         <ApprovalCard key={process.id} process={process} sessions={sessions} processes={processes} />
       ))}
 
-      {list !== null && list.length === 0 && redesign ? (
+      {list !== null && list.length === 0 ? (
         <EmptyCommands />
-      ) : list !== null && list.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-text-muted">
-          No commands yet. Add one, like <code className="font-mono text-[12px]">npm run dev</code>.
-        </p>
       ) : (
         <div className="flex flex-col gap-2">
           {list?.map((process) => (
@@ -324,7 +318,6 @@ function placeOf(places: Place[], worktree: string | null): Place {
     places.find((place) => place.worktree === worktree) ?? {
       worktree,
       label: worktree?.split("/").pop() ?? "main",
-      hue: 0,
     }
   );
 }

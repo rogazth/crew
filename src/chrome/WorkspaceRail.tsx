@@ -10,15 +10,11 @@ import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
 import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
-import { requestWorkspaceRename } from "../prototype/design-system/sidebar/renameBus";
+import { requestWorkspaceRename } from "../lib/renameBus";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
-import { useRedesign } from "../prototype/design-system/direction";
-import { UpdateButton } from "../prototype/design-system/UpdateButton";
-import { UsageButton } from "../prototype/design-system/UsageButton";
-import { openSettingsSection } from "../lib/remoteUi";
 
 type Props = {
   /** The projects, home aside. */
@@ -70,7 +66,6 @@ function loudest(sessions: Session[]): SessionStatus | null {
  * dragging, switched by ⌘1‥9 or the arrows. Routines and settings sit at its foot.
  */
 export function WorkspaceRail(props: Props) {
-  const redesign = useRedesign();
   const [menu, setMenu] = useState<Menu | null>(null);
   // A mark held still under the pointer for a beat says which workspace it is and where it lives.
   const [peek, setPeek] = useState<{ id: string; anchor: WorkspacePeekAnchor } | null>(null);
@@ -100,7 +95,7 @@ export function WorkspaceRail(props: Props) {
     <nav
       data-sidebar-rail
       aria-label="Workspaces"
-      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-3"
+      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-2"
     >
       {props.home && (
         <HomeMark
@@ -146,11 +141,8 @@ export function WorkspaceRail(props: Props) {
 
       <div className="flex-1" />
 
-      {/* PROTOTYPE — throwaway: the foot under a short rule, apart from the marks, and a simulated app update. */}
-      {redesign && <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />}
-      {redesign && <UpdateButton />}
-      {/* PROTOTYPE — throwaway: the providers' plan usage, on fake readings. */}
-      <UsageButton onOpenSettings={() => openSettingsSection("usage")} />
+      {/* The foot sits under a short rule, apart from the marks. */}
+      <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />
       <RailButton
         icon={RefreshCwIcon}
         label="Routines"
@@ -312,8 +304,8 @@ function Mark({
       />
       <span
         aria-hidden
-        className={`grid size-9 place-items-center bg-accent text-[12px] font-semibold tracking-wide text-inverse transition-[border-radius,opacity] duration-150 ${
-          current ? "rounded-xl" : "rounded-[18px] opacity-70 group-hover:rounded-xl group-hover:opacity-100"
+        className={`grid size-9 place-items-center text-[12px] font-semibold tracking-wide transition-[border-radius,background-color] duration-150 ${
+          current ? "rounded-xl bg-accent text-inverse" : "rounded-[18px] bg-fill text-text group-hover:rounded-xl group-hover:bg-selected"
         } ${remote && (remote.status === "offline" || remote.mismatch) ? "opacity-35! grayscale" : ""}`}
       >
         {workspaceMark(workspace.name)}

@@ -1,12 +1,8 @@
-import { BotAvatar } from "../../chrome/BotAvatar";
-import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { awaitsUser } from "../../lib/blocks";
-import { modelLabel, providerLine, providerOf } from "../../lib/providers";
 import { Composer } from "./Composer";
+import { IntroHead, IntroWays } from "./SessionIntro";
 import { Transcript } from "./Transcript";
 import type { ChatSurfaceProps } from "./surface";
-import { useRedesign } from "../../prototype/design-system/direction";
-import { IntroHead, IntroWays } from "../../prototype/design-system/chat/SessionIntro";
 
 export function DefaultChatSurface({
   session,
@@ -43,15 +39,13 @@ export function DefaultChatSurface({
   inThread = false,
   readOnly = false,
 }: ChatSurfaceProps) {
-  // PROTOTYPE: with a direction on, the empty chat and the composer are the redesign's.
-  const redesign = useRedesign();
   const pickStarter = (text: string) => {
     onDraft(text);
     field.current?.focus();
   };
   return (
     <>
-      <div className="relative flex min-h-0 flex-1 flex-col" {...(redesign ? { "data-ds-chat": "" } : {})}>
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
             <span className="crew-ink rounded-full px-3 py-1 text-[12px] font-medium">
@@ -59,21 +53,9 @@ export function DefaultChatSurface({
             </span>
           </div>
         )}
-        {blocks.length === 0 && redesign ? (
+        {blocks.length === 0 ? (
           <div className="flex min-h-0 flex-[4] flex-col items-center justify-end overflow-hidden">
             {!loading && <IntroHead session={session} />}
-          </div>
-        ) : blocks.length === 0 ? (
-          <div className="flex min-h-0 flex-[5] flex-col items-center justify-end">
-            {!loading && (
-              <Intro
-                session={session}
-                onPick={(text) => {
-                  onDraft(text);
-                  field.current?.focus();
-                }}
-              />
-            )}
           </div>
         ) : (
           <Transcript
@@ -115,63 +97,13 @@ export function DefaultChatSurface({
             switchProvider={switchProvider}
           />
         )}
-        {blocks.length === 0 && redesign ? (
+        {blocks.length === 0 && (
           <div className="min-h-0 flex-[6] overflow-y-auto">
             {!loading && !readOnly && <IntroWays session={session} onPick={pickStarter} />}
           </div>
-        ) : (
-          blocks.length === 0 && <div className="min-h-0 flex-[6]" />
         )}
         {overlay}
       </div>
     </>
-  );
-}
-
-/** Starters that fit any session in any repo; a click drafts it, it never sends. */
-const STARTERS = [
-  "Summarize what this repo does and how it's laid out",
-  "Find the TODOs and FIXMEs worth doing first",
-  "Review the last commit for bugs",
-];
-
-/**
- * A new chat's first screen, the way ChatGPT and Grok open one: who it is,
- * what runs it, and a few ways in, above the composer.
- */
-function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPick: (text: string) => void }) {
-  return (
-    <div className="mx-auto flex w-full max-w-[840px] flex-col items-center gap-4 px-6 pb-6 text-center">
-      {/* A session is its CLI, with no face of its own: the CLI's mark stands in. */}
-      {session.kind === "bot" ? (
-        <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-16" />
-      ) : (
-        <span className="grid size-16 place-items-center rounded-2xl bg-card ring-1 ring-border">
-          <ProviderIcon provider={session.provider} className="size-8" />
-        </span>
-      )}
-      <div className="flex flex-col items-center gap-1">
-        <h2 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{session.name}</h2>
-        <p className="flex items-center gap-1.5 text-[13px] text-text-muted">
-          <ProviderIcon provider={session.provider} className="size-3.5" />
-          {session.kind === "bot"
-            ? `${providerOf(session.provider)?.label} ${modelLabel(session.provider, session.model)}`
-            : providerLine(session.provider, session.model)}
-        </p>
-        {session.description && <p className="max-w-md text-[13.5px] text-text-muted">{session.description}</p>}
-      </div>
-      <div className="flex flex-wrap justify-center gap-1.5 pt-1">
-        {STARTERS.map((text) => (
-          <button
-            key={text}
-            type="button"
-            onClick={() => onPick(text)}
-            className="rounded-full px-3 py-1.5 text-[12.5px] text-text-muted ring-1 ring-border transition-colors hover:bg-hover hover:text-text"
-          >
-            {text}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }

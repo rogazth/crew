@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -13,14 +12,13 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
 import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
 import type { Opener } from "../../chrome/ModelPicker";
 import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
 import { composerHints } from "../../lib/composerHints";
-import { accessesOf, effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
-import { nextAccess, nextEffort } from "../../lib/sessionOptions";
+import { effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
+import { nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
   folderChoices,
@@ -50,14 +48,12 @@ import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
 import type { Upload } from "../../hooks/useUploads";
 import { AttachmentStrip } from "./Attachments";
-import { ContextMeter } from "./ContextMeter";
 import { McpSegment } from "./Mcp";
 import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
 import { SlashPicker } from "./SlashPicker";
-import { useRedesign } from "../../prototype/design-system/direction";
 import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
 import {
   AgentClip,
@@ -66,10 +62,10 @@ import {
   SendButton,
   SessionContextRow,
   WorktreeSegment,
-} from "../../prototype/design-system/chat/ComposerParts";
+} from "./ComposerParts";
 
 /**
- * PROTOTYPE: the redesigned overlay's runs. A `-`, `*` or `+` marker wears a bullet over it, an inline
+ * The overlay's runs. A `-`, `*` or `+` marker wears a bullet over it, an inline
  * code span becomes one pill with its ticks hidden inside it as padding, and a mention its own pill.
  * Every character stays in place, in the field's font, so the overlay never drifts from the caret.
  */
@@ -186,7 +182,6 @@ export function Composer({
   switchProvider = false,
   escBack = false,
 }: Props) {
-  const redesign = useRedesign();
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
@@ -370,18 +365,12 @@ export function Composer({
         }
       }
     }
-    // ⇧Tab steps through the access modes, the way it does in Claude's own terminal.
-    // PROTOTYPE: the redesign steps the effort levels instead; access stays a deliberate pick.
+    // ⇧Tab steps the effort levels; access stays a deliberate pick.
     if (event.key === "Tab" && event.shiftKey && onOptions) {
       event.preventDefault();
-      if (redesign) {
-        const fitted = fitChoice(choiceOf(session));
-        const next = nextEffort(fitted.effort, effortsOf(fitted.provider, fitted.model));
-        if (next) onOptions(fitChoice({ ...fitted, effort: next }));
-        return;
-      }
-      const next = nextAccess(session.autonomy, accessesOf(session.provider));
-      if (next) onOptions({ ...choiceOf(session), access: next });
+      const fitted = fitChoice(choiceOf(session));
+      const next = nextEffort(fitted.effort, effortsOf(fitted.provider, fitted.model));
+      if (next) onOptions(fitChoice({ ...fitted, effort: next }));
       return;
     }
     // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
@@ -401,214 +390,74 @@ export function Composer({
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
   const hints = composerHints({ working, escBack, whileWorking });
 
-  // PROTOTYPE: the redesigned composer, while the dev bar has a direction on. Same state, same handlers.
-  if (redesign) {
-    // A mention is marked where it is typed, in the text; the row over the field never repeats it.
-    const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
-      part.kind === "token" ? [part] : splitMentions(part.text, known),
-    );
-    // What the plus menu types for you: an `@` or a `/` at the caret, so the pickers open as if typed.
-    const typeAtCaret = (mark: string) => {
-      const el = field.current;
-      const at = mark === "/" && draft.trim() === "" ? 0 : (el?.selectionStart ?? draft.length);
-      const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
-      const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
-      const text = `${before}${gap}${mark}${draft.slice(at)}`;
-      onDraft(text);
-      // The menu hands the focus back to its trigger as it closes: the caret goes in after that.
-      window.setTimeout(() => place(before.length + gap.length + 1), 40);
-    };
-    const queued = queue && queue.items.some((message) => !message.steering);
-    const placeholder = waiting
-      ? `Answer ${session.name} above, or write here`
-      : working
-        ? whileWorking === "steer"
-          ? "Add to the running turn…"
-          : whileWorking === "queue"
-            ? "Queue a message for the next turn…"
-            : `${session.name} is working…`
-        : centered
-          ? "Ask anything…"
-          : `Message ${session.name}…`;
-    return (
-      <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
-        <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
-          {work && (
-            <WorkSegment
-              work={work}
-              open={sheet === "work"}
-              onOpenChange={openWork}
-              onEscape={focusField}
-              // The clip over the composer opens it, and it unfolds from the clip itself.
-              hideTrigger
-            />
-          )}
-        </AgentClip>
-        <form onSubmit={submit} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
-          {mention && (
-            <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
-          )}
-          {slashResults.length > 0 && (
-            <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
-          )}
-          {queued && (
-            <div className="px-1.5">
-              <QueueChips queue={queue} />
-            </div>
-          )}
-          <SessionContextRow session={session} hidePlace={centered} />
-          {(files.length > 0 || uploads.length > 0) && (
-            <div className="px-1.5">
-              <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />
-            </div>
-          )}
-          <div className="ds-composer-text">
-            <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
-              {overlayRuns(splitInlineCode(splitListMarkers(segments)))}
-              {"​"}
-            </div>
-            <textarea
-              ref={field}
-              rows={1}
-              value={draft}
-              placeholder={placeholder}
-              aria-label={`Message ${session.name}`}
-              spellCheck={false}
-              onChange={(event) => {
-                onDraft(event.target.value);
-                setCursor(event.target.selectionStart);
-                setActive(0);
-              }}
-              onSelect={syncCursor}
-              onKeyUp={syncCursor}
-              onClick={syncCursor}
-              onBlur={() => setCursor(-1)}
-              onScroll={(event) => {
-                if (overlay.current) overlay.current.scrollTop = event.currentTarget.scrollTop;
-              }}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-              className="crew-composer-field crew-composer-input"
-            />
-          </div>
-          <div className="flex h-8 items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <AttachMenu onAttach={onAttach} onMention={() => typeAtCaret("@")} onCommand={() => typeAtCaret("/")} />
-              {onOptions && (
-                <div className="ds-model-group">
-                  <ModelControls
-                    lockProvider={!switchProvider}
-                    value={choiceOf(session)}
-                    onChange={onOptions}
-                    openers={{ model, effort }}
-                  />
-                </div>
-              )}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {onOptions && (
-                <div className="ds-access">
-                  <AccessPicker
-                    ref={access}
-                    provider={session.provider}
-                    value={session.autonomy as Access}
-                    onChange={(next) => onOptions({ ...choiceOf(session), access: next })}
-                  />
-                </div>
-              )}
-              <ContextRing sessionId={session.id} provider={session.provider} mock={!centered} />
-              <SendButton
-                stopping={stopping}
-                canSend={canSend}
-                label={sendLabel}
-                title={sendTitle}
-                stopTitle={escBack ? "Stop the turn" : "Stop the turn (esc)"}
-                onStop={onStop}
-              />
-            </div>
-          </div>
-        </form>
-        <div data-status-line data-session={session.id} className="ds-status">
-          {!centered && <WorktreeSegment session={session} />}
-          {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
-          {session.paused && <PausedSegment />}
-          <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
-          <span className="flex-1" />
-          {optionsPending ? (
-            <span className="truncate text-info">
-              The new settings apply with your next message, which restarts {session.name} where it left off
-            </span>
-          ) : (
-            !centered && (
-              // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
-              <span className="ds-hints" data-shown>
-                {hints.map(({ key, does }) => (
-                  <span key={key}>
-                    <kbd>{key}</kbd>
-                    {does}
-                  </span>
-                ))}
-              </span>
-            )
-          )}
-        </div>
-      </div>
-    );
-  }
-
+  // A mention is marked where it is typed, in the text; the row over the field never repeats it.
+  const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
+    part.kind === "token" ? [part] : splitMentions(part.text, known),
+  );
+  // What the plus menu types for you: an `@` or a `/` at the caret, so the pickers open as if typed.
+  const typeAtCaret = (mark: string) => {
+    const el = field.current;
+    const at = mark === "/" && draft.trim() === "" ? 0 : (el?.selectionStart ?? draft.length);
+    const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
+    const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
+    const text = `${before}${gap}${mark}${draft.slice(at)}`;
+    onDraft(text);
+    // The menu hands the focus back to its trigger as it closes: the caret goes in after that.
+    window.setTimeout(() => place(before.length + gap.length + 1), 40);
+  };
+  const queued = queue && queue.items.some((message) => !message.steering);
+  const placeholder = waiting
+    ? `Answer ${session.name} above, or write here`
+    : working
+      ? whileWorking === "steer"
+        ? "Add to the running turn…"
+        : whileWorking === "queue"
+          ? "Queue a message for the next turn…"
+          : `${session.name} is working…`
+      : centered
+        ? "Ask anything…"
+        : `Message ${session.name}…`;
   return (
-    <div className={`relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
-      <form onSubmit={submit} className="crew-composer relative">
+    <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
+      <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
+        {work && (
+          <WorkSegment
+            work={work}
+            open={sheet === "work"}
+            onOpenChange={openWork}
+            onEscape={focusField}
+          />
+        )}
+      </AgentClip>
+      <form onSubmit={submit} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
         {slashResults.length > 0 && (
           <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
         )}
-        {queue && queue.items.some((message) => !message.steering) && <QueueChips queue={queue} />}
+        {queued && (
+          <div className="px-1.5">
+            <QueueChips queue={queue} />
+          </div>
+        )}
+        <SessionContextRow session={session} hidePlace={centered} />
         {(files.length > 0 || uploads.length > 0) && (
-          <div className="mb-2">
+          <div className="px-1.5">
             <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />
           </div>
         )}
-        <div className="relative">
+        <div className="ds-composer-text">
           <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
-            {splitListMarkers(
-              splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
-                part.kind === "token" ? [part] : splitMentions(part.text, known),
-              ),
-            ).map((segment, index) =>
-              segment.kind === "text" ? (
-                <span key={index}>{segment.text}</span>
-              ) : segment.kind === "marker" ? (
-                <span key={index} className="text-text-muted">
-                  {segment.text}
-                </span>
-              ) : (
-                <mark key={index} className="crew-mention-run">
-                  {segment.text}
-                </mark>
-              ),
-            )}
+            {overlayRuns(splitInlineCode(splitListMarkers(segments)))}
             {"​"}
           </div>
           <textarea
             ref={field}
             rows={1}
             value={draft}
-            placeholder={
-              waiting
-                ? `${session.name} is waiting on you — answer above`
-                : working
-                  ? whileWorking === "steer"
-                    ? `${session.name} is working — ↵ adds this to the running turn`
-                    : whileWorking === "queue"
-                      ? `${session.name} is working — ↵ queues this for the next turn`
-                      : escBack
-                        ? `${session.name} is working`
-                        : `${session.name} is working — esc stops it`
-                  : `Ask ${session.name} anything — @ files, / commands`
-            }
+            placeholder={placeholder}
+            aria-label={`Message ${session.name}`}
             spellCheck={false}
             onChange={(event) => {
               onDraft(event.target.value);
@@ -627,87 +476,66 @@ export function Composer({
             className="crew-composer-field crew-composer-input"
           />
         </div>
-        <div className="mt-1.5 flex h-8 items-center justify-between gap-2">
+        <div className="flex h-8 items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
-            <button
-              type="button"
-              aria-label="Attach files"
-              title="Attach files"
-              onClick={onAttach}
-              className="crew-composer-plus shrink-0"
-            >
-              <PaperclipIcon className="size-4" />
-            </button>
+            <AttachMenu onAttach={onAttach} onMention={() => typeAtCaret("@")} onCommand={() => typeAtCaret("/")} />
             {onOptions && (
-              <ModelControls
-                lockProvider={!switchProvider}
-                value={choiceOf(session)}
-                onChange={onOptions}
-                openers={{ model, effort }}
-              />
+              <div className="ds-model-group">
+                <ModelControls
+                  lockProvider={!switchProvider}
+                  value={choiceOf(session)}
+                  onChange={onOptions}
+                  openers={{ model, effort }}
+                />
+              </div>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1">
             {onOptions && (
-              <AccessPicker
-                ref={access}
-                provider={session.provider}
-                value={session.autonomy as Access}
-                onChange={(access) => onOptions({ ...choiceOf(session), access })}
-                hint="⇧Tab in the message box cycles them."
-              />
+              <div className="ds-access">
+                <AccessPicker
+                  ref={access}
+                  provider={session.provider}
+                  value={session.autonomy as Access}
+                  onChange={(next) => onOptions({ ...choiceOf(session), access: next })}
+                />
+              </div>
             )}
-            {stopping ? (
-              <button
-                type="button"
-                onClick={onStop}
-                aria-label="Stop"
-                title={escBack ? "Stop the turn" : "Stop the turn (esc)"}
-                className="flex size-[30px] shrink-0 items-center justify-center rounded-full crew-ink transition-colors duration-100 hover:bg-accent-hover focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
-              >
-                <SquareIcon className="size-3 fill-current" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!canSend}
-                aria-label={sendLabel}
-                title={sendTitle}
-                className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
-                  canSend ? "crew-ink hover:bg-accent-hover" : "bg-card text-text-muted"
-                }`}
-              >
-                <ArrowUpIcon className="size-4" />
-              </button>
-            )}
+            <ContextRing sessionId={session.id} provider={session.provider} />
+            <SendButton
+              stopping={stopping}
+              canSend={canSend}
+              label={sendLabel}
+              title={sendTitle}
+              stopTitle={escBack ? "Stop the turn" : "Stop the turn (esc)"}
+              onStop={onStop}
+            />
           </div>
         </div>
       </form>
-      <div data-status-line data-session={session.id} className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
-        <ContextMeter sessionId={session.id} provider={session.provider} />
-        {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
-        {queue && queue.items.some((message) => !message.steering) && (
-          <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />
-        )}
+      <div data-status-line data-session={session.id} className="ds-status">
+        {!centered && <WorktreeSegment session={session} />}
+        {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
         {session.paused && <PausedSegment />}
-        {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
-        <span className="truncate text-placeholder">
-          {optionsPending ? (
-            <>The new settings apply with your next message, which restarts {session.name} where it left off</>
-          ) : hints.length > 0 ? (
-            // Only while a turn runs: an idle composer's keys do what they seem to.
-            <span data-key-hints>
-              {hints.map(({ key, does }, index) => (
-                <Fragment key={key}>
-                  {index > 0 && " · "}
-                  <kbd className="font-sans">{key}</kbd> {does}
-                </Fragment>
+        {optionsPending ? (
+          <span className="truncate text-info">
+            The new settings apply with your next message, which restarts {session.name} where it left off
+          </span>
+        ) : (
+          !centered && (
+            // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
+            <span className="ds-hints" data-shown>
+              {hints.map(({ key, does }) => (
+                <span key={key}>
+                  <kbd>{key}</kbd>
+                  {does}
+                </span>
               ))}
             </span>
-          ) : null}
-        </span>
+          )
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,4 @@
 import { useEffect, useRef, type ComponentProps } from "react";
-import type { SessionSidebarProps } from "./SessionSidebar";
 import { SettingsSidebar } from "./SettingsSidebar";
 import { SidebarShell, SlidingViews } from "./SidebarShell";
 import { TOGGLE_RESERVE } from "../lib/chrome";
@@ -7,8 +6,7 @@ import { WorkspaceRail } from "./WorkspaceRail";
 import { useSpatialKeys } from "../hooks/useSpatialKeys";
 import { useTabScope } from "../hooks/useTabScope";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "../lib/settings";
-// PROTOTYPE — throwaway: the redesign's sidebar, worktrees and sessions in one scroll.
-import { UnifiedSidebar } from "../prototype/design-system/sidebar/UnifiedSidebar";
+import { WorkspaceSidebar, type WorkspaceSidebarProps } from "./WorkspaceSidebar";
 
 type Props = {
   open: boolean;
@@ -18,7 +16,7 @@ type Props = {
   onSelectSettings: (section: SettingsSectionId) => void;
   onCloseSettings: () => void;
   rail: ComponentProps<typeof WorkspaceRail>;
-  sessions: SessionSidebarProps;
+  sessions: WorkspaceSidebarProps;
 };
 
 /**
@@ -45,9 +43,9 @@ export function AppSidebar({ open, width, onResize, settings, onSelectSettings, 
         <WorkspaceRail {...rail} />
         <SlidingViews
           active={settings ? "settings" : "sessions"}
-          className="min-w-0 rounded-tl-xl border-t border-l border-border bg-canvas/40"
+          className="mb-2 min-w-0 border-t border-l border-transparent border-l-hairline"
           views={[
-            { key: "sessions", node: <UnifiedSidebar {...sessions} /> },
+            { key: "sessions", node: <WorkspaceSidebar {...sessions} /> },
             {
               key: "settings",
               node: (

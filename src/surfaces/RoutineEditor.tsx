@@ -1,14 +1,13 @@
 import { CheckIcon, ChevronRightIcon, LoaderCircleIcon, MinusIcon, PlayIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Card, Field, IconButton, Select, TextArea, TextInput, Toggle } from "../chrome/kit";
+import { BotPicker } from "../chrome/BotPicker";
+import { Button, Card, Field, IconButton, TextArea, TextInput, Toggle } from "../chrome/kit";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
 import { isValidCron } from "../lib/cron";
 import { type RoutineDraft, type RoutineRun } from "../lib/routines";
 import { dayLabel, duration } from "../lib/time";
-import type { Session, Workspace } from "../lib/types";
-import { useRedesign } from "../prototype/design-system/direction";
-import { BotPicker } from "../prototype/design-system/routines/BotPicker";
+import type { Workspace } from "../lib/types";
 
 type Props = {
   initial: RoutineDraft;
@@ -33,10 +32,8 @@ export function RoutineEditor({
   onRunNow,
   onBack,
 }: Props) {
-  const redesign = useRedesign();
   const [draft, setDraft] = useState(initial);
   const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
-  const [bots, setBots] = useState<Session[]>([]);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -48,7 +45,6 @@ export function RoutineEditor({
       .then((list) => {
         if (cancelled) return;
         const found = list.filter((session) => session.kind === "bot");
-        setBots(found);
         // Moving the routine to another workspace hands it to that workspace's first bot.
         setDraft((prev) =>
           found.some((bot) => bot.id === prev.sessionId)
@@ -56,9 +52,7 @@ export function RoutineEditor({
             : { ...prev, sessionId: found[0]?.id ?? "" },
         );
       })
-      .catch(() => {
-        if (!cancelled) setBots([]);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -147,45 +141,17 @@ export function RoutineEditor({
             />
           </Field>
 
-          {/* PROTOTYPE: with a direction on, one picker for the bot and its workspace together. */}
-          {redesign ? (
-            <Group label="Runs as">
-              <BotPicker
-                workspaces={workspaces}
-                workspaceId={workspaceId}
-                sessionId={draft.sessionId}
-                onChange={(nextWorkspaceId, sessionId) => {
-                  setWorkspaceId(nextWorkspaceId);
-                  setDraft((prev) => ({ ...prev, sessionId }));
-                }}
-              />
-            </Group>
-          ) : (
-          <div className="grid grid-cols-2 gap-4">
-            <Group label="Workspace">
-              <Select
-                label="Workspace"
-                className="w-full"
-                value={workspaceId}
-                onChange={setWorkspaceId}
-                options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
-              />
-            </Group>
-            <Group label="Bot">
-              {bots.length === 0 ? (
-                <TextInput disabled readOnly aria-label="Bot" value="No bots in this workspace" />
-              ) : (
-                <Select
-                  label="Bot"
-                  className="w-full"
-                  value={draft.sessionId}
-                  onChange={(sessionId) => setDraft({ ...draft, sessionId })}
-                  options={bots.map((bot) => ({ value: bot.id, label: bot.name }))}
-                />
-              )}
-            </Group>
-          </div>
-          )}
+          <Group label="Runs as">
+            <BotPicker
+              workspaces={workspaces}
+              workspaceId={workspaceId}
+              sessionId={draft.sessionId}
+              onChange={(nextWorkspaceId, sessionId) => {
+                setWorkspaceId(nextWorkspaceId);
+                setDraft((prev) => ({ ...prev, sessionId }));
+              }}
+            />
+          </Group>
 
           <Card>
             <Toggle

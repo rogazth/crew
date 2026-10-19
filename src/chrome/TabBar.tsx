@@ -233,8 +233,9 @@ export function TabBar({
       ref={bar}
       data-tauri-drag-region
       data-file-drop={dropping || undefined}
-      className={`flex h-10 shrink-0 items-stretch border-b border-border bg-sidebar ${
-        dropping ? "ring-2 ring-accent ring-inset" : ""
+      className={`flex h-10 shrink-0 items-stretch border-b border-transparent ${
+        // Files held over the strip only tint it; they open as tabs.
+        dropping ? "bg-[color-mix(in_oklab,var(--color-focus)_6%,var(--color-sidebar))]" : "bg-sidebar"
       }`}
     >
       {inset && (

@@ -43,7 +43,6 @@ import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
-import { CommandsButton } from "./chrome/CommandsButton";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
@@ -55,11 +54,8 @@ import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
 import { useTour } from "./hooks/useTour";
 import type { Process } from "./lib/processes";
-// PROTOTYPE — throwaway: the review picker, dev builds only.
-import { ReviewPicker } from "./prototype/design-system/review/ReviewPicker";
-import { PanePlaceContext } from "./prototype/design-system/sidebar/PaneWorktree";
-import { WorkspaceStart, focusWorkspaceStart } from "./prototype/design-system/chat/WorkspaceStart";
-import { useRedesign } from "./prototype/design-system/direction";
+import { PanePlaceContext } from "./surfaces/chat/panePlace";
+import { WorkspaceStart, focusWorkspaceStart } from "./surfaces/WorkspaceStart";
 import type { AgentChoice } from "./lib/providers";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
@@ -106,7 +102,6 @@ export function App() {
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
-  const redesign = useRedesign();
   const tour = useTour(workspaces.home, workspaces.projects, all);
   // A page opened anywhere ticks the tour's last step.
   const { triedBrowser } = tour;
@@ -175,7 +170,7 @@ export function App() {
   const processes = useProcesses(workspaceId);
 
   // With only the main checkout there is no other worktree to tell apart.
-  const { tabPlaceOf, hues } = work;
+  const { tabPlaceOf } = work;
 
   const nav = useNavigation({
     tabs,
@@ -195,9 +190,8 @@ export function App() {
       worktrees.list.map((tree) => ({
         worktree: tree.main ? null : tree.path,
         label: worktreeLabel(tree),
-        hue: hues.get(tree.path) ?? 0,
       })),
-    [hues, worktrees.list],
+    [worktrees.list],
   );
   const commandCounts = useMemo(() => {
     const list = processes.processes ?? [];
@@ -216,7 +210,7 @@ export function App() {
     };
   }, [active?.path, all, processes.processes]);
   // The worktree on screen: where a Commands tab opens, and where Start all starts.
-  const here = places.find((place) => place.worktree === work.placeIn) ?? places[0] ?? { worktree: null, label: "main", hue: 0 };
+  const here = places.find((place) => place.worktree === work.placeIn) ?? places[0] ?? { worktree: null, label: "main" };
   const { openStub } = nav;
   const openCommands = useCallback(() => openStub("commands", "Commands"), [openStub]);
   // A file dropped on the strip opens as ⌘P would open it: one in the worktree
@@ -309,12 +303,12 @@ export function App() {
   const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
   const openPalette = (mode: PaletteMode) => setPalette(mode);
 
-  // PROTOTYPE — throwaway: the content's worktree line, which can still move a session nobody has written to.
+  // The content's worktree line, which can still move a session nobody has written to.
   const paneTab = tabs.active;
   const paneSession = paneTab?.kind === "session" ? all.find((s) => s.id === paneTab.sessionId) : undefined;
   const paneFresh = paneSession?.kind === "terminal" && !paneSession.providerSessionId && !paneSession.cursor;
   const panePath = paneTab && tabPlaceOf ? tabPlaceOf(paneTab) : null;
-  const panePlaces = worktrees.list.map((tree) => ({ path: tree.path, label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }));
+  const panePlaces = worktrees.list.map((tree) => ({ path: tree.path, label: worktreeLabel(tree) }));
   const panePlace = panePlaces.find((p) => p.path === panePath) ?? null;
   const paneMove =
     paneFresh && paneTab && paneSession
@@ -379,14 +373,9 @@ export function App() {
           sessions={{
             workspace: active,
             worktrees: worktrees.list,
-            activeWorktree: current?.path ?? active.path,
             sessions: listed,
             activeSessionId,
             onSelect: nav.openSession,
-            onSelectWorktree: (path) => {
-              closePage();
-              work.selectWorktree(path);
-            },
             onNewBot: sheet.newBot,
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) =>
@@ -421,28 +410,15 @@ export function App() {
                   foot: tour.shown ? <TourFoot steps={tour.steps} onDismiss={tour.dismiss} /> : null,
                 }
               : undefined,
-            commands: isHome ? undefined : (
-              <CommandsButton
-                live={commandCounts.live}
-                asking={commandCounts.asking}
-                orphans={commandCounts.orphans}
-                open={isWorkspace && commandsOpen}
-                onToggle={openCommands}
-              />
-            ),
             running: commandCounts.running,
-            hues,
-            // PROTOTYPE — throwaway: what the sidebar proposals reach for beyond the sessions.
-            proto: {
-              onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
-              onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
-              commands: {
-                live: commandCounts.live,
-                asking: commandCounts.asking,
-                orphans: commandCounts.orphans,
-                open: isWorkspace && commandsOpen,
-                onToggle: openCommands,
-              },
+            onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
+            onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
+            commands: {
+              live: commandCounts.live,
+              asking: commandCounts.asking,
+              orphans: commandCounts.orphans,
+              open: isWorkspace && commandsOpen,
+              onToggle: openCommands,
             },
             // A refusal from either still lets the other land; the button stops spinning either way.
             onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
@@ -450,7 +426,7 @@ export function App() {
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-canvas">
+      <main className="flex min-w-0 flex-1 flex-col bg-sidebar">
         <Pages
           page={page}
           workspaces={workspaces.workspaces}
@@ -491,7 +467,7 @@ export function App() {
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
           )}
 
-          <div className="flex min-h-0 flex-1">
+          <div data-sheet="workspace" className="flex min-h-0 flex-1">
             {/* The content, not the tab, says its worktree. */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <PanePlaceContext value={panePick}>
@@ -506,7 +482,7 @@ export function App() {
                     onNewBot={() => sheet.newBot()}
                     onOpenBrowser={() => nav.openBrowser("")}
                   />
-                ) : redesign && active ? (
+                ) : active ? (
                   <WorkspaceStart
                     workspaceId={active.id}
                     places={panePlaces}
@@ -647,55 +623,6 @@ export function App() {
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
       <UpdateDialog />
-
-      {import.meta.env.DEV && (
-        <ReviewPicker
-          control={{
-            workspaces: workspaces.workspaces,
-            activeId: workspaceId,
-            remoteOf: envs.remoteOf,
-            sessions,
-            worktrees: worktrees.list,
-            currentTree: current?.path ?? null,
-            processes: processes.processes,
-            panes: tabs.panes,
-            activate: workspaces.activate,
-            selectWorktree: work.selectWorktree,
-            reset: () => {
-              closePage();
-              setPalette(null);
-              setDialog(null);
-              sheet.close();
-              confirms.close();
-              envs.closePicker();
-              setSidebarOpen(true);
-              if (explorer.open) explorer.close();
-            },
-            openSession: nav.openSession,
-            newSession: () => void newSession(),
-            openTab: (tab) => {
-              closePage();
-              tabs.open(tab);
-            },
-            openStub: nav.openStub,
-            openFile: (relative) => treePath && openFile({ path: `${treePath}/${relative}`, relative, name: relative.split("/").pop() ?? relative }),
-            openProcessRun: nav.openProcessRun,
-            openExplorer: (mode) => {
-              closePage();
-              explorer.setMode(mode);
-            },
-            openSettings,
-            addMachine: envs.addMachine,
-            openRoutines,
-            editBot: sheet.editBot,
-            newBot: () => sheet.newBot(),
-            openPalette: (mode) => setPalette(mode),
-            openDialog: (which) => setDialog(which),
-            openMachines: envs.openWorkspace,
-            askDelete: confirms.askSession,
-          }}
-        />
-      )}
 
       <BotSheetHost
         sheet={sheet}
