@@ -1225,6 +1225,51 @@ svg.lucide {
   visibility: hidden;
 }
 
+/* ── Tab strip ─────────────────────────────────────────────────────────
+   The tabs float in the strip, bare. The one on screen is a raised card;
+   the rest are words split by hairlines that give way beside the card and
+   under a hover. Switching is instant: nothing moves but colour. */
+.crew-tab {
+  position: relative;
+  display: flex;
+  height: 30px;
+  align-items: center;
+  border-radius: 9px;
+  outline: none;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+.crew-tab:not([data-on]):hover {
+  background: var(--color-hover);
+}
+.crew-tab[data-on] {
+  z-index: 1;
+  background: light-dark(var(--color-canvas), var(--color-surface));
+  box-shadow:
+    0 0 0 1px var(--color-hairline),
+    0 1px 2px light-dark(oklch(0% 0 0 / 0.05), oklch(0% 0 0 / 0.3)),
+    0 3px 8px -3px light-dark(oklch(0% 0 0 / 0.1), oklch(0% 0 0 / 0.45));
+}
+.crew-tab:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+/* A hairline between two bare tabs, gone beside the card or a hover. */
+.crew-tab + .crew-tab::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -1.5px;
+  width: 1px;
+  height: 14px;
+  translate: 0 -50%;
+  background: var(--color-border);
+  transition: opacity 120ms ease-out;
+}
+:is(.crew-tab[data-on], .crew-tab[data-on] + .crew-tab, .crew-tab:hover, .crew-tab:hover + .crew-tab)::before {
+  opacity: 0;
+}
+
 /* Work in progress: three dots in ink, rising in turn. A tab, a running call. */
 .crew-typing {
   display: flex;

@@ -207,7 +207,7 @@ export function TabBar({
     groups?.placeOf ?? null,
   );
   const itemIds = items.map((item) => (item.kind === "tab" ? item.tab.id : item.id));
-  const strip = useTabOverflow(itemIds.join("|"));
+  const { ref, endRef, overflowing, canScrollStart, canScrollEnd, scroll } = useTabOverflow(itemIds.join("|"));
   const branchOf = (tab: Tab): Branch | null => {
     const place = groups?.placeOf(tab);
     return place ? groups!.labelOf(place) : null;
@@ -216,12 +216,16 @@ export function TabBar({
   useCommand("open-launcher", () => setLauncher((value) => !value));
 
   // Selecting from the launcher or the sidebar can land on a tab that scrolled out of view.
-  const { ref } = strip;
+  // Brought in sideways only: the strip never scrolls up or down, whatever a tab's height.
   useEffect(() => {
-    if (!activeId) return;
-    ref.current
-      ?.querySelector(`[data-tab-id="${CSS.escape(activeId)}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const scroller = ref.current;
+    const el = activeId ? scroller?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeId)}"]`) : null;
+    if (!scroller || !el) return;
+    const margin = 40;
+    const box = scroller.getBoundingClientRect();
+    const tab = el.getBoundingClientRect();
+    if (tab.left < box.left + margin) scroller.scrollLeft -= box.left + margin - tab.left;
+    else if (tab.right > box.right - margin) scroller.scrollLeft += tab.right - (box.right - margin);
   }, [activeId, ref]);
 
   return (
@@ -258,7 +262,7 @@ export function TabBar({
       >
         <Tabs.List className="flex h-full min-w-0 flex-1 items-center">
           {pinned.length > 0 && (
-            <div data-tab-pins className="flex h-full shrink-0 items-center gap-1 pl-1.5">
+            <div data-tab-pins className="flex h-full shrink-0 items-center gap-0.5 pl-2.5">
               <SortableList
                 ids={pinnedIds}
                 onReorder={(next) => onReorder([...next, ...tabs.flatMap((tab) => (tab.pinned ? [] : [tab.id]))])}
@@ -278,17 +282,19 @@ export function TabBar({
                   />
                 ))}
               </SortableList>
-              <span aria-hidden className="ml-0.5 h-4 w-px shrink-0 bg-border" />
+              <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-border" />
             </div>
           )}
 
           <div className="relative isolate flex h-full min-w-0 flex-1">
             {/* One scroller carries the tabs and the plus, so the plus trails the last
-                tab and sits flush left when there are none. */}
+                tab and sits flush left when there are none. Overflowing, it is no window
+                handle: a wheel in a gap between tabs scrolls them. */}
             <div
               ref={ref}
               data-tab-strip
-              className="no-scrollbar flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden px-1.5 scroll-px-10"
+              data-tauri-drag-region={overflowing ? "false" : undefined}
+              className={`no-scrollbar flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden pr-1.5 scroll-px-10 ${pinned.length > 0 ? "" : "pl-2.5"}`}
             >
               <SortableList
                 ids={itemIds}
@@ -322,7 +328,7 @@ export function TabBar({
                 )}
               </SortableList>
 
-              <div className="flex shrink-0 items-center">
+              <div className="ml-1 flex shrink-0 items-center">
                 <TabLauncher
                   open={launcher}
                   onOpenChange={setLauncher}
@@ -330,17 +336,19 @@ export function TabBar({
                   onLaunch={onLaunch}
                 />
               </div>
+              {/* The strip's end: once it is in view, so is the plus, and the end arrow goes. */}
+              <span ref={endRef} aria-hidden className="h-px w-px shrink-0" />
             </div>
 
             <ScrollControl
               side="start"
-              visible={strip.canScrollStart}
-              onClick={() => strip.scroll("start")}
+              visible={canScrollStart}
+              onClick={() => scroll("start")}
             />
             <ScrollControl
               side="end"
-              visible={strip.canScrollEnd}
-              onClick={() => strip.scroll("end")}
+              visible={canScrollEnd}
+              onClick={() => scroll("end")}
             />
           </div>
         </Tabs.List>
@@ -451,13 +459,11 @@ const TabPill = memo(function TabPill({
       onMouseLeave={() => onPeek(tab.id, null)}
       onPointerDown={() => onPeek(tab.id, null)}
       title={tab.kind === "session" ? undefined : tabTitle(tab, sessions)}
-      /* The ring and the shadow are always drawn; only their colour moves,
-         so the pill fades in instead of growing an edge. A held pill wears the
-         active face: the inactive one is translucent and would show its neighbours. */
-      className={`group relative flex h-7 touch-none w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} min-w-[120px] shrink-0 items-center gap-1 rounded-chrome pr-1 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-        active || isDragging
-          ? "bg-tab-on text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
-          : "bg-tab-off text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+      /* The card (crew-tab in index.css) marks the one on screen; a held tab wears it too,
+         so it never shows its neighbours through it while it moves. */
+      data-on={active || isDragging || undefined}
+      className={`crew-tab group w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} shrink-0 touch-none gap-1 pr-1 pl-2.5 ${
+        active || isDragging ? "text-text" : "text-text-muted"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
@@ -475,7 +481,7 @@ const TabPill = memo(function TabPill({
       {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[110px]" />}
       {/* One fixed slot holds the status and the close button, so neither resizes the
           tab: the status shows until a hover or a focus asks for the button. */}
-      <span className="relative flex size-5 shrink-0 items-center justify-center">
+      <span className="relative -ml-0.5 flex size-5 shrink-0 items-center justify-center">
         {signal && (
           <StatusDot
             status={status}
@@ -551,11 +557,8 @@ const PinnedPill = memo(function PinnedPill({
       onMouseLeave={() => onPeek(tab.id, null)}
       onPointerDown={() => onPeek(tab.id, null)}
       title={tab.kind === "session" ? undefined : title}
-      className={`relative flex size-7 shrink-0 touch-none items-center justify-center rounded-chrome shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-        active || isDragging
-          ? "bg-tab-on ring-hairline [--tab-shadow:var(--color-hairline)]"
-          : "bg-tab-off ring-transparent hover:bg-hover [--tab-shadow:transparent]"
-      } ${isDragging ? "cursor-grabbing" : ""}`}
+      data-on={active || isDragging || undefined}
+      className={`crew-tab w-8 shrink-0 touch-none justify-center ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
         <BrowserTabFace tab={tab} sessions={sessions} bare />
@@ -667,7 +670,7 @@ function ScrollControl({
         visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
       }`}
     >
-      <span className="flex size-6 items-center justify-center rounded-md text-icon transition-colors hover:bg-hover hover:text-text">
+      <span className="flex size-6 items-center justify-center text-icon">
         <Caret className="size-3.5" />
       </span>
     </button>
