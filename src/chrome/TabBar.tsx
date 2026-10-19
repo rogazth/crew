@@ -453,8 +453,8 @@ const TabPill = memo(function TabPill({
             ? "bg-canvas text-text ring-warning/45 [--tab-shadow:var(--color-hairline)]"
             : "bg-warning/12 text-text ring-warning/30 hover:bg-warning/18 [--tab-shadow:transparent]"
           : active || isDragging
-            ? "bg-canvas text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
-            : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+            ? "bg-tab-on text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
+            : "bg-tab-off text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
@@ -555,8 +555,8 @@ const PinnedPill = memo(function PinnedPill({
             ? "bg-canvas ring-warning/45 [--tab-shadow:var(--color-hairline)]"
             : "bg-warning/12 ring-warning/30 hover:bg-warning/18 [--tab-shadow:transparent]"
           : active || isDragging
-            ? "bg-canvas ring-hairline [--tab-shadow:var(--color-hairline)]"
-            : "bg-card ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+            ? "bg-tab-on ring-hairline [--tab-shadow:var(--color-hairline)]"
+            : "bg-tab-off ring-transparent hover:bg-hover [--tab-shadow:transparent]"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (

@@ -199,12 +199,26 @@
 /* ── A · Ink ───────────────────────────────────────────────────────────── */
 
 :root[data-direction="a"] {
-  /* One ground for all the chrome, a step under the sheet. */
-  --color-sidebar: light-dark(oklch(96.6% 0 0), oklch(13% 0 0));
+  /* One ground for all the chrome, a step under the sheet. The dark ramp sits
+     higher than the app's own (L16 chrome, 21 sheet, 25 float, 30 fill): every
+     step is at least 1.1:1 from its neighbour, not 1.05. */
+  --color-sidebar: light-dark(oklch(96.6% 0 0), oklch(16% 0 0));
   --color-rail: var(--color-sidebar);
+  --color-canvas: light-dark(#ffffff, oklch(21% 0 0));
+  --color-surface: light-dark(#ffffff, oklch(25% 0 0));
+  --color-fill: light-dark(oklch(94% 0 0), oklch(30% 0 0));
+  --color-text-muted: light-dark(oklch(52% 0.004 285), oklch(74% 0 0));
+  --color-placeholder: light-dark(oklch(68% 0 0), oklch(58% 0 0));
 
-  --color-card: light-dark(oklch(14.5% 0 0 / 0.035), oklch(100% 0 0 / 0.045));
-  --color-hairline: light-dark(oklch(14.5% 0 0 / 0.07), oklch(100% 0 0 / 0.07));
+  --color-card: light-dark(oklch(14.5% 0 0 / 0.035), oklch(100% 0 0 / 0.06));
+  --color-hairline: light-dark(oklch(14.5% 0 0 / 0.07), oklch(100% 0 0 / 0.1));
+  --color-hover: light-dark(oklch(14.5% 0 0 / 0.045), oklch(100% 0 0 / 0.08));
+  --color-selected: light-dark(oklch(14.5% 0 0 / 0.085), oklch(100% 0 0 / 0.14));
+
+  /* Dark: the active tab is lifted above the sheet (the fill), the rest sit
+     flat on the strip, so the one on screen is 1.4:1 from the others. */
+  --color-tab-on: light-dark(#ffffff, var(--color-fill));
+  --color-tab-off: light-dark(var(--color-card), transparent);
   --shadow-float:
     0 0 0 1px var(--color-hairline), 0 16px 40px -12px oklch(0% 0 0 / 0.18), 0 4px 12px -4px oklch(0% 0 0 / 0.06);
 }

@@ -50,6 +50,9 @@
      any surface and flips with the theme without a second value. */
   --color-card: light-dark(oklch(14.5% 0 0 / 0.04), oklch(100% 0 0 / 0.05));
   --color-hairline: light-dark(oklch(14.5% 0 0 / 0.08), oklch(100% 0 0 / 0.08));
+  /* The strip's tabs: the one on screen, and the rest at rest. */
+  --color-tab-on: var(--color-canvas);
+  --color-tab-off: var(--color-card);
 
   /* Arc's generous row radius. One value for every row of chrome — sidebar
      items and tabs — so the two strips read as the same surface. */
