@@ -190,7 +190,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         list.map((file) => ({
           name: file.name || "pasted file",
           size: file.size,
-          run: (onProgress) => writeTempFile(file, env, onProgress),
+          run: (onProgress, signal) => writeTempFile(file, env, onProgress, signal),
         })),
       );
     },
@@ -205,7 +205,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     for (const path of paths) {
       const source = await pathSource(path).catch(() => null);
       if (!source) continue;
-      startUploads([{ name: source.name, size: source.size, run: (onProgress) => upload(source, env, extensionFor(source.name), onProgress) }]);
+      startUploads([{ name: source.name, size: source.size, run: (onProgress, signal) => upload(source, env, extensionFor(source.name), onProgress, signal) }]);
     }
   }, [addPaths, startUploads]);
 

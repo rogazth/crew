@@ -1,7 +1,7 @@
 import { client } from "./client";
 import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
-import { base64OfFile, extensionFor, fileSource, upload } from "./upload";
+import { base64OfFile, CHUNK, extensionFor, fileSource, upload } from "./upload";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BackgroundList,
@@ -39,7 +39,7 @@ import type {
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Up to here a file travels in one message. */
-const SINGLE_CALL = 4 * 1024 * 1024;
+const SINGLE_CALL = CHUNK;
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -357,10 +357,12 @@ export async function writeTempFile(
   file: File,
   envId = focusEnv(),
   onProgress?: (sent: number) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const extension = extensionFor(file.name, file.type);
   // A small one is a single call, which a daemon from before pieces still answers.
   if (file.size <= SINGLE_CALL) {
+    signal?.throwIfAborted();
     const path = await client.request<string>(
       "write_temp_file",
       { extension, base64Contents: await base64OfFile(file) },
@@ -369,7 +371,7 @@ export async function writeTempFile(
     onProgress?.(file.size);
     return path;
   }
-  return upload(fileSource(file), envId, extension, onProgress);
+  return upload(fileSource(file), envId, extension, onProgress, signal);
 }
 
 /** A new file at `path`, parent folders included. Fails rather than overwrite. */
