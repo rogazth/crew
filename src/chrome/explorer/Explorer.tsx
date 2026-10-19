@@ -1,10 +1,11 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { ListCollapseIcon, RefreshCwIcon } from "lucide-react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Menu } from "@base-ui/react/menu";
+import { CheckIcon, ChevronDownIcon, GitBranchIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { PANEL, ROW } from "../kit";
 import { FileTree } from "./FileTree";
 import { SearchPanel } from "./SearchPanel";
 import { useFileTree } from "../../hooks/useFileTree";
-import type { ExplorerFocus, ExplorerMode } from "../../hooks/useExplorer";
-import { commandKeys } from "../../lib/commands";
+import type { ExplorerFocus } from "../../hooks/useExplorer";
 import type { ProjectFile } from "../../lib/types";
 
 type Props = {
@@ -12,28 +13,33 @@ type Props = {
   root: string;
   width: number;
   onResize: (width: number) => void;
-  mode: ExplorerMode;
-  onMode: (mode: ExplorerMode) => void;
   focus: ExplorerFocus | null;
   /** The file tab on screen. */
   active: string | null;
   onOpenFile: (file: ProjectFile) => void;
+  /** The workspace's worktrees: with more than one, the header lets you pick which one it shows. */
+  places?: { path: string; label: string }[];
+  onRoot?: (path: string) => void;
 };
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 640;
 
-const MODES: { mode: ExplorerMode; label: string; command: "toggle-explorer" | "search-files" }[] = [
-  { mode: "files", label: "Files", command: "toggle-explorer" },
-  { mode: "search", label: "Search", command: "search-files" },
-];
-
 /**
- * VS Code's explorer, beside the tabs: the worktree's files, and text in them.
- * Both halves stay mounted, so a search is still there after a look at the tree.
+ * VS Code's explorer, beside the tabs: one box over the worktree's files. Empty,
+ * it shows the tree; with text, what the files say. The tree stays mounted
+ * under a search, so it is as it was left once the box is cleared.
  */
-export function Explorer({ root, width, onResize, mode, onMode, focus, active, onOpenFile }: Props) {
-  const tree = useFileTree(root, mode === "files");
+export function Explorer({ root, width, onResize, focus, active, onOpenFile, places = [], onRoot }: Props) {
+  const tree = useFileTree(root, true);
+  const here = places.find((item) => item.path === root);
+  // Hidden until asked for: by the button, or by ⌘⇧F, whose token is new each time.
+  const [searching, setSearching] = useState(focus?.mode === "search");
+  const [seen, setSeen] = useState(focus?.token);
+  if (focus && focus.token !== seen) {
+    setSeen(focus.token);
+    if (focus.mode === "search") setSearching(true);
+  }
   const start = useRef<{ x: number; width: number } | null>(null);
 
   function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -63,44 +69,50 @@ export function Explorer({ root, width, onResize, mode, onMode, focus, active, o
       className="relative flex h-full shrink-0 flex-col border-l border-border bg-sidebar"
     >
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-2">
-        {/* The file header's Preview/Source toggle, so the two headers read as one. */}
-        <div role="tablist" aria-label="Explorer" className="inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md bg-card p-0.5">
-          {MODES.map((item) => (
-            <button
-              key={item.mode}
-              type="button"
-              role="tab"
-              aria-selected={mode === item.mode}
-              title={`${item.label} (${commandKeys(item.command)})`}
-              onClick={() => onMode(item.mode)}
-              className="flex h-6 items-center rounded-[5px] px-2 text-[12px] text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 aria-selected:bg-canvas aria-selected:text-text aria-selected:shadow-sm"
+        {places.length > 1 ? (
+          <Menu.Root modal={false}>
+            <Menu.Trigger
+              title={root}
+              className="-ml-0.5 flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-text outline-none transition-colors hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
             >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex-1" />
-        {mode === "files" && (
-          <>
-            <HeaderButton icon={RefreshCwIcon} label="Refresh" onClick={() => void tree.refresh()} />
-            <HeaderButton icon={ListCollapseIcon} label="Collapse folders" onClick={tree.collapseAll} />
-          </>
+              <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-icon" />
+              <span className="truncate">{here?.label ?? "Worktree"}</span>
+              <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-icon" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
+                <Menu.Popup className={`${PANEL} min-w-56`}>
+                  <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Show files of</div>
+                  {places.map((item) => (
+                    <Menu.Item key={item.path} className={ROW} onClick={() => item.path !== root && onRoot?.(item.path)}>
+                      <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-icon" />
+                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                      <CheckIcon className={`size-4 shrink-0 ${item.path === root ? "" : "invisible"}`} />
+                    </Menu.Item>
+                  ))}
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        ) : (
+          <span className="px-1 text-[12px] font-medium text-text">Explorer</span>
         )}
+        <div className="flex-1" />
+        <HeaderButton icon={SearchIcon} label="Search" pressed={searching} onClick={() => setSearching((on) => !on)} />
+        <HeaderButton icon={RefreshCwIcon} label="Refresh" onClick={() => void tree.refresh()} />
+        <HeaderButton icon={CollapseAllIcon} label="Collapse folders" onClick={tree.collapseAll} />
       </div>
 
-      <div hidden={mode !== "files"} className="flex min-h-0 flex-1 flex-col">
+      <SearchPanel visible={searching} onClose={() => setSearching(false)} root={root} focus={focus?.mode === "search" ? focus : null} onOpenFile={onOpenFile}>
         <FileTree
           root={root}
           active={active}
-          live={mode === "files"}
+          live
           focusToken={focus?.mode === "files" ? focus.token : 0}
           tree={tree}
           onOpenFile={onOpenFile}
         />
-      </div>
-      <div hidden={mode !== "search"} className="flex min-h-0 flex-1 flex-col">
-        <SearchPanel root={root} focus={focus?.mode === "search" ? focus : null} onOpenFile={onOpenFile} />
-      </div>
+      </SearchPanel>
 
       <button
         type="button"
@@ -117,14 +129,28 @@ export function Explorer({ root, width, onResize, mode, onMode, focus, active, o
   );
 }
 
-function HeaderButton({ icon: Glyph, label, onClick }: { icon: typeof RefreshCwIcon; label: string; onClick: () => void }) {
+type IconType = (props: { className?: string }) => ReactNode;
+
+/** VS Code's collapse-all: two stacked folders' worth of squares, minus inside. */
+function CollapseAllIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M5.5 3.5V3a.5.5 0 0 1 .5-.5h6.5a1 1 0 0 1 1 1V10a.5.5 0 0 1-.5.5h-.5" />
+      <rect x="2.5" y="5.5" width="8" height="8" rx="1" />
+      <path d="M4.5 9.5h4" />
+    </svg>
+  );
+}
+
+function HeaderButton({ icon: Glyph, label, onClick, pressed }: { icon: IconType; label: string; onClick: () => void; pressed?: boolean }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
+      aria-pressed={pressed}
+      className="aria-pressed:bg-selected aria-pressed:text-text grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
       <Glyph className="size-4" />
     </button>

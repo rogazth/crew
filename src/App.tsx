@@ -116,6 +116,9 @@ export function App() {
   }, [openedPage, triedBrowser]);
   const treePath = current?.path ?? active?.path ?? null;
   const files = useProjectFiles(treePath);
+  // The explorer's own pick of worktree: it holds until the tab on screen moves to another.
+  const [explorerPick, setExplorerRoot] = useState<{ for: string | null; path: string } | null>(null);
+  const explorerRoot = explorerPick && explorerPick.for === treePath ? explorerPick.path : treePath;
 
   // Its panes go first: dropping them ends its shells. Its sessions' CLIs,
   // tabs open or closed, crewd ends with the workspace.
@@ -173,10 +176,6 @@ export function App() {
 
   // With only the main checkout there is no other worktree to tell apart.
   const { tabPlaceOf, hues } = work;
-  const branches = useMemo(
-    () => new Map(worktrees.list.map((tree) => [tree.path, { label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }])),
-    [hues, worktrees.list],
-  );
 
   const nav = useNavigation({
     tabs,
@@ -576,17 +575,16 @@ export function App() {
             />
             </PanePlaceContext>
             </div>
-            {explorer.open && treePath && explorerWidth.width !== null && (
+            {explorer.open && explorerRoot && explorerWidth.width !== null && (
               <Explorer
-                root={treePath}
+                root={explorerRoot}
                 width={explorerWidth.width}
                 onResize={explorerWidth.resize}
-                mode={explorer.mode}
-                onMode={explorer.setMode}
                 focus={explorer.focus}
                 active={tabFile(tabs.active)?.path ?? null}
                 onOpenFile={nav.openFile}
-                place={worktrees.list.length > 1 ? branches.get(treePath) : null}
+                places={worktrees.list.map((tree) => ({ path: tree.path, label: worktreeLabel(tree) }))}
+                onRoot={(path) => setExplorerRoot({ for: treePath, path })}
               />
             )}
           </div>

@@ -1,7 +1,6 @@
-import { EllipsisIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, SquareTerminalIcon } from "lucide-react";
+import { EllipsisIcon, GitBranchIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, SquareTerminalIcon } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import { ActionMenu } from "../chrome/ActionMenu";
-import { BranchDot } from "../chrome/BranchDot";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Button, Field, Footer, IconButton, Overlay, PageFrame, Select, TextArea } from "../chrome/kit";
 import { ProcessDialog } from "../chrome/ProcessDialog";
@@ -354,7 +353,7 @@ function RunDialog({
   const options = places.map((place) => ({
     value: place.worktree ?? KEY_MAIN,
     label: place.label,
-    icon: <BranchDot hue={place.hue} />,
+    icon: <GitBranchIcon aria-hidden className="size-3.5" />,
   }));
 
   async function run() {

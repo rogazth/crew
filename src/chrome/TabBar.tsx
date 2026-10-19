@@ -3,9 +3,9 @@ import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
 import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, ServerIcon, XIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
-import { BranchDot, BranchTag } from "./BranchDot";
+import { BranchTag } from "./BranchDot";
 import { BotAvatar } from "./BotAvatar";
 import { TOGGLE_RESERVE } from "../lib/chrome";
 import { DriverFace } from "./DriverFace";
@@ -78,8 +78,8 @@ type Props = {
   onPin: (id: string) => void;
   onUnpin: (id: string) => void;
   onLaunch: (launch: Launch) => void;
-  /** Said on the strip while the sidebar is away: where you are, and the door to switch. */
-  context: { workspace: string; branch: string; onSwitch: () => void };
+  /** Said on the strip while the sidebar is away: where you are, in the worktree's hue, and the door to switch. */
+  context: { workspace: string; branch: string; hue?: number | undefined; onSwitch: () => void };
   groups: TabGroups | null;
   /** Files dropped on the strip from Finder, each to open in a tab. */
   onDropFiles: (paths: string[]) => void;
@@ -192,6 +192,13 @@ export function TabBar({
     }, 450);
   }, []);
   useEffect(() => () => window.clearTimeout(peekTimer.current), []);
+  // The shell's close is remade with every tab and session; the pills get one
+  // that is not, so a tab opened does not redraw every pill in the strip.
+  const latestClose = useRef(onClose);
+  useLayoutEffect(() => {
+    latestClose.current = onClose;
+  });
+  const closePill = useCallback((id: string) => latestClose.current(id), []);
   const pinned = tabs.filter((tab) => tab.pinned);
   const pinnedIds = pinned.map((tab) => tab.id);
   const items = stripItems(
@@ -237,9 +244,9 @@ export function TabBar({
             className="mx-1 flex h-7 shrink-0 translate-y-px items-center gap-1.5 rounded-md px-2 text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
           >
             <span className="font-medium text-text">{context.workspace}</span>
-            <span>›</span>
-            <GitBranchIcon className="size-3.5" />
-            <span>{context.branch}</span>
+            {context.branch && <span>›</span>}
+            {context.branch && <GitBranchIcon className="size-3.5" />}
+            {context.branch && <span>{context.branch}</span>}
           </button>
           <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         </div>
@@ -264,7 +271,7 @@ export function TabBar({
                     index={index}
                     active={tab.id === activeId}
                     sessions={sessions}
-                    onClose={onClose}
+                    onClose={closePill}
                     onMenu={setMenu}
                     branch={branchOf(tab)}
                     onPeek={onPeek}
@@ -296,7 +303,7 @@ export function TabBar({
                       index={index}
                       active={item.tab.id === activeId}
                       sessions={sessions}
-                      onClose={onClose}
+                      onClose={closePill}
                       onMenu={setMenu}
                       branch={branchOf(item.tab)}
                       onPeek={onPeek}
@@ -448,13 +455,9 @@ const TabPill = memo(function TabPill({
          so the pill fades in instead of growing an edge. A held pill wears the
          active face: the inactive one is translucent and would show its neighbours. */
       className={`group relative flex h-7 touch-none w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} min-w-[120px] shrink-0 items-center gap-1 rounded-chrome pr-1 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-        tone.tint
-          ? active || isDragging
-            ? "bg-canvas text-text ring-warning/45 [--tab-shadow:var(--color-hairline)]"
-            : "bg-warning/12 text-text ring-warning/30 hover:bg-warning/18 [--tab-shadow:transparent]"
-          : active || isDragging
-            ? "bg-tab-on text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
-            : "bg-tab-off text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+        active || isDragging
+          ? "bg-tab-on text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
+          : "bg-tab-off text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
@@ -495,7 +498,7 @@ const TabPill = memo(function TabPill({
       </span>
     </Tabs.Tab>
   );
-});
+}, samePill);
 
 /**
  * A pinned tab is its face alone, the title in its tooltip. It keeps no close
@@ -528,7 +531,6 @@ const PinnedPill = memo(function PinnedPill({
     accept: "pin",
   });
   const status = tabStatus(tab, sessions);
-  const tone = toneOf(status);
   const title = tabTitle(tab, sessions);
   return (
     <Tabs.Tab
@@ -550,13 +552,9 @@ const PinnedPill = memo(function PinnedPill({
       onPointerDown={() => onPeek(tab.id, null)}
       title={tab.kind === "session" ? undefined : title}
       className={`relative flex size-7 shrink-0 touch-none items-center justify-center rounded-chrome shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-        tone.tint
-          ? active || isDragging
-            ? "bg-canvas ring-warning/45 [--tab-shadow:var(--color-hairline)]"
-            : "bg-warning/12 ring-warning/30 hover:bg-warning/18 [--tab-shadow:transparent]"
-          : active || isDragging
-            ? "bg-tab-on ring-hairline [--tab-shadow:var(--color-hairline)]"
-            : "bg-tab-off ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+        active || isDragging
+          ? "bg-tab-on ring-hairline [--tab-shadow:var(--color-hairline)]"
+          : "bg-tab-off ring-transparent hover:bg-hover [--tab-shadow:transparent]"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
@@ -579,7 +577,7 @@ const PinnedPill = memo(function PinnedPill({
       )}
     </Tabs.Tab>
   );
-});
+}, samePill);
 
 const NO_EXPAND = () => {};
 
@@ -619,7 +617,6 @@ const GroupChip = memo(function GroupChip({
     accept: "tab",
   });
   const status = groupStatus(item.tabs, sessions);
-  const tone = toneOf(status);
   const hue = branch?.hue ?? 0;
   const label = branch?.label ?? "Worktree";
   const count = item.tabs.length;
@@ -633,12 +630,10 @@ const GroupChip = memo(function GroupChip({
       title={`Expand ${label}`}
       onClick={() => onExpand(item.place)}
       onContextMenu={(event) => onMenu({ point: menuFromEvent(event), group: item })}
-      style={tone.tint ? undefined : { background: `oklch(68% 0.14 ${hue} / ${isDragging ? 0.3 : 0.18})` }}
-      className={`flex h-6 max-w-[160px] shrink-0 touch-none items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-text outline-none transition-[filter,box-shadow] duration-150 hover:brightness-110 focus-visible:ring-1 focus-visible:ring-hairline ${
-        tone.tint ? "bg-warning/15 ring-1 ring-warning/40" : ""
-      } ${isDragging ? "cursor-grabbing" : ""}`}
+      style={{ background: `oklch(68% 0.14 ${hue} / ${isDragging ? 0.3 : 0.18})` }}
+      className={`flex h-6 max-w-[160px] shrink-0 touch-none items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-text outline-none transition-[filter,box-shadow] duration-150 hover:brightness-110 focus-visible:ring-1 focus-visible:ring-hairline ${isDragging ? "cursor-grabbing" : ""}`}
     >
-      <BranchDot hue={hue} />
+      <GitBranchIcon aria-hidden className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{label}</span>
       <span className="shrink-0 text-text-muted tabular-nums">{count}</span>
       {status && <StatusDot status={status} className="size-3" />}
@@ -687,6 +682,23 @@ function BackgroundCount({ count }: { count: number }) {
       {count}
     </span>
   );
+}
+
+type PillProps = { tab: Tab; sessions: Session[] } & Record<string, unknown>;
+
+/**
+ * A pill reads one row of the session list, its own session's; a page's reads
+ * whichever session drives it. A session made or changed anywhere else leaves
+ * it as it is: with a hundred tabs open, each ⌘N would otherwise redraw them all.
+ */
+function samePill(prev: PillProps, next: PillProps): boolean {
+  for (const key of Object.keys(next)) if (key !== "sessions" && prev[key] !== next[key]) return false;
+  if (prev.sessions === next.sessions) return true;
+  const { tab } = next;
+  if (tab.kind === "browser") return false;
+  if (tab.kind !== "session") return true;
+  const row = (list: Session[]) => list.find((s) => s.id === tab.sessionId);
+  return row(prev.sessions) === row(next.sessions);
 }
 
 const tabStatus = (tab: Tab, sessions: Session[]) =>
