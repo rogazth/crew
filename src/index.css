@@ -503,6 +503,38 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: var(--color-text);
   color: var(--color-canvas);
 }
+/*
+ * A scroller whose content fades out at an edge it can still scroll past, and
+ * only there: no cut at rest, no fade where the content ends. The script only
+ * flips the two lengths (see `scrollShadow`). They snap, never ease: a fade
+ * that eases in on first paint reads as the shadow arriving late.
+ */
+@property --fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.crew-scroll-shadow {
+  --fade-size: 40px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
+    transparent
+  );
+}
+.crew-scroll-shadow[data-fade-top] {
+  --fade-top: var(--fade-size);
+}
+.crew-scroll-shadow[data-fade-bottom] {
+  --fade-bottom: var(--fade-size);
+}
 .crew-prose {
   font-size: 14px;
   line-height: 20px;

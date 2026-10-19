@@ -9,7 +9,7 @@ import { ShortcutsDialog } from "./chrome/ShortcutsDialog";
 import { SidebarToggle } from "./chrome/SidebarToggle";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
-import { TabBar, type TabGroups } from "./chrome/TabBar";
+import { TabBar } from "./chrome/TabBar";
 import { UpdateDialog } from "./chrome/UpdateDialog";
 import { Explorer } from "./chrome/explorer/Explorer";
 import { useBotSheet } from "./hooks/useBotSheet";
@@ -57,6 +57,10 @@ import { useTour } from "./hooks/useTour";
 import type { Process } from "./lib/processes";
 // PROTOTYPE — throwaway: the review picker, dev builds only.
 import { ReviewPicker } from "./prototype/design-system/review/ReviewPicker";
+import { PaneWorktree, PanePlaceContext } from "./prototype/design-system/sidebar/PaneWorktree";
+import { WorkspaceStart, focusWorkspaceStart } from "./prototype/design-system/chat/WorkspaceStart";
+import { useRedesign } from "./prototype/design-system/direction";
+import type { AgentChoice } from "./lib/providers";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
 const NO_PROCESSES: Process[] = [];
@@ -102,6 +106,7 @@ export function App() {
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
+  const redesign = useRedesign();
   const tour = useTour(workspaces.home, workspaces.projects, all);
   // A page opened anywhere ticks the tour's last step.
   const { triedBrowser } = tour;
@@ -171,19 +176,6 @@ export function App() {
   const branches = useMemo(
     () => new Map(worktrees.list.map((tree) => [tree.path, { label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }])),
     [hues, worktrees.list],
-  );
-  const { collapsed, collapse, collapseOther, expand } = tabs;
-  const groups = useMemo<TabGroups | null>(
-    () =>
-      tabPlaceOf && {
-        placeOf: tabPlaceOf,
-        labelOf: (place) => branches.get(place) ?? null,
-        collapsed,
-        onCollapse: collapse,
-        onCollapseOthers: collapseOther,
-        onExpand: expand,
-      },
-    [branches, collapse, collapseOther, collapsed, expand, tabPlaceOf],
   );
 
   const nav = useNavigation({
@@ -271,6 +263,12 @@ export function App() {
       explorer.setMode("files");
     },
     newBot: sheet.newBot,
+    showStart: () => {
+      closePage();
+      tabs.select(null);
+      // Already on screen, it does not mount again to take the focus.
+      window.setTimeout(focusWorkspaceStart, 0);
+    },
   });
 
   useAppCommands({
@@ -311,6 +309,38 @@ export function App() {
 
   const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
   const openPalette = (mode: PaletteMode) => setPalette(mode);
+
+  // PROTOTYPE — throwaway: the content's worktree line, which can still move a session nobody has written to.
+  const paneTab = tabs.active;
+  const paneSession = paneTab?.kind === "session" ? all.find((s) => s.id === paneTab.sessionId) : undefined;
+  const paneFresh = paneSession?.kind === "terminal" && !paneSession.providerSessionId && !paneSession.cursor;
+  const panePath = paneTab && tabPlaceOf ? tabPlaceOf(paneTab) : null;
+  const panePlaces = worktrees.list.map((tree) => ({ path: tree.path, label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }));
+  const panePlace = panePlaces.find((p) => p.path === panePath) ?? null;
+  const paneMove =
+    paneFresh && paneTab && paneSession
+      ? (path: string) =>
+          void newSession(
+            {
+              provider: paneSession.provider as AgentChoice["provider"],
+              model: paneSession.model,
+              effort: paneSession.effort as AgentChoice["effort"],
+              access: paneSession.autonomy,
+              ...(paneSession.serviceTier ? { serviceTier: paneSession.serviceTier } : {}),
+            },
+            path === active?.path ? null : path,
+          ).then(async (moved) => {
+            if (!moved) return;
+            // The new one takes the old one's place and, once it is gone, its name.
+            nav.closeTab(paneTab.id);
+            await api.deleteSession(paneSession.id).catch(() => {});
+            void rename(moved.id, paneSession.name);
+          })
+      : null;
+
+  // The fresh session on screen can start in another worktree; its first screen says so and offers it.
+  const panePick =
+    paneMove && panePlace && paneSession ? { sessionId: paneSession.id, place: panePlace, places: panePlaces, onMove: paneMove } : null;
 
   return (
     <TerminalPrefsProvider>
@@ -402,6 +432,19 @@ export function App() {
               />
             ),
             running: commandCounts.running,
+            hues,
+            // PROTOTYPE — throwaway: what the sidebar proposals reach for beyond the sessions.
+            proto: {
+              onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
+              onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
+              commands: {
+                live: commandCounts.live,
+                asking: commandCounts.asking,
+                orphans: commandCounts.orphans,
+                open: isWorkspace && commandsOpen,
+                onToggle: openCommands,
+              },
+            },
             // A refusal from either still lets the other land; the button stops spinning either way.
             onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
@@ -435,10 +478,11 @@ export function App() {
             onLaunch={launch}
             context={{
               workspace: isHome ? "Home" : (active?.name ?? ""),
-              branch: current && !isHome ? worktreeLabel(current) : "",
+              branch: "",
+              hue: current && !isHome && worktrees.list.length > 1 ? hues.get(current.path) : undefined,
               onSwitch: () => openPalette("context"),
             }}
-            groups={groups}
+            groups={null}
             onDropFiles={openDropped}
           />
 
@@ -450,15 +494,32 @@ export function App() {
           )}
 
           <div className="flex min-h-0 flex-1">
+            {/* The content, not the tab, says its worktree. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <PanePlaceContext value={panePick}>
+            {/* Only a session says its worktree: a bot, a browser, a file and the empty state have no line, and no bar where one would be. */}
+            {!isHome && panePlace && paneSession && paneSession.kind !== "bot" && !paneMove && (
+              <PaneWorktree place={panePlace} places={panePlaces} onMove={paneMove} />
+            )}
             <WorkspacePanes
               tab={tabs.active}
               empty={
                 isHome ? (
                   <HomeStart
                     firstRun={workspaces.projects.length === 0}
-                    onAsk={(text, choice) => void newSession(choice, null, text)}
+                    onAsk={(text, choice, files) => void newSession(choice, null, text, files)}
                     onOpenFolder={envs.openWorkspace}
                     onNewBot={() => sheet.newBot()}
+                    onOpenBrowser={() => nav.openBrowser("")}
+                  />
+                ) : redesign && active ? (
+                  <WorkspaceStart
+                    workspaceId={active.id}
+                    places={panePlaces}
+                    defaultPath={work.placeIn ?? active.path}
+                    onAsk={(text, choice, path, files) => void newSession(choice, path === active.path ? null : path, text, files)}
+                    onNewBot={() => sheet.newBot()}
+                    onOpenFile={() => openPalette("files")}
                     onOpenBrowser={() => nav.openBrowser("")}
                   />
                 ) : undefined
@@ -518,6 +579,8 @@ export function App() {
               onOpenProcessRun={nav.openProcessRun}
               onOpenSignIn={nav.openSignIn}
             />
+            </PanePlaceContext>
+            </div>
             {explorer.open && treePath && explorerWidth.width !== null && (
               <Explorer
                 root={treePath}
@@ -528,6 +591,7 @@ export function App() {
                 focus={explorer.focus}
                 active={tabFile(tabs.active)?.path ?? null}
                 onOpenFile={nav.openFile}
+                place={worktrees.list.length > 1 ? branches.get(treePath) : null}
               />
             )}
           </div>
@@ -643,8 +707,6 @@ export function App() {
       <BotSheetHost
         sheet={sheet}
         sessions={sessions}
-        worktrees={worktrees.list}
-        activeWorktree={work.placeIn}
         onNewRoutine={openRoutines}
       />
     </div>

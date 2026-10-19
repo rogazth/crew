@@ -43,6 +43,14 @@ function waiting(blocks: Block[]): boolean {
   return blocks.some(awaitsUser);
 }
 
+/** The fade at an edge there is more content past: a flag the stylesheet reads, flipped only when it changes. */
+function scrollShadow(el: HTMLElement) {
+  const top = el.scrollTop > 1;
+  const bottom = el.scrollHeight - el.scrollTop - el.clientHeight > 1;
+  if (el.hasAttribute("data-fade-top") !== top) el.toggleAttribute("data-fade-top", top);
+  if (el.hasAttribute("data-fade-bottom") !== bottom) el.toggleAttribute("data-fade-bottom", bottom);
+}
+
 /** Where the reader is: the first row on screen, and how far below the top edge it sits. */
 type Reading = { row: Element; id: string; offset: number };
 
@@ -100,6 +108,7 @@ export function Transcript({
     const el = scroller.current;
     // Hidden, everything measures 0: that would read as pinned to the bottom.
     if (!el || el.clientHeight === 0) return;
+    scrollShadow(el);
     pinned.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     fromBottom.current = el.scrollHeight - el.scrollTop;
@@ -128,6 +137,7 @@ export function Transcript({
     }
     if (pinned.current) {
       el.scrollTop = el.scrollHeight;
+      scrollShadow(el);
       return;
     }
     // Reading something further up: messages arriving below, history loading
@@ -141,9 +151,11 @@ export function Transcript({
       // Not written when still: a write stops the wheel's momentum.
       if (Math.abs(moved) >= 1) el.scrollTop += moved;
       fromBottom.current = el.scrollHeight - el.scrollTop;
+      scrollShadow(el);
       return;
     }
     el.scrollTop = el.scrollHeight - fromBottom.current;
+    scrollShadow(el);
   }, [endHold, onScroll]);
 
   // A click on anything that folds (a phase, a tool row, a letter) pins that
@@ -239,7 +251,7 @@ export function Transcript({
       data-focus={focusId ?? ""}
       onScroll={onScroll}
       onClickCapture={onClickCapture}
-      className="min-h-0 flex-1 overflow-y-auto"
+      className="crew-scroll-shadow min-h-0 flex-1 overflow-y-auto"
     >
       <div ref={content} className="crew-prose mx-auto w-full max-w-[840px] px-6 pt-8 pb-10">
         <div ref={sentinel} aria-hidden className="h-px" />
