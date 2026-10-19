@@ -134,6 +134,17 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(0);
+  // Rows move under a still pointer (opening, filtering, arrow-key scrolling) and the
+  // browser answers with mouse events. Only a pointer that actually travelled may steer.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  function hoverAt(index: number) {
+    return (event: React.MouseEvent) => {
+      const last = pointer.current;
+      pointer.current = { x: event.screenX, y: event.screenY };
+      if (!last || (last.x === event.screenX && last.y === event.screenY)) return;
+      setCursor(index);
+    };
+  }
 
   const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
   const asked = useRef(0);
@@ -288,7 +299,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
                     key={item.id}
                     item={item}
                     active={start + index === cursor}
-                    onHover={() => setCursor(start + index)}
+                    onHover={hoverAt(start + index)}
                     onPick={() => onPick(item.launch)}
                   />
                 ))}
@@ -303,7 +314,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
                   key={item.id}
                   item={item}
                   active={start + index === cursor}
-                  onHover={() => setCursor(start + index)}
+                  onHover={hoverAt(start + index)}
                   onPick={() => onPick(item.launch)}
                 />
               ))}
@@ -331,12 +342,12 @@ function smaller(icon: React.ReactNode): React.ReactNode {
 }
 
 /** Glyph over label. Resting cards are a quiet fill; the one under the cursor steps up a shade. */
-function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: () => void; onPick: () => void }) {
+function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: (event: React.MouseEvent) => void; onPick: () => void }) {
   return (
     <button
       type="button"
       data-active={active}
-      onMouseEnter={onHover}
+      onMouseMove={onHover}
       onClick={onPick}
       className={`flex h-[72px] flex-col items-center justify-center gap-1.5 rounded-xl outline-none transition-colors ${
         active ? "bg-selected" : "bg-card"
@@ -348,12 +359,12 @@ function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; 
   );
 }
 
-function Row({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: () => void; onPick: () => void }) {
+function Row({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: (event: React.MouseEvent) => void; onPick: () => void }) {
   return (
     <button
       type="button"
       data-active={active}
-      onMouseEnter={onHover}
+      onMouseMove={onHover}
       onClick={onPick}
       className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left ${active ? "bg-hover" : ""}`}
     >
