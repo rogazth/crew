@@ -15,6 +15,20 @@ export function ProviderIcon({
 }) {
   const src = MARKS[provider as ProviderId];
   if (!src) return <span className={`${className} shrink-0`} />;
+  // The cursor mark is a single-colour glyph, so an <img> would pin it to black.
+  // Painting it as a mask lets it follow the theme's icon colour.
+  if (provider === "cursor") {
+    return (
+      <span
+        aria-hidden
+        className={`${className} shrink-0 bg-icon`}
+        style={{
+          WebkitMask: `url("${src}") center / contain no-repeat`,
+          mask: `url("${src}") center / contain no-repeat`,
+        }}
+      />
+    );
+  }
   return (
     <img src={src} alt="" aria-hidden className={`${className} shrink-0`} />
   );
