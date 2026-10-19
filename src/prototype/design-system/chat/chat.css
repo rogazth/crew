@@ -23,15 +23,14 @@
   box-shadow:
     0 0 0 1px var(--color-hairline),
     0 1px 2px oklch(0% 0 0 / 0.04),
-    0 14px 36px -18px oklch(0% 0 0 / 0.22);
-  transition: box-shadow 140ms var(--ease-out);
+    0 12px 32px -18px oklch(0% 0 0 / 0.16);
 }
 /* Focus deepens the lift a touch; no drawn outline, no halo. */
 [data-direction] .ds-composer:focus-within {
   box-shadow:
     0 0 0 1px color-mix(in oklab, var(--color-hairline) 60%, var(--color-border)),
     0 1px 2px oklch(0% 0 0 / 0.05),
-    0 18px 44px -18px oklch(0% 0 0 / 0.28);
+    0 15px 37px -18px oklch(0% 0 0 / 0.2);
 }
 [data-direction] .ds-composer button:not(:disabled):active {
   transform: scale(0.96);
