@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { BotIcon, MessagesSquareIcon, PauseIcon, ServerIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
+import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
 import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
@@ -49,7 +49,7 @@ export function StateDot({ state }: { state: PanelState }) {
 export function PanelKindIcon({ kind, className }: { kind: PanelKind; className: string }) {
   if (kind === "subagent") return <BotIcon className={className} />;
   if (kind === "session") return <MessagesSquareIcon className={className} />;
-  if (kind === "process") return <ServerIcon className={className} />;
+  if (kind === "process") return <LayersIcon className={className} />;
   return <TerminalIcon className={className} />;
 }
 
@@ -73,14 +73,25 @@ export function WorkSegment({
   open,
   onOpenChange,
   onEscape,
+  hideTrigger = false,
 }: {
   work: PanelScope;
   open: boolean;
+  /** Something else opens the sheet (the redesign's strip over the composer): no button of its own. */
+  hideTrigger?: boolean;
   onOpenChange: (open: boolean) => void;
   /** The sheet was closed with Esc: the composer takes the focus back. */
   onEscape: () => void;
 }) {
-  const { entries, conversations } = work;
+  const { conversations } = work;
+  // Under the redesign's clip the agents lead: the clip is about them, the rest of the work follows.
+  const entries = useMemo(
+    () =>
+      hideTrigger
+        ? [...work.entries].sort((a, b) => Number(isAgentEntry(b)) - Number(isAgentEntry(a)))
+        : work.entries,
+    [hideTrigger, work.entries],
+  );
   const summary = useMemo(() => panelSummary(entries), [entries]);
   const running = entries.length > summary.finished;
   // One list for the keys: the entries, then the conversations.
@@ -116,6 +127,7 @@ export function WorkSegment({
     const down = (event: MouseEvent) => {
       const target = event.target as Node;
       if (sheet.current?.contains(target) || trigger.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-ds-strip]")) return;
       onOpenChange(false);
     };
     document.addEventListener("mousedown", down);
@@ -158,40 +170,49 @@ export function WorkSegment({
   if (total === 0) return null;
   return (
     <>
-      <button
-        ref={trigger}
-        type="button"
-        aria-expanded={shown}
-        onClick={() => {
-          // Each time it opens, the selection starts at the top: running work.
-          if (!open) setPicked(null);
-          onOpenChange(!open);
-        }}
-        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
-      >
-        {summary.attention > 0 && (
-          <span className="flex items-center gap-1 text-warning">
-            <TriangleAlertIcon className="size-3" aria-hidden />
-            {summary.attentionText}
-          </span>
-        )}
-        {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
-        {running && <span className="crew-bg-dot" aria-hidden />}
-        {summary.text}
-        {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
-        {conversations.length > 0 && (
-          <span className="flex items-center gap-1 text-text-muted">
-            <MessagesSquareIcon className="size-3" aria-hidden />
-            {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
-          </span>
-        )}
-      </button>
-      {shown && (
+      {!hideTrigger && (
+        <button
+          ref={trigger}
+          type="button"
+          aria-expanded={shown}
+          onClick={() => {
+            // Each time it opens, the selection starts at the top: running work.
+            if (!open) setPicked(null);
+            onOpenChange(!open);
+          }}
+          className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
+        >
+          {summary.attention > 0 && (
+            <span className="flex items-center gap-1 text-warning">
+              <TriangleAlertIcon className="size-3" aria-hidden />
+              {summary.attentionText}
+            </span>
+          )}
+          {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
+          {running && <span className="crew-bg-dot" aria-hidden />}
+          {summary.text}
+          {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
+          {conversations.length > 0 && (
+            <span className="flex items-center gap-1 text-text-muted">
+              <MessagesSquareIcon className="size-3" aria-hidden />
+              {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
+            </span>
+          )}
+        </button>
+      )}
+      {/* Under the clip the sheet stays mounted, closed: it unfolds and folds back instead of appearing and vanishing. */}
+      {(shown || hideTrigger) && (
         <div
           ref={sheet}
           tabIndex={-1}
           data-work-sheet
-          className="absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
+          {...(shown ? { "data-open": "" } : {})}
+          inert={!shown}
+          className={
+            hideTrigger
+              ? "ds-strip-panel flex flex-col outline-none"
+              : "absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
+          }
         >
           <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
             Work
@@ -243,6 +264,8 @@ export function WorkSegment({
     </>
   );
 }
+
+const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
 /** A row of the sheet's keys: an entry of the work, or a conversation. */
 type Row = { id: string; entry?: PanelEntry; conversation?: ConversationEntry };

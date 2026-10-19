@@ -2,7 +2,7 @@
 // PROTOTYPE — throwaway. Small pieces the variants share: the transcript,
 // state dots, the context readouts, the fast toggles and the scenario bar.
 // Layout is each variant's own.
-import { BotIcon, FileTextIcon, PencilIcon, SearchIcon, ServerIcon, TerminalIcon, UsersIcon, WrenchIcon, ZapIcon, type LucideIcon } from "lucide-react";
+import { BotIcon, FileTextIcon, PencilIcon, SearchIcon, LayersIcon, TerminalIcon, UsersIcon, WrenchIcon, ZapIcon, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { LABEL, tokens, type Entry, type EntryKind, type Fast, type Item, type Provider, type Sim } from "./sim";
@@ -81,7 +81,7 @@ export function StateDot({ state }: { state: Entry["state"] }) {
 export function KindIcon({ kind, className = "size-3.5" }: { kind: EntryKind; className?: string }) {
   if (kind === "agent") return <BotIcon className={className} />;
   if (kind === "crew") return <UsersIcon className={className} />;
-  if (kind === "process") return <ServerIcon className={className} />;
+  if (kind === "process") return <LayersIcon className={className} />;
   return <TerminalIcon className={className} />;
 }
 

@@ -1,4 +1,4 @@
-import { ServerIcon } from "lucide-react";
+import { LayersIcon } from "lucide-react";
 
 type Props = {
   /** Runs up across the workspace's worktrees. */
@@ -13,7 +13,7 @@ type Props = {
 };
 
 /**
- * The way to the workspace's commands, at the foot of the sidebar: how many
+ * The way to the workspace's commands, under its name in the sidebar: how many
  * run, and whether anything waits on the user, without opening the page.
  */
 export function CommandsButton({ live, asking, orphans, open, onToggle }: Props) {
@@ -37,7 +37,7 @@ export function CommandsButton({ live, asking, orphans, open, onToggle }: Props)
         open ? "bg-selected font-medium" : "hover:bg-hover focus-visible:bg-hover"
       }`}
     >
-      <ServerIcon className="size-4 shrink-0 text-icon" />
+      <LayersIcon className="size-4 shrink-0 text-icon" />
       <span className="min-w-0 flex-1 truncate">Commands</span>
       {asking > 0 && (
         <span className="shrink-0 rounded-full bg-warning/15 px-1.5 text-[11px] text-warning">Review</span>

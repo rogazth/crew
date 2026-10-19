@@ -2,7 +2,7 @@ import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
-import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, ServerIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, LayersIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BranchTag } from "./BranchDot";
@@ -712,7 +712,7 @@ function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
   const icon = () => {
     if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-icon" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
-    if (tab.kind === "process") return <ServerIcon className="size-3.5 text-icon" />;
+    if (tab.kind === "process") return <LayersIcon className="size-3.5 text-icon" />;
     if (tab.kind === "browser")
       return tab.incognito ? <IncognitoIcon /> : <GlobeIcon className="size-3.5 text-icon" />;
     const session = sessions.find((s) => s.id === tab.sessionId);

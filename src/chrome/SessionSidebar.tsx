@@ -1,10 +1,9 @@
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, LayersIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BotAvatar } from "./BotAvatar";
 import {
   COPY_NAME,
-  COPY_PATH,
   DELETE,
   EDIT,
   MARK_READ,
@@ -39,7 +38,6 @@ import {
   canReorder,
   shows,
   trimSection,
-  type Arranged,
   type SidebarPrefs,
   type Trimmed,
 } from "../lib/sidebarPrefs";
@@ -71,10 +69,18 @@ export type SessionSidebarProps = {
   onRemoveMany: (sessions: Session[]) => void;
   /** Terminal sessions whose CLI runs, tab open or not: those offer Stop. */
   onReorder: (ids: string[]) => void;
-  /** The way to the workspace's commands, kept under the list whatever it scrolls to. */
+  /** The way to the workspace's commands, under the workspace's name. */
   commands?: ReactNode;
   /** The names of the commands running in each worktree, by its path. */
   running?: ReadonlyMap<string, string[]>;
+  /** Each worktree's hue, by its path: the colour its tabs and its line share. */
+  hues?: ReadonlyMap<string, number>;
+  /** PROTOTYPE — throwaway: what the sidebar proposals reach for beyond the sessions. */
+  proto?: {
+    onRenameWorkspace: (name: string) => void;
+    onRemoveWorkspace: () => void;
+    commands: { live: number; asking: number; orphans: number; open: boolean; onToggle: () => void };
+  };
   /** Reads the worktrees and sessions again, for changes made outside this window. */
   onRefresh: () => Promise<void>;
   /**
@@ -89,7 +95,6 @@ type Menu =
   | { kind: "worktree"; point: MenuPoint; tree: Worktree };
 
 const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to Worktree", icon: "open", hotkey: "O" };
-const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New Bot Here", icon: "bot", hotkey: "A" };
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
@@ -123,10 +128,8 @@ function sessionActions(session: Session): MenuEntry[] {
 function worktreeActions(tree: Worktree, current: boolean): MenuEntry[] {
   return tidy([
     ...(current ? [] : [SWITCH_HERE, SEPARATOR]),
-    NEW_BOT_HERE,
     NEW_SESSION_HERE,
     SEPARATOR,
-    COPY_PATH,
     ...(tree.branch ? [COPY_BRANCH] : []),
     SEPARATOR,
     ...(tree.main ? [] : [REMOVE_WORKTREE]),
@@ -144,10 +147,13 @@ function pointOf(element: HTMLElement): MenuPoint {
 }
 
 /**
- * The panel beside the rail: the workspace's name, then its worktrees. The one
- * on screen opens as a card holding its bots as faces and its sessions as
- * rows; the others fold to a line with who works there. Search and the view
- * menu sit on the Worktrees line.
+ * The panel beside the rail: the workspace's name, its commands, its bots,
+ * then its worktrees, all in one scroll. Bots belong to the workspace, not to
+ * a worktree: they are the ones you talk to every day, and they run the work
+ * as sessions. Sessions are throwaway and live in the worktree they work in;
+ * the one on screen opens to list them, the others fold to a line with the
+ * bots working there. Search and the view menu sit on the Worktrees line and
+ * look through both.
  */
 export function SessionSidebar(props: SessionSidebarProps) {
   const [query, setQuery] = useState("");
@@ -158,41 +164,50 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [refreshing, setRefreshing] = useState(false);
   // A worktree folded or unfolded by hand; the rest follow the default: open while on screen.
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
-  // Sections unfolded past the limit, as `bots:<path>` or `terminals:<path>`; for this run only.
+  // Sections unfolded past the limit, as `bots` or `terminals:<path>`; for this run only.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
   const filtering = query.trim().length > 0;
 
-  // Each worktree's share of the arranged sessions; a session whose worktree is gone shows under the main checkout.
+  const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
+
+  // The workspace's bots in one list, wherever they work; each worktree's share
+  // of the sessions, and one whose worktree is gone shows under the main checkout.
+  const arranged = useMemo(() => (prefs ? arrangeSessions(props.sessions, prefs, query) : null), [prefs, props.sessions, query]);
   const placed = useMemo(() => {
-    const out = new Map<string, Arranged>();
-    for (const tree of props.worktrees) out.set(tree.path, { bots: [], terminals: [] });
-    if (!prefs) return out;
-    const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
-    const { bots, terminals } = arrangeSessions(props.sessions, prefs, query);
-    const put = (session: Session, key: keyof Arranged) => {
-      const path = sessionPath(session, props.workspace, props.worktrees);
-      (out.get(path) ?? out.get(main))?.[key].push(session);
-    };
-    for (const session of bots) put(session, "bots");
-    for (const session of terminals) put(session, "terminals");
+    const out = new Map<string, Session[]>();
+    for (const tree of props.worktrees) out.set(tree.path, []);
+    for (const session of arranged?.terminals ?? [])
+      (out.get(sessionPath(session, props.workspace, props.worktrees)) ?? out.get(main))?.push(session);
     return out;
-  }, [prefs, props.sessions, props.workspace, props.worktrees, query]);
+  }, [arranged, main, props.workspace, props.worktrees]);
 
   const shown = useMemo(
     () =>
       props.worktrees.filter((tree) => {
         const current = tree.path === props.activeWorktree;
-        const mine = placed.get(tree.path);
-        const count = (mine?.bots.length ?? 0) + (mine?.terminals.length ?? 0);
-        if (filtering) return current || count > 0;
+        const mine = placed.get(tree.path) ?? [];
+        if (filtering) return current || mine.length > 0;
         if (prefs?.scope === "current") return current;
-        if (prefs?.scope === "busy")
-          return current || [...(mine?.bots ?? []), ...(mine?.terminals ?? [])].some((s) => s.status !== "idle");
+        if (prefs?.scope === "busy") return current || mine.some((s) => s.status !== "idle");
         return true;
       }),
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
+
+  // The bots behind each worktree's sessions: who is running work there, for its folded line.
+  const launchers = useMemo(() => {
+    const bots = new Map(props.sessions.filter((s) => s.kind === "bot").map((s) => [s.id, s]));
+    const out = new Map<string, Session[]>();
+    for (const session of props.sessions) {
+      const bot = session.launchedBy ? bots.get(session.launchedBy) : undefined;
+      if (!bot || session.kind === "bot") continue;
+      const path = sessionPath(session, props.workspace, props.worktrees);
+      const mine = out.get(path) ?? [];
+      if (!mine.includes(bot)) out.set(path, [...mine, bot]);
+    }
+    return out;
+  }, [props.sessions, props.workspace, props.worktrees]);
 
   // A bot's children live in its chat; one that failed unseen puts a dot on its face.
   const failing = useMemo(() => {
@@ -205,29 +220,23 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
 
   // What each section lists after the recency and the limit. A search looks past both.
-  const listed = useMemo(() => {
-    const out = new Map<string, Record<keyof Arranged, Trimmed>>();
-    for (const [path, mine] of placed) {
-      const trim = (key: keyof Arranged): Trimmed =>
-        !prefs || filtering || expanded.has(`${key}:${path}`)
-          ? { shown: mine[key], hidden: 0 }
-          : trimSection(mine[key], prefs, props.activeSessionId, now);
-      out.set(path, { bots: trim("bots"), terminals: trim("terminals") });
-    }
-    return out;
-  }, [expanded, filtering, now, placed, prefs, props.activeSessionId]);
-
-  const visible = useCallback(
-    (path: string) => {
-      const mine = listed.get(path);
-      return [...(mine?.bots.shown ?? []), ...(mine?.terminals.shown ?? [])];
-    },
-    [listed],
+  const trim = useCallback(
+    (sessions: Session[], key: string): Trimmed =>
+      !prefs || filtering || expanded.has(key) ? { shown: sessions, hidden: 0 } : trimSection(sessions, prefs, props.activeSessionId, now),
+    [expanded, filtering, now, prefs, props.activeSessionId],
   );
+  const bots = useMemo(() => trim(arranged?.bots ?? [], "bots"), [arranged, trim]);
+  const listed = useMemo(() => {
+    const out = new Map<string, Trimmed>();
+    for (const [path, mine] of placed) out.set(path, trim(mine, `terminals:${path}`));
+    return out;
+  }, [placed, trim]);
+
+  const visible = useCallback((path: string) => listed.get(path)?.shown ?? [], [listed]);
 
   const order = useMemo(
-    () => shown.flatMap((tree) => visible(tree.path).map((session) => session.id)),
-    [shown, visible],
+    () => [...bots.shown, ...shown.flatMap((tree) => visible(tree.path))].map((session) => session.id),
+    [bots, shown, visible],
   );
 
   // The open session is the one-item selection. A multi-selection is held against
@@ -295,6 +304,20 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const fold = (path: string, open: boolean) => setFolds((prev) => new Map(prev).set(path, open));
 
+  // A tab brought up anywhere unfolds the worktree holding it, so the panel always shows where you are.
+  const focus = `${props.activeWorktree}\n${props.activeSessionId ?? ""}`;
+  const [focused, setFocused] = useState(focus);
+  if (focused !== focus) {
+    setFocused(focus);
+    if (folds.get(props.activeWorktree) === false) fold(props.activeWorktree, true);
+  }
+
+  // A click on a worktree's line makes it the one on screen and unfolds it; only its caret folds.
+  const activate = (path: string) => {
+    fold(path, true);
+    if (path !== props.activeWorktree) props.onSelectWorktree(path);
+  };
+
   // A press anywhere outside the panel puts the search away.
   useEffect(() => {
     if (!searching) return;
@@ -343,7 +366,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     );
 
   const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
-  const firstVisible = () => shown.flatMap((tree) => visible(tree.path))[0];
+  const firstVisible = () => [...bots.shown, ...shown.flatMap((tree) => visible(tree.path))][0];
 
   const unfold = (key: string, open: boolean) =>
     setExpanded((prev) => {
@@ -355,116 +378,152 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 px-3 pt-3 pb-2" title={props.workspace.path}>
-        <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.home ? "Home" : props.workspace.name}</div>
-        {!props.home && <div className="truncate text-[11px] text-text-muted">{shortenPath(props.workspace.path)}</div>}
-      </div>
+      {/* One scroll for the whole panel: bots grow without a scroller of their own, and each section's line sticks while it is in view. */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+        <div className="px-3 pt-3 pb-2" title={props.workspace.path}>
+          <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.home ? "Home" : props.workspace.name}</div>
+          {!props.home && <div className="truncate text-[11px] text-text-muted">{shortenPath(props.workspace.path)}</div>}
+        </div>
 
-      {props.home && <div className="shrink-0 px-2 pb-1">{props.home.actions}</div>}
+        {props.home && <div className="px-2 pb-1">{props.home.actions}</div>}
+        {props.commands && <div className="px-2 pb-1">{props.commands}</div>}
 
-      <div className="shrink-0 px-2">
-        {searching ? (
-          <SearchField
-            query={query}
-            onChange={setQuery}
-            onClose={() => {
-              closeSearch();
-              panel.current?.querySelector<HTMLElement>("[data-nav][aria-current]")?.focus();
-            }}
-            onEnter={() => {
-              const first = firstVisible();
-              if (first) props.onSelect(first);
-            }}
-            onDown={() => panel.current?.querySelector<HTMLElement>("[data-nav][data-session]")?.focus()}
-          />
-        ) : (
-          <div className="flex h-8 items-center gap-0.5 pl-2">
-            <span className="min-w-0 flex-1 truncate text-text-muted">{props.home ? "Sessions" : "Worktrees"}</span>
-            {!props.home && (
-              <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
+        {prefs && !(filtering && bots.shown.length === 0) && (
+          <div className="px-2 pb-1">
+            <div className={`${STICKY} flex h-8 items-center gap-0.5 pl-2`}>
+              <span className="min-w-0 flex-1 truncate text-text-muted">Bots</span>
+              <HeaderButton icon={PlusIcon} label={`New bot ${commandKeys("new-bot")}`} onClick={() => props.onNewBot(main)} />
+            </div>
+            {bots.shown.length > 0 ? (
+              <div className="grid grid-cols-3 gap-0.5">
+                <SortableList ids={bots.shown.map((s) => s.id)} disabled={!draggable || bots.hidden > 0} onReorder={props.onReorder}>
+                  {bots.shown.map((session, at) => (
+                    <SortableItem key={session.id} id={session.id} index={at} group="bots" disabled={!draggable || bots.hidden > 0}>
+                      <Tile {...card(session)} failed={failing.has(session.id)} onEdit={() => props.onEdit(session)} />
+                    </SortableItem>
+                  ))}
+                </SortableList>
+              </div>
+            ) : (
+              bots.hidden === 0 && (
+                <button
+                  type="button"
+                  data-nav
+                  data-tauri-drag-region="false"
+                  onClick={() => props.onNewBot(main)}
+                  className="flex w-full items-center gap-2.5 rounded-chrome px-2 py-2 text-left outline-none hover:bg-hover focus-visible:bg-hover"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-full border border-dashed border-border-strong text-icon">
+                    <PlusIcon aria-hidden className="size-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px]">New bot</span>
+                    <span className="block truncate text-[11px] text-text-muted">Plans with you and runs the work</span>
+                  </span>
+                </button>
+              )
             )}
-            <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
-            <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
-            {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
+            <MoreRow hidden={bots.hidden} open={expanded.has("bots")} onToggle={(next) => unfold("bots", next)} />
           </div>
         )}
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {prefs &&
-          shown.map((tree) => {
-            const index = props.worktrees.indexOf(tree);
-            const isCurrent = tree.path === props.activeWorktree;
-            // Home has the one folder and no git: its sessions are the whole list, never folded.
-            const open = Boolean(props.home) || filtering || (folds.get(tree.path) ?? isCurrent);
-            const mine = listed.get(tree.path) ?? { bots: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
-            const bots = mine.bots.shown;
-            const terminals = mine.terminals.shown;
-            const more = (key: keyof Arranged) => (
-              <MoreRow
-                hidden={mine[key].hidden}
-                open={expanded.has(`${key}:${tree.path}`)}
-                onToggle={(next) => unfold(`${key}:${tree.path}`, next)}
+        <div className="px-2">
+          <div className={`${STICKY} -mx-2 px-2`}>
+            {searching ? (
+              <SearchField
+                query={query}
+                onChange={setQuery}
+                onClose={() => {
+                  closeSearch();
+                  panel.current?.querySelector<HTMLElement>("[data-nav][aria-current]")?.focus();
+                }}
+                onEnter={() => {
+                  const first = firstVisible();
+                  if (first) props.onSelect(first);
+                }}
+                onDown={() => panel.current?.querySelector<HTMLElement>("[data-nav][data-session]")?.focus()}
               />
-            );
-            const everyone = props.sessions.filter(
-              (session) => sessionPath(session, props.workspace, props.worktrees) === tree.path,
-            );
-            return (
-              <div key={tree.path} className="mt-0.5 first:mt-0">
-                {!props.home && <WorktreeHeader
-                  tree={tree}
-                  current={isCurrent}
-                  open={open}
-                  sessions={everyone}
-                  running={props.running?.get(tree.path) ?? NONE}
-                  showDiff={shows(prefs, "diff")}
-                  keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
-                  onFold={(next) => fold(tree.path, next)}
-                  onAdd={() => props.onNewBot(tree.path)}
-                  onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
-                  onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
-                />}
-                {open && (
-                  <div className={props.home ? "pb-2" : "pb-2 pl-2"}>
-                    {bots.length > 0 && (
-                      <div className="grid grid-cols-3 gap-0.5">
-                        <SortableList ids={bots.map((s) => s.id)} disabled={!draggable || mine.bots.hidden > 0} onReorder={props.onReorder}>
-                          {bots.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`bots:${tree.path}`} disabled={!draggable || mine.bots.hidden > 0}>
-                              <Tile {...card(session)} failed={failing.has(session.id)} onEdit={() => props.onEdit(session)} />
-                            </SortableItem>
-                          ))}
-                        </SortableList>
-                      </div>
-                    )}
-                    {more("bots")}
-                    {terminals.length > 0 && (
-                      <div className="flex flex-col gap-0.5 pt-0.5">
-                        <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
-                          {terminals.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
-                              {sessionRow(session)}
-                            </SortableItem>
-                          ))}
-                        </SortableList>
-                      </div>
-                    )}
-                    {more("terminals")}
-                    {bots.length + terminals.length + mine.bots.hidden + mine.terminals.hidden === 0 && (
-                      <p className="px-2 py-1.5 text-[12px] text-placeholder">
-                        {filtering
-                          ? "No matches"
-                          : "No sessions yet"}
-                      </p>
-                    )}
-                  </div>
+            ) : (
+              <div className="flex h-8 items-center gap-0.5 pl-2">
+                <span className="min-w-0 flex-1 truncate text-text-muted">{props.home ? "Sessions" : "Worktrees"}</span>
+                {!props.home && (
+                  <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
                 )}
+                <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
+                <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
+                {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
               </div>
-            );
-          })}
+            )}
+          </div>
+
+          {prefs &&
+            shown.map((tree) => {
+              const index = props.worktrees.indexOf(tree);
+              const isCurrent = tree.path === props.activeWorktree;
+              // Home has the one folder and no git: its sessions are the whole list, never folded.
+              const open = Boolean(props.home) || filtering || (folds.get(tree.path) ?? isCurrent);
+              const mine = listed.get(tree.path) ?? { shown: [], hidden: 0 };
+              const terminals = mine.shown;
+              const everyone = props.sessions.filter(
+                (session) => session.kind !== "bot" && sessionPath(session, props.workspace, props.worktrees) === tree.path,
+              );
+              return (
+                <div key={tree.path} className="mt-0.5 first:mt-0">
+                  {!props.home && <WorktreeHeader
+                    tree={tree}
+                    current={isCurrent}
+                    open={open}
+                    sessions={everyone}
+                    faces={launchers.get(tree.path) ?? NO_SESSIONS}
+                    running={props.running?.get(tree.path) ?? NONE}
+                    showDiff={shows(prefs, "diff")}
+                    keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
+                    onActivate={() => activate(tree.path)}
+                    onFold={(next) => fold(tree.path, next)}
+                    onAdd={() => props.onNewSession(tree.path)}
+                    onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
+                    onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
+                  />}
+                  {open && (
+                    <div className={props.home ? "pb-2" : "pb-2 pl-2"}>
+                      {terminals.length > 0 && (
+                        <div className="flex flex-col gap-0.5 pt-0.5">
+                          <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.hidden > 0} onReorder={props.onReorder}>
+                            {terminals.map((session, at) => (
+                              <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.hidden > 0}>
+                                {sessionRow(session)}
+                              </SortableItem>
+                            ))}
+                          </SortableList>
+                        </div>
+                      )}
+                      <MoreRow
+                        hidden={mine.hidden}
+                        open={expanded.has(`terminals:${tree.path}`)}
+                        onToggle={(next) => unfold(`terminals:${tree.path}`, next)}
+                      />
+                      {terminals.length + mine.hidden === 0 &&
+                        (filtering || props.home ? (
+                          <p className="px-2 py-1.5 text-[12px] text-placeholder">{filtering ? "No matches" : "No sessions yet"}</p>
+                        ) : (
+                          <button
+                            type="button"
+                            data-nav
+                            data-tauri-drag-region="false"
+                            onClick={() => props.onNewSession(tree.path)}
+                            className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] text-text-muted outline-none hover:bg-hover hover:text-text focus-visible:bg-hover"
+                          >
+                            <PlusIcon aria-hidden className="size-3.5 shrink-0" />
+                            New session
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+        </div>
       </div>
-      {props.commands && <div className="shrink-0 border-t border-hairline px-2 py-1.5">{props.commands}</div>}
       {props.home?.foot}
 
       {menu?.kind === "session" && (
@@ -499,14 +558,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
           key={menu.tree.path}
           point={menu.point}
           title={worktreeLabel(menu.tree)}
+          path={menu.tree.path}
           actions={worktreeActions(menu.tree, menu.tree.path === props.activeWorktree)}
           onPick={(id) => {
             const tree = menu.tree;
             setMenu(null);
             if (id === "switch") props.onSelectWorktree(tree.path);
-            if (id === "new-bot") props.onNewBot(tree.path);
             if (id === "new-session") props.onNewSession(tree.path);
-            if (id === "copy-path") void navigator.clipboard.writeText(tree.path);
             if (id === "copy-branch" && tree.branch) void navigator.clipboard.writeText(tree.branch);
             if (id === "remove-worktree") props.onRemoveWorktree(tree);
           }}
@@ -543,18 +601,21 @@ function HeaderButton({
 }
 
 /**
- * A worktree's line. A click or ←/→ folds it; its plus starts a bot there;
- * opening one of its sessions, its menu or ⌥⌘1‥9 makes it the one on screen.
- * Folded, it shows who works there and how loud.
+ * A worktree's line. A click makes it the one on screen and unfolds it, as do
+ * opening one of its sessions, its menu and ⌥⌘1‥9; its caret or ←/→ folds it;
+ * its plus starts a session there. Folded, it shows the bots running work
+ * there and how loud its sessions are.
  */
 function WorktreeHeader({
   tree,
   current,
   open,
   sessions,
+  faces,
   running,
   showDiff,
   keys,
+  onActivate,
   onFold,
   onAdd,
   onMenu,
@@ -564,16 +625,18 @@ function WorktreeHeader({
   current: boolean;
   open: boolean;
   sessions: Session[];
+  /** The bots that started the sessions here. */
+  faces: Session[];
   /** Commands running here, by name: a server left up shows even with the worktree folded. */
   running: string[];
   showDiff: boolean;
   keys: string;
+  onActivate: () => void;
   onFold: (open: boolean) => void;
   onAdd: () => void;
   onMenu: (point: MenuPoint) => void;
   onRemove: () => void;
 }) {
-  const faces = sessions.filter((session) => session.kind === "bot").slice(0, 3);
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if ((event.key === "ArrowRight") === open) return;
@@ -597,7 +660,7 @@ function WorktreeHeader({
         aria-current={current ? "true" : undefined}
         aria-expanded={open}
         title={`${tree.path}${keys ? `  ${keys} to switch` : ""}`}
-        onClick={() => onFold(!open)}
+        onClick={onActivate}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={onKeyDown}
         className="flex h-8 w-full items-center gap-2 rounded-chrome pr-2 pl-8 text-left outline-none transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-border-strong"
@@ -612,13 +675,13 @@ function WorktreeHeader({
             title={`Running: ${running.join(", ")}`}
             className="flex shrink-0 items-center gap-1 text-[11px] text-text-muted transition-opacity group-hover/tree:opacity-0"
           >
-            <ServerIcon className="size-3 text-success" />
+            <LayersIcon className="size-3 text-success" />
             {running.length > 1 && <span className="tabular-nums">{running.length}</span>}
           </span>
         )}
         {!open && faces.length > 0 && (
           <span className="flex -space-x-1.5 transition-opacity group-hover/tree:opacity-0">
-            {faces.map((session) => (
+            {faces.slice(0, 3).map((session) => (
               <BotAvatar key={session.id} seed={session.id} bare className="size-5" />
             ))}
           </span>
@@ -634,18 +697,27 @@ function WorktreeHeader({
           </span>
         )}
       </button>
-      {/* The branch mark turns into the fold's caret under the pointer, as Linear's teams do; the row is the button. */}
-      <span aria-hidden className="pointer-events-none absolute top-1 left-1.5 grid size-6 place-items-center text-icon">
-        <Glyph className={`size-4 transition-opacity group-hover/tree:opacity-0 ${current ? "text-text" : ""}`} />
-        <ChevronRightIcon
-          className={`absolute size-3.5 opacity-0 transition-[opacity,transform] duration-150 group-hover/tree:opacity-100 ${open ? "rotate-90" : ""}`}
-        />
-      </span>
+      {/* The branch mark turns into the fold's caret under the pointer, as Linear's teams do; the caret alone folds. */}
       <button
         type="button"
         tabIndex={-1}
-        aria-label={`New bot in ${worktreeLabel(tree)}`}
-        title={`New bot in ${worktreeLabel(tree)}`}
+        aria-label={open ? `Collapse ${worktreeLabel(tree)}` : `Expand ${worktreeLabel(tree)}`}
+        aria-expanded={open}
+        data-tauri-drag-region="false"
+        onClick={() => onFold(!open)}
+        className="absolute top-1 left-1.5 grid size-6 place-items-center rounded-md text-icon hover:bg-hover hover:text-text"
+      >
+        <Glyph aria-hidden className={`size-4 transition-opacity group-hover/tree:opacity-0 ${current ? "text-text" : ""}`} />
+        <ChevronRightIcon
+          aria-hidden
+          className={`absolute size-3.5 opacity-0 transition-[opacity,transform] duration-150 group-hover/tree:opacity-100 ${open ? "rotate-90" : ""}`}
+        />
+      </button>
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={`New session in ${worktreeLabel(tree)}`}
+        title={`New session in ${worktreeLabel(tree)}`}
         onClick={onAdd}
         className="absolute top-1 right-1 grid size-6 place-items-center rounded-md text-icon opacity-0 transition-opacity group-hover/tree:opacity-100 hover:bg-hover hover:text-text"
       >
@@ -674,6 +746,9 @@ function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; on
 }
 
 const NONE: string[] = [];
+const NO_SESSIONS: Session[] = [];
+/** A section's line, held at the top of the panel while its section scrolls under it. */
+const STICKY = "sticky top-0 z-10 bg-sidebar";
 
 function loudest(sessions: Session[]): SessionStatus {
   for (const status of STATUS_ORDER) if (sessions.some((session) => session.status === status)) return status;
