@@ -479,7 +479,6 @@ export function App() {
             context={{
               workspace: isHome ? "Home" : (active?.name ?? ""),
               branch: "",
-              hue: current && !isHome && worktrees.list.length > 1 ? hues.get(current.path) : undefined,
               onSwitch: () => openPalette("context"),
             }}
             groups={null}

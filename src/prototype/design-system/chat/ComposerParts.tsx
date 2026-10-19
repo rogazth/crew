@@ -9,6 +9,7 @@ import {
   ArrowUpIcon,
   AtSignIcon,
   ChevronUpIcon,
+  GitBranchIcon,
   ImageIcon,
   MessageCircleMoreIcon,
   MonitorIcon,
@@ -28,7 +29,7 @@ import type { PanelScope } from "../../../surfaces/chat/Panel";
 import { awaitsUser, isOpen, type Block } from "../../../lib/blocks";
 import { turnStart } from "../../../lib/transcriptRows";
 import type { Session } from "../../../lib/types";
-import { useWhere, type Where } from "./where";
+import { branchOf, useWhere, type Where } from "./where";
 
 /** What the chat knows about the turn in progress, for the strip. */
 export type TurnActivity = {
@@ -187,6 +188,18 @@ export function ContextRow({
       )}
       {children}
     </div>
+  );
+}
+
+/** The worktree a session works in, at the status line's left: its branch, when it is one worth naming. */
+export function WorktreeSegment({ session }: { session: Session }) {
+  const branch = branchOf(useWhere(session));
+  if (!branch) return null;
+  return (
+    <span className="flex min-w-0 shrink items-center gap-1 pl-2 text-text-muted" title={`Worktree: ${branch}`}>
+      <GitBranchIcon className="size-3 shrink-0" aria-hidden />
+      <span className="truncate">{branch}</span>
+    </span>
   );
 }
 

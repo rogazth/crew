@@ -65,6 +65,7 @@ import {
   ContextRing,
   SendButton,
   SessionContextRow,
+  WorktreeSegment,
   jumpToCard,
   type TurnActivity,
 } from "../../prototype/design-system/chat/ComposerParts";
@@ -526,6 +527,7 @@ export function Composer({
           </div>
         </form>
         <div data-status-line data-session={session.id} className="ds-status">
+          {!centered && <WorktreeSegment session={session} />}
           {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
           {session.paused && <PausedSegment />}
           {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
