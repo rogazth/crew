@@ -90,7 +90,8 @@ export function AgentRow({
         <span className="truncate text-[13px] leading-[18px] text-text">{title}</span>
         {sub ? <span className="truncate text-[11.5px] leading-4 text-text-muted tabular-nums">{sub}</span> : null}
       </span>
-      <StateChip tone={chip.tone}>{chip.label}</StateChip>
+      {/* Done is the quiet default: the row's own words say how it ended, a green badge would shout it. */}
+      {chip.tone === "success" ? null : <StateChip tone={chip.tone}>{chip.label}</StateChip>}
       {onOpen ? <ChevronRightIcon aria-hidden className="ds-agent-go size-3.5" /> : <span className="w-3.5 shrink-0" />}
     </>
   );

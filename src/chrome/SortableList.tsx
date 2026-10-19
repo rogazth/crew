@@ -21,14 +21,16 @@ type ListProps = {
   disabled?: boolean;
   onReorder: (ids: string[]) => void;
   modifiers?: ComponentProps<typeof DragDropProvider>["modifiers"];
+  /** In place of the default: a drag past 5px. */
+  sensors?: ComponentProps<typeof DragDropProvider>["sensors"];
   children: ReactNode;
 };
 
 /** One sortable group. Visual reorder is optimistic; we persist the id list on drop. */
-export function SortableList({ ids, disabled, onReorder, modifiers, children }: ListProps) {
+export function SortableList({ ids, disabled, onReorder, modifiers, sensors = SENSORS, children }: ListProps) {
   return (
     <DragDropProvider
-      sensors={SENSORS}
+      sensors={sensors}
       {...(modifiers ? { modifiers } : {})}
       onDragEnd={(event) => {
         if (event.canceled || disabled) return;

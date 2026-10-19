@@ -4,6 +4,7 @@
 import {
   BellIcon,
   BotIcon,
+  GaugeIcon,
   GlobeIcon,
   InfoIcon,
   KeyboardIcon,
@@ -49,6 +50,12 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
     description: "Coding agents and permissions.",
     icon: BotIcon,
   },
+  usage: {
+    id: "usage",
+    label: "Usage",
+    description: "Plan limits and when they reset.",
+    icon: GaugeIcon,
+  },
   environments: {
     id: "environments",
     label: "Environments",
@@ -77,7 +84,7 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
 
 export const NAV_GROUPS: { title: string | null; pages: SettingsSectionId[] }[] = [
   { title: "App", pages: ["general", "appearance", "notifications", "keybindings"] },
-  { title: "Agents", pages: ["providers", "environments"] },
+  { title: "Agents", pages: ["providers", "usage", "environments"] },
   { title: "Tools", pages: ["terminal", "browser"] },
   { title: null, pages: ["about"] },
 ];
@@ -117,6 +124,9 @@ const SETTINGS: IndexEntry[] = [
   { id: "tailscale", label: "Tailscale", page: "environments", keywords: "tailnet network vpn" },
   { id: "warn-relay", label: "Relay warnings", page: "environments", keywords: "tailscale relay derp lag" },
   { id: "wake", label: "Reconnect on wake", page: "environments", keywords: "sleep heartbeat reconnect" },
+  { id: "usage-limits", label: "Plan limits", page: "usage", keywords: "usage quota rate limit session weekly reset" },
+  { id: "usage-rings", label: "Rings on the rail", page: "usage", keywords: "usage indicator rail widget" },
+  { id: "usage-alerts", label: "Usage alerts", page: "usage", keywords: "notify warn limit threshold" },
   { id: "providers-env", label: "Providers per machine", page: "providers", keywords: "environment remote install cli ssh per machine" },
 ];
 

@@ -43,6 +43,9 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
     if (!hot || requestId == null) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // A card under an open thread is not on screen: the keys are the thread's. In a thread, Esc goes back, it never decides.
+      if (card.current?.closest("[inert]")) return;
+      if (event.key === "Escape" && card.current?.closest("[data-agent-view]")) return;
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable]")) return;
       if (event.key === "Enter") {

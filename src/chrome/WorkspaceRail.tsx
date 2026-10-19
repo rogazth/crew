@@ -9,13 +9,16 @@ import { StatusDot } from "./StatusDot";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
-import { COPY_PATH, DELETE, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
+import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
+import { requestWorkspaceRename } from "../prototype/design-system/sidebar/renameBus";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
 import { useRedesign } from "../prototype/design-system/direction";
 import { UpdateButton } from "../prototype/design-system/UpdateButton";
+import { UsageButton } from "../prototype/design-system/UsageButton";
+import { openSettingsSection } from "../lib/remoteUi";
 
 type Props = {
   /** The projects, home aside. */
@@ -146,6 +149,8 @@ export function WorkspaceRail(props: Props) {
       {/* PROTOTYPE — throwaway: the foot under a short rule, apart from the marks, and a simulated app update. */}
       {redesign && <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />}
       {redesign && <UpdateButton />}
+      {/* PROTOTYPE — throwaway: the providers' plan usage, on fake readings. */}
+      <UsageButton onOpenSettings={() => openSettingsSection("usage")} />
       <RailButton
         icon={RefreshCwIcon}
         label="Routines"
@@ -172,16 +177,17 @@ export function WorkspaceRail(props: Props) {
         <ActionMenu
           key={menu.workspace.id}
           point={menu.point}
-          title={`${menu.workspace.name} — ${menu.workspace.path}`}
-          rename={{
-            initial: menu.workspace.name,
-            onCommit: (name) => props.onRename(menu.workspace.id, name),
-          }}
-          actions={[COPY_PATH, SEPARATOR, { ...DELETE, label: "Remove Workspace…" }]}
+          title={menu.workspace.name}
+          path={menu.workspace.path}
+          // Rename opens the name in the sidebar's header.
+          actions={[RENAME, SEPARATOR, { ...DELETE, label: "Remove Workspace…" }]}
           onPick={(id) => {
             const workspace = menu.workspace;
             setMenu(null);
-            if (id === "copy-path") void navigator.clipboard.writeText(workspace.path);
+            if (id === "rename") {
+              props.onSelect(workspace.id);
+              requestWorkspaceRename(workspace.id);
+            }
             if (id === "delete") props.onRemove(workspace);
           }}
           onClose={() => setMenu(null)}

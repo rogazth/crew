@@ -33,65 +33,9 @@
   --radius-float: 1rem;
 }
 
-@keyframes ds-spin {
-  to { transform: rotate(360deg); }
-}
-
-/* Working, starting, a call still open: an arc turning. It replaces the three
-   rising dots, so the chat's "Working" line and every status dot speak alike. */
-[data-direction] .crew-typing {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  gap: 0;
-  border-radius: 999px;
-  border: 1.75px solid color-mix(in oklab, var(--activity) 18%, transparent);
-  border-top-color: var(--activity);
-  border-right-color: var(--activity);
-  animation: ds-spin 0.75s linear infinite;
-}
-[data-direction] .crew-typing > span {
-  display: none;
-}
-[data-direction] .crew-node .crew-typing {
-  width: 12px;
-  height: 12px;
-}
-
-/* Background work: the same arc, slower and quieter. A turn is over, the
-   session is not done. Same shape means the eye reads it as the same family. */
-[data-direction] [role="img"][aria-label="Running in background"] > span,
-[data-direction] .crew-bg-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: none;
-  border: 1.75px solid color-mix(in oklab, var(--activity-bg) 30%, transparent);
-  border-top-color: var(--activity-bg);
-  animation: ds-spin 2.4s linear infinite;
-  opacity: 1;
-}
-[data-direction] .crew-bg-dot {
-  width: 9px;
-  height: 9px;
-  border-width: 1.5px;
-}
-
-/* What wants you keeps its colour, with a soft halo so it reads at a glance. */
-[data-direction] [role="img"][aria-label="Needs input"] > span {
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-warning) 26%, transparent);
-}
-[data-direction] [role="img"][aria-label="Error"] > span {
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-danger) 22%, transparent);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-direction] .crew-typing,
-  [data-direction] .crew-bg-dot,
-  [data-direction] [role="img"][aria-label="Running in background"] > span {
-    animation: none;
-  }
-}
+/* Working keeps the app's own three rising dots, and background work its
+   hollow dot: no spinner in the chrome. Status is the dot alone, with no halo:
+   it never tints, rings or shadows what holds it. */
 
 /* Cards in the chat (question, approval): no box inside a box. The card is
    one raised surface; its options are fills, never outlines, and every inner
@@ -305,6 +249,26 @@
   )::after {
   opacity: 1;
 }
+/* Files held over a pane: no ring drawn inside it and no veil over the chat.
+   The sheet itself answers, from outside, with a soft accent glow cast off
+   its left edge (the focus colour, as the resize edge uses) and a firmer hairline. */
+[data-direction] main [data-file-drop] {
+  --tw-ring-shadow: 0 0 #0000;
+  box-shadow: none;
+}
+[data-direction] main [data-file-drop] [data-ds-chat] > .pointer-events-none.absolute.inset-0.z-10 {
+  background: transparent;
+}
+[data-direction] :is(main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child, main > div.h-full):has([data-file-drop]) {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-focus) 30%, var(--color-hairline)),
+    -8px 0 20px -10px color-mix(in oklab, var(--color-focus) 55%, transparent),
+    0 0 16px -6px oklch(0% 0 0 / 0.1);
+}
+/* The tab strip, a drop of its own (files open as tabs), only tints. */
+[data-direction] main [data-tauri-drag-region].bg-sidebar[data-file-drop] {
+  background: color-mix(in oklab, var(--color-focus) 6%, var(--color-sidebar));
+}
 /* Beside the sidebar, the sidebar is the gutter. */
 [data-direction] aside[data-sidebar="sidebar"] ~ main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child,
 [data-direction] aside[data-sidebar="sidebar"] ~ main > div.h-full {
@@ -322,10 +286,12 @@
    runs the panel's height; the work sits in the sheet. */
 [data-direction] .rounded-tl-xl.border-t.border-l {
   margin-bottom: 8px;
+  /* A border, not an inset shadow: a child's ground (a sticky section line)
+     would paint over a shadow and cut the rule wherever it scrolls to. */
   border-color: transparent;
+  border-left-color: var(--color-hairline);
   border-radius: 0;
   background: transparent;
-  box-shadow: inset 1px 0 0 var(--color-hairline);
 }
 /* Its foot, the workspace's commands: a filled button pinned under the list,
    so it reads as a place to go rather than one more row. */

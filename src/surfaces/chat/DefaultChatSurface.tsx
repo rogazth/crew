@@ -5,9 +5,7 @@ import { modelLabel, providerLine, providerOf } from "../../lib/providers";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
 import type { ChatSurfaceProps } from "./surface";
-import { useMemo } from "react";
 import { useRedesign } from "../../prototype/design-system/direction";
-import { turnActivity } from "../../prototype/design-system/chat/ComposerParts";
 import { IntroHead, IntroWays } from "../../prototype/design-system/chat/SessionIntro";
 
 export function DefaultChatSurface({
@@ -47,7 +45,6 @@ export function DefaultChatSurface({
 }: ChatSurfaceProps) {
   // PROTOTYPE: with a direction on, the empty chat and the composer are the redesign's.
   const redesign = useRedesign();
-  const activity = useMemo(() => (redesign ? turnActivity(blocks) : undefined), [redesign, blocks]);
   const pickStarter = (text: string) => {
     onDraft(text);
     field.current?.focus();
@@ -116,7 +113,6 @@ export function DefaultChatSurface({
             {...(onOptions ? { onOptions } : {})}
             optionsPending={optionsPending}
             switchProvider={switchProvider}
-            {...(activity ? { activity } : {})}
           />
         )}
         {blocks.length === 0 && redesign ? (

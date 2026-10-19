@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, BellIcon, BotIcon, GlobeIcon, InfoIcon, KeyboardIcon, PaletteIcon, ServerIcon, SlidersHorizontalIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, BellIcon, BotIcon, GaugeIcon, GlobeIcon, InfoIcon, KeyboardIcon, PaletteIcon, ServerIcon, SlidersHorizontalIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { SidebarRow } from "./SidebarRow";
 import { useRedesign } from "../prototype/design-system/direction";
@@ -12,6 +12,7 @@ const ICONS: Record<SettingsSectionId, Icon> = {
   browser: GlobeIcon,
   environments: ServerIcon,
   providers: BotIcon,
+  usage: GaugeIcon,
   keybindings: KeyboardIcon,
   about: InfoIcon,
 };

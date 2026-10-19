@@ -2,7 +2,7 @@
 // from: the page frame (title + one line), cards of rows, the Careful card,
 // soft status chips, a progress bar, a copy button, toasts, and the jump that
 // lands the nav's search on a single row.
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, Button, Card, IconButton, Toggle } from "../../../chrome/kit";
 
@@ -34,7 +34,8 @@ export function SettingsPage({
   // Two boxes: the shell's sheet rule clips the outer one (`main > div.h-full`), so the scroll lives inside it.
   return (
     <div className="h-full">
-      <div ref={root} className="@container h-full overflow-y-auto">
+      {/* No scroll anchoring: a page that reorders cards above the fold (Usage) would be dragged along with them. */}
+      <div ref={root} className="@container h-full overflow-y-auto [overflow-anchor:none]">
       <div className={`mx-auto flex ${wide ? "max-w-[920px]" : "max-w-[720px]"} flex-col gap-7 px-10 pt-12 pb-28`}>
         <header className={`flex items-center gap-4 px-1 ${hideHeader ? "sr-only" : ""}`}>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -173,6 +174,43 @@ export function Chip({ tone, dot = true, children }: { tone: Tone; dot?: boolean
       {dot && <span className={`size-1.5 rounded-full ${DOTS[tone]}`} />}
       {children}
     </span>
+  );
+}
+
+/**
+ * A notice in HeroUI's alert shape: a neutral card, the tone only in the
+ * icon's soft disc, a title, a line under it, and at most one action. The
+ * card never takes the tone's colour, so a notice reads as information, not
+ * as an alarm, and only the disc says how much it matters.
+ */
+export function Callout({
+  tone = "accent",
+  icon: Glyph,
+  spinning = false,
+  title,
+  description,
+  action,
+  className = "",
+}: {
+  tone?: Tone;
+  icon: LucideIcon;
+  spinning?: boolean;
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div role="status" className={`flex items-center gap-3 rounded-xl bg-surface p-3 shadow-[0_0_0_1px_var(--color-hairline)] ${className}`}>
+      <span className={`grid size-8 shrink-0 place-items-center rounded-full ${TONES[tone]}`}>
+        <Glyph className={`size-4 ${spinning ? "animate-spin motion-reduce:animate-none" : ""}`} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">{title}</p>
+        {description && <p className="truncate text-[12px] text-text-muted">{description}</p>}
+      </div>
+      {action}
+    </div>
   );
 }
 

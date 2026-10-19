@@ -13,7 +13,7 @@ type Command = { label: string; keys?: RegisterableHotkey; also?: RegisterableHo
  */
 export const COMMANDS = {
   // Tabs — browser conventions, so the muscle memory transfers.
-  "open-launcher": { label: "New Tab", keys: "Mod+T" },
+  "open-launcher": { label: "New tab", keys: "Mod+T" },
   close: { label: "Close Tab", keys: "Mod+W" },
   "reopen-tab": { label: "Reopen Closed Tab", keys: "Mod+Shift+T" },
   // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the

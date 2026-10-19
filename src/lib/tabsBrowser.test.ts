@@ -153,12 +153,12 @@ describe("incognito tabs", () => {
 });
 
 describe("browserTitle", () => {
-  it("prefers the page title, then the host, then New Tab", () => {
+  it("prefers the page title, then the host, then New tab", () => {
     expect(browserTitle("Docs", "https://a.com/x")).toBe("Docs");
     expect(browserTitle("  ", "https://a.com:8080/x")).toBe("a.com:8080");
-    expect(browserTitle("", "")).toBe("New Tab");
-    expect(browserTitle("", "about:blank")).toBe("New Tab");
-    expect(browserTitle("", "not a url")).toBe("New Tab");
+    expect(browserTitle("", "")).toBe("New tab");
+    expect(browserTitle("", "about:blank")).toBe("New tab");
+    expect(browserTitle("", "not a url")).toBe("New tab");
   });
 
   it("is what tabTitle shows for a page", () => {

@@ -221,12 +221,6 @@
 [data-direction] .ds-access > button[data-popup-open] {
   color: var(--color-text);
 }
-[data-direction] .ds-access[data-risky] > button {
-  color: var(--color-warning);
-}
-[data-direction] .ds-access[data-risky] > button svg {
-  color: currentColor;
-}
 
 /* The one primary action. It morphs into Stop while a turn runs; the strip
    over the composer says it is working, so the button wears nothing more. */
@@ -345,39 +339,70 @@
   font-family: inherit; font-size: 10.5px; font-weight: 500; line-height: 1;
 }
 
-/* ── The activity strip ───────────────────────────────────────────────────
-   A slim tab tucked behind the composer's top edge, there only while
-   something runs or waits. Same arc as everywhere else; amber when it is
-   your turn. It slides out from under the composer when it appears. */
+/* ── The agent clip ───────────────────────────────────────────────────────
+   A slim tab tucked behind the composer's top edge, there only while the chat
+   has agents. Amber when one waits on you. A click slides the same tab's
+   panel up out of it: the panel is the tab's own child, wearing its ground,
+   and it rests behind the tab until called, its rows already laid out, so
+   what rises is the whole thing, not a window opening on it. Only transform
+   moves (compositor, never layout), fast and without bounce; folding back is
+   quicker still. */
 
 [data-direction] .ds-strip {
   position: relative;
   z-index: 0;
-  display: flex;
   height: 44px;
-  align-items: flex-start;
-  gap: 8px;
   margin: 0 18px -14px;
-  padding: 6px 8px 0 12px;
   border-radius: 14px 14px 0 0;
   background: var(--color-fill);
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 24px;
   animation: ds-strip-in 220ms var(--ease-out);
+  transition: border-radius 140ms var(--ease-out);
+  /* The panel waits inside the tab's own box: nothing of it shows below the tab, and every other side is open. */
+  clip-path: inset(-100vh -100vw 0 -100vw);
 }
-[data-direction] .ds-strip[data-state="waiting"],
-[data-direction] .ds-strip[data-state="attention"] {
-  background: color-mix(in oklab, var(--color-warning) 14%, var(--color-canvas));
-  color: color-mix(in oklab, var(--color-warning) 70%, var(--color-text));
+/* Unfolded, the tab's own corners square off where the panel joins it. */
+[data-direction] .ds-strip[data-open] {
+  border-radius: 0;
 }
 [data-direction] .ds-strip b {
   font-weight: 600;
   color: var(--color-text);
 }
-[data-direction] .ds-strip[data-state="waiting"] b,
-[data-direction] .ds-strip[data-state="attention"] b {
+[data-direction] .ds-strip-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 12px;
+  border-radius: 14px 14px 0 0;
+  /* Opaque: it is what the resting panel slides out from behind. */
+  background: var(--color-fill);
   color: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms var(--ease-out);
+}
+[data-direction] .ds-strip-head:hover {
+  background: color-mix(in oklab, var(--color-fill) 95%, var(--color-text));
+}
+[data-direction] .ds-strip-head:focus-visible {
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+[data-direction] .ds-strip[data-open] .ds-strip-head {
+  border-radius: 0;
+}
+[data-direction] .ds-strip-chevron {
+  color: var(--color-placeholder);
+  transition: transform 160ms var(--ease-out);
+}
+[data-direction] .ds-strip[data-open] .ds-strip-chevron {
+  transform: rotate(180deg);
 }
 [data-direction] .ds-strip-glyph {
   display: grid;
@@ -386,59 +411,59 @@
   flex-shrink: 0;
   place-items: center;
 }
+/* Nothing runs: only ended agents are left to look at. */
+[data-direction] .ds-strip-rest {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-placeholder);
+}
 [data-direction] .ds-strip-halo {
   width: 8px;
   height: 8px;
   border-radius: 999px;
   background: var(--color-warning);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-warning) 26%, transparent);
-}
-[data-direction] .ds-strip-action {
-  display: inline-flex;
-  height: 24px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  border-radius: 8px;
-  color: inherit;
-  font-weight: 500;
-  outline: none;
-  transition: background-color 120ms var(--ease-out);
-}
-[data-direction] .ds-strip-action:hover {
-  background: color-mix(in oklab, currentColor 10%, transparent);
-}
-[data-direction] .ds-strip-action:focus-visible {
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
-}
-[data-direction] .ds-strip kbd {
-  display: inline-grid;
-  height: 16px;
-  margin-right: 4px;
-  padding: 0 4px;
-  place-items: center;
-  border-radius: 5px;
-  background: color-mix(in oklab, var(--color-canvas) 70%, transparent);
-  font-family: inherit; font-size: 10.5px; font-weight: 500; line-height: 1;
 }
 @keyframes ds-strip-in {
   from { transform: translateY(14px); opacity: 0; }
   to { transform: none; opacity: 1; }
 }
 
-/* The strip says what the transcript's "Working for…" line said, right where
-   the eye is: with the strip on screen, that line steps aside. */
-[data-direction] [data-ds-chat]:has([data-ds-strip]) div:has(> div.min-h-6 > span.crew-node:first-child + span.tabular-nums:last-child) {
-  display: none;
+/* The panel sits on the tab's top edge (a pixel under it, so no seam shows).
+   Resting, it is pushed down behind the tab, hidden and inert; open, it is
+   where it sits. */
+[data-direction] .ds-strip-panel {
+  position: absolute;
+  z-index: 0;
+  inset-inline: 0;
+  bottom: calc(100% - 1px);
+  max-height: min(50vh, 380px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 6px 4px;
+  border-radius: 14px 14px 0 0;
+  background: var(--color-fill);
+  color: var(--color-text);
+  transform: translateY(calc(100% + 1px));
+  visibility: hidden;
+  will-change: transform;
+  transition:
+    transform 140ms cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 140ms;
 }
-
-/* "Show me": the card that waits gets a brief ring, answering the click. */
-[data-direction] [data-ds-flash] {
-  animation: ds-flash 1.1s var(--ease-out);
+[data-direction] .ds-strip-panel[data-open] {
+  transform: none;
+  visibility: visible;
+  transition: transform 200ms var(--ease-out);
 }
-@keyframes ds-flash {
-  0%, 35% { box-shadow: 0 0 0 1px var(--color-hairline), 0 0 0 5px color-mix(in oklab, var(--color-warning) 35%, transparent); }
-  100% { box-shadow: 0 0 0 1px var(--color-hairline), 0 0 0 0 transparent; }
+/* The rows' tiles were drawn for the surface; on the tab's ground they lift off it the same way. */
+[data-direction] .ds-strip-panel [data-entry] > span:first-child,
+[data-direction] .ds-strip-panel [data-conversation] > span:first-child {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-hairline);
+}
+[data-direction] .ds-strip-panel [data-entry] > span:first-child > span:last-child {
+  background: var(--color-fill);
 }
 
 /* ── Empty states: a new session, Home ──────────────────────────────────── */
@@ -465,6 +490,23 @@
 [data-direction] .ds-fact > span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A fact that can be changed: it answers the pointer like any chip, and says it opens a list. */
+[data-direction] .ds-fact-button {
+  outline: none;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+[data-direction] .ds-fact-button:hover,
+[data-direction] .ds-fact-button[data-popup-open] {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+[data-direction] .ds-fact-button:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+[data-direction] .ds-fact > svg:last-child:not(:first-child) {
+  width: 12px;
+  height: 12px;
 }
 [data-direction] .ds-fact[data-tone="warning"] {
   background: color-mix(in oklab, var(--color-warning) 13%, transparent);
@@ -556,9 +598,13 @@
 @media (prefers-reduced-motion: reduce) {
   [data-direction] .ds-strip,
   [data-direction] .ds-send[data-swapped] > svg,
-  [data-direction] .ds-rise,
-  [data-direction] [data-ds-flash] {
+  [data-direction] .ds-rise {
     animation: none;
+  }
+  [data-direction] .ds-strip,
+  [data-direction] .ds-strip-chevron,
+  [data-direction] .ds-strip-panel {
+    transition: none;
   }
 }
 

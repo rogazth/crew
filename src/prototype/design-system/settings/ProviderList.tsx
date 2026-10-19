@@ -41,7 +41,7 @@ import {
   type ProviderMock,
   type Status,
 } from "./mock";
-import { Chip, CopyButton, Heading, ProgressBar, toast, type Tone } from "./ui";
+import { Callout, Chip, CopyButton, Heading, ProgressBar, toast, type Tone } from "./ui";
 
 const STATUS: Record<Status, { tone: Tone; label: string }> = {
   ok: { tone: "success", label: "Up to date" },
@@ -162,35 +162,33 @@ function EnvPicker({ env, envs, all }: { env: EnvMock; envs: EnvMock[]; all: Rec
 function Unreachable({ env }: { env: EnvMock }) {
   const mismatch = env.state === "error";
   const busy = env.busy !== null || env.state === "connecting";
-  return (
-    <div className={`flex items-center gap-3 rounded-xl px-3.5 py-3 ${mismatch ? "bg-danger/8" : "bg-card"}`}>
-      {busy ? (
-        <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-icon motion-reduce:animate-none" />
-      ) : mismatch ? (
-        <CircleAlertIcon className="size-4 shrink-0 text-danger" />
-      ) : (
-        <WifiOffIcon className="size-4 shrink-0 text-icon" />
-      )}
-      <div className="min-w-0 flex-1 truncate">
-        <p className="truncate">
-          {busy
-            ? `${env.busy ?? "Connecting"} on ${env.name}…`
-            : mismatch
-              ? `crewd ${env.crewd} is outdated`
-              : `Offline · last seen ${env.lastSeen}`}
-        </p>
-      </div>
-      {!busy &&
-        (mismatch ? (
-          <Button variant="primary" icon={ArrowDownToLineIcon} onClick={() => updateCrewd(env.id)}>
+  if (busy) return <Callout tone="neutral" icon={LoaderCircleIcon} spinning title={`${env.busy ?? "Connecting"} on ${env.name}…`} />;
+  if (mismatch)
+    return (
+      <Callout
+        tone="accent"
+        icon={ArrowDownToLineIcon}
+        title="Update available for crewd"
+        description={`${env.name} runs ${env.crewd}; update it to keep working there.`}
+        action={
+          <Button variant="primary" onClick={() => updateCrewd(env.id)}>
             Update
           </Button>
-        ) : (
-          <Button icon={RefreshCwIcon} onClick={() => reconnectEnv(env.id)}>
-            Retry
-          </Button>
-        ))}
-    </div>
+        }
+      />
+    );
+  return (
+    <Callout
+      tone="neutral"
+      icon={WifiOffIcon}
+      title={`${env.name} is offline`}
+      description={`Last seen ${env.lastSeen}`}
+      action={
+        <Button icon={RefreshCwIcon} onClick={() => reconnectEnv(env.id)}>
+          Retry
+        </Button>
+      }
+    />
   );
 }
 

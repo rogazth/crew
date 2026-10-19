@@ -447,6 +447,7 @@ export function TerminalView({
           hasSelection: termRef.current?.hasSelection() ?? false,
         });
       }}
+      data-file-drop={over || undefined}
       className={`crew-terminal relative h-full min-h-0 w-full min-w-0 bg-canvas p-3 ${
         over ? "ring-2 ring-accent ring-inset" : ""
       }`}

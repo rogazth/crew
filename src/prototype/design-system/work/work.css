@@ -92,8 +92,10 @@
 
 /* ── Agent cards in the chat ──────────────────────────────────────────────
    The card hanging under "Started a subagent" is a soft filled surface, its
-   rows concentric inside it, and an elbow runs from the row's node into it:
-   who was delegated what reads as a hierarchy, not a list of boxes. */
+   rows running edge to edge with a hairline between them, and an elbow runs
+   from the row's node into it: who was delegated what reads as a hierarchy,
+   not a list of boxes. A row's hover fills the card to its edge, so there is
+   never a second box inside the first. */
 
 [data-direction] [data-hang] {
   --tw-ring-shadow: 0 0 #0000;
@@ -105,13 +107,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 3px;
   overflow: visible;
-}
-/* The divider between several rows gives way to the gap. */
-[data-direction] [data-hang]:has([data-agent-card]) > * {
-  border-color: transparent;
 }
 [data-direction] [data-hang]:has([data-agent-card])::before {
   content: "";
@@ -132,11 +128,22 @@
   min-height: 46px;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 6px 7px;
-  border-radius: 11px;
+  padding: 8px 12px 8px 10px;
+  border-radius: 0;
   text-align: left;
   outline: none;
   transition: background-color 120ms var(--ease-out);
+}
+[data-direction] .ds-agent:first-child {
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+}
+[data-direction] .ds-agent:last-child {
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
+[data-direction] .ds-agent + .ds-agent {
+  box-shadow: inset 0 1px 0 var(--color-hairline);
 }
 [data-direction] button.ds-agent:hover {
   background: var(--color-hover);
@@ -224,11 +231,12 @@
   opacity: 1;
 }
 
-/* ── The Work sheet over the composer ─────────────────────────────────────
-   Floating, so it is a shadow and no line; rows concentric in it; a child
+/* ── The Work sheet ────────────────────────────────────────────────────────
+   Under the agent clip it is the clip's own panel (chat.css); elsewhere it
+   floats over the composer, so it is a shadow and no line; rows concentric in it; a child
    that waits on you trades its turning arc for the amber dot. */
 
-[data-direction] [data-work-sheet] {
+[data-direction] [data-work-sheet]:not(.ds-strip-panel) {
   --tw-ring-shadow: 0 0 #0000;
   border-radius: 18px;
   padding: 6px;

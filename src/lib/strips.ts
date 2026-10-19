@@ -63,7 +63,8 @@ export function splitStrip(
 export function tabPlace(tab: Tab, workspace: Workspace, worktrees: Worktree[], sessions: Session[]): string | null {
   if (tab.kind === "session") {
     const session = sessions.find((s) => s.id === tab.sessionId);
-    return session ? sessionPath(session, workspace, worktrees) : null;
+    // A bot belongs to the workspace, not to a worktree: its tab joins no group.
+    return session && session.kind !== "bot" ? sessionPath(session, workspace, worktrees) : null;
   }
   if (tab.kind === "stub") return tab.worktree !== undefined ? placePath(tab.worktree, workspace, worktrees) : null;
   if (tab.kind === "process") return placePath(tab.worktree, workspace, worktrees);

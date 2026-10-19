@@ -25,6 +25,35 @@ describe("groupRows", () => {
     expect((rows[1] as { blocks: Block[] }).blocks).toHaveLength(3);
   });
 
+  it("draws a native subagent's report where it landed, not under the call that started it", () => {
+    const subagent = (call: string, at: number, report: string, ended: number) =>
+      block("tool", "Started a subagent", {
+        at,
+        tool: {
+          callId: call,
+          name: "Task",
+          title: report,
+          status: "completed",
+          detail: {
+            kind: "agent",
+            description: report,
+            output: report,
+            steps: [{ id: `${call}-step`, role: "assistant", text: report, at: ended }],
+          },
+        },
+      });
+    const rows = groupRows([
+      subagent("a", 1000, "alpha", 1500),
+      subagent("b", 1010, "beta", 1600),
+      subagent("c", 1020, "gamma", 1700),
+      block("assistant", "all three are back", { at: 2000 }),
+    ]);
+    const order = rows.map((row) =>
+      row.kind === "report" ? `report:${row.block.tool?.callId}` : row.kind === "subagent" ? `start:${row.block.tool?.callId}` : row.kind,
+    );
+    expect(order).toEqual(["start:a", "start:b", "start:c", "report:a", "report:b", "report:c", "message"]);
+  });
+
   it("starts a new group after the agent speaks", () => {
     const rows = groupRows([
       block("tool", "npm test"),

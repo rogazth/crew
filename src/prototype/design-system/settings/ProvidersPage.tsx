@@ -71,15 +71,15 @@ function DefaultAgent({ providers }: { providers: ProviderMock[] }) {
               onClick={() => pick(p)}
               className={`group flex flex-col gap-2.5 rounded-xl p-3 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
                 on
-                  ? "bg-accent/10 shadow-[inset_0_0_0_1.5px_color-mix(in_oklab,var(--color-accent)_55%,transparent)]"
-                  : "bg-card hover:bg-hover"
+                  ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+                  : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
               }`}
             >
               <span className="flex items-center justify-between">
                 <ProviderIcon provider={p.id} className="size-5" />
                 <span
                   className={`grid size-4 place-items-center rounded-full transition-colors ${
-                    on ? "bg-accent text-inverse" : "ring-1 ring-border-strong"
+                    on ? "bg-text text-inverse" : "ring-1 ring-border-strong"
                   }`}
                 >
                   {on && <CheckIcon className="size-2.5" strokeWidth={3} />}
@@ -189,15 +189,15 @@ function Permissions({ providers }: { providers: ProviderMock[] }) {
                     onClick={() => update({ ...preferred, access: a.id })}
                     className={`group flex flex-col gap-2.5 rounded-xl p-3 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 disabled:cursor-default ${
                       on
-                        ? "bg-accent/10 shadow-[inset_0_0_0_1.5px_color-mix(in_oklab,var(--color-accent)_55%,transparent)]"
+                        ? "bg-surface shadow-[inset_0_0_0_1.5px_var(--color-text)]"
                         : "bg-surface shadow-[0_0_0_1px_var(--color-hairline)] enabled:hover:bg-hover"
                     }`}
                   >
                     <span className="flex items-center justify-between">
-                      <Icon className={`size-4 ${on ? "text-accent" : off ? "text-placeholder" : "text-icon"}`} />
+                      <Icon className={`size-4 ${on ? "text-text" : off ? "text-placeholder" : "text-icon"}`} />
                       <span
                         className={`grid size-4 place-items-center rounded-full transition-colors ${
-                          on ? "bg-accent text-inverse" : "ring-1 ring-border-strong group-disabled:opacity-0"
+                          on ? "bg-text text-inverse" : "ring-1 ring-border-strong group-disabled:opacity-0"
                         }`}
                       >
                         {on && <CheckIcon className="size-2.5" strokeWidth={3} />}

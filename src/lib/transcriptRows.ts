@@ -8,7 +8,7 @@
  */
 import { type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, isSteering, letterIdOf } from "./letters";
-import { controlOf, isReportLetter, startedOf, startNoteTarget } from "./orchestration";
+import { controlOf, isReportLetter, nativeReportAt, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
 
 /** A gap this long between messages gets a date line, like a chat app. */
@@ -201,7 +201,39 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
   }
   flush();
   flushQueued();
-  return rows;
+  return withNativeReports(rows, blocks);
+}
+
+/** The last moment a row covers, so a report can be placed after what came before it. */
+function rowEndAt(row: Row): number | undefined {
+  if (row.kind === "activity" || row.kind === "queued") return row.blocks.at(-1)?.at;
+  if (row.kind === "footer" || row.kind === "date") return row.at;
+  if (row.kind === "fold") return row.rows.length > 0 ? rowEndAt(row.rows[row.rows.length - 1]!) : undefined;
+  return row.block.at;
+}
+
+/**
+ * A native subagent's report is drawn where it landed, not under the card of
+ * the call that started it: three agents asked together answer later, each when
+ * it is done, and a report pinned to its start would read out of order.
+ */
+function withNativeReports(rows: Row[], blocks: readonly Block[]): Row[] {
+  const reports = blocks
+    .map((block) => ({ block, at: nativeReportAt(block) }))
+    .filter((entry): entry is { block: Block; at: number } => entry.at !== undefined)
+    .sort((a, b) => a.at - b.at);
+  if (reports.length === 0) return rows;
+  const out = rows.slice();
+  for (const { block, at } of reports) {
+    // The start row stays as it is; a suffixed id keeps both rows apart.
+    const report: Row = { kind: "report", block: { ...block, id: `${block.id}:report` } };
+    const found = out.findIndex((row) => {
+      const end = rowEndAt(row);
+      return end !== undefined && end > at;
+    });
+    out.splice(found < 0 ? out.length : found, 0, report);
+  }
+  return out;
 }
 
 /** The queue at the foot, apart: it goes under the working line, not into a turn. */

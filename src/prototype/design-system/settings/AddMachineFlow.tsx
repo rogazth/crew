@@ -333,11 +333,11 @@ function ConnectStep({
               onClick={() => onVia(v.id)}
               className={`flex flex-col gap-2 rounded-xl p-3 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
                 on
-                  ? "bg-accent/10 shadow-[inset_0_0_0_1.5px_color-mix(in_oklab,var(--color-accent)_55%,transparent)]"
-                  : "bg-card hover:bg-hover"
+                  ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+                  : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
               }`}
             >
-              <v.icon className={`size-4 ${on ? "text-accent" : "text-icon"}`} />
+              <v.icon className={`size-4 ${on ? "text-text" : "text-icon"}`} />
               <span className="flex min-w-0 flex-col">
                 <span className="font-medium">{v.label}</span>
                 <span className="truncate text-[12px] text-text-muted">{v.line}</span>

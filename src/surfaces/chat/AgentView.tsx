@@ -11,8 +11,6 @@ import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
 import { Transcript } from './Transcript';
 
-const HEAD_FADE = '[mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]';
-
 /** One level of the way down to the open thread: a session that holds the level below it. */
 export type Crumb = {
   id: string;
@@ -150,7 +148,7 @@ export function AgentView({
       // Only the innermost thread answers.
       if (open.at(-1) !== token.current) return;
       // Esc that something in the page already used (a picker, a card) is not a way out; the work sheet takes it first.
-      if (event.key === 'Escape' && !event.defaultPrevented && !root.current?.querySelector('[data-work-sheet]')) onClose();
+      if (event.key === 'Escape' && !event.defaultPrevented && !root.current?.querySelector('[data-work-sheet][data-open]')) onClose();
       const target = event.target as HTMLElement;
       if (
         event.key === 'x' &&
@@ -240,7 +238,7 @@ export function AgentView({
       </header>
       <div className="relative z-0 flex min-h-0 flex-1 flex-col pt-14">
         {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
-        <div className={`relative flex min-h-0 flex-1 flex-col ${HEAD_FADE}`}>{body}</div>
+        <div className="relative flex min-h-0 flex-1 flex-col">{body}</div>
       </div>
       {footer}
     </div>

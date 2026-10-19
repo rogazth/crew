@@ -425,7 +425,7 @@ export function browserTitle(title: string, url: string): string {
   } catch {
     // Not a URL yet: a blank tab.
   }
-  return "New Tab";
+  return "New tab";
 }
 
 /** Every workspace whose tabs this window has restored, not just the one on screen. */

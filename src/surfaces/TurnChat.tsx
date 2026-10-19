@@ -19,7 +19,7 @@ import { markedCalls, turnTray } from "../lib/background";
 import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
-import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
+import { clearFirstPrompt, peekFirstFiles, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -76,6 +76,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   // turn that is running, the user's messages for the next turn above the composer.
   const pending = usePending(session.id, true);
   const blocks = useMemo(() => [...held, ...queuedLetters(transcriptPending(pending), held)], [held, pending]);
+  // A session with history draws nothing until it is read: drawn early, its empty chat (the intro, the
+  // composer centred) would show for a beat and then jump away as the transcript lands.
+  const settling = !ready && held.length === 0 && (!!session.providerSessionId || (session.cursor ?? 0) > 0);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
   const whileWorking = whileWorkingOf(session.kind, session.provider);
   const panel = useBackgroundPanel(session, sessions, processes);
@@ -161,8 +164,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   useEffect(() => {
     const prompt = peekFirstPrompt(session.id);
     if (!prompt) return;
+    const files = peekFirstFiles(session.id);
     clearFirstPrompt(session.id);
-    void send(session, cwd, prompt);
+    void send(session, cwd, prompt, files);
   }, [cwd, session]);
 
   const addPaths = useCallback((paths: string[]) => {
@@ -380,6 +384,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   return (
     <div
       ref={bindPane}
+      data-file-drop={over || undefined}
       className={`relative flex flex-col bg-canvas ${embedded ? "min-h-0 flex-1" : "h-full"}`}
     >
       <PaneContext value={host}>
@@ -388,7 +393,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
           <BackgroundContext value={backgroundScope}>
             <WorkContext value={panel.all}>
             {/* Under a thread the chat stays mounted, hidden and inert: its scroll, draft and open sheet come back as they were. */}
-            <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen ? "invisible" : ""}`}>
+            <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen || settling ? "invisible" : ""}`}>
             <DefaultChatSurface
               session={session}
               blocks={blocks}

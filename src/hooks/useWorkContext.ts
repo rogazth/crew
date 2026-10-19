@@ -59,9 +59,10 @@ export function useWorkContext(
     [listed, workspace?.id],
   );
 
-  // All together, the tab on screen names the worktree; a file or page tab leaves the chosen one.
+  // All together, the tab on screen names the worktree; a file or page tab leaves the chosen one, and
+  // so does a bot's: it belongs to the workspace, so talking to it keeps you where you stand.
   const onScreen = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
-  const tabTree = scope === "all" && onScreen ? sessions.find((s) => s.id === onScreen) : undefined;
+  const tabTree = scope === "all" && onScreen ? sessions.find((s) => s.id === onScreen && s.kind !== "bot") : undefined;
   const tabPath = tabTree ? pathOf(tabTree) : null;
   const current = worktrees.list.find((tree) => tree.path === tabPath) ?? chosen;
 
@@ -77,7 +78,10 @@ export function useWorkContext(
   );
 
   /** The same for the worktree `session` runs in. */
-  const route = useCallback((session: Session) => routeTo(pathOf(session)), [pathOf, routeTo]);
+  const route = useCallback(
+    (session: Session) => (scope === "all" && session.kind === "bot" ? null : routeTo(pathOf(session))),
+    [pathOf, routeTo, scope],
+  );
 
   /**
    * All together, going to a worktree brings up the tab last used there, or

@@ -39,10 +39,10 @@ const devbox = { name: "api", machine: "devbox" };
 
 const RAW: Omit<ReviewState, "id">[] = [
   // ── Workspaces ─────────────────────────────────────────────
-  { group: "Workspaces", label: "Busy workspace", hint: "crew › main: bots as faces in every status, sessions below, a running command", target: { kind: "workspace", ws: crew, tree: "main" } },
-  { group: "Workspaces", label: "Worktree with work in it", hint: "crew › feat/tab-indicators: its own bots, its own tab strip, +/− on the line", target: { kind: "workspace", ws: crew, tree: "feat/tab-indicators" } },
+  { group: "Workspaces", label: "Busy workspace", hint: "crew › main: the workspace's bots on top in every status, main's sessions below, a running command", target: { kind: "workspace", ws: crew, tree: "main" } },
+  { group: "Workspaces", label: "Worktree with work in it", hint: "crew › feat/tab-indicators: its sessions, its own tab strip, +/− on the line; the bots stay on top", target: { kind: "workspace", ws: crew, tree: "feat/tab-indicators" } },
   { group: "Workspaces", label: "Empty worktree", hint: "crew › exp/voxel-avatars-…: nobody in it, a long branch name", target: { kind: "workspace", ws: crew, tree: "exp/voxel-avatars-without-background-and-rounded-corners" } },
-  { group: "Workspaces", label: "Many bots", hint: "orca: the face grid wraps, folded worktrees stack their faces", target: { kind: "workspace", ws: orca, tree: "main" } },
+  { group: "Workspaces", label: "Many bots", hint: "orca: the bot grid wraps, folded worktrees stack the faces of the bots running work there", target: { kind: "workspace", ws: orca, tree: "main" } },
   { group: "Workspaces", label: "Sessions at volume", hint: "spendo: sessions of the user's, subagents, letters between sessions", target: { kind: "workspace", ws: spendo, tree: "main" } },
   { group: "Workspaces", label: "One bot, nothing else", hint: "landing", target: { kind: "workspace", ws: { name: "landing" } } },
   { group: "Workspaces", label: "Empty folder, no git", hint: "notes: no worktrees, no bots, no sessions", target: { kind: "workspace", ws: { name: "notes" } } },

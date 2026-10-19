@@ -1,34 +1,21 @@
 // PROTOTYPE — throwaway. A new session's first screen and Home, as one
-// family: who it is and where it runs above the composer, ways in below it.
+// family: who it is above the composer, ways in below it.
 import "./chat.css";
 import {
   BookOpenIcon,
   FlaskConicalIcon,
-  FolderGit2Icon,
-  FolderIcon,
+  GitBranchIcon,
   GitCommitHorizontalIcon,
   GitPullRequestIcon,
-  ListTodoIcon,
-  LockIcon,
-  LockOpenIcon,
   MonitorIcon,
-  PencilIcon,
-  PlugIcon,
-  SparklesIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { BotAvatar } from "../../../chrome/BotAvatar";
-import { ProviderIcon } from "../../../chrome/ProviderIcon";
-import { sortedServers, useMcp } from "../../../lib/mcp";
-import { ACCESSES, EFFORT_LABELS, providerLine, type Access, type Effort } from "../../../lib/providers";
+import { CrewGlyph } from "../../../chrome/CrewGlyph";
 import type { Session } from "../../../lib/types";
+import { usePanePlace, WorktreeFact } from "../sidebar/PaneWorktree";
 import { branchOf, useWhere, type Where } from "./where";
-
-const ACCESS_ICONS: Record<Access, Icon> = { ask: LockIcon, edits: PencilIcon, auto: SparklesIcon, full: LockOpenIcon };
-
-/** PROTOTYPE mock: what a fresh session's CLI would load, before it has started and reported its own. */
-const MOCK_MCP = ["github", "linear", "playwright"];
 
 /** A fact about where or how something runs: a filled pill, never an outline. */
 export function Fact({ icon: Glyph, children, title, tone }: { icon: Icon; children: ReactNode; title?: string | undefined; tone?: "warning" }) {
@@ -67,55 +54,64 @@ export function KeyHints({ keys }: { keys: [string, string][] }) {
   );
 }
 
-/** Who it is, what runs it, where and with what it may act. */
-export function IntroHead({ session }: { session: Session }) {
-  const where = useWhere(session);
-  const mcp = useMcp(session.id);
-  const servers = sortedServers(mcp);
-  const reported = mcp?.reported && servers.length > 0;
-  const mcpCount = reported ? servers.length : MOCK_MCP.length;
-  const access = ACCESSES.find((item) => item.id === session.autonomy);
-  const effort = session.effort ? EFFORT_LABELS[session.effort as Effort] : undefined;
-  const branch = branchOf(where);
-  const place = [where.workspace, branch ?? (where.workspace ? undefined : where.folder)].filter(Boolean).join(" · ");
+/**
+ * The first screen's head, one skeleton for Home and every session: a mark, a
+ * title, a line, and the facts about where it runs. The provider and the model
+ * are the composer's to show, right under it.
+ */
+export function EmptyHead({
+  mark,
+  title,
+  line,
+  facts,
+}: {
+  mark: ReactNode;
+  title: string;
+  line?: string | undefined;
+  facts?: ReactNode;
+}) {
   return (
     <div className="mx-auto flex w-full max-w-[840px] flex-col items-center gap-4 px-6 pb-5 text-center">
-      {session.kind === "bot" ? (
-        <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />
-      ) : (
-        <span className="grid size-14 place-items-center rounded-[18px] bg-surface shadow-float">
-          <ProviderIcon provider={session.provider} className="size-7" />
-        </span>
-      )}
+      {mark}
       <div className="flex flex-col items-center gap-1">
-        <h2 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{session.name || "New session"}</h2>
-        <p className="flex items-center gap-1.5 text-[13px] text-text-muted">
-          <ProviderIcon provider={session.provider} className="size-3.5" />
-          {providerLine(session.provider, session.model)}
-          {effort && <span className="text-placeholder">· {effort} effort</span>}
-        </p>
-        {session.description && <p className="mt-1 max-w-md text-[13px] leading-5 text-text-muted">{session.description}</p>}
+        <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
+        {line && <p className="max-w-lg text-[13px] leading-5 text-balance text-text-muted">{line}</p>}
       </div>
-      <div className="flex max-w-[640px] flex-wrap justify-center gap-1.5">
-        {place && (
-          <Fact icon={branch ? FolderGit2Icon : FolderIcon} title={where.tree?.path ?? where.folder}>
-            {place}
-          </Fact>
-        )}
-        <Fact icon={MonitorIcon}>{where.machine}</Fact>
-        {access && (
-          <Fact icon={ACCESS_ICONS[access.id]} title={access.description} {...(access.id === "full" ? { tone: "warning" as const } : {})}>
-            {access.label}
-          </Fact>
-        )}
-        <Fact
-          icon={PlugIcon}
-          title={reported ? servers.map((server) => server.name).join(", ") : `Mocked: ${MOCK_MCP.join(", ")}`}
-        >
-          {mcpCount} MCP {mcpCount === 1 ? "server" : "servers"}
-        </Fact>
-      </div>
+      {facts && <div className="flex flex-wrap justify-center gap-1.5">{facts}</div>}
     </div>
+  );
+}
+
+/** A session's head: a bot is its face and name, any other session is the app's own question about its folder. */
+export function IntroHead({ session }: { session: Session }) {
+  const where = useWhere(session);
+  const pane = usePanePlace(session.id);
+  if (session.kind === "bot") {
+    return (
+      <EmptyHead
+        mark={<BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />}
+        title={session.name || "New session"}
+        line={session.description}
+      />
+    );
+  }
+  const branch = branchOf(where);
+  return (
+    <EmptyHead
+      mark={<CrewGlyph className="size-14" />}
+      title="What are we working on?"
+      facts={
+        <>
+          {/* A session nobody has written to can still start in another worktree: its badge is the way to. */}
+          {pane ? (
+            <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
+          ) : (
+            branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
+          )}
+          <Fact icon={MonitorIcon}>{where.machine}</Fact>
+        </>
+      }
+    />
   );
 }
 
@@ -150,34 +146,35 @@ function startersFor(where: Where): Starter[] {
       hint: "Layout and where to start",
       text: "Explain this codebase: what it does, how it's laid out, and where I should start reading.",
     },
-    {
-      icon: ListTodoIcon,
-      title: "Find work worth doing",
-      hint: "TODOs, FIXMEs and rough edges, ranked",
-      text: "Find the TODOs, FIXMEs and rough edges in this repo and rank the ones worth doing first.",
-    },
   ];
+}
+
+/** The keys both first screens teach. */
+const INTRO_KEYS: [string, string][] = [
+  ["↵", "send"],
+  ["⇧↵", "new line"],
+  ["@", "mention a file"],
+  ["/", "run a command"],
+];
+
+/** Under the composer, on every first screen: three ways in, then the keys. Only the ways differ. */
+export function IntroWaysFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="mx-auto flex w-full max-w-[840px] flex-col gap-6 px-6 pt-2 pb-8">
+      <div className="grid grid-cols-3 gap-2 px-1">{children}</div>
+      <KeyHints keys={INTRO_KEYS} />
+    </div>
+  );
 }
 
 /** Ways in under the composer: starters and the keys. */
 export function IntroWays({ session, onPick }: { session: Session; onPick: (text: string) => void }) {
   const where = useWhere(session);
   return (
-    <div className="mx-auto flex w-full max-w-[840px] flex-col gap-6 px-6 pt-2 pb-8">
-      <div className="grid grid-cols-2 gap-2 px-1">
-        {startersFor(where).map((starter) => (
-          <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
-        ))}
-      </div>
-      <KeyHints
-        keys={[
-          ["↵", "send"],
-          ["⇧↵", "new line"],
-          ["@", "mention a file"],
-          ["/", "run a command"],
-          ["⇧⇥", "change access"],
-        ]}
-      />
-    </div>
+    <IntroWaysFrame>
+      {startersFor(where).map((starter) => (
+        <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
+      ))}
+    </IntroWaysFrame>
   );
 }

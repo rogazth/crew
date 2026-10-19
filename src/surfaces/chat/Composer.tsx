@@ -19,8 +19,8 @@ import type { Opener } from "../../chrome/ModelPicker";
 import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
 import { composerHints } from "../../lib/composerHints";
-import { accessesOf, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
-import { nextAccess } from "../../lib/sessionOptions";
+import { accessesOf, effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
+import { nextAccess, nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
   folderChoices,
@@ -60,14 +60,12 @@ import { SlashPicker } from "./SlashPicker";
 import { useRedesign } from "../../prototype/design-system/direction";
 import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
 import {
-  ActivityStrip,
+  AgentClip,
   AttachMenu,
   ContextRing,
   SendButton,
   SessionContextRow,
   WorktreeSegment,
-  jumpToCard,
-  type TurnActivity,
 } from "../../prototype/design-system/chat/ComposerParts";
 
 /**
@@ -146,8 +144,6 @@ type Props = {
   switchProvider?: boolean;
   /** In a thread: Esc goes back one level and never stops the turn; the Stop button does. */
   escBack?: boolean;
-  /** PROTOTYPE: the turn in progress, for the redesign's activity strip. Unused by the shipped composer. */
-  activity?: TurnActivity;
 };
 
 /** What the session's row says it runs, as the chips show it. */
@@ -189,7 +185,6 @@ export function Composer({
   optionsPending = false,
   switchProvider = false,
   escBack = false,
-  activity,
 }: Props) {
   const redesign = useRedesign();
   const field = useRef<HTMLTextAreaElement>(null);
@@ -365,7 +360,7 @@ export function Composer({
           return;
         }
       }
-      // Tab indents a list item; ⇧Tab outdents one that is indented, and otherwise steps the access modes below.
+      // Tab indents a list item; ⇧Tab outdents one that is indented, and otherwise steps the modes below.
       if (event.key === "Tab" && (event.shiftKey ? onIndentedListLine(value, selectionStart) : onListLine(value, selectionStart))) {
         const edit = indentList(value, selectionStart, selectionEnd, event.shiftKey ? -1 : 1);
         if (edit) {
@@ -376,9 +371,16 @@ export function Composer({
       }
     }
     // ⇧Tab steps through the access modes, the way it does in Claude's own terminal.
+    // PROTOTYPE: the redesign steps the effort levels instead; access stays a deliberate pick.
     if (event.key === "Tab" && event.shiftKey && onOptions) {
-      const next = nextAccess(session.autonomy, accessesOf(session.provider));
       event.preventDefault();
+      if (redesign) {
+        const fitted = fitChoice(choiceOf(session));
+        const next = nextEffort(fitted.effort, effortsOf(fitted.provider, fitted.model));
+        if (next) onOptions(fitChoice({ ...fitted, effort: next }));
+        return;
+      }
+      const next = nextAccess(session.autonomy, accessesOf(session.provider));
       if (next) onOptions({ ...choiceOf(session), access: next });
       return;
     }
@@ -426,21 +428,22 @@ export function Composer({
             ? "Queue a message for the next turn…"
             : `${session.name} is working…`
         : centered
-          ? `Ask ${session.name} anything…`
+          ? "Ask anything…"
           : `Message ${session.name}…`;
     return (
       <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
-        <ActivityStrip
-          name={session.name}
-          working={working}
-          waiting={waiting}
-          activity={activity}
-          work={work}
-          escBack={escBack}
-          onStop={onStop}
-          onJump={() => jumpToCard(field.current)}
-          onShowWork={() => openWork(true)}
-        />
+        <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
+          {work && (
+            <WorkSegment
+              work={work}
+              open={sheet === "work"}
+              onOpenChange={openWork}
+              onEscape={focusField}
+              // The clip over the composer opens it, and it unfolds from the clip itself.
+              hideTrigger
+            />
+          )}
+        </AgentClip>
         <form onSubmit={submit} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
           {mention && (
             <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
@@ -504,13 +507,12 @@ export function Composer({
             </div>
             <div className="flex shrink-0 items-center gap-1">
               {onOptions && (
-                <div className="ds-access" {...(session.autonomy === "full" ? { "data-risky": "" } : {})}>
+                <div className="ds-access">
                   <AccessPicker
                     ref={access}
                     provider={session.provider}
                     value={session.autonomy as Access}
                     onChange={(next) => onOptions({ ...choiceOf(session), access: next })}
-                    hint="⇧Tab in the message box cycles them."
                   />
                 </div>
               )}
@@ -530,7 +532,6 @@ export function Composer({
           {!centered && <WorktreeSegment session={session} />}
           {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
           {session.paused && <PausedSegment />}
-          {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
           <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
           <span className="flex-1" />
           {optionsPending ? (
@@ -539,18 +540,14 @@ export function Composer({
             </span>
           ) : (
             !centered && (
-              // Only while a turn runs, as the shipped composer: then the keys do
-              // something other than they seem to. The strip over the composer
-              // already says how to stop, so esc shows only when it goes back.
+              // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
               <span className="ds-hints" data-shown>
-                {hints
-                  .filter(({ key, does }) => key !== "esc" || does === "back")
-                  .map(({ key, does }) => (
-                    <span key={key}>
-                      <kbd>{key}</kbd>
-                      {does}
-                    </span>
-                  ))}
+                {hints.map(({ key, does }) => (
+                  <span key={key}>
+                    <kbd>{key}</kbd>
+                    {does}
+                  </span>
+                ))}
               </span>
             )
           )}

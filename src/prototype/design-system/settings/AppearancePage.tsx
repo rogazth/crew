@@ -141,8 +141,8 @@ function PickCard({ on, onClick, label, children }: { on: boolean; onClick: () =
       onClick={onClick}
       className={`flex flex-col gap-2 rounded-[14px] p-1.5 pb-2 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
         on
-          ? "bg-accent/10 shadow-[inset_0_0_0_1.5px_color-mix(in_oklab,var(--color-accent)_55%,transparent)]"
-          : "bg-card hover:bg-hover"
+          ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+          : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
       }`}
     >
       {children}
@@ -158,7 +158,7 @@ function Radio({ on }: { on: boolean }) {
   return (
     <span
       className={`grid size-4 shrink-0 place-items-center rounded-full transition-colors ${
-        on ? "bg-accent text-inverse" : "ring-1 ring-border-strong"
+        on ? "bg-text text-inverse" : "ring-1 ring-border-strong"
       }`}
     >
       {on && <CheckIcon className="size-2.5" strokeWidth={3} />}
@@ -191,8 +191,8 @@ function StylePicker() {
               onClick={() => applyDirection(s.id)}
               className={`flex items-center gap-3 rounded-[14px] p-2.5 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
                 on
-                  ? "bg-accent/10 shadow-[inset_0_0_0_1.5px_color-mix(in_oklab,var(--color-accent)_55%,transparent)]"
-                  : "bg-card hover:bg-hover"
+                  ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+                  : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
               }`}
             >
               <Swatch light={s.light} dark={s.dark} />

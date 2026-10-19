@@ -11,7 +11,6 @@ import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
-import { useTabScope } from "../hooks/useTabScope";
 import { BOT_AVATARS } from "../lib/botAvatar";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
@@ -23,7 +22,6 @@ import { cliHost } from "../lib/host";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
-import type { TabScope } from "../lib/worktrees";
 import { EnvironmentSettings } from "./EnvironmentSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { SessionSettings } from "./SessionSettings";
@@ -34,11 +32,6 @@ import { useRedesign } from "../prototype/design-system/direction";
 const RedesignedSettingsPage = lazy(() =>
   import("../prototype/design-system/settings/SettingsPages").then((m) => ({ default: m.RedesignedSettingsPage })),
 );
-
-const TAB_SCOPES: Option<TabScope>[] = [
-  { value: "worktree", label: "Per worktree" },
-  { value: "all", label: "All together" },
-];
 
 type Props = {
   section: SettingsSectionId;
@@ -101,17 +94,8 @@ function ClassicSettingsView({ section, workspaces, onConfirm, onOpenTerminal }:
 }
 
 function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
-  const tabs = useTabScope();
   return (
     <>
-      <SettingsSection title="Worktrees">
-        <SettingsRow
-          label="Tabs"
-          description="Tabs per worktree, or one strip for all, marked by branch."
-        >
-          <Select label="Tabs" className="w-40" value={tabs.scope} onChange={tabs.update} options={TAB_SCOPES} />
-        </SettingsRow>
-      </SettingsSection>
       <SessionSettings onConfirm={onConfirm} />
       <CommandLineSettings />
     </>

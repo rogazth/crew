@@ -1,6 +1,6 @@
 // PROTOTYPE — throwaway. The redesigned composer's pieces. Composer.tsx keeps
 // every bit of its logic and, while a direction is on, lays these out instead
-// of the shipped markup: the activity strip over it, the context row, the
+// of the shipped markup: the agent clip over it, the context row, the
 // attach menu, the joined model chip, the context ring and the send button
 // that turns into Stop.
 import "./chat.css";
@@ -11,7 +11,6 @@ import {
   ChevronUpIcon,
   GitBranchIcon,
   ImageIcon,
-  MessageCircleMoreIcon,
   MonitorIcon,
   PaperclipIcon,
   PlusIcon,
@@ -20,146 +19,90 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { PANEL, ROW } from "../../../chrome/kit";
-import { useNow } from "../../../hooks/useNow";
-import { panelSummary } from "../../../lib/backgroundPanel";
+import type { PanelEntry } from "../../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../../lib/contextMeter";
 import { providerOf } from "../../../lib/providers";
-import { duration } from "../../../lib/time";
 import type { PanelScope } from "../../../surfaces/chat/Panel";
-import { awaitsUser, isOpen, type Block } from "../../../lib/blocks";
-import { turnStart } from "../../../lib/transcriptRows";
 import type { Session } from "../../../lib/types";
 import { branchOf, useWhere, type Where } from "./where";
 
-/** What the chat knows about the turn in progress, for the strip. */
-export type TurnActivity = {
-  /** When the turn began. */
-  since?: number;
-  /** What it is doing right now: the open tool's title, "Thinking", "Writing". */
-  step?: string;
-  /** What the card above wants, when one waits. */
-  ask?: "approval" | "question";
-  /** How many messages there are: none is a new session. */
-  empty?: boolean;
-};
+/** An agent among the work: a native subagent or a session someone started. Shells, processes and bot conversations are not the clip's. */
+export const isAgent = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
-/** What the strip says about the turn, read off the transcript. */
-export function turnActivity(blocks: readonly Block[]): TurnActivity {
-  const since = turnStart(blocks);
-  const last = blocks.at(-1);
-  const tool = [...blocks].reverse().find((block) => block.role === "tool" && isOpen(block));
-  const step = tool?.tool?.title ?? (last?.role === "reasoning" ? "Thinking" : last?.streaming ? "Writing" : undefined);
-  const card = [...blocks].reverse().find(awaitsUser);
-  return {
-    ...(since !== undefined ? { since } : {}),
-    ...(step ? { step } : {}),
-    ...(card ? { ask: card.role === "question" ? ("question" as const) : ("approval" as const) } : {}),
-    empty: blocks.length === 0,
-  };
+type ClipState = "working" | "attention" | "quiet";
+
+const agents = (n: number) => `${n} ${n === 1 ? "agent" : "agents"}`;
+
+/** What the clip says about the agents, if there are any: who runs, who waits on the user, or that they ended. */
+export function clipOf(work: PanelScope | undefined): { state: ClipState; label: ReactNode } | null {
+  const all = work?.entries.filter(isAgent) ?? [];
+  if (all.length === 0) return null;
+  const running = all.filter((entry) => entry.state === "running");
+  const waiting = running.filter((entry) => entry.attention);
+  if (waiting.length > 0) {
+    const [only] = waiting;
+    return {
+      state: "attention",
+      label:
+        waiting.length === 1 && only ? (
+          <>
+            <b>{only.title}</b> {only.attention === "approval" ? "needs approval" : "asks you"}
+          </>
+        ) : (
+          <>
+            <b>{agents(waiting.length)}</b> wait on you
+          </>
+        ),
+    };
+  }
+  if (running.length > 0)
+    return {
+      state: "working",
+      label: (
+        <>
+          <b>{agents(running.length)}</b> working
+        </>
+      ),
+    };
+  return { state: "quiet", label: `${agents(all.length)} finished` };
 }
 
-type StripState = "working" | "waiting" | "background" | "attention";
-
 /**
- * A slim tab tucked under the composer's top edge, there only while
- * something runs or waits on you. One language for the three: the arc in
- * front, the slow arc behind, amber when it is your move.
+ * A slim tab tucked under the composer's top edge, there only while the chat
+ * has agents: the ones running, the ones that wait on you, and quietly the
+ * ones that ended. The turn itself is the transcript's ("Working for…"). A
+ * click unfolds the tab upward, in place, into the list of those agents:
+ * `children` is that list, drawn by the same element that holds the tab.
  */
-export function ActivityStrip({
-  name,
-  working,
-  waiting,
-  activity,
+export function AgentClip({
   work,
-  escBack,
-  onStop,
-  onJump,
-  onShowWork,
+  open,
+  onToggle,
+  children,
 }: {
-  name: string;
-  working: boolean;
-  waiting: boolean;
-  activity?: TurnActivity | undefined;
-  work?: PanelScope | undefined;
-  escBack: boolean;
-  onStop: () => void;
-  onJump: () => void;
-  onShowWork: () => void;
+  work: PanelScope | undefined;
+  open: boolean;
+  onToggle: () => void;
+  children?: ReactNode;
 }) {
-  const summary = work ? panelSummary(work.entries) : null;
-  const running = summary ? summary.running.agents + summary.running.sessions + summary.running.shells + summary.running.processes : 0;
-  const state: StripState | null = waiting
-    ? "waiting"
-    : working
-      ? "working"
-      : summary && summary.attention > 0
-        ? "attention"
-        : running > 0
-          ? "background"
-          : null;
-  const now = useNow(1000, state === "working");
-  if (!state) return null;
-
-  const since = activity?.since;
+  const clip = clipOf(work);
+  if (!clip) return null;
   return (
-    <div data-ds-strip data-state={state} className="ds-strip" role="status" aria-live="polite">
-      <span className="ds-strip-glyph">
-        {state === "working" ? (
-          <span className="crew-typing" aria-hidden>
-            <span />
-            <span />
-            <span />
-          </span>
-        ) : state === "background" ? (
-          <span className="crew-bg-dot" aria-hidden />
-        ) : state === "waiting" ? (
-          <MessageCircleMoreIcon className="size-3.5" aria-hidden />
-        ) : (
-          <span className="ds-strip-halo" aria-hidden />
-        )}
-      </span>
-      <span className="min-w-0 flex-1 truncate">
-        {state === "working" && (
-          <>
-            <b>{name}</b> is working
-            {activity?.step && <> · {activity.step}</>}
-            {since !== undefined && <span className="tabular-nums"> · {duration(Math.max(0, now - since))}</span>}
-          </>
-        )}
-        {state === "waiting" && (
-          <>
-            <b>{name}</b> {activity?.ask === "question" ? "asked you a question" : "needs your approval"}
-          </>
-        )}
-        {state === "background" && (
-          <>
-            Turn finished · <b>{summary!.text}</b> still running
-          </>
-        )}
-        {state === "attention" && <b>{summary!.attentionText}</b>}
-      </span>
-      {state === "working" &&
-        (escBack ? (
-          <button type="button" className="ds-strip-action" onClick={onStop}>
-            Stop
-          </button>
-        ) : (
-          <span className="shrink-0 pr-1">
-            <kbd>esc</kbd>to stop
-          </span>
-        ))}
-      {state === "waiting" && (
-        <button type="button" className="ds-strip-action" onClick={onJump}>
-          Show me
-          <ChevronUpIcon className="size-3.5" />
-        </button>
-      )}
-      {(state === "background" || state === "attention") && (
-        <button type="button" className="ds-strip-action" onClick={onShowWork}>
-          Show
-          <ChevronUpIcon className="size-3.5" />
-        </button>
-      )}
+    <div data-ds-strip data-state={clip.state} className="ds-strip" {...(open ? { "data-open": "" } : {})}>
+      {children}
+      <button type="button" className="ds-strip-head" aria-expanded={open} onClick={onToggle}>
+        <span className="ds-strip-glyph">
+          {clip.state === "working" ? (
+            <span className="crew-bg-dot" aria-hidden />
+          ) : clip.state === "attention" ? (
+            <span className="ds-strip-halo" aria-hidden />
+          ) : (
+            <span className="ds-strip-rest" aria-hidden />
+          )}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-left">{clip.label}</span>
+        <ChevronUpIcon className="ds-strip-chevron size-3.5 shrink-0" aria-hidden />
+      </button>
     </div>
   );
 }
@@ -341,19 +284,4 @@ export function SendButton({
       <ArrowUpIcon className="size-[18px]" strokeWidth={2.25} />
     </button>
   );
-}
-
-/** Scrolls to the card that waits in this chat and rings it once; its first choice takes the focus. */
-export function jumpToCard(from: HTMLElement | null) {
-  const scope = from?.closest("[data-ds-chat]") ?? document;
-  const cards = scope.querySelectorAll<HTMLElement>(".crew-card");
-  const card = cards[cards.length - 1];
-  if (!card) return;
-  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  card.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
-  card.removeAttribute("data-ds-flash");
-  void card.offsetWidth;
-  card.setAttribute("data-ds-flash", "");
-  window.setTimeout(() => card.removeAttribute("data-ds-flash"), 1200);
-  card.querySelector<HTMLElement>("input, button:not(:disabled), textarea")?.focus({ preventScroll: true });
 }

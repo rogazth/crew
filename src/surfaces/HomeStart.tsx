@@ -1,17 +1,19 @@
-import { ArrowUpIcon, BotIcon, FolderPlusIcon, GlobeIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, FolderPlusIcon, GlobeIcon, HouseIcon, MonitorIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
 import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import type { AgentChoice } from "../lib/providers";
 import { useRedesign } from "../prototype/design-system/direction";
-import { HomeIntro } from "../prototype/design-system/chat/HomeIntro";
+import { StartScreen } from "../prototype/design-system/chat/WorkspaceStart";
+import { Fact, StarterCard as WayCard } from "../prototype/design-system/chat/SessionIntro";
+import type { AttachedFile } from "../lib/blocks";
 
 type Props = {
   /** No project is open yet: the page greets a new user and shows the way in. */
   firstRun: boolean;
   /** A new session in home, with `text` as its first message, in what the chips say. */
-  onAsk: (text: string, choice: AgentChoice) => void;
+  onAsk: (text: string, choice: AgentChoice, files?: AttachedFile[]) => void;
   onOpenFolder: () => void;
   onNewBot: () => void;
   onOpenBrowser: () => void;
@@ -44,17 +46,24 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
   // PROTOTYPE: with a direction on, Home is laid out like a new session's first screen.
   if (redesign) {
     return (
-      <HomeIntro
-        firstRun={firstRun}
-        draft={draft}
-        setDraft={setDraft}
-        field={field}
-        choice={choice}
-        setChoice={setPicked}
-        send={send}
-        onOpenFolder={onOpenFolder}
-        onNewBot={onNewBot}
-        onOpenBrowser={onOpenBrowser}
+      <StartScreen
+        title={firstRun ? "Welcome to Crew" : "What are we working on?"}
+        facts={
+          <>
+            <Fact icon={HouseIcon} title="Runs in your Home folder">
+              Home
+            </Fact>
+            <Fact icon={MonitorIcon}>This Mac</Fact>
+          </>
+        }
+        ways={
+          <>
+            <WayCard icon={FolderPlusIcon} title="Open a project folder" hint="Code, worktrees and commands" onClick={onOpenFolder} />
+            <WayCard icon={BotIcon} title={firstRun ? "Meet your first bot" : "Make a bot"} hint="A named agent with its own history" onClick={onNewBot} />
+            <WayCard icon={GlobeIcon} title="Open a browser tab" hint="Let agents browse, fill forms and capture pages" onClick={onOpenBrowser} />
+          </>
+        }
+        onAsk={onAsk}
       />
     );
   }
@@ -134,7 +143,7 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
           <div className="mt-10 grid grid-cols-3 gap-2">
             <StartCard icon={FolderPlusIcon} title="Open a project folder" hint="Code, worktrees and commands" onClick={onOpenFolder} />
             <StartCard icon={BotIcon} title="Meet your first bot" hint="A named agent with its own history" onClick={onNewBot} />
-            <StartCard icon={GlobeIcon} title="Drive a browser tab" hint="Agents click, fill and screenshot" onClick={onOpenBrowser} />
+            <StartCard icon={GlobeIcon} title="Open a browser tab" hint="Let agents browse, fill forms and capture pages" onClick={onOpenBrowser} />
           </div>
         )}
       </div>

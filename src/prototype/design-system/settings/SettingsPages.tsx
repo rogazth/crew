@@ -16,6 +16,7 @@ import { GeneralPage } from "./GeneralPage";
 import { KeybindingsPage } from "./KeybindingsPage";
 import { PAGES } from "./pages";
 import { ProvidersPage } from "./ProvidersPage";
+import { UsagePage } from "./UsagePage";
 import { SettingsPage, Toasts } from "./ui";
 
 export type RedesignedSettingsProps = {
@@ -52,6 +53,8 @@ function Page({ section, installed, standalone }: RedesignedSettingsProps) {
       return <AppearancePage />;
     case "providers":
       return <ProvidersPage installed={installed} />;
+    case "usage":
+      return <UsagePage />;
     case "keybindings":
       return <KeybindingsPage />;
     case "about":

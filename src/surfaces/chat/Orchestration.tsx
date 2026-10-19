@@ -271,7 +271,6 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
   const peer: Peer = { name: nativeName(detail), provider };
   const state = detail.thread ? view.state : (entry?.state ?? view.state);
   const meta = agentMeta(entry ? { ...entryFacts(entry), state } : { state, activity: view.current });
-  const report = state === "done" ? nativeReport(block) : null;
   return (
     <div className="flex flex-col gap-1.5">
       <ToolLine icon={BotIcon} id={block.id} marked={marked}>
@@ -294,9 +293,20 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
           onOpen={entry ? () => openAgent(entry.id) : undefined}
         />
       </Hang>
-      {report ? <Report peer={peer} text={report} target={entry?.id} /> : null}
     </div>
   );
+});
+
+/** A native subagent's report as a row of its own, drawn where it landed after the call. */
+export const SubagentReport = memo(function SubagentReport({ block }: { block: Block }) {
+  const entries = useContext(WorkContext);
+  const { sessions, owner } = useLetterScope();
+  const detail = agentDetail(block);
+  const report = nativeReport(block);
+  if (!detail || !report) return null;
+  const entry = entryOfCall(entries, block);
+  const provider = entry?.provider ?? sessions.find((row) => row.id === owner?.id)?.provider;
+  return <Report peer={{ name: nativeName(detail), provider }} text={report} target={entry?.id} />;
 });
 
 /** The line a Crew start makes for one session: the work list's entry, else what the call said. */
