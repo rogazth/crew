@@ -1,16 +1,15 @@
 // PROTOTYPE — throwaway. Environments: this Mac and every machine sessions can
 // run on, each a raised card with where it is, how it's connected, the
-// workspaces that live there and the agent CLIs it has, then the network
-// switches. Adding one is a guided dialog (AddMachineFlow). Simulated
+// connection and load as small charts, then the network switches. Adding one is a guided dialog (AddMachineFlow). Simulated
 // (envMock.ts, mock.ts); the real page is surfaces/EnvironmentSettings.tsx.
 import { Menu } from "@base-ui/react/menu";
 import {
+  ArrowDownToLineIcon,
   ArrowRightIcon,
   ArrowUpCircleIcon,
   BotIcon,
   CircleAlertIcon,
   EllipsisIcon,
-  FolderIcon,
   FolderOpenIcon,
   PencilIcon,
   PlusIcon,
@@ -22,9 +21,8 @@ import {
   TriangleAlertIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
 import { Alert, Button, Field, Footer, IconButton, Overlay, PANEL, ROW, Switch, TextInput } from "../../../chrome/kit";
-import { ProviderIcon } from "../../../chrome/ProviderIcon";
 import { subscribeAdd, takeAddRequest } from "../../../lib/remoteUi";
 import { AddMachineFlow } from "./AddMachineFlow";
 import {
@@ -41,15 +39,13 @@ import {
   type EnvMock,
 } from "./envMock";
 import { EnvGlyph, StateChip } from "./envParts";
-import { useAllProviders, type ProviderMock } from "./mock";
 import { manageProviders } from "./route";
-import { Chip, Group, Row, SettingsPage, ToggleRow, toast } from "./ui";
+import { Callout, Chip, Group, Row, SettingsPage, ToggleRow, toast } from "./ui";
 
 let prefs = { relay: true, wake: true };
 
 export function EnvironmentsPage() {
   const envs = useEnvs();
-  const providers = useAllProviders();
   // "Add a machine…" from the machine picker lands here, as on the shipped page.
   const [adding, setAdding] = useState(() => takeAddRequest());
   useEffect(() => subscribeAdd(() => setAdding(true)), []);
@@ -72,12 +68,11 @@ export function EnvironmentsPage() {
       }
     >
       <section className="flex flex-col gap-3" data-setting="machines">
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-3">
           {envs.map((env) => (
             <MachineCard
               key={env.id}
               env={env}
-              providers={providers[env.id] ?? []}
               onRename={() => setRenaming(env)}
               onRemove={() => setRemoving(env)}
               onLogs={() => setLogs(env)}
@@ -126,18 +121,16 @@ type Action = { label: string; icon: LucideIcon; run: () => void; disabled?: boo
 
 /**
  * One machine: name and state on the first line, where it is under it, then
- * at most one short notice and four facts in two airy columns. Everything else
- * lives in the menu.
+ * at most one short notice and a single strip with the connection and two
+ * small load charts. Everything else lives in the menu.
  */
 function MachineCard({
   env,
-  providers,
   onRename,
   onRemove,
   onLogs,
 }: {
   env: EnvMock;
-  providers: ProviderMock[];
   onRename: () => void;
   onRemove: () => void;
   onLogs: () => void;
@@ -145,6 +138,8 @@ function MachineCard({
   const local = env.kind === "local";
   const up = env.state === "connected" && !env.busy;
   const behind = !local && env.crewd !== CURRENT_CREWD;
+  const offline = env.state === "offline";
+  const memory = parseMemory(env.memory);
   const terminal = () => toast(`Terminal opened on ${hereOf(env)}`, "info");
   const openWorkspace = () => toast(`Choose a folder on ${hereOf(env)}`, "info");
   const manage = { label: "Manage providers", icon: BotIcon, run: () => manageProviders(env.id) };
@@ -175,15 +170,15 @@ function MachineCard({
 
   return (
     <article data-setting={`env-${env.id}`} className="flex flex-col rounded-[14px] bg-card">
-      <header className="flex items-center gap-4 px-5 pt-5 pb-4">
+      <header className="flex items-center gap-3 px-4 pt-4 pb-3">
         <span
-          className={`grid size-10 shrink-0 place-items-center rounded-[10px] bg-canvas shadow-[0_0_0_1px_var(--color-hairline)] ${env.state === "offline" ? "text-placeholder" : "text-icon"}`}
+          className={`grid size-9 shrink-0 place-items-center rounded-[9px] bg-canvas shadow-[0_0_0_1px_var(--color-hairline)] ${env.state === "offline" ? "text-placeholder" : "text-icon"}`}
         >
-          <EnvGlyph env={env} className="size-5" />
+          <EnvGlyph env={env} className="size-[18px]" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2">
-            <h3 className="truncate text-[15px] leading-5 font-semibold tracking-[-0.01em]">{env.name}</h3>
+            <h3 className="truncate text-[14px] leading-5 font-semibold tracking-[-0.01em]">{env.name}</h3>
             <StateChip env={env} />
           </div>
           <p className="truncate text-[12px] text-text-muted" title={`${whereOf(env)} · ${env.os} · ${env.arch}`}>
@@ -196,40 +191,31 @@ function MachineCard({
         </span>
       </header>
       <Notice env={env} />
-      <dl className="mx-5 grid grid-cols-1 gap-x-10 gap-y-5 border-t border-hairline pt-4 pb-5 @[560px]:grid-cols-2">
+      <dl className="mx-4 grid grid-cols-1 gap-x-8 gap-y-3 border-t border-hairline py-3 @[560px]:grid-cols-[1.2fr_1fr_1fr]">
         <Stat label="Connection" sub={<Version env={env} />}>
           <Connection env={env} />
         </Stat>
-        <Stat label="Load" sub={env.state === "offline" ? null : env.memory}>
-          {env.state === "offline" ? (
+        <Stat label="CPU" sub={offline ? null : `${env.load.toFixed(2)} of ${env.cpus} cores`}>
+          {offline ? (
             <span className="text-text-muted">—</span>
           ) : (
-            <span className="tabular-nums">
-              {env.load.toFixed(2)} <span className="text-text-muted">/ {env.cpus} cores</span>
-            </span>
+            <Sparkline
+              seed={`${env.id}-cpu`}
+              level={Math.min(env.load / Math.max(env.cpus, 1), 1)}
+              format={(v) => `${(v * env.cpus).toFixed(2)} load · ${Math.round(v * 100)}%`}
+            />
           )}
         </Stat>
-        <Stat label="Workspaces">
-          {env.workspaces.length === 0 ? (
-            <>
-              <span className="text-text-muted">None</span>
-              {up && (
-                <button type="button" onClick={openWorkspace} className="text-[12px] font-medium text-accent hover:underline">
-                  Open
-                </button>
-              )}
-            </>
+        <Stat label="Memory" sub={offline ? null : memory.label}>
+          {offline ? (
+            <span className="text-text-muted">—</span>
           ) : (
-            env.workspaces.map((name) => (
-              <span key={name} className="inline-flex h-6 items-center gap-1.5 rounded-md bg-canvas px-2 text-[12px] shadow-[0_0_0_1px_var(--color-hairline)]">
-                <FolderIcon className="size-3.5 text-icon" />
-                {name}
-              </span>
-            ))
+            <Sparkline
+              seed={`${env.id}-mem`}
+              level={memory.used ?? 0.4}
+              format={(v) => `${(v * memory.total).toFixed(memory.total < 10 ? 1 : 0)} of ${memory.total} GB · ${Math.round(v * 100)}%`}
+            />
           )}
-        </Stat>
-        <Stat label="Agents" sub={<AgentsLine env={env} providers={providers} />}>
-          <Agents env={env} providers={providers} />
         </Stat>
       </dl>
     </article>
@@ -239,9 +225,9 @@ function MachineCard({
 /** A label over its value, with at most one muted line under it. */
 function Stat({ label, sub, children }: { label: string; sub?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-[12px] text-text-muted">{label}</dt>
-      <dd className="flex min-h-6 min-w-0 flex-wrap items-center gap-1.5">{children}</dd>
+      <dd className="flex min-h-5 min-w-0 flex-wrap items-center gap-1.5 text-[13px]">{children}</dd>
       {sub && <dd className="flex min-w-0 items-center gap-1.5 truncate text-[12px] text-text-muted">{sub}</dd>}
     </div>
   );
@@ -272,81 +258,121 @@ function Version({ env }: { env: EnvMock }) {
   );
 }
 
-function Agents({ env, providers }: { env: EnvMock; providers: ProviderMock[] }) {
-  return (
-    <button
-      type="button"
-      onClick={() => manageProviders(env.id)}
-      title="Manage providers"
-      aria-label={`Manage providers on ${env.name}`}
-      className="-mx-1 flex items-center gap-1 rounded-md px-1 py-0.5 outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50"
-    >
-      {providers.map((p) => (
-        <span
-          key={p.id}
-          title={p.version ? `${p.name} ${p.version}${p.account ? "" : " · signed out"}` : `${p.name} · not installed`}
-          className={`relative grid size-6 place-items-center rounded-md ${p.version ? "bg-canvas shadow-[0_0_0_1px_var(--color-hairline)]" : ""}`}
-        >
-          <ProviderIcon provider={p.id} className={`size-3.5 ${p.version ? "" : "opacity-40 grayscale"}`} />
-          {p.version && !p.account && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-warning ring-2 ring-canvas" />}
-        </span>
-      ))}
-    </button>
-  );
-}
+const SAMPLES = 24;
+const STEP_MIN = 5;
 
-function AgentsLine({ env, providers }: { env: EnvMock; providers: ProviderMock[] }) {
-  const installed = providers.filter((p) => p.version).length;
-  const running = env.state === "offline" ? 0 : env.agentsRunning;
+/**
+ * A small history chart ending at `level` (0–1 of capacity). Moving over it
+ * scrubs a marker along the timeline and shows that sample's time and usage.
+ * The history is simulated: the mock only knows the current value.
+ */
+function Sparkline({ seed: key, level, format }: { seed: string; level: number; format: (value: number) => string }) {
+  const w = 120;
+  const h = 28;
+  const [now] = useState(() => Date.now());
+  const [at, setAt] = useState<number | null>(null);
+  const values = useMemo(() => {
+    const base = [...key].reduce((n, c) => n + c.charCodeAt(0), 7);
+    return Array.from({ length: SAMPLES }, (_, i) => {
+      const noise = Math.sin((base + i) * 12.9898) * 43758.5453;
+      const wobble = (noise - Math.floor(noise) - 0.5) * Math.max(level * 0.7, 0.04);
+      return i === SAMPLES - 1 ? level : Math.min(Math.max(level + wobble, 0), 1);
+    });
+  }, [key, level]);
+  const x = (i: number) => (i / (SAMPLES - 1)) * w;
+  const y = (v: number) => h - 2 - v * (h - 4);
+  const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const time = (i: number) =>
+    i === SAMPLES - 1
+      ? "Now"
+      : new Date(now - (SAMPLES - 1 - i) * STEP_MIN * 60_000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const scrub = (e: PointerEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    setAt(Math.round(Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1) * (SAMPLES - 1)));
+  };
   return (
-    <span className="tabular-nums">
-      {installed} of {providers.length} installed
-      {running > 0 && ` · ${running} running`}
+    <span className="relative -mx-1 inline-flex px-1 py-0.5">
+      <svg
+        width={w}
+        height={h}
+        viewBox={`0 0 ${w} ${h}`}
+        role="img"
+        aria-label={`Last ${(SAMPLES - 1) * STEP_MIN} minutes, now ${format(level)}`}
+        className="touch-none text-accent"
+        onPointerMove={scrub}
+        onPointerLeave={() => setAt(null)}
+      >
+        <polyline points={points.join(" ")} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+        {at !== null && (
+          <>
+            <line x1={x(at)} x2={x(at)} y1={0} y2={h} stroke="currentColor" strokeWidth={1} opacity={0.35} />
+            <circle cx={x(at)} cy={y(values[at]!)} r={3} fill="currentColor" stroke="var(--color-card)" strokeWidth={1.5} />
+          </>
+        )}
+      </svg>
+      {at !== null && (
+        <span
+          role="tooltip"
+          style={{ left: x(at) + 4 }}
+          className="pointer-events-none absolute bottom-full z-50 mb-1.5 -translate-x-1/2 rounded-lg bg-accent px-2 py-1 text-[12px] leading-4 whitespace-nowrap text-inverse shadow-float"
+        >
+          <span className="text-inverse/70">{time(at)}</span> · {format(values[at]!)}
+        </span>
+      )}
     </span>
   );
 }
 
-/** One line, at most one action: what's wrong and the way past it. */
+/** Memory strings read "41 GB free of 64 GB" or just a total ("36 GB"). */
+function parseMemory(text: string): { used: number | null; total: number; label: string } {
+  const m = /^([\d.]+) GB free of ([\d.]+) GB$/.exec(text);
+  if (!m) return { used: null, total: parseFloat(text) || 0, label: text };
+  const free = Number(m[1]);
+  const total = Number(m[2]);
+  return { used: 1 - free / total, total, label: `${(total - free).toFixed(total < 10 ? 1 : 0)} of ${total} GB used` };
+}
+
+/** At most one notice, in the alert's shape: what's wrong and the way past it. */
 function Notice({ env }: { env: EnvMock }) {
-  let text: string | null = null;
-  let detail: string | undefined;
-  let danger = false;
-  let action: { label: string; run: () => void } | null = null;
   if (env.busy || env.state === "connecting") return null;
-  if (env.state === "offline") {
-    danger = true;
-    text = `Unreachable · last seen ${env.lastSeen}`;
-    detail = env.error ?? undefined;
-    action = { label: "Retry", run: () => reconnectEnv(env.id) };
-  } else if (env.state === "error") {
-    danger = true;
-    text = `crewd ${env.crewd} is outdated`;
-    detail = env.error ?? undefined;
-    action = { label: "Update", run: () => updateCrewd(env.id) };
-  } else if (env.relay && prefs.relay) {
-    text = "Relayed connection · terminals may lag";
-    detail = "Open UDP 41641 on that network for a direct path.";
-  }
-  if (!text) return null;
-  const Icon = danger ? CircleAlertIcon : TriangleAlertIcon;
-  return (
-    <div
-      title={detail}
-      className={`mx-5 mb-4 flex h-9 items-center gap-2.5 rounded-lg px-3 text-[12px] ${danger ? "bg-danger/8" : "bg-warning/10"}`}
-    >
-      <Icon className={`size-3.5 shrink-0 ${danger ? "text-danger" : "text-warning"}`} />
-      <span className="min-w-0 flex-1 truncate">{text}</span>
-      {action && (
-        <button
-          type="button"
-          onClick={action.run}
-          className={`shrink-0 font-medium hover:underline ${danger ? "text-danger" : "text-warning"}`}
-        >
-          {action.label}
-        </button>
-      )}
-    </div>
-  );
+  const box = "mx-4 mb-3";
+  if (env.state === "offline")
+    return (
+      <Callout
+        className={box}
+        tone="danger"
+        icon={CircleAlertIcon}
+        title="Unreachable"
+        description={env.error ?? `Last seen ${env.lastSeen}`}
+        action={<Button onClick={() => reconnectEnv(env.id)}>Retry</Button>}
+      />
+    );
+  if (env.state === "error")
+    return (
+      <Callout
+        className={box}
+        tone="accent"
+        icon={ArrowDownToLineIcon}
+        title="Update available for crewd"
+        description={`This machine runs ${env.crewd}; update it to keep working here.`}
+        action={
+          <Button variant="primary" onClick={() => updateCrewd(env.id)}>
+            Update
+          </Button>
+        }
+      />
+    );
+  if (env.relay && prefs.relay)
+    return (
+      <Callout
+        className={box}
+        tone="warning"
+        icon={TriangleAlertIcon}
+        title="Relayed connection"
+        description="Terminals may lag. Open UDP 41641 on that network for a direct path."
+      />
+    );
+  return null;
 }
 
 function MachineMenu({ env, actions }: { env: EnvMock; actions: Action[] }) {
