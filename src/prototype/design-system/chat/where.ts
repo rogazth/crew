@@ -22,6 +22,10 @@ export type Where = {
 
 const trees = new Map<string, Promise<Worktree | null>>();
 let workspaces: Promise<Workspace[]> | null = null;
+// What the reads above already answered, for a chat mounted after them to draw on its first frame:
+// waiting on the settled promise again would add the branch a frame late, and the facts would jump.
+const treesRead = new Map<string, Worktree | null>();
+let workspacesRead: Workspace[] | null = null;
 
 const trim = (path: string) => path.replace(/\/+$/, "");
 
@@ -32,13 +36,16 @@ function treeOf(root: string): Promise<Worktree | null> {
       (list) => list.find((tree) => trim(tree.path) === root) ?? null,
       () => null,
     );
+    void found.then((tree) => treesRead.set(root, tree));
     trees.set(root, found);
   }
   return found;
 }
 
 function workspaceName(id: string): Promise<string | undefined> {
-  workspaces ??= listWorkspaces().catch(() => []);
+  workspaces ??= listWorkspaces()
+    .catch(() => [])
+    .then((list) => (workspacesRead = list));
   return workspaces.then((list) => list.find((workspace) => workspace.id === id)?.name);
 }
 
@@ -66,10 +73,14 @@ export function useWhere(session: Pick<Session, "workspaceId">): Where {
     };
   }, [session.workspaceId]);
 
-  const name = workspace?.id === session.workspaceId ? workspace.name : undefined;
+  const name =
+    workspace?.id === session.workspaceId
+      ? workspace.name
+      : workspacesRead?.find((one) => one.id === session.workspaceId)?.name;
+  const read = tree && tree.root === root ? { tree: tree.tree } : treesRead.has(root) ? { tree: treesRead.get(root) ?? null } : {};
   return {
     ...(name ? { workspace: name } : {}),
-    ...(tree && tree.root === root ? { tree: tree.tree } : {}),
+    ...read,
     ...(root ? { folder: root.split("/").pop() ?? root } : {}),
     machine: link?.name ?? "This Mac",
     remote: link !== null,

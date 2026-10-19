@@ -18,7 +18,7 @@ import {
   SlashIcon,
   SquareIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { PANEL, ROW } from "../../../chrome/kit";
 import { useNow } from "../../../hooks/useNow";
 import { panelSummary } from "../../../lib/backgroundPanel";
@@ -324,12 +324,20 @@ export function SendButton({
   stopTitle: string;
   onStop: () => void;
 }) {
+  // The glyph pops when Send and Stop trade places, not when a chat first draws it.
+  const [was, setWas] = useState(stopping);
+  const [swapped, setSwapped] = useState(false);
+  if (was !== stopping) {
+    setWas(stopping);
+    setSwapped(true);
+  }
+  const pop = swapped ? { "data-swapped": "" } : {};
   return stopping ? (
-    <button key="stop" type="button" data-stop onClick={onStop} aria-label="Stop" title={stopTitle} className="ds-send">
+    <button key="stop" type="button" data-stop {...pop} onClick={onStop} aria-label="Stop" title={stopTitle} className="ds-send">
       <SquareIcon className="size-3 fill-current" />
     </button>
   ) : (
-    <button key="send" type="submit" disabled={!canSend} aria-label={label} title={title} className="ds-send">
+    <button key="send" type="submit" {...pop} disabled={!canSend} aria-label={label} title={title} className="ds-send">
       <ArrowUpIcon className="size-[18px]" strokeWidth={2.25} />
     </button>
   );

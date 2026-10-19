@@ -254,7 +254,7 @@
 [data-direction] .ds-send:focus-visible {
   box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 3.5px color-mix(in oklab, var(--color-focus) 70%, transparent);
 }
-[data-direction] .ds-send > svg {
+[data-direction] .ds-send[data-swapped] > svg {
   animation: ds-pop 180ms var(--ease-spring);
 }
 [data-direction] .ds-send[data-stop] {
@@ -556,7 +556,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   [data-direction] .ds-strip,
-  [data-direction] .ds-send > svg,
+  [data-direction] .ds-send[data-swapped] > svg,
   [data-direction] .ds-rise,
   [data-direction] [data-ds-flash] {
     animation: none;

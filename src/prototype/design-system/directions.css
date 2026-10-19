@@ -299,7 +299,7 @@
   pointer-events: none;
   transition: opacity 140ms var(--ease-out);
 }
-[data-direction] body:has(button[data-sidebar="resize-handle"]:is(:hover, :active)) :is(
+[data-direction][data-sidebar-resize] :is(
     main > div:not([hidden], .h-full) > div.min-h-0.flex-1:last-child,
     main > div.h-full
   )::after {
@@ -327,12 +327,8 @@
   background: transparent;
   box-shadow: inset 1px 0 0 var(--color-hairline);
 }
-/* Its foot, the workspace's commands: no rule, a filled button pinned under
-   the list, so it reads as a place to go rather than one more row. */
-[data-direction] .rounded-tl-xl.border-t.border-l .border-t.border-hairline:has(> [data-nav]) {
-  padding: 6px 8px 0;
-  border-top-color: transparent;
-}
+/* Its foot, the workspace's commands: a filled button pinned under the list,
+   so it reads as a place to go rather than one more row. */
 [data-direction] .rounded-tl-xl.border-t.border-l .border-t.border-hairline > [data-nav] {
   height: 34px;
   border-radius: 10px;

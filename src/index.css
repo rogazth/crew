@@ -117,13 +117,13 @@ label[for],
 }
 
 /* The rule above is a button rule and unlayered, so the resize handle has to
-   restate its own cursor. :active holds the cursor through a drag
-   that runs past the clamp and leaves the 12px target behind. */
+   restate its own cursor. A drag (data-sidebar-resize on <html>) holds the
+   cursor when it runs past the clamp and leaves the 12px target behind. */
 button[data-sidebar="resize-handle"] {
   cursor: col-resize;
 }
 
-body:has(button[data-sidebar="resize-handle"]:active) * {
+html[data-sidebar-resize="active"] * {
   cursor: col-resize !important;
 }
 

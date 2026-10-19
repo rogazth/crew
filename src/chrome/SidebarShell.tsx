@@ -16,12 +16,14 @@ type Props = {
  */
 export function SidebarShell({ open, width, minWidth, maxWidth, onResize, children }: Props) {
   const start = useRef<{ x: number; width: number } | null>(null);
+  const over = useRef(false);
 
   function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     start.current = { x: event.clientX, width };
+    markResize();
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -33,6 +35,18 @@ export function SidebarShell({ open, width, minWidth, maxWidth, onResize, childr
   function onPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
     start.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
+    markResize();
+  }
+
+  /**
+   * The handle's state on <html>, for the cursor held through a drag and the
+   * sheet's lit edge. A `body:has(handle:active)` rule did this, and made every
+   * change anywhere in the window check it: with many tabs open, typing lagged.
+   */
+  function markResize() {
+    const state = start.current ? "active" : over.current ? "hover" : null;
+    if (state) document.documentElement.dataset.sidebarResize = state;
+    else delete document.documentElement.dataset.sidebarResize;
   }
 
   if (!open) return null;
@@ -53,6 +67,14 @@ export function SidebarShell({ open, width, minWidth, maxWidth, onResize, childr
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerEnter={() => {
+          over.current = true;
+          markResize();
+        }}
+        onPointerLeave={() => {
+          over.current = false;
+          markResize();
+        }}
         onDoubleClick={() => onResize(300)}
         className="absolute inset-y-0 -right-1.5 z-20 w-3 after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-transparent after:transition-colors hover:after:bg-border-strong active:after:bg-border-strong"
       />
