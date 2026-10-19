@@ -87,7 +87,6 @@ export type IndexEntry = { id: string; label: string; page: SettingsSectionId; k
 
 const SETTINGS: IndexEntry[] = [
   { id: "tabs", label: "Tabs", page: "general", keywords: "per worktree strip together" },
-  { id: "new-session-where", label: "New sessions start in", page: "general", keywords: "worktree branch" },
   { id: "retention", label: "Delete inactive sessions", page: "general", keywords: "cleanup retention old" },
   { id: "notify-needs-you", label: "Dock badge", page: "general", keywords: "dock badge needs you waiting" },
   { id: "crew-command", label: "crew command", page: "general", keywords: "cli path terminal install" },

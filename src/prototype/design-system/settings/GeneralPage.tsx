@@ -2,19 +2,14 @@
 // Bypass permissions lives on Providers, beside the access it overrides. Tabs and retention read the
 // real state where the daemon answers; the rest is local.
 import { useEffect, useState } from "react";
-import { Button, Segmented, Select } from "../../../chrome/kit";
-import { useTabScope } from "../../../hooks/useTabScope";
+import { Button, Select } from "../../../chrome/kit";
 import * as api from "../../../lib/api";
 import { RETENTION_CHOICES, RETENTION_KEY, parseRetention, type Retention } from "../../../lib/retention";
-import type { TabScope } from "../../../lib/worktrees";
 import { Chip, ConfirmDialog, CopyButton, Group, Row, SettingsPage, ToggleRow, toast, wait, type ConfirmAsk } from "./ui";
 
-type Where = "new" | "current";
-
-let local = { where: "new" as Where, badge: true, login: false, reopen: true, cli: false };
+let local = { badge: true, login: false, reopen: true, cli: false };
 
 export function GeneralPage() {
-  const tabs = useTabScope();
   const [retention, setRetention] = useState<Retention>("never");
   const [prefs, setPrefs] = useState(local);
   const [cliBusy, setCliBusy] = useState(false);
@@ -65,48 +60,6 @@ export function GeneralPage() {
 
   return (
     <SettingsPage title="General">
-      <Group title="Worktrees">
-        <Row
-          id="tabs"
-          label="Tabs"
-          description={
-            tabs.scope === "worktree"
-              ? "Separate tabs per worktree."
-              : "One tab strip for all worktrees."
-          }
-        >
-          <Segmented<TabScope>
-            label="Tabs"
-            value={tabs.scope}
-            onChange={tabs.update}
-            options={[
-              { value: "worktree", label: "Per worktree" },
-              { value: "all", label: "Together" },
-            ]}
-          />
-        </Row>
-        <Row
-          id="new-session-where"
-          label="New sessions start in"
-          description={
-            prefs.where === "new"
-              ? "Isolated branch per session."
-              : "Shares files with the open worktree."
-          }
-        >
-          <Select<Where>
-            label="New sessions start in"
-            className="w-44"
-            value={prefs.where}
-            onChange={(where) => set({ where })}
-            options={[
-              { value: "new", label: "A new worktree" },
-              { value: "current", label: "The current worktree" },
-            ]}
-          />
-        </Row>
-      </Group>
-
       <Group title="Sessions">
         <Row
           id="retention"
