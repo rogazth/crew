@@ -27,3 +27,9 @@ export function presetOf(viewport: Viewport): PresetId | null {
   const match = VIEWPORT_PRESETS.find((item) => item.width === viewport.width && item.height === viewport.height);
   return match?.id ?? null;
 }
+
+/** The scale that fits a page of this size in the room there is, never past its real size. */
+export function fitScale(viewport: Viewport, room: { width: number; height: number }): number {
+  if (room.width <= 0 || room.height <= 0) return 1;
+  return Math.min(1, room.width / viewport.width, room.height / viewport.height);
+}

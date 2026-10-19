@@ -7,6 +7,8 @@ const CURSOR: Record<Edge, string> = { right: "ew-resize", bottom: "ns-resize", 
 
 type Props = {
   viewport: Viewport;
+  /** How much the page is shrunk to fit the pane. */
+  scale: number;
   onChange: (viewport: Viewport) => void;
 };
 
@@ -15,7 +17,7 @@ type Props = {
  * mode. A box the page's size laid over it, since the guest's own element can't
  * take children or a new parent.
  */
-export function ViewportHandles({ viewport, onChange }: Props) {
+export function ViewportHandles({ viewport, scale, onChange }: Props) {
   const start = useRef<{ x: number; y: number; viewport: Viewport; scale: number } | null>(null);
   const [dragging, setDragging] = useState<Edge | null>(null);
 
@@ -23,19 +25,17 @@ export function ViewportHandles({ viewport, onChange }: Props) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    // A centered page grows on both sides, so the edge only keeps up with the pointer at twice the pace.
-    const frame = event.currentTarget.parentElement!;
-    const port = frame.parentElement!;
-    const centered = frame.offsetLeft > parseFloat(getComputedStyle(port).paddingLeft) + 0.5;
-    start.current = { x: event.clientX, y: event.clientY, viewport, scale: centered ? 2 : 1 };
+    start.current = { x: event.clientX, y: event.clientY, viewport, scale };
     setDragging(edge);
   };
 
   const move = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const from = start.current;
     if (!from || !dragging) return;
-    const width = dragging === "bottom" ? from.viewport.width : from.viewport.width + (event.clientX - from.x) * from.scale;
-    const height = dragging === "right" ? from.viewport.height : from.viewport.height + event.clientY - from.y;
+    // A centered page grows on both sides, so its edge only keeps up with the pointer at twice the pace;
+    // and a shrunk page moves by less than the pixels it stands for.
+    const width = dragging === "bottom" ? from.viewport.width : from.viewport.width + ((event.clientX - from.x) * 2) / from.scale;
+    const height = dragging === "right" ? from.viewport.height : from.viewport.height + (event.clientY - from.y) / from.scale;
     onChange({ width: clampSide(width, from.viewport.width), height: clampSide(height, from.viewport.height) });
   };
 
@@ -66,7 +66,7 @@ export function ViewportHandles({ viewport, onChange }: Props) {
   return (
     <div
       className="pointer-events-none relative self-start justify-self-center [grid-area:1/1]"
-      style={{ width: viewport.width, height: viewport.height }}
+      style={{ width: viewport.width * scale, height: viewport.height * scale }}
     >
       {handle("right", "Resize width", "top-0 -right-4 h-full w-4", "h-8 w-1")}
       {handle("bottom", "Resize height", "-bottom-4 left-0 h-4 w-full", "h-1 w-8")}
