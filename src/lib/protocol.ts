@@ -965,6 +965,86 @@ export type ProviderAccount = { signedIn: boolean | null, email?: string,
 plan?: string, };
 
 /**
+ * One job, as `provider_job_start` and `provider_job_list` answer and as the
+ * `provider-job` event carries it on every change.
+ */
+export type ProviderJob = { id: string, provider: string, action: ProviderJobAction, 
+/**
+ * The method the job resolved to.
+ */
+method?: ProviderJobMethod, phase: ProviderJobPhase, 
+/**
+ * What it is doing: `Uninstalling`, `Installing`, `Updating`, ...
+ */
+step?: string, 
+/**
+ * The shell command now running, or the one that failed.
+ */
+command?: string, 
+/**
+ * The tail of its output (stdout and stderr), oldest first.
+ */
+lastLines: Array<string>, error?: string, startedAt: number, };
+
+export type ProviderJobAction = "install" | "update" | "reinstall" | "uninstall" | "logout";
+
+/**
+ * `provider_job_cancel`: kills the job's process group.
+ */
+export type ProviderJobCancel = { id: string, };
+
+/**
+ * How a CLI is put on, or taken off, a machine.
+ */
+export type ProviderJobMethod = "npm" | "brew" | "script" | "native";
+
+export type ProviderJobPhase = "running" | "done" | "failed" | "cancelled";
+
+/**
+ * `provider_job_start`. Without `method`, an update uses the CLI's own
+ * updater and the rest follow how the installed CLI got there (a first
+ * install uses the vendor's script, or npm for Codex).
+ */
+export type ProviderJobStart = { 
+/**
+ * `claude`, `codex`, `cursor`, `opencode`.
+ */
+provider: string, action: ProviderJobAction, method?: ProviderJobMethod, };
+
+export type ProviderLoginCancel = { loginId: string, };
+
+/**
+ * What to type in a terminal tab on the machine to sign in or out by hand.
+ */
+export type ProviderLoginCommand = { provider: string, 
+/**
+ * `claude auth login`.
+ */
+login: string, 
+/**
+ * `claude auth logout`.
+ */
+logout: string, };
+
+/**
+ * The `provider-login` event: how a device-code sign-in ended.
+ */
+export type ProviderLoginEvent = { provider: string, loginId: string, phase: ProviderLoginPhase, error?: string, };
+
+/**
+ * A device-code sign-in the daemon is waiting on: show `user_code`, open
+ * `verification_url`; the `provider-login` event says how it ended.
+ */
+export type ProviderLoginFlow = { provider: string, loginId: string, userCode: string, verificationUrl: string, };
+
+export type ProviderLoginPhase = "pending" | "done" | "failed" | "cancelled";
+
+/**
+ * `provider_login` / `provider_login_start` / `provider_login_cancel`.
+ */
+export type ProviderRef = { provider: string, };
+
+/**
  * One agent CLI on one machine.
  */
 export type ProviderStatus = { 
@@ -987,7 +1067,12 @@ version?: string,
 /**
  * The newest release; absent when it could not be looked up (offline).
  */
-latest?: string, updateAvailable: boolean, account?: ProviderAccount, 
+latest?: string, updateAvailable: boolean, 
+/**
+ * The ways this machine can install the CLI: only those whose tool (npm,
+ * brew, curl) is there, and only those the CLI ships through.
+ */
+methods: Array<ProviderJobMethod>, account?: ProviderAccount, 
 /**
  * Why the CLI cannot run, when it is there but unusable (opencode 1.x).
  */

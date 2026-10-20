@@ -29,15 +29,15 @@ const LATEST_TTL: Duration = Duration::from_secs(60 * 60);
 const ACCOUNT_TTL: Duration = Duration::from_secs(30);
 
 /// One CLI Crew knows how to drive.
-struct Spec {
-    id: &'static str,
-    binary: &'static str,
+pub(crate) struct Spec {
+    pub(crate) id: &'static str,
+    pub(crate) binary: &'static str,
     /// The npm package that carries releases; None where the CLI says itself.
     /// opencode's is `@opencode/cli`: `opencode-ai`'s `latest` is still 1.x, which Crew does not run.
-    npm: Option<&'static str>,
+    pub(crate) npm: Option<&'static str>,
 }
 
-const SPECS: &[Spec] = &[
+pub(crate) const SPECS: &[Spec] = &[
     Spec { id: "claude", binary: "claude", npm: Some("@anthropic-ai/claude-code") },
     Spec { id: "codex", binary: "codex", npm: Some("@openai/codex") },
     Spec { id: "cursor", binary: "cursor-agent", npm: None },
@@ -65,6 +65,13 @@ pub fn all(refresh: bool) -> Vec<ProviderStatus> {
     })
 }
 
+/// Forgets the cached latest versions and accounts, so the next lookup asks the
+/// CLIs again: after a job changed what is installed or who is signed in.
+pub fn invalidate() {
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = None;
+}
+
 fn bare(spec: &Spec) -> ProviderStatus {
     ProviderStatus { id: spec.id.into(), binary: spec.binary.into(), ..Default::default() }
 }
@@ -75,6 +82,7 @@ fn one(spec: &Spec, refresh: bool) -> ProviderStatus {
         Ok(Some(path)) => {
             status.installed = true;
             status.path = Some(path.to_string_lossy().into_owned());
+            status.methods = crate::provider_job::available_methods(spec.id);
             fill(spec, &path, refresh, &mut status);
         }
         Ok(None) => {}
@@ -172,7 +180,11 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
 fn account_of(id: &str, path: &Path) -> Option<ProviderAccount> {
     Some(match id {
         "claude" => parse_claude_auth(&run(path, &["auth", "status"], LOOKUP_TIMEOUT)?),
-        "codex" => parse_codex_login(&run(path, &["login", "status"], LOOKUP_TIMEOUT)?),
+        // The app-server knows the email and plan; its sentence only says whether.
+        "codex" => match crate::usage::codex::read_account(&path.to_string_lossy()) {
+            Some(result) => parse_codex_account(&result),
+            None => parse_codex_login(&run(path, &["login", "status"], LOOKUP_TIMEOUT)?),
+        },
         "cursor" => parse_cursor_status(&run(path, &["status", "--format", "json"], CURSOR_TIMEOUT)?),
         "opencode" => parse_opencode_auth(&run(path, &["auth", "list"], LOOKUP_TIMEOUT)?),
         _ => return None,
@@ -266,6 +278,23 @@ pub fn parse_claude_auth(json: &str) -> ProviderAccount {
     }
 }
 
+/// An `account/read` result: `{ account: { type, email, planType } | null, requiresOpenaiAuth }`.
+/// No account while sign-in is required is signed out; an API key has no email or plan.
+pub fn parse_codex_account(result: &Value) -> ProviderAccount {
+    match result.get("account") {
+        Some(account) if account.is_object() => ProviderAccount {
+            signed_in: Some(true),
+            email: string(account, "email"),
+            plan: string(account, "planType"),
+        },
+        Some(Value::Null) if result.get("requiresOpenaiAuth").and_then(Value::as_bool) != Some(false) => {
+            ProviderAccount { signed_in: Some(false), ..Default::default() }
+        }
+        // Signed out, but Codex does not need OpenAI (a custom provider): nothing to say.
+        _ => ProviderAccount::default(),
+    }
+}
+
 /// `Logged in using ChatGPT`, `Logged in using an API key`, `Not logged in`.
 pub fn parse_codex_login(text: &str) -> ProviderAccount {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
@@ -316,7 +345,7 @@ pub fn parse_opencode_auth(text: &str) -> ProviderAccount {
     ProviderAccount::default()
 }
 
-fn strip_ansi(text: &str) -> String {
+pub(crate) fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -343,6 +372,7 @@ fn string(value: &Value, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn versions_are_the_number_each_cli_prints() {
@@ -382,6 +412,21 @@ mod tests {
         );
         assert_eq!(parse_claude_auth(r#"{"loggedIn":false}"#).signed_in, Some(false));
         assert_eq!(parse_claude_auth("garbage"), ProviderAccount::default());
+    }
+
+    #[test]
+    fn codex_account_gives_email_and_plan() {
+        let chatgpt = json!({"account":{"type":"chatgpt","email":"a@b.dev","planType":"plus"},"requiresOpenaiAuth":true});
+        assert_eq!(
+            parse_codex_account(&chatgpt),
+            ProviderAccount { signed_in: Some(true), email: Some("a@b.dev".into()), plan: Some("plus".into()) }
+        );
+        let key = json!({"account":{"type":"apiKey"},"requiresOpenaiAuth":true});
+        assert_eq!(parse_codex_account(&key), ProviderAccount { signed_in: Some(true), email: None, plan: None });
+        let out = json!({"account":null,"requiresOpenaiAuth":true});
+        assert_eq!(parse_codex_account(&out).signed_in, Some(false));
+        assert_eq!(parse_codex_account(&json!({"account":null,"requiresOpenaiAuth":false})).signed_in, None);
+        assert_eq!(parse_codex_account(&json!({})).signed_in, None);
     }
 
     #[test]

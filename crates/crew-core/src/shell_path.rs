@@ -154,7 +154,7 @@ fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0).unwrap_or(false)
 }
 
-fn home_dir() -> Option<String> {
+pub(crate) fn home_dir() -> Option<String> {
     std::env::var("HOME").ok().filter(|home| !home.is_empty())
 }
 
