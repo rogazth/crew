@@ -29,7 +29,7 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
   appearance: {
     id: "appearance",
     label: "Appearance",
-    description: "Theme, style and bot faces.",
+    description: "Theme, style, text size and bot faces.",
     icon: PaletteIcon,
   },
   notifications: {
@@ -113,6 +113,7 @@ const SETTINGS: IndexEntry[] = [
   { id: "bypass", label: "Bypass permissions", page: "general", keywords: "danger skip approvals yolo" },
   { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },
   { id: "style", label: "Style and accent colour", page: "appearance", keywords: "brand ink crew cobalt teal blue" },
+  { id: "text-size", label: "Chat text size", page: "appearance", keywords: "font size zoom bigger smaller reading" },
   { id: "avatar", label: "Bot avatar style", page: "appearance", keywords: "faces dicebear" },
   { id: "provider-claude", label: "Claude Code", page: "providers", keywords: "anthropic sign in" },
   { id: "provider-codex", label: "Codex", page: "providers", keywords: "openai chatgpt" },

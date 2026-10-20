@@ -124,7 +124,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
         <span className="min-w-0 flex-1 truncate font-medium">{many ? "Questions" : "Question"}</span>
         {current.multiSelect ? <span className="shrink-0 text-[12px] text-text-muted">Pick any</span> : null}
       </div>
-      <p className="text-[14.5px] leading-[21px]">{current.question}</p>
+      <p className="text-[length:calc(var(--chat-text)+0.5px)] leading-[21px]">{current.question}</p>
       <div className="crew-options flex flex-col">
         <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
         <label className={CHOICE}>

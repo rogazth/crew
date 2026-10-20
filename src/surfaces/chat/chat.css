@@ -47,13 +47,13 @@
   inset: 2px 8px auto;
 }
 .ds-composer-text .crew-composer-field {
-  font-size: 14px;
-  line-height: 21px;
-  min-height: 21px;
+  font-size: var(--chat-text);
+  line-height: calc(var(--chat-text) * 1.5);
+  min-height: calc(var(--chat-text) * 1.5);
 }
 /* A new chat's composer is the page: two lines of room to start in. */
 .ds-composer[data-roomy] .ds-composer-text .crew-composer-field {
-  min-height: 42px;
+  min-height: calc(var(--chat-text) * 3);
 }
 
 /* An `@path` in the draft wears what it will wear once sent (`.crew-file-ref`):
