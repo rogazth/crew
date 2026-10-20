@@ -22,18 +22,9 @@ import { effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type 
 import { nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
-  folderChoices,
-  foldersOf,
-  mentionAt,
-  mentionFolder,
-  mergeChoices,
   rememberMention,
-  searchFiles,
   splitMentions,
-  type MentionChoice,
 } from "../../lib/mentions";
-import { listFolder } from "../../lib/api";
-import type { FolderEntry } from "../../lib/protocol";
 import type { CommandEntry } from "../../lib/protocol";
 import {
   completeSlash,
@@ -54,6 +45,7 @@ import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
+import { useMentionMenu } from "./useMentionMenu";
 import { SlashPicker } from "./SlashPicker";
 import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
 import {
@@ -194,17 +186,7 @@ export function Composer({
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
   const [active, setActive] = useState(0);
-  const mention = mentionAt(draft, cursor);
-  const root = useMemo(() => resolvePath("./")?.replace(/\/+$/, "") ?? "", [resolvePath]);
-  const indexed = useMemo<MentionChoice[]>(() => [...projectFiles, ...foldersOf(projectFiles, root)], [projectFiles, root]);
-  // The folder being typed into is read from disk, once per folder: the index leaves out large folders git ignores.
-  const typedFolder = mention ? mentionFolder(mention.query) : null;
-  const listing = useFolderListing(typedFolder?.folder ?? null, resolvePath);
-  const results = useMemo(() => {
-    if (!mention || !typedFolder) return [];
-    const listed = listing ? folderChoices(listing, typedFolder.folder, typedFolder.rest) : [];
-    return mergeChoices(listed, searchFiles(mention.query, indexed));
-  }, [mention?.query, indexed, listing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { mention, indexed, results } = useMentionMenu(draft, cursor, projectFiles, resolvePath);
   const [picked, setPicked] = useState<readonly string[]>([]);
   const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...picked]), [indexed, picked]);
 
@@ -543,23 +525,4 @@ export function Composer({
       </div>
     </div>
   );
-}
-
-/** What `folder` (relative to the session's) holds, read when it is first typed; null until it is read. */
-function useFolderListing(folder: string | null, resolvePath: (path: string) => string | null): FolderEntry[] | null {
-  const [listing, setListing] = useState<{ folder: string; entries: FolderEntry[] } | null>(null);
-  useEffect(() => {
-    if (folder === null) return;
-    const path = resolvePath(folder || "./")?.replace(/\/+$/, "");
-    if (!path) return;
-    let live = true;
-    listFolder(path).then(
-      (entries) => live && setListing({ folder, entries }),
-      () => live && setListing({ folder, entries: [] }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [folder, resolvePath]);
-  return listing && listing.folder === folder ? listing.entries : null;
 }

@@ -493,6 +493,7 @@ export function App() {
                 isHome ? (
                   <HomeStart
                     firstRun={workspaces.projects.length === 0}
+                    cwd={active?.path ?? null}
                     onAsk={(text, choice, files) => void newSession(choice, null, text, files)}
                     onOpenFolder={envs.openWorkspace}
                     onNewBot={() => sheet.newBot()}
