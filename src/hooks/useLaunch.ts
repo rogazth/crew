@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Launch } from "../chrome/TabLauncher";
 import type { AttachedFile } from "../lib/blocks";
-import { setFirstPrompt } from "../lib/firstPrompt";
+import { carryUnsent, setFirstPrompt, type Unsent } from "../lib/firstPrompt";
 import { choiceForNewSession, type AgentChoice, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
 import { PLACEHOLDER_SESSION_NAME } from "../lib/workspaces";
@@ -21,8 +21,8 @@ type Deps = {
   /** The file explorer beside the tabs, on its files half. */
   openExplorer: () => void;
   newBot: () => void;
-  /** Puts the start screen on screen with the caret in its composer. */
-  showStart: () => void;
+  /** Puts the start screen on screen with the caret in its composer, starting in the worktree at `place` when one is named. */
+  showStart: (place?: string) => void;
 };
 
 /** New sessions and the tab launcher's picks. */
@@ -47,9 +47,10 @@ export function useLaunch({
      * which takes the default's model when it is the default's and its effort
      * and access where they fit. `place` puts it in a worktree other than the
      * one on screen; null is the main checkout. `prompt` is its first message:
-     * it is the first turn of the chat, with `files` attached.
+     * it is the first turn of the chat, with `files` attached. `unsent` is
+     * what another session's composer held, left in this one's as a draft.
      */
-    async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string, files?: AttachedFile[]) => {
+    async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string, files?: AttachedFile[], unsent?: Unsent) => {
       const choice = choiceForNewSession(pick, defaultAgent);
       const session = await create("terminal", {
         name: PLACEHOLDER_SESSION_NAME,
@@ -64,6 +65,7 @@ export function useLaunch({
       if (!session) return;
       if (prompt) setFirstPrompt(session.id, prompt, files);
       else markBlank(session.id);
+      if (unsent) carryUnsent(session.id, unsent);
       openSession(session);
       return session;
     },
@@ -71,11 +73,12 @@ export function useLaunch({
   );
 
   // A new session is the start screen: a provider picked for it becomes the composer's choice, nothing is created yet.
+  // Whatever an earlier visit left in the composer's choice goes first, so it never outlives the session it was for.
   const startSession = useCallback(
-    (pick?: ProviderId | AgentChoice) => {
+    (pick?: ProviderId | AgentChoice, place?: string) => {
       if (typeof pick === "string") setDraft(pick === defaultAgent.provider ? null : lastOf(pick));
       else setDraft(pick ?? null);
-      showStart();
+      showStart(place);
     },
     [defaultAgent, lastOf, setDraft, showStart],
   );
@@ -89,10 +92,10 @@ export function useLaunch({
       if (item.kind === "browser") openBrowser(item.url, item.incognito);
       if (item.kind === "explorer") openExplorer();
       if (item.kind === "new-bot") newBot();
-      if (item.kind === "new-session") void newSession(item.provider);
+      if (item.kind === "new-session") startSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
-    [newBot, newSession, openSession, openStub, openTerminal, openBrowser, openExplorer, worktree],
+    [newBot, openSession, openStub, startSession, openTerminal, openBrowser, openExplorer, worktree],
   );
 
   return { newSession, startSession, launch };
