@@ -1,9 +1,11 @@
 // An app update as news, not an interruption: a mark at the rail's foot that
 // walks through the update (available → downloading → ready) and opens what
-// changed. It takes the update as props and is not in the rail until S5 of
-// docs/plans/2026-10-19-design-system-finish.md feeds it the real updater.
+// changed. `UpdateButton` takes the update as props; `RailUpdate` feeds it the
+// real updater.
 import { Popover } from "@base-ui/react/popover";
 import { ArrowDownToLineIcon, RotateCwIcon, XIcon } from "lucide-react";
+import { useUpdateActions, useUpdateState } from "../hooks/useUpdate";
+import { dateLabel, sizeLabel, type ReleaseNote } from "../lib/update";
 import { CrewGlyph } from "./CrewGlyph";
 import { Button, IconButton } from "./kit";
 
@@ -13,9 +15,9 @@ export type Release = {
   version: string;
   /** The version running now. */
   current: string;
-  size: string;
-  date: string;
-  notes: readonly { kind: "new" | "improved" | "fixed"; text: string }[];
+  size: string | null;
+  date: string | null;
+  notes: readonly ReleaseNote[];
 };
 
 type UpdateProps = {
@@ -33,6 +35,32 @@ const KIND: Record<string, { label: string; tone: string }> = {
   improved: { label: "Better", tone: "bg-info/12 text-info" },
   fixed: { label: "Fixed", tone: "bg-success/12 text-success" },
 };
+
+/** The mark in the rail, on the real updater: nothing until a release is offered. */
+export function RailUpdate() {
+  const state = useUpdateState();
+  const { download, skip, restart } = useUpdateActions();
+  if (
+    state.phase !== "available" &&
+    state.phase !== "downloading" &&
+    state.phase !== "staging" &&
+    state.phase !== "ready"
+  ) {
+    return null;
+  }
+  const { offer } = state;
+  const release: Release = {
+    version: offer.version,
+    current: offer.current,
+    size: offer.size === null ? null : sizeLabel(offer.size),
+    date: offer.date === null ? null : dateLabel(offer.date) || null,
+    notes: offer.notes,
+  };
+  const phase: UpdatePhase = state.phase === "available" ? "available" : state.phase === "ready" ? "ready" : "downloading";
+  const progress =
+    state.phase === "downloading" ? (state.total ? state.received / state.total : 0) : state.phase === "available" ? 0 : 1;
+  return <UpdateButton release={release} phase={phase} progress={progress} onDownload={download} onSkip={skip} onRestart={restart} />;
+}
 
 export function UpdateButton(props: UpdateProps) {
   const { release, phase: update, progress } = props;
@@ -85,21 +113,24 @@ export function ReleaseCard({ release, phase: update, progress, onDownload, onSk
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-[15px] font-semibold tracking-[-0.01em]">Crew {release.version}</span>
           <span className="text-[12px] text-text-muted">
-            You have {release.current} · {release.size} · {release.date}
+            You have {release.current}
+            {[release.size, release.date].filter(Boolean).map((part) => ` · ${part}`)}
           </span>
         </div>
         {onClose && <IconButton icon={XIcon} label="Close" className="size-7" onClick={onClose} />}
       </div>
-      <ul className="mx-3 flex flex-col gap-1 rounded-xl bg-card p-1.5">
-        {release.notes.map((note) => (
-          <li key={note.text} className="flex items-start gap-2.5 rounded-lg px-2 py-1.5">
-            <span className={`mt-px shrink-0 rounded-md px-1.5 py-px text-[11px] font-medium ${KIND[note.kind]!.tone}`}>
-              {KIND[note.kind]!.label}
-            </span>
-            <span className="leading-[18px]">{note.text}</span>
-          </li>
-        ))}
-      </ul>
+      {release.notes.length > 0 && (
+        <ul className="mx-3 flex max-h-64 flex-col gap-1 overflow-y-auto rounded-xl bg-card p-1.5">
+          {release.notes.map((note) => (
+            <li key={note.text} className="flex items-start gap-2.5 rounded-lg px-2 py-1.5">
+              <span className={`mt-px shrink-0 rounded-md px-1.5 py-px text-[11px] font-medium ${KIND[note.kind]!.tone}`}>
+                {KIND[note.kind]!.label}
+              </span>
+              <span className="leading-[18px]">{note.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex items-center gap-2 p-3 pl-4">
         {update === "downloading" ? (
           <div className="flex flex-1 flex-col gap-1.5">
@@ -116,7 +147,7 @@ export function ReleaseCard({ release, phase: update, progress, onDownload, onSk
             <span className="flex-1" />
             {update === "ready" ? (
               <Button variant="primary" keys="⌘⏎" onClick={onRestart}>
-                Restart to update
+                Restart to install
               </Button>
             ) : (
               <>

@@ -10,7 +10,6 @@ import { SidebarToggle } from "./chrome/SidebarToggle";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
-import { UpdateDialog } from "./chrome/UpdateDialog";
 import { Explorer } from "./chrome/explorer/Explorer";
 import { useBotSheet } from "./hooks/useBotSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
@@ -53,6 +52,7 @@ import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
 import { useTour } from "./hooks/useTour";
+import { useUpdateWiring } from "./hooks/useUpdate";
 import type { Process } from "./lib/processes";
 import { PanePlaceContext } from "./surfaces/chat/panePlace";
 import { WorkspaceStart, focusWorkspaceStart } from "./surfaces/WorkspaceStart";
@@ -167,6 +167,7 @@ export function App() {
     openSettings,
     openRoutines,
   } = usePages();
+  useUpdateWiring(openSettings);
   const processes = useProcesses(workspaceId);
 
   // With only the main checkout there is no other worktree to tell apart.
@@ -622,7 +623,6 @@ export function App() {
 
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
-      <UpdateDialog />
 
       <BotSheetHost
         sheet={sheet}

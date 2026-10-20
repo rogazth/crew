@@ -3,6 +3,7 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import { PAGES, PENDING } from "./settings/pages";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
+import { AboutPage } from "./settings/AboutPage";
 import { AppearancePage } from "./settings/AppearancePage";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { CommandLineSettings } from "./settings/CommandLineSettings";
@@ -25,7 +26,7 @@ type Props = {
  * One page per section. Appearance and Keybindings are the redesigned pages;
  * the rest are the components that work against the real daemon and host, in
  * the same frame, until streams S2–S5 of docs/plans/2026-10-19-design-system-finish.md
- * give Usage, Providers, Environments, About and General their redesigned,
+ * give Usage, Providers, Environments and General their redesigned,
  * real pages (see settings/pages.ts for the ones still pending).
  */
 export function SettingsView({ section, workspaces, onConfirm, onOpenTerminal }: Props) {
@@ -82,8 +83,9 @@ function Page({ section, workspaces, onConfirm, onOpenTerminal }: Props) {
           <InstalledProviders />
         </Framed>
       );
-    case "usage":
     case "about":
+      return <AboutPage />;
+    case "usage":
       return null;
   }
 }

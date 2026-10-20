@@ -1,38 +1,94 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { app, BrowserWindow, ipcMain } from "electron";
-import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
+import {
+  notesOf,
+  UPDATE_CHANNELS,
+  type PublishedRelease,
+  type ReleaseList,
+  type ReleaseNote,
+  type UpdateOffer,
+  type UpdatePhase,
+} from "../src/lib/update";
 import { release } from "./build-info";
 
-const RELEASES = "https://github.com/rogazth/crew/releases";
+const REPO = "rogazth/crew";
+const RELEASES = `https://github.com/${REPO}/releases`;
+const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=12`;
+const RELEASES_TTL = 30 * 60 * 1000;
 const MANIFEST = `${RELEASES}/latest/download/latest.json`;
 const FIRST_CHECK = 15_000;
 const EVERY = 6 * 60 * 60 * 1000;
 const PROGRESS_EVERY = 100;
 
-type Manifest = { version: string; zip: string; sha256: string };
+/** `size`, `date` and `notes` are optional in latest.json: releases cut before they were added lack them. */
+type Manifest = {
+  version: string;
+  zip: string;
+  sha256: string;
+  size: number | null;
+  date: string | null;
+  notes: ReleaseNote[];
+};
+
+/** A downloaded, unpacked release waiting to replace the bundle. */
+type Staged = { stage: string; script: string; app: string; target: string };
 
 let busy = false;
 let skipped: string | null = null;
-let state: UpdateState = { phase: "idle" };
+let phase: UpdatePhase = { phase: "idle" };
+let checkedAt: number | null = null;
 let offered: Manifest | null = null;
+let staged: Staged | null = null;
+let applied = false;
+let auto = false;
 let aborting: AbortController | null = null;
 let ensureWindow: (() => void) | null = null;
 
+function parseNotes(value: unknown): ReleaseNote[] {
+  if (!Array.isArray(value)) return [];
+  const notes: ReleaseNote[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const { kind, text } = item as Record<string, unknown>;
+    if ((kind === "new" || kind === "improved" || kind === "fixed") && typeof text === "string" && text) {
+      notes.push({ kind, text });
+    }
+  }
+  return notes;
+}
+
 function parseManifest(value: unknown): Manifest | null {
   if (typeof value !== "object" || value === null) return null;
-  const { version, zip, sha256 } = value as Record<string, unknown>;
+  const { version, zip, sha256, size, date, notes } = value as Record<string, unknown>;
   if (typeof version !== "string" || typeof zip !== "string" || typeof sha256 !== "string") return null;
   if (!/^[0-9a-f]{64}$/.test(sha256)) return null;
   // The url ends up as an argument to a shell script that replaces the bundle;
   // anything outside the release host is a redirect we did not publish.
   if (!zip.startsWith(`${RELEASES}/download/`)) return null;
-  return { version, zip, sha256 };
+  return {
+    version,
+    zip,
+    sha256,
+    size: typeof size === "number" && size > 0 ? size : null,
+    date: typeof date === "string" && !Number.isNaN(new Date(date).getTime()) ? date : null,
+    notes: parseNotes(notes),
+  };
+}
+
+function offerOf(manifest: Manifest): UpdateOffer {
+  return {
+    version: manifest.version,
+    current: app.getVersion(),
+    size: manifest.size,
+    date: manifest.date,
+    notes: manifest.notes,
+  };
 }
 
 function newer(latest: string, current: string): boolean {
@@ -112,8 +168,9 @@ function run(command: string, args: string[]): Promise<void> {
 
 // The bundle cannot replace itself while it is the running executable, so the
 // swap happens from a detached shell that waits for this process to be gone.
+// Installing on quit leaves the app closed; restarting to install opens it.
 const SWAP = `#!/bin/sh
-pid="$1"; target="$2"; staged="$3"; stage="$4"
+pid="$1"; target="$2"; staged="$3"; stage="$4"; reopen="$5"
 while /bin/kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 old="$target.crew-old"
 /bin/rm -rf "$old"
@@ -126,54 +183,62 @@ if /bin/mv "$target" "$old"; then
   fi
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null
-/usr/bin/open "$target"
+[ "$reopen" = 1 ] && /usr/bin/open "$target"
 /bin/rm -rf "$stage"
 `;
 
+function snapshot() {
+  return { ...phase, checkedAt };
+}
+
 /** Sends the phase to every window; one that opens later asks for it. */
-function set(next: UpdateState): void {
-  state = next;
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNELS.state, next);
+function set(next: UpdatePhase): void {
+  phase = next;
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNELS.state, snapshot());
 }
 
 function inFlight(): boolean {
-  return state.phase === "downloading" || state.phase === "installing" || state.phase === "restarting";
+  return (
+    phase.phase === "downloading" ||
+    phase.phase === "staging" ||
+    phase.phase === "ready" ||
+    phase.phase === "restarting"
+  );
 }
 
-async function install(manifest: Manifest, target: string): Promise<void> {
+/** Downloads, verifies and unpacks the release next to the installed one; nothing is replaced yet. */
+async function stage(manifest: Manifest, target: string): Promise<void> {
   const controller = new AbortController();
   aborting = controller;
-  const stage = await mkdtemp(path.join(tmpdir(), "crew-update-"));
+  const offer = offerOf(manifest);
+  const dir = await mkdtemp(path.join(tmpdir(), "crew-update-"));
   try {
-    const zip = path.join(stage, path.basename(manifest.zip));
-    set({ phase: "downloading", version: manifest.version, received: 0, total: null });
+    const zip = path.join(dir, path.basename(manifest.zip));
+    set({ phase: "downloading", offer, received: 0, total: null });
     let sent = 0;
     await download(manifest.zip, zip, manifest.sha256, controller.signal, (received, total) => {
       // A chunk lands every few kilobytes; the bar only needs a few frames a second.
       const now = Date.now();
       if (now - sent < PROGRESS_EVERY && received !== total) return;
       sent = now;
-      set({ phase: "downloading", version: manifest.version, received, total });
+      set({ phase: "downloading", offer, received, total });
     });
     aborting = null;
-    set({ phase: "installing", version: manifest.version });
-    const unpacked = path.join(stage, "unpacked");
+    set({ phase: "staging", offer });
+    const unpacked = path.join(dir, "unpacked");
     await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
-    const staged = path.join(unpacked, path.basename(target));
-    await access(path.join(staged, "Contents", "Info.plist"));
-    const script = path.join(stage, "swap.sh");
+    const bundled = path.join(unpacked, path.basename(target));
+    await access(path.join(bundled, "Contents", "Info.plist"));
+    const script = path.join(dir, "swap.sh");
     await writeFile(script, SWAP, { mode: 0o755 });
-    set({ phase: "restarting", version: manifest.version });
-    const swap = spawn("/bin/sh", [script, String(process.pid), target, staged, stage], {
-      detached: true,
-      stdio: "ignore",
-    });
-    swap.unref();
-    app.quit();
+    await rm(zip, { force: true });
+    staged = { stage: dir, script, app: bundled, target };
+    applied = false;
+    set({ phase: "ready", offer });
   } catch (error) {
-    await rm(stage, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
     if (controller.signal.aborted) {
-      set({ phase: "idle" });
+      set({ phase: "available", offer });
       return;
     }
     set({ phase: "error", message: error instanceof Error ? error.message : String(error) });
@@ -182,13 +247,32 @@ async function install(manifest: Manifest, target: string): Promise<void> {
   }
 }
 
+/** Hands the swap to a shell that outlives this process. Once only. */
+function applyStaged(reopen: boolean): boolean {
+  if (!staged || applied) return false;
+  applied = true;
+  const { script, target, app: bundled, stage: dir } = staged;
+  const swap = spawn("/bin/sh", [script, String(process.pid), target, bundled, dir, reopen ? "1" : "0"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  swap.unref();
+  return true;
+}
+
+/** The user quit with a release staged: it goes in as the app closes, and opens on the next launch. */
+export function installStagedOnQuit(): void {
+  applyStaged(false);
+}
+
+function startDownload(): void {
+  const target = bundle();
+  if (phase.phase !== "available" || !offered || !target) return;
+  void stage(offered, target);
+}
+
 export async function checkForUpdates(manual = false): Promise<void> {
-  if (manual) ensureWindow?.();
-  if (inFlight()) {
-    // The dialog may have been closed by a reload; the menu brings it back.
-    if (manual) set(state);
-    return;
-  }
+  if (inFlight()) return;
   if (busy) return;
   // A local build updating itself would turn into the release, on the installed app's data.
   if (!app.isPackaged || !release || !bundle()) {
@@ -199,35 +283,131 @@ export async function checkForUpdates(manual = false): Promise<void> {
   if (manual) set({ phase: "checking" });
   try {
     const manifest = await fetchManifest();
+    checkedAt = Date.now();
     if (!newer(manifest.version, app.getVersion())) {
-      if (manual) set({ phase: "latest", version: app.getVersion() });
+      // A quiet check that finds nothing leaves the page as it was.
+      set(manual || phase.phase === "available" ? { phase: "latest", version: app.getVersion() } : phase);
       return;
     }
-    if (!manual && skipped === manifest.version) return;
+    if (!manual && skipped === manifest.version) {
+      set(phase);
+      return;
+    }
     offered = manifest;
-    set({ phase: "available", version: manifest.version, current: app.getVersion() });
+    set({ phase: "available", offer: offerOf(manifest) });
+    if (auto) startDownload();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (manual) set({ phase: "error", message });
-    else console.error(`update check failed: ${message}`);
+    else {
+      console.error(`update check failed: ${message}`);
+      set(phase);
+    }
   } finally {
     busy = false;
   }
 }
 
+/** The menu's "Check for Updates…": the About page opens on the answer. */
+export function checkFromMenu(): void {
+  const show = () => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNELS.show);
+  };
+  if (BrowserWindow.getAllWindows().length > 0) show();
+  else {
+    ensureWindow?.();
+    // A window that is still loading has no one listening yet.
+    BrowserWindow.getAllWindows()[0]?.webContents.once("did-finish-load", () => setTimeout(show, 600));
+  }
+  void checkForUpdates(true);
+}
+
+/* ── What's new: the published releases ─────────────────────────────── */
+
+let memory: { at: number; releases: PublishedRelease[] } | null = null;
+
+function cacheFile(): string {
+  return path.join(app.getPath("userData"), "releases.json");
+}
+
+function parseReleases(value: unknown): PublishedRelease[] {
+  if (!Array.isArray(value)) return [];
+  const list: PublishedRelease[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const { tag_name, published_at, html_url, body, draft, prerelease } = item as Record<string, unknown>;
+    if (draft === true || prerelease === true) continue;
+    if (typeof tag_name !== "string" || typeof published_at !== "string" || typeof html_url !== "string") continue;
+    if (!html_url.startsWith(`${RELEASES}/`)) continue;
+    list.push({
+      version: tag_name.replace(/^v/, ""),
+      date: published_at,
+      url: html_url,
+      notes: notesOf(typeof body === "string" ? body : ""),
+    });
+  }
+  return list;
+}
+
+/** Cached for half an hour in memory and kept on disk, so an offline Crew still shows the last it saw. */
+async function publishedReleases(): Promise<ReleaseList> {
+  if (memory && Date.now() - memory.at < RELEASES_TTL) return { releases: memory.releases, stale: false };
+  try {
+    const response = await fetch(RELEASES_API, {
+      headers: { accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`${RELEASES_API} answered ${response.status}`);
+    const releases = parseReleases(await response.json());
+    memory = { at: Date.now(), releases };
+    await writeFile(cacheFile(), JSON.stringify(releases)).catch(() => {});
+    return { releases, stale: false };
+  } catch {
+    const cached = memory?.releases ?? parseStored(await readFile(cacheFile(), "utf8").catch(() => ""));
+    return { releases: cached, stale: true };
+  }
+}
+
+function parseStored(text: string): PublishedRelease[] {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (item): item is PublishedRelease =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as PublishedRelease).version === "string" &&
+        typeof (item as PublishedRelease).date === "string" &&
+        typeof (item as PublishedRelease).url === "string" &&
+        Array.isArray((item as PublishedRelease).notes),
+    );
+  } catch {
+    return [];
+  }
+}
+
 function registerIpc(): void {
-  ipcMain.handle(UPDATE_CHANNELS.current, () => state);
-  ipcMain.handle(UPDATE_CHANNELS.install, () => {
-    const target = bundle();
-    if (state.phase !== "available" || !offered || !target) return;
-    void install(offered, target);
+  ipcMain.handle(UPDATE_CHANNELS.current, () => snapshot());
+  ipcMain.handle(UPDATE_CHANNELS.check, () => checkForUpdates(true));
+  ipcMain.handle(UPDATE_CHANNELS.download, () => startDownload());
+  ipcMain.handle(UPDATE_CHANNELS.restart, () => {
+    if (phase.phase !== "ready" || !applyStaged(true)) return;
+    set({ phase: "restarting", offer: phase.offer });
+    app.quit();
   });
   ipcMain.handle(UPDATE_CHANNELS.dismiss, () => {
+    // A staged release stays: it installs when Crew quits.
     if (inFlight()) return;
-    if (state.phase === "available") skipped = state.version;
+    if (phase.phase === "available") skipped = phase.offer.version;
     set({ phase: "idle" });
   });
   ipcMain.handle(UPDATE_CHANNELS.cancel, () => aborting?.abort());
+  ipcMain.handle(UPDATE_CHANNELS.auto, (_event, on: unknown) => {
+    auto = on === true;
+    // Switched on while a release is waiting to be asked for: take it now.
+    if (auto) startDownload();
+  });
+  ipcMain.handle(UPDATE_CHANNELS.releases, () => publishedReleases());
 }
 
 /** `open` brings a window back when the menu asks for a check and none is open. */

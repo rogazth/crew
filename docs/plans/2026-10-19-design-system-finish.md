@@ -12,7 +12,7 @@ Decisions are final; the numbers match the review list they came from.
 | S2 | Usage | pending |
 | S3 | Providers | pending |
 | S4 | Environments, metrics, add machine | pending |
-| S5 | Updates, About, General | pending |
+| S5 | Updates, About, General | updates and About (27-35) done; General (11-16) pending |
 | S6 | Appearance, keybindings | pending |
 | S7 | Sidebar, composer, first screens, misc | pending |
 | S8 | Rebase `feat/bot-memory` | pending |

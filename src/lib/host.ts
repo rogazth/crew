@@ -17,7 +17,8 @@ import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { Banner, BannerResult, BannerState, DockBadge, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
-import type { UpdateState } from "./update";
+import type { AppInfo } from "./appInfo";
+import type { ReleaseList, UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
 
@@ -25,6 +26,9 @@ export type DaemonInfo = { url: string; token: string };
 
 type CrewHost = {
   daemonInfo(): Promise<DaemonInfo>;
+  appInfo(): Promise<AppInfo>;
+  /** Opens the third-party licenses file; resolves why it could not, or "". */
+  openLicenses(): Promise<string>;
   open(opts: OpenOptions): Promise<string | string[] | null>;
   homeDir(): Promise<string>;
   openUrl(url: string): Promise<void>;
@@ -104,9 +108,19 @@ export type CliHost = {
 export type UpdateHost = {
   current(): Promise<UpdateState>;
   onState(cb: (state: UpdateState) => void): () => void;
-  install(): Promise<void>;
+  /** Looks for a newer release now. */
+  check(): Promise<void>;
+  /** Downloads and stages the offered release. */
+  download(): Promise<void>;
+  /** Applies the staged release and relaunches. */
+  restart(): Promise<void>;
   dismiss(): Promise<void>;
   cancel(): Promise<void>;
+  /** The menu asked for a check: show About. */
+  onShow(cb: () => void): () => void;
+  /** Tells main whether to download an offered release on its own. */
+  setAutoDownload(on: boolean): Promise<void>;
+  releases(): Promise<ReleaseList>;
 };
 
 /** The browser's main-process half. Absent outside Electron (the mock, the screenshot build). */
@@ -192,6 +206,17 @@ export function cliHost(): CliHost | null {
 
 export function updateHost(): UpdateHost | null {
   return crewHost()?.update ?? null;
+}
+
+/** The running build, for About. Null outside Electron. */
+export async function appInfo(): Promise<AppInfo | null> {
+  return (await crewHost()?.appInfo()) ?? null;
+}
+
+/** Resolves why the licenses file did not open, or "". */
+export async function openLicenses(): Promise<string> {
+  const host = crewHost();
+  return host ? host.openLicenses() : "Licenses are in the installed app.";
 }
 
 export async function daemonInfo(): Promise<DaemonInfo> {
