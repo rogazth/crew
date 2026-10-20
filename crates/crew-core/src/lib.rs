@@ -31,6 +31,7 @@ pub mod process;
 pub mod process_tools;
 pub mod prompts;
 pub mod provider_session;
+pub mod provider_status;
 pub mod providers;
 pub mod pty;
 pub mod remote;

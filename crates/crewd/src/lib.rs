@@ -1683,6 +1683,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Names { names } = parse(params)?;
             json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
+        "provider_status" => {
+            let proto::ProviderStatusRequest { refresh } = parse(params)?;
+            json(block(move || Ok::<_, String>(crew_core::provider_status::all(refresh))).await?)
+        }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
             // Cursor and Codex list their models; the others keep Crew's own list.
@@ -1696,13 +1700,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "usage_read" => {
             let p: proto::UsageRead = parse(params)?;
             let usage = hosts.turns.usage().clone();
-            json(block(move || {
-                if p.refresh.unwrap_or(false) {
-                    usage.refresh();
-                }
-                usage.snapshot()
-            })
-            .await?)
+            json(
+                block(move || {
+                    if p.refresh.unwrap_or(false) {
+                        usage.refresh();
+                    }
+                    usage.snapshot()
+                })
+                .await?,
+            )
         }
         "agent_fast_mode" => json(block(|| Ok::<_, String>(provider_session::claude_fast_mode())).await?),
         "turn_start" => {
