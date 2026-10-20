@@ -59,7 +59,6 @@ import { statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
 import { sessionPath, worktreeLabel } from "../lib/worktrees";
-import { useWorkspaceRenameRequest } from "../lib/renameBus";
 import { SidebarViewMenu } from "./SidebarViewMenu";
 
 export type WorkspaceSidebarProps = {
@@ -80,6 +79,9 @@ export type WorkspaceSidebarProps = {
   onRemoveMany: (sessions: Session[]) => void;
   onReorder: (ids: string[]) => void;
   onRenameWorkspace: (name: string) => void;
+  /** The workspace whose name the rail asked to rename; it opens the field, then `onRenameSettled`. */
+  renameWanted: string | null;
+  onRenameSettled: () => void;
   onRemoveWorkspace: () => void;
   /** The workspace's commands, for the pill under its name. */
   commands: { live: number; asking: number; orphans: number; open: boolean; onToggle: () => void };
@@ -208,11 +210,15 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const treeOf = (s: Session) => props.worktrees.find((t) => t.path === pathOf(s));
 
   // "Rename" on the rail's mark lands here, on the name it renames.
-  const request = useWorkspaceRenameRequest();
-  if (request.wanted === props.workspace.id) {
-    request.clear();
-    setNaming(true);
-  }
+  const wanted = props.renameWanted === props.workspace.id;
+  const { onRenameSettled } = props;
+  const setNamingOrSettle = useCallback(
+    (next: boolean) => {
+      setNaming(next);
+      if (!next) onRenameSettled();
+    },
+    [onRenameSettled],
+  );
 
   // The view menu is the sessions': bots keep their own order and every filter passes them by.
   const arranged = useMemo(() => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [] }, query) : null), [prefs, props.sessions, query]);
@@ -390,8 +396,8 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           name={props.home ? "Home" : props.workspace.name}
           path={props.workspace.path}
           editable={!props.home}
-          naming={naming}
-          onNaming={setNaming}
+          naming={naming || wanted}
+          onNaming={setNamingOrSettle}
           onRename={props.onRenameWorkspace}
           onMenu={(point) => setMenu({ kind: "workspace", point })}
           commands={

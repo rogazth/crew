@@ -159,6 +159,8 @@ export function App() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [dialog, setDialog] = useState<"new-worktree" | "shortcuts" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The workspace whose name the rail asked to rename, until the sidebar settles it.
+  const [renameWanted, setRenameWanted] = useState<string | null>(null);
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
   const {
@@ -365,11 +367,13 @@ export function App() {
             // Picking a workspace is going back to it, out from under any page.
             onSelect: (id) => {
               closePage();
+              setRenameWanted(null);
               workspaces.activate(id);
             },
             onCreate: envs.openWorkspace,
             remoteOf: envs.remoteOf,
             onRename: workspaces.rename,
+            onRequestRename: setRenameWanted,
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
@@ -417,6 +421,8 @@ export function App() {
               : undefined,
             running: commandCounts.running,
             onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
+            renameWanted,
+            onRenameSettled: () => setRenameWanted(null),
             onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
             commands: {
               live: commandCounts.live,
