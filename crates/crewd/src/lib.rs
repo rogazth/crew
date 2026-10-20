@@ -528,6 +528,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // What a turn left running in the background reaches every window.
     let tray = hub.clone();
     turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
+    // So does a change in what a plan has spent.
+    let plans = hub.clone();
+    turns.usage().set_listener(Arc::new(move |snapshot| plans.emit("usage-changed", snapshot)));
     // A session's `/` menu changing reaches every window.
     let menu = hub.clone();
     turns.commands().set_listener(Arc::new(move |change| menu.emit("commands-changed", change)));
@@ -1684,6 +1687,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 _ => Vec::new(),
             };
             json(models)
+        }
+        "usage_read" => {
+            let p: proto::UsageRead = parse(params)?;
+            let usage = hosts.turns.usage().clone();
+            json(block(move || {
+                if p.refresh.unwrap_or(false) {
+                    usage.refresh();
+                }
+                usage.snapshot()
+            })
+            .await?)
         }
         "agent_fast_mode" => json(block(|| Ok::<_, String>(provider_session::claude_fast_mode())).await?),
         "turn_start" => {
@@ -3924,6 +3938,17 @@ for line in sys.stdin:
         assert_eq!(kept.result, Some(serde_json::json!("{}")), "a neighbouring key went too");
         let again = rpc(&mut ws, 6, "state_delete", serde_json::json!({ "key": "tabs:w@/tmp/feat" })).await;
         assert!(again.ok, "deleting a missing key is not an error");
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn usage_read_answers_with_the_stored_readings_and_no_cli() {
+        let dir = test_dir("usage-read");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let read = rpc(&mut ws, 1, "usage_read", serde_json::json!({})).await;
+        assert!(read.ok, "{}", read.error.unwrap_or_default());
+        assert_eq!(read.result, Some(serde_json::json!({ "readings": [], "history": [] })));
         handle.shutdown();
     }
 }

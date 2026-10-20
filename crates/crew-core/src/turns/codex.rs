@@ -1122,6 +1122,11 @@ impl TurnHost {
     }
 
     fn codex_notification(&self, session_id: &str, method: &str, params: &Value) {
+        // The account's, not the turn's: the plan's windows moved.
+        if method == "account/rateLimits/updated" {
+            self.usage().codex_event(params);
+            return;
+        }
         // The skills are the process's, not the turn's: Codex says they moved
         // whatever the turn is doing, so they are read again here, before the
         // turn's own checks can drop it.
