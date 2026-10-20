@@ -8,7 +8,7 @@ Decisions are final; the numbers match the review list they came from.
 
 | Stream | Scope | Status |
 | --- | --- | --- |
-| S1 | Cleanup and promotion | pending |
+| S1 | Cleanup and promotion | done |
 | S2 | Usage | pending |
 | S3 | Providers | pending |
 | S4 | Environments, metrics, add machine | pending |
