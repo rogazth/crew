@@ -14,6 +14,7 @@ import type {
   RefObject,
   TextareaHTMLAttributes,
 } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Kbd } from "./Kbd";
 
@@ -256,22 +257,31 @@ export function Overlay({
   width?: string;
   label?: string;
 }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  // Opened from a button, focus is still back on the page: take it, so Escape
+  // reaches the dialog. A field inside that focused itself keeps it.
+  useEffect(() => {
+    const el = dialog.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
+  }, []);
   // Portaled: an ancestor with a transform (the sidebar's sliding views) would
   // otherwise become the containing block for `fixed` and clip the dialog to it.
   return createPortal(
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={onClose}>
       <div className="absolute inset-0 bg-(--backdrop)" />
       <div
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
           event.stopPropagation();
           onClose();
         }}
-        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden ${SURFACE}`}
+        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden outline-none ${SURFACE}`}
       >
         {children}
       </div>
