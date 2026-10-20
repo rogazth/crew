@@ -40,10 +40,9 @@ export function asListed(list: Worktree[], workspacePath: string): Worktree[] {
   return list.map((tree) => (tree.main ? { ...tree, path: workspacePath } : tree));
 }
 
-/** What a worktree is called: its branch, or its folder when its HEAD is detached, as agents leave theirs. */
+/** What a worktree is called: its branch, or its folder when it has none (a detached HEAD, as agents leave theirs, or a main checkout on none). */
 export function worktreeLabel(tree: Worktree): string {
   if (tree.branch) return tree.branch;
-  if (tree.main) return "No branch";
   return tree.path.split("/").filter(Boolean).at(-1) ?? "Detached";
 }
 

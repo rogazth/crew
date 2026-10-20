@@ -27,6 +27,7 @@ import { useNotificationTarget } from "./hooks/useNotificationTarget";
 import { useMarkSeen } from "./hooks/useMarkSeen";
 import { useDockBadge } from "./hooks/useDockBadge";
 import { Toaster } from "./chrome/Toaster";
+import { useExplorerRoot } from "./hooks/useExplorerRoot";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
@@ -39,7 +40,7 @@ import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
-import { worktreeLabel } from "./lib/worktrees";
+import { worktreeLabel, worktreeOf } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
@@ -116,8 +117,7 @@ export function App() {
   const treePath = current?.path ?? active?.path ?? null;
   const files = useProjectFiles(treePath);
   // The explorer's own pick of worktree: it holds until the tab on screen moves to another.
-  const [explorerPick, setExplorerRoot] = useState<{ for: string | null; path: string } | null>(null);
-  const explorerRoot = explorerPick && explorerPick.for === treePath ? explorerPick.path : treePath;
+  const [explorerRoot, setExplorerRoot] = useExplorerRoot(active?.id ?? null, treePath);
 
   // Its panes go first: dropping them ends its shells. Its sessions' CLIs,
   // tabs open or closed, crewd ends with the workspace.
@@ -473,6 +473,11 @@ export function App() {
               onSwitch: () => openPalette("context"),
             }}
             groups={null}
+            branchOfSession={(session) => {
+              if (!active || session.workspaceId !== active.id) return null;
+              const tree = worktreeOf(session, active, worktrees.list);
+              return tree && !(tree.main && !tree.branch) ? worktreeLabel(tree) : null;
+            }}
             onDropFiles={openDropped}
           />
 
@@ -576,7 +581,7 @@ export function App() {
                 active={tabFile(tabs.active)?.path ?? null}
                 onOpenFile={nav.openFile}
                 places={worktrees.list.map((tree) => ({ path: tree.path, label: worktreeLabel(tree) }))}
-                onRoot={(path) => setExplorerRoot({ for: treePath, path })}
+                onRoot={setExplorerRoot}
               />
             )}
           </div>

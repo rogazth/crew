@@ -81,6 +81,8 @@ type Props = {
   /** Said on the strip while the sidebar is away: where you are, in the worktree's hue, and the door to switch. */
   context: { workspace: string; branch: string; hue?: number | undefined; onSwitch: () => void };
   groups: TabGroups | null;
+  /** The branch a session works on, from its worktree; null when it has none to name. */
+  branchOfSession?: ((session: Session) => string | null) | undefined;
   /** Files dropped on the strip from Finder, each to open in a tab. */
   onDropFiles: (paths: string[]) => void;
 };
@@ -174,6 +176,7 @@ export function TabBar({
   onLaunch,
   context,
   groups,
+  branchOfSession,
   onDropFiles,
 }: Props) {
   const bar = useRef<HTMLDivElement>(null);
@@ -356,7 +359,13 @@ export function TabBar({
       </Tabs.Root>
 
       {peek && !menu && (
-        <PeekFor tabId={peek.tabId} anchor={peek.anchor} tabs={tabs} sessions={sessions} branchOf={branchOf} />
+        <PeekFor
+          tabId={peek.tabId}
+          anchor={peek.anchor}
+          tabs={tabs}
+          sessions={sessions}
+          branchOf={(tab, session) => branchOf(tab)?.label ?? branchOfSession?.(session) ?? null}
+        />
       )}
 
       {menu?.group && (
@@ -803,11 +812,10 @@ function PeekFor({
   anchor: PeekAnchor;
   tabs: Tab[];
   sessions: Session[];
-  branchOf: (tab: Tab) => Branch | null;
+  branchOf: (tab: Tab, session: Session) => string | null;
 }) {
   const tab = tabs.find((t) => t.id === tabId);
   const session = tab?.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
   if (!tab || !session) return null;
-  const branch = branchOf(tab)?.label ?? (session.worktree ? (session.worktree.split("/").pop() ?? null) : null);
-  return <TabPeek session={session} branch={branch} anchor={anchor} />;
+  return <TabPeek session={session} branch={branchOf(tab, session)} anchor={anchor} />;
 }

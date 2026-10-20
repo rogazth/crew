@@ -95,7 +95,7 @@ describe("removing a worktree", () => {
 describe("naming a worktree", () => {
   it("names a detached one by its folder, so agents' worktrees tell apart", () => {
     expect(worktreeLabel(tree("/wt/feat", "feat/avatars"))).toBe("feat/avatars");
-    expect(worktreeLabel(tree("/repo", null, true))).toBe("No branch");
+    expect(worktreeLabel(tree("/repo", null, true))).toBe("repo");
     expect(worktreeLabel(tree("/home/agent/worktrees/agent-a1b2/", null))).toBe("agent-a1b2");
   });
 });

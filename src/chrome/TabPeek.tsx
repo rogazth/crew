@@ -7,6 +7,7 @@ import { useNow } from "../hooks/useNow";
 import { useThread } from "../hooks/useThread";
 import { modelLabel, providerOf } from "../lib/providers";
 import { statusLabel } from "../lib/status";
+import { turnStart } from "../lib/transcriptRows";
 import { duration } from "../lib/time";
 import type { Session } from "../lib/types";
 
@@ -20,7 +21,6 @@ export type PeekAnchor = { left: number; top: number };
  */
 export function TabPeek({ session, branch, anchor }: { session: Session; branch: string | null; anchor: PeekAnchor }) {
   const working = session.status === "working";
-  const now = useNow(1000, working);
   return createPortal(
     <div
       role="tooltip"
@@ -52,15 +52,15 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
             <StatusDot status={session.status} className="size-3" />
           )}
           {working ? (
-            <span className="tabular-nums">Working for {duration(now - session.updatedAt)}</span>
+            <WorkingFor sessionId={session.id} />
           ) : (
             statusLabel(session.status)
           )}
         </span>
-        {session.kind !== "bot" && (
+        {session.kind !== "bot" && branch && (
           <span className="flex min-w-0 items-center gap-1 text-text-muted">
             <GitBranchIcon className="size-3 shrink-0 text-icon" />
-            <span className="truncate">{branch ?? "main"}</span>
+            <span className="truncate">{branch}</span>
           </span>
         )}
       </div>
@@ -69,6 +69,14 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
     </div>,
     document.body,
   );
+}
+
+/** How long the turn now running has run: from its start in the transcript, not from the session's last update. */
+function WorkingFor({ sessionId }: { sessionId: string }) {
+  const { blocks } = useThread(sessionId);
+  const now = useNow(1000, true);
+  const since = turnStart(blocks);
+  return <span className="tabular-nums">{since === undefined ? "Working" : `Working for ${duration(Math.max(0, now - since))}`}</span>;
 }
 
 /** The newest line the bot wrote, or what it is doing if it is mid-turn. */
