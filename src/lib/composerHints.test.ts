@@ -22,4 +22,11 @@ describe("composerHints", () => {
       "esc back · ↵ add to the turn · ⌘↵ next turn",
     );
   });
+
+  it("says ⇧Tab steps the effort, idle or not, when there are levels to step", () => {
+    expect(line(composerHints({ working: false, escBack: false, stepsEffort: true }))).toBe("⇧Tab effort");
+    expect(line(composerHints({ working: true, escBack: false, whileWorking: "queue", stepsEffort: true }))).toBe(
+      "esc stop · ↵ queue · ⇧Tab effort",
+    );
+  });
 });

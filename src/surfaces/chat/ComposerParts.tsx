@@ -18,6 +18,7 @@ import { useState, type ReactNode } from "react";
 import { PANEL, ROW } from "../../chrome/kit";
 import type { PanelEntry } from "../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../lib/contextMeter";
+import { IS_MAC } from "../../lib/hotkey";
 import { providerOf } from "../../lib/providers";
 import type { PanelScope } from "./Panel";
 import type { Session } from "../../lib/types";
@@ -184,7 +185,7 @@ export function AttachMenu({
             <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />
             <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-text-muted">
               <ImageIcon className="size-4 shrink-0 opacity-70" />
-              Paste a screenshot with ⌘V
+              Paste a screenshot with {IS_MAC ? "⌘V" : "Ctrl+V"}
             </div>
           </Menu.Popup>
         </Menu.Positioner>

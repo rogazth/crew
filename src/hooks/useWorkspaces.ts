@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
+import { publishWorkspaces } from "../lib/placeStore";
 import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
@@ -39,6 +40,10 @@ export function useWorkspaces() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!loading) publishWorkspaces(workspaces);
+  }, [loading, workspaces]);
 
   // A machine that was offline or slow at launch answers later; its workspaces join the rail then.
   useEffect(

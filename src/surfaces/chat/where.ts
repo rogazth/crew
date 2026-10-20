@@ -1,11 +1,15 @@
 // Where a session runs, for the composer's context row
 // and a new session's first screen: its workspace, its worktree's branch and
-// its machine. Read once per folder and kept for the window's life; a branch
-// switched under it shows on the next launch.
-import { useEffect, useState } from "react";
+// its machine. It reads the app's shared place store, which the sidebar's
+// hooks feed, and asks git itself only for a folder nobody has listed yet or
+// when the window comes back, so a branch switched or a workspace renamed
+// shows here as it does there.
+import { useEffect, useSyncExternalStore } from "react";
 import { useWorkspaceLink } from "../../hooks/useEnvLinks";
 import { listWorkspaces, listWorktrees } from "../../lib/api";
-import type { Session, Workspace, Worktree } from "../../lib/types";
+import { onWorkspacesChanged } from "../../lib/client/registry";
+import { placesVersion, publishWorkspaces, publishWorktrees, subscribePlaces, mainBranchOf, treeKnown, workspacesKnown } from "../../lib/placeStore";
+import type { Session, Worktree } from "../../lib/types";
 import { useChatActions } from "./context";
 
 export type Where = {
@@ -13,6 +17,10 @@ export type Where = {
   workspace?: string;
   /** The checkout the session works in; null outside git, undefined until git answers. */
   tree?: Worktree | null;
+  /** The branch the repository's main checkout is on: the default one that work lands on. */
+  base?: string;
+  /** Whether the session works in Home, which is no project. */
+  home?: boolean;
   /** The folder's last segment, for when there is no branch to name. */
   folder?: string;
   /** The machine's name; "This Mac" here. */
@@ -20,67 +28,48 @@ export type Where = {
   remote: boolean;
 };
 
-const trees = new Map<string, Promise<Worktree | null>>();
-let workspaces: Promise<Workspace[]> | null = null;
-// What the reads above already answered, for a chat mounted after them to draw on its first frame:
-// waiting on the settled promise again would add the branch a frame late, and the facts would jump.
-const treesRead = new Map<string, Worktree | null>();
-let workspacesRead: Workspace[] | null = null;
-
 const trim = (path: string) => path.replace(/\/+$/, "");
 
-function treeOf(root: string): Promise<Worktree | null> {
-  let found = trees.get(root);
-  if (!found) {
-    found = listWorktrees(root).then(
-      (list) => list.find((tree) => trim(tree.path) === root) ?? null,
-      () => null,
-    );
-    void found.then((tree) => treesRead.set(root, tree));
-    trees.set(root, found);
-  }
-  return found;
+function readTrees(root: string) {
+  void listWorktrees(root).then(
+    (list) => publishWorktrees(root, list),
+    () => treeKnown(root) === undefined && publishWorktrees(root, []),
+  );
 }
 
-function workspaceName(id: string): Promise<string | undefined> {
-  workspaces ??= listWorkspaces()
-    .catch(() => [])
-    .then((list) => (workspacesRead = list));
-  return workspaces.then((list) => list.find((workspace) => workspace.id === id)?.name);
+function readWorkspaces() {
+  void listWorkspaces().then(publishWorkspaces, () => workspacesKnown() ?? publishWorkspaces([]));
 }
 
 export function useWhere(session: Pick<Session, "workspaceId">): Where {
   const { resolvePath } = useChatActions();
   const root = trim(resolvePath("./") ?? "");
   const link = useWorkspaceLink(session.workspaceId);
-  const [tree, setTree] = useState<{ root: string; tree: Worktree | null } | null>(null);
-  const [workspace, setWorkspace] = useState<{ id: string; name: string | undefined } | null>(null);
+  useSyncExternalStore(subscribePlaces, placesVersion);
+  const tree = root ? treeKnown(root) : undefined;
+  const list = workspacesKnown();
 
   useEffect(() => {
     if (!root) return;
-    let live = true;
-    void treeOf(root).then((found) => live && setTree({ root, tree: found }));
-    return () => {
-      live = false;
-    };
+    if (treeKnown(root) === undefined) readTrees(root);
+    const again = () => readTrees(root);
+    window.addEventListener("focus", again);
+    return () => window.removeEventListener("focus", again);
   }, [root]);
 
   useEffect(() => {
-    let live = true;
-    void workspaceName(session.workspaceId).then((name) => live && setWorkspace({ id: session.workspaceId, name }));
-    return () => {
-      live = false;
-    };
-  }, [session.workspaceId]);
+    if (workspacesKnown() === null) readWorkspaces();
+    return onWorkspacesChanged(readWorkspaces);
+  }, []);
 
-  const name =
-    workspace?.id === session.workspaceId
-      ? workspace.name
-      : workspacesRead?.find((one) => one.id === session.workspaceId)?.name;
-  const read = tree && tree.root === root ? { tree: tree.tree } : treesRead.has(root) ? { tree: treesRead.get(root) ?? null } : {};
+  const workspace = list?.find((one) => one.id === session.workspaceId);
+  const name = workspace?.name;
+  const base = root ? mainBranchOf(root) : null;
   return {
     ...(name ? { workspace: name } : {}),
-    ...read,
+    ...(base ? { base } : {}),
+    ...(workspace?.home ? { home: true } : {}),
+    ...(tree !== undefined ? { tree } : {}),
     ...(root ? { folder: root.split("/").pop() ?? root } : {}),
     machine: link?.name ?? "This Mac",
     remote: link !== null,

@@ -389,7 +389,9 @@ export function Composer({
   // The one round button: Stop while a turn runs and there is nothing to send, Send as soon as there is.
   const stopping = working && draft.trim().length === 0 && files.length === 0;
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
-  const hints = composerHints({ working, escBack, whileWorking });
+  const current = fitChoice(choiceOf(session));
+  const stepsEffort = !!onOptions && effortsOf(current.provider, current.model).length > 1;
+  const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
 
   // A mention is marked where it is typed, in the text; the row over the field never repeats it.
   const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
@@ -527,7 +529,7 @@ export function Composer({
           </span>
         ) : (
           !centered && (
-            // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
+            // While a turn runs the keys do something other than they seem to; idle, only ⇧Tab's effort stepping is named.
             <span className="ds-hints" data-key-hints data-shown>
               {hints.map(({ key, does }) => (
                 <span key={key}>
