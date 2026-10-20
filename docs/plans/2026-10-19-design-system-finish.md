@@ -10,11 +10,11 @@ Decisions are final; the numbers match the review list they came from.
 | --- | --- | --- |
 | S1 | Cleanup and promotion | done |
 | S2 | Usage | done |
-| S3 | Providers | pending |
-| S4 | Environments, metrics, add machine | pending |
+| S3 | Providers | done |
+| S4 | Environments, metrics, add machine | done |
 | S5 | Updates, About, General | updates and About (27-35) done; General (11-16) pending |
-| S6 | Appearance, keybindings | pending |
-| S7 | Sidebar, composer, first screens, misc | pending |
+| S6 | Appearance, keybindings | done |
+| S7 | Sidebar, composer, first screens, misc | done |
 | S8 | Rebase `feat/bot-memory` | pending |
 
 S1 lands first; S2–S7 build on it and touch mostly separate files; S8 runs after this branch reaches `master`.
