@@ -234,7 +234,7 @@ export function App() {
     [openFile, treePath],
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
-  const sheet = useBotSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
+  const sheet = useBotSheet({ create, update, openSession: nav.openSession });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
 
   const { activate } = workspaces;
@@ -385,7 +385,10 @@ export function App() {
             sessions: listed,
             activeSessionId,
             onSelect: nav.openSession,
-            onNewBot: sheet.newBot,
+            // The main checkout is stored as null, so it asks for no worktree.
+            onNewBot: (path) => sheet.newBot(path === undefined || path === active.path ? undefined : path),
+            currentWorktree: work.current?.path ?? null,
+            onSelectWorktree: work.selectWorktree,
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) =>
               void newSession(undefined, path === undefined ? work.placeIn : path === active.path ? null : path),

@@ -69,6 +69,10 @@ export type WorkspaceSidebarProps = {
   onSelect: (session: Session) => void;
   onNewBot: (worktree?: string) => void;
   onNewSession: (worktree?: string) => void;
+  /** The worktree on screen, by its path: its heading is marked. */
+  currentWorktree: string | null;
+  /** Makes the worktree at `path` the one on screen. */
+  onSelectWorktree: (path: string) => void;
   onToggleNotifications: (session: Session) => void;
   onMarkRead: (session: Session) => void;
   onNewWorktree: () => void;
@@ -137,6 +141,8 @@ function TreeGlyph({ tree, className }: { tree: Worktree | undefined; className:
 // ── Menus ───────────────────────────────────────────────────────────────────
 
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
+const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to Worktree", icon: "open", hotkey: "O" };
+const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New Bot Here", icon: "bot", hotkey: "N" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
 const NEW_WORKTREE: MenuAction = { id: "new-worktree", label: "New Worktree…", icon: "branch", hotkey: "W" };
@@ -168,8 +174,17 @@ function sessionActions(session: Session, tree: Worktree | undefined): MenuEntry
   ]);
 }
 
-function worktreeActions(tree: Worktree): MenuEntry[] {
-  return tidy([NEW_SESSION_HERE, SEPARATOR, ...(tree.branch ? [COPY_BRANCH] : []), SEPARATOR, ...(tree.main ? [] : [REMOVE_WORKTREE])]);
+/** Copy Path joins them in the menu itself. */
+function worktreeActions(tree: Worktree, current: boolean): MenuEntry[] {
+  return tidy([
+    ...(current ? [] : [SWITCH_HERE, SEPARATOR]),
+    NEW_SESSION_HERE,
+    NEW_BOT_HERE,
+    SEPARATOR,
+    ...(tree.branch ? [COPY_BRANCH] : []),
+    SEPARATOR,
+    ...(tree.main ? [] : [REMOVE_WORKTREE]),
+  ]);
 }
 
 type Menu =
@@ -388,6 +403,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
       return out;
     });
   const fold = (key: string, next: boolean) => setFolds((prev) => new Map(prev).set(key, next));
+  /** A click on a worktree makes it the one on screen and unfolds it. */
+  const activate = (path: string) => {
+    props.onSelectWorktree(path);
+    fold(`tree:${path}`, true);
+  };
   const empty = terminals.length === 0;
 
   return (
@@ -492,6 +512,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                       loudest={loudest(section.sessions, activeId)}
                       showDiff={shows(prefs, "diff")}
                       running={props.running?.get(section.tree.path) ?? NO_COMMANDS}
+                      current={section.tree.path === props.currentWorktree}
+                      onActivate={() => (section.tree!.path === props.currentWorktree ? fold(section.key, !isOpen) : activate(section.tree!.path))}
+                      onRemove={() => !section.tree!.main && props.onRemoveWorktree(section.tree!)}
                       onFold={(next) => fold(section.key, next)}
                       onAdd={() => props.onNewSession(section.tree!.path)}
                       onMenu={(point) => setMenu({ kind: "worktree", point, tree: section.tree! })}
@@ -579,11 +602,13 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           point={menu.point}
           title={worktreeLabel(menu.tree)}
           path={menu.tree.path}
-          actions={worktreeActions(menu.tree)}
+          actions={worktreeActions(menu.tree, menu.tree.path === props.currentWorktree)}
           onPick={(id) => {
             const tree = menu.tree;
             setMenu(null);
+            if (id === "switch") activate(tree.path);
             if (id === "new-session") props.onNewSession(tree.path);
+            if (id === "new-bot") props.onNewBot(tree.path);
             if (id === "copy-branch" && tree.branch) void navigator.clipboard.writeText(tree.branch);
             if (id === "remove-worktree") props.onRemoveWorktree(tree);
           }}
@@ -828,6 +853,9 @@ function WorktreeHeading({
   loudest: status,
   showDiff,
   running,
+  current,
+  onActivate,
+  onRemove,
   onFold,
   onAdd,
   onMenu,
@@ -838,6 +866,9 @@ function WorktreeHeading({
   loudest: SessionStatus;
   showDiff: boolean;
   running: string[];
+  current: boolean;
+  onActivate: () => void;
+  onRemove: () => void;
   onFold: (open: boolean) => void;
   onAdd: () => void;
   onMenu: (point: MenuPoint) => void;
@@ -848,13 +879,21 @@ function WorktreeHeading({
         type="button"
         data-nav
         aria-expanded={open}
+        aria-current={current ? "true" : undefined}
         title={running.length > 0 ? `${tree.path}\n${running.length} running\n${running.join("\n")}` : tree.path}
-        onClick={() => onFold(!open)}
+        onClick={onActivate}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={(event) => {
-          if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            if ((event.key === "ArrowRight") === open) return;
+            event.preventDefault();
+            onFold(event.key === "ArrowRight");
+          } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
             event.preventDefault();
             onMenu(pointOf(event.currentTarget));
+          } else if (isDeleteChord(event)) {
+            event.preventDefault();
+            onRemove();
           }
         }}
         className="flex h-8 w-full items-center gap-2 rounded-chrome pr-2 pl-2 text-left outline-none transition-colors hover:bg-hover focus-visible:bg-hover"
@@ -863,7 +902,7 @@ function WorktreeHeading({
           <TreeGlyph tree={tree} className="size-3.5 text-icon group-hover/tree:hidden" />
           <ChevronRightIcon className={`hidden size-3.5 text-icon transition-transform group-hover/tree:block ${open ? "rotate-90" : ""}`} />
         </span>
-        <span className="min-w-0 flex-1 truncate font-medium">{worktreeLabel(tree)}</span>
+        <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold text-text" : "font-medium text-text/85"}`}>{worktreeLabel(tree)}</span>
         <span className="flex shrink-0 items-center gap-2 transition-opacity group-hover/tree:opacity-0">
           {running.length > 0 && (
             <LayersIcon aria-label={`${running.length} commands running`} className="size-3 text-success" />
