@@ -1,3 +1,4 @@
+import { UsageWarning } from "./UsageWarning";
 import {
   useCallback,
   useEffect,
@@ -429,6 +430,7 @@ export function Composer({
           />
         )}
       </AgentClip>
+      <UsageWarning provider={session.provider} />
       <form onSubmit={submit} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />

@@ -1,7 +1,7 @@
 // Usage: each provider's plan limits in full (every window, when it resets,
 // where the pace lands it, the last week day by day), which providers get a
-// ring on the rail, and when to be told. Not reachable until S2 of
-// docs/plans/2026-10-19-design-system-finish.md reads real usage.
+// ring on the rail, and when to be told. Read from every connected machine,
+// one card per account.
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, GripVerticalIcon, RefreshCwIcon, RotateCcwIcon, TrendingUpIcon } from "lucide-react";
 import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
@@ -11,6 +11,7 @@ import { Button, Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { SortableItem, SortableList } from "../../chrome/SortableList";
 import { Rings } from "../../chrome/UsageButton";
+import { Tokens } from "../../chrome/UsageTokens";
 import {
   MAX_RINGS,
   RING_COLORS,
@@ -23,25 +24,32 @@ import {
   reorderRings,
   resetRings,
   runsOutIn,
+  setAlerts,
   setRingColor,
   toggleRing,
   tone,
   updatedLabel,
+  useAlerts,
   useFreshness,
+  useNow,
+  useReadings,
   useRings,
+  NOTIFY_AT,
+  WARN_AT,
   type RingConfig,
   type Reading,
   type Window,
 } from "../../lib/usage";
+import { hasWindows, type UsageDayPoint } from "../../lib/usageData";
 import { Group, Heading, RAISED, Row, SettingsPage, ToggleRow, toast } from "./ui";
-
-type Plan = Extract<Reading, { plan: string }>;
 
 const REFRESH = [
   { value: "1", label: "Every minute" },
   { value: "5", label: "Every 5 minutes" },
   { value: "15", label: "Every 15 minutes" },
 ] as const;
+
+const cardKey = (reading: Reading) => `${reading.provider}|${reading.account ?? ""}`;
 
 /** The page itself holds no state: each part subscribes to what it draws, so a drag or a refresh redraws only that part. */
 export function UsagePage() {
@@ -58,7 +66,7 @@ export function UsagePage() {
 
 function RefreshButton() {
   const fresh = useFreshness();
-  const refresh = () => void refreshUsage().then(() => toast("Usage updated"));
+  const refresh = () => void refreshUsage(true).then(() => toast("Usage updated"));
   return (
     <Button variant="ghost" icon={RefreshCwIcon} loading={fresh.refreshing} onClick={refresh}>
       Refresh
@@ -69,20 +77,27 @@ function RefreshButton() {
 function PlanLimits() {
   const fresh = useFreshness();
   const rings = useRings();
-  const plans = inOrder(rings).filter((reading): reading is Plan => reading.plan !== null);
-  const silent = inOrder(rings).filter((reading) => reading.plan === null);
+  const now = useNow();
+  const all = inOrder(rings, useReadings());
+  const shown = all.filter((reading) => reading.plan !== null || hasWindows(reading) || reading.tokens !== null);
+  const silent = all.filter((reading) => !shown.includes(reading));
   return (
       <section className="flex flex-col gap-2" data-setting="usage-limits">
         <Heading
           title="Plan limits"
-          action={<span className="text-[11.5px] text-text-muted">{updatedLabel(fresh.updatedAt)}</span>}
+          action={<span className="text-[11.5px] text-text-muted">{updatedLabel(fresh.updatedAt, now)}</span>}
         />
         <div className="flex flex-col gap-2.5">
-          {plans.map((reading) => (
-            <ProviderCard key={reading.provider} reading={reading} color={colorOf(rings, reading.provider)} />
+          {all.length === 0 && (
+            <div className="rounded-xl bg-card px-4 py-3 text-text-muted">
+              {fresh.refreshing ? "Reading usage…" : "No usage read yet. Claude reports after its first turn; the others on refresh."}
+            </div>
+          )}
+          {shown.map((reading) => (
+            <ProviderCard key={cardKey(reading)} reading={reading} color={colorOf(rings, reading.provider)} />
           ))}
           {silent.map((reading) => (
-            <div key={reading.provider} className="flex items-center gap-3 rounded-xl bg-card px-4 py-3 text-text-muted">
+            <div key={cardKey(reading)} className="flex items-center gap-3 rounded-xl bg-card px-4 py-3 text-text-muted">
               <ProviderIcon provider={reading.provider} className="size-5 opacity-60" />
               <span className="font-medium">{reading.name}</span>
               <span className="ml-auto text-[12px]">No usage data</span>
@@ -96,23 +111,36 @@ function PlanLimits() {
 /* ── One provider ───────────────────────────────────────────────────── */
 
 /** Memoised: a reorder or another provider's colour change leaves this card alone. */
-const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: Plan; color: string }) {
+const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: Reading; color: string }) {
   return (
     <div className={`flex flex-col gap-3 rounded-xl p-3 ${RAISED}`}>
       <div className="flex items-center gap-2 px-0.5">
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="font-semibold">{reading.name}</span>
-        <span className="rounded-md bg-fill px-1.5 py-px text-[11px] font-medium text-text-muted">{reading.plan}</span>
+        {reading.plan && (
+          <span className="rounded-md bg-fill px-1.5 py-px text-[11px] font-medium text-text-muted">{reading.plan}</span>
+        )}
         <span className="ml-auto truncate text-[12px] text-text-muted">{reading.account}</span>
       </div>
 
-      <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2">
-        {reading.windows.map((window) => (
-          <WindowTile key={window.label} window={window} color={color} />
-        ))}
-      </div>
-
-      <Week reading={reading} color={color} />
+      {hasWindows(reading) ? (
+        <>
+          <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2">
+            {reading.windows.map((window) => (
+              <WindowTile key={window.id} window={window} color={color} />
+            ))}
+          </div>
+          <Week days={reading.history} color={color} />
+        </>
+      ) : (
+        <div className="rounded-lg bg-card px-3 py-2.5">
+          {reading.tokens !== null || reading.cost !== null ? (
+            <Tokens reading={reading} />
+          ) : (
+            <span className="text-[12px] text-text-muted">Limits unavailable</span>
+          )}
+        </div>
+      )}
     </div>
   );
 });
@@ -125,7 +153,9 @@ function WindowTile({ window, color }: { window: Window; color: string }) {
     <div className="flex flex-col gap-1.5 rounded-lg bg-card px-3 py-2.5">
       <div className="flex items-baseline justify-between">
         <span className="text-[12px] text-text-muted">{window.label}</span>
-        <span className="text-[11.5px] text-text-muted tabular-nums">Resets {resetAt(window.resetsIn)}</span>
+        {window.resetsIn !== null && (
+          <span className="text-[11.5px] text-text-muted tabular-nums">Resets {resetAt(window.resetsIn)}</span>
+        )}
       </div>
       <span className="text-[18px] leading-6 font-semibold tracking-[-0.02em] tabular-nums">{window.used}%</span>
       <div className="h-1.5 overflow-hidden rounded-full bg-hairline">
@@ -157,13 +187,14 @@ function resetAt(minutes: number): string {
  * in the provider's colour. A single series, so the heading names it and no
  * legend is needed; each bar says its day and value on hover.
  */
-function Week({ reading, color }: { reading: Plan; color: string }) {
-  const top = Math.max(...reading.history, 1);
-  const [now] = useState(() => Date.now());
-  const days = reading.history.map((value, index) => {
-    const at = new Date(now - (reading.history.length - 1 - index) * 86_400_000);
-    return { value, day: at.toLocaleDateString([], { weekday: "short" }), today: index === reading.history.length - 1 };
-  });
+function Week({ days: points, color }: { days: UsageDayPoint[]; color: string }) {
+  const top = Math.max(...points.map((point) => point.percent), 1);
+  const days = points.map((point, index) => ({
+    value: point.percent,
+    day: new Date(`${point.day}T12:00:00Z`).toLocaleDateString([], { weekday: "short", timeZone: "UTC" }),
+    key: point.day,
+    today: index === points.length - 1,
+  }));
   return (
     <div className="flex flex-col gap-1.5 px-0.5">
       <div className="flex items-baseline justify-between">
@@ -171,7 +202,7 @@ function Week({ reading, color }: { reading: Plan; color: string }) {
       </div>
       <div className="flex h-12 items-end gap-1 border-b border-hairline">
         {days.map((day) => (
-          <div key={day.day} className="group relative flex h-full flex-1 items-end justify-center">
+          <div key={day.key} className="group relative flex h-full flex-1 items-end justify-center">
             <div
               className="w-full rounded-t-[4px] transition-opacity group-hover:opacity-80"
               style={{ height: day.value ? `${(day.value / top) * 100}%` : 2, background: day.value ? color : "var(--color-hairline)" }}
@@ -184,7 +215,7 @@ function Week({ reading, color }: { reading: Plan; color: string }) {
       </div>
       <div className="flex gap-1">
         {days.map((day) => (
-          <span key={day.day} className={`flex-1 text-center text-[11px] ${day.today ? "font-medium text-text" : "text-text-muted"}`}>
+          <span key={day.key} className={`flex-1 text-center text-[11px] ${day.today ? "font-medium text-text" : "text-text-muted"}`}>
             {day.today ? "Today" : day.day}
           </span>
         ))}
@@ -213,7 +244,9 @@ const RING_SENSORS = [
  */
 function RingsSection() {
   const rings = useRings();
-  const choices = inOrder(rings).filter((reading): reading is Plan => reading.plan !== null);
+  const choices = inOrder(rings, useReadings()).filter(
+    (reading, index, list) => hasWindows(reading) && list.findIndex((item) => item.provider === reading.provider) === index,
+  );
   const pressed = useRef(0);
   return (
     <section className="flex flex-col gap-2" data-setting="usage-rings">
@@ -454,23 +487,22 @@ function CustomColor({ value, active, onChange }: { value: string; active: boole
 /* ── Alerts ─────────────────────────────────────────────────────────── */
 
 function Alerts() {
-  const [notify, setNotify] = useState(true);
-  const [composer, setComposer] = useState(true);
-  const [every, setEvery] = useState<(typeof REFRESH)[number]["value"]>("5");
+  const alerts = useAlerts();
   return (
     <Group title="Alerts" id="usage-alerts">
+      <ToggleRow checked={alerts.notify} onChange={(notify) => setAlerts({ notify })} label={`Notify at ${NOTIFY_AT}%`} />
       <ToggleRow
-        checked={notify}
-        onChange={setNotify}
-        label="Notify at 90%"
-      />
-      <ToggleRow
-        checked={composer}
-        onChange={setComposer}
-        label="Warn in the composer at 85%"
+        checked={alerts.composer}
+        onChange={(composer) => setAlerts({ composer })}
+        label={`Warn in the composer at ${WARN_AT}%`}
       />
       <Row label="Refresh">
-        <Select value={every} options={[...REFRESH]} onChange={setEvery} label="Refresh usage" />
+        <Select
+          value={String(alerts.every) as (typeof REFRESH)[number]["value"]}
+          options={[...REFRESH]}
+          onChange={(value) => setAlerts({ every: Number(value) as 1 | 5 | 15 })}
+          label="Refresh usage"
+        />
       </Row>
     </Group>
   );

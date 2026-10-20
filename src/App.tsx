@@ -374,6 +374,7 @@ export function App() {
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
             onOpenSettings: () => (settings ? closePage() : openSettings()),
+            onOpenUsage: () => openSettings("usage"),
           }}
           sessions={{
             workspace: active,

@@ -7,6 +7,7 @@ import { CrewGlyph } from "./CrewGlyph";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { RailUpdate } from "./UpdateButton";
+import { UsageButton } from "./UsageButton";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
@@ -34,6 +35,8 @@ type Props = {
   onReorder: (ids: string[]) => void;
   onOpenRoutines: () => void;
   onOpenSettings: () => void;
+  /** Opens Settings on Usage. */
+  onOpenUsage: () => void;
   /** The machine a workspace lives on, for the corner badge. Null on this Mac. */
   remoteOf?: (workspace: Workspace) => EnvLink | null;
 };
@@ -143,6 +146,7 @@ export function WorkspaceRail(props: Props) {
       <div className="flex-1" />
 
       <RailUpdate />
+      <UsageButton onOpenSettings={props.onOpenUsage} />
 
       {/* The foot sits under a short rule, apart from the marks. */}
       <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />

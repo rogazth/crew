@@ -1,15 +1,14 @@
 // The providers' plan usage at the rail's foot: a ring per chosen provider (or
 // one with the tightest limit), and a card with every provider's windows, when
-// each resets and, at the current pace, whether it lasts until then. Not in the
-// rail until S2 of docs/plans/2026-10-19-design-system-finish.md reads real usage.
+// each resets and, at the current pace, whether it lasts until then. Mounting
+// it also keeps the usage store fed.
 import { Popover } from "@base-ui/react/popover";
-import { ArrowRightIcon, RefreshCwIcon } from "lucide-react";
+import { ArrowRightIcon, GaugeIcon, RefreshCwIcon } from "lucide-react";
 import { IconButton } from "./kit";
 import { ProviderIcon } from "./ProviderIcon";
 import {
   BAR,
   INDICATOR,
-  currentReadings,
   STROKE,
   TEXT,
   clock,
@@ -20,22 +19,33 @@ import {
   tone,
   updatedLabel,
   useFreshness,
+  useNow,
+  useReadings,
+  useUsageSync,
   colorOf,
   inOrder,
+  peak,
   shownInOrder,
   useRings,
   type RingConfig,
   type Reading,
   type Window,
 } from "../lib/usage";
+import { hasWindows, ofProvider } from "../lib/usageData";
+import { Tokens } from "./UsageTokens";
 
 export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) {
+  useUsageSync();
   const rings = useRings();
   const fresh = useFreshness();
-  const top = tightest();
-  if (!top) return null;
-  const level = tone(top.window.used);
-  const label = `Usage: ${top.reading.name} ${top.window.label.toLowerCase()} at ${top.window.used}%`;
+  const readings = useReadings();
+  const now = useNow();
+  const top = tightest(readings);
+  if (readings.length === 0) return null;
+  const level = tone(top?.window.used ?? 0);
+  const label = top
+    ? `Usage: ${top.reading.name} ${top.window.label.toLowerCase()} at ${top.window.used}%`
+    : "Usage";
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -45,24 +55,29 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
         data-tauri-drag-region="false"
         className="grid size-9 shrink-0 place-items-center rounded-xl text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-selected"
       >
-        {INDICATOR === "rings" ? <Rings config={rings} /> : <Ring value={top.window.used / 100} level={level} />}
+        {INDICATOR === "rings" || !top ? <Rings config={rings} /> : <Ring value={top.window.used / 100} level={level} />}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="right" align="end" sideOffset={12} className="z-50">
           <Popover.Popup className="w-[340px] origin-(--transform-origin) overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-150 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0">
             <div className="flex items-center gap-2 pt-2.5 pr-2 pb-1.5 pl-4">
               <span className="text-[13px] font-semibold">Usage</span>
-              <span className="ml-auto text-[11.5px] text-text-muted">{fresh.refreshing ? "Refreshing…" : updatedLabel(fresh.updatedAt)}</span>
+              <span className="ml-auto text-[11.5px] text-text-muted">{fresh.refreshing ? "Refreshing…" : updatedLabel(fresh.updatedAt, now)}</span>
               <IconButton
                 icon={RefreshCwIcon}
                 label="Refresh usage"
                 className={`size-7 ${fresh.refreshing ? "[&_svg]:animate-spin" : ""}`}
-                onClick={() => void refreshUsage()}
+                onClick={() => void refreshUsage(true)}
               />
             </div>
             <div className="flex flex-col gap-1 px-2">
-              {inOrder(rings).filter((reading) => rings.shown.includes(reading.provider)).map((reading) => (
-                <ProviderUsage key={reading.provider} reading={reading} color={colorOf(rings, reading.provider)} />
+              {inOrder(rings, readings).map((reading) => (
+                <ProviderUsage
+                  key={`${reading.provider}|${reading.account ?? ""}`}
+                  reading={reading}
+                  color={colorOf(rings, reading.provider)}
+                  ring={rings.shown.includes(reading.provider)}
+                />
               ))}
             </div>
             <Popover.Close
@@ -79,13 +94,13 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
   );
 }
 
-function ProviderUsage({ reading, color }: { reading: Reading; color: string }) {
-  if (!reading.plan) {
+function ProviderUsage({ reading, color, ring }: { reading: Reading; color: string; ring: boolean }) {
+  if (!hasWindows(reading) && reading.tokens === null) {
     return (
       <div className="flex items-center gap-2 rounded-xl px-2 py-2 opacity-55">
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="text-[12.5px] font-medium">{reading.name}</span>
-        <span className="ml-auto text-[11.5px] text-text-muted">Doesn't report usage</span>
+        <span className="ml-auto truncate text-[11.5px] text-text-muted">{reading.plan ?? "Doesn't report usage"}</span>
       </div>
     );
   }
@@ -95,13 +110,14 @@ function ProviderUsage({ reading, color }: { reading: Reading; color: string }) 
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="text-[12.5px] font-medium">{reading.name}</span>
         <span className="text-[11.5px] text-text-muted">{reading.plan}</span>
-        {INDICATOR === "rings" && (
+        {INDICATOR === "rings" && ring && hasWindows(reading) && (
           <span aria-hidden className="ml-auto size-2 rounded-full" style={{ background: color }} />
         )}
       </div>
       {reading.windows.map((window) => (
-        <WindowRow key={window.label} window={window} />
+        <WindowRow key={window.id} window={window} />
       ))}
+      <Tokens reading={reading} />
     </div>
   );
 }
@@ -119,7 +135,7 @@ function WindowRow({ window }: { window: Window }) {
         <div className={`h-full rounded-full ${BAR[level]}`} style={{ width: `${window.used}%` }} />
       </div>
       <div className="flex justify-between text-[11px] text-text-muted tabular-nums">
-        <span>Resets in {span(window.resetsIn)}</span>
+        <span>{window.resetsIn === null ? "Reset time unknown" : `Resets in ${span(window.resetsIn)}`}</span>
         {out === null ? (
           <span>Lasts until reset</span>
         ) : (
@@ -163,12 +179,12 @@ function Ring({ value, level }: { value: number; level: keyof typeof STROKE }) {
  * that provider's tightest window. Past 90% a ring turns red, whatever its colour.
  */
 export function Rings({ config }: { config: RingConfig }) {
+  const readings = useReadings();
   const rings = shownInOrder(config).flatMap((id) => {
-    const reading = currentReadings().find((item) => item.provider === id);
-    return reading?.plan
-      ? [{ id, color: colorOf(config, id), used: Math.max(...reading.windows.map((w) => w.used)) }]
-      : [];
+    const reading = ofProvider(readings, id);
+    return reading && hasWindows(reading) ? [{ id, color: colorOf(config, id), used: peak(reading) }] : [];
   });
+  if (rings.length === 0) return <GaugeIcon className="size-[18px]" aria-hidden />;
   const width = 2.75;
   const gap = 0.75;
   return (
