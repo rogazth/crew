@@ -34,6 +34,8 @@ type Props = {
   command: string[];
   /** Typed into the process once it has started, with Enter; only the first spawn. */
   initialInput?: string | undefined;
+  /** The initial input went to the process: the owner forgets it. */
+  onInputSent?: (() => void) | undefined;
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
@@ -52,6 +54,7 @@ export function TerminalView({
   cwd,
   command,
   initialInput,
+  onInputSent,
   active,
   shellOnExit,
   onExit,
@@ -67,10 +70,12 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onOpenPath, command, shellOnExit, initialInput });
+  const latest = useRef({ onExit, onOpenPath, command, shellOnExit, initialInput, onInputSent });
+  // The input is typed once per mount: a render before the tab drops it must not bring it back.
+  const inputTaken = useRef(false);
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onOpenPath, command, shellOnExit, initialInput };
+    latest.current = { onExit, onOpenPath, command, shellOnExit, initialInput: inputTaken.current ? undefined : initialInput, onInputSent };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -267,11 +272,15 @@ export function TerminalView({
       spawned = true;
       const typed = latest.current.initialInput;
       latest.current.initialInput = undefined;
+      if (typed) inputTaken.current = true;
       void api
         .spawnPty(id, cwd, command, term.cols, term.rows, { reuse, dark: isDark() })
         .then(() => {
           // The shell reads its input once it is up; what is typed before its prompt waits in the tty.
-          if (typed && !closed) void api.writePty(id, `${typed}\r`);
+          if (typed && !closed) {
+            void api.writePty(id, `${typed}\r`);
+            latest.current.onInputSent?.();
+          }
         })
         .catch((error: unknown) => {
           spawned = false;

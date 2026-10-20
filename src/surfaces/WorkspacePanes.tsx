@@ -37,6 +37,8 @@ type Props = {
   onOpenFileInBrowser: (file: { path: string; relative: string }) => void;
   onOpenSession: (sessionId: string) => void;
   onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
+  /** A terminal tab's typed command was written: forget it. */
+  onClearTerminalInput?: (workspaceId: string, tabId: string) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   /** An agent needs this tab in that strip: add it behind the one on screen. */
   onAdoptBrowserTab: (context: string, tab: Tab) => void;
@@ -68,6 +70,7 @@ export function WorkspacePanes({
   onOpenFileInBrowser,
   onOpenSession,
   onPatchBrowser,
+  onClearTerminalInput,
   onOpenBrowserTab,
   onAdoptBrowserTab,
   files,
@@ -153,7 +156,7 @@ export function WorkspacePanes({
           renderCommands={renderCommands}
         />
       </DiffsPool>
-      <Terminals panes={mounted} onOpenFile={onOpenFile} />
+      <Terminals panes={mounted} onOpenFile={onOpenFile} {...(onClearTerminalInput && { onInputSent: onClearTerminalInput })} />
       <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
         <TurnChats panes={mounted} sessions={sessions} />
