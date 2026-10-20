@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon } from "lucide-react";
+import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
 import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
@@ -73,8 +73,11 @@ export function WorkSegment({
   open,
   onOpenChange,
   onEscape,
+  segment = false,
 }: {
   work: PanelScope;
+  /** Without the agents clip to open it, the sheet has its own entry: a button in the status line that floats the sheet over the composer. */
+  segment?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The sheet was closed with Esc: the composer takes the focus back. */
@@ -120,7 +123,7 @@ export function WorkSegment({
     const down = (event: MouseEvent) => {
       const target = event.target as Node;
       if (sheet.current?.contains(target)) return;
-      if (target instanceof Element && target.closest("[data-agent-strip]")) return;
+      if (target instanceof Element && target.closest("[data-agent-strip], [data-work-trigger]")) return;
       onOpenChange(false);
     };
     document.addEventListener("mousedown", down);
@@ -163,14 +166,49 @@ export function WorkSegment({
   if (total === 0) return null;
   return (
     <>
-      {/* The sheet stays mounted, closed: it unfolds and folds back instead of appearing and vanishing. */}
+      {segment && (
+        <button
+          type="button"
+          data-work-trigger
+          aria-expanded={shown}
+          onClick={() => {
+            // Each time it opens, the selection starts at the top: running work.
+            if (!open) setPicked(null);
+            onOpenChange(!open);
+          }}
+          className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
+        >
+          {summary.attention > 0 && (
+            <span className="flex items-center gap-1 text-warning">
+              <TriangleAlertIcon className="size-3" aria-hidden />
+              {summary.attentionText}
+            </span>
+          )}
+          {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
+          {running && <span className="crew-bg-dot" aria-hidden />}
+          {summary.text}
+          {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
+          {conversations.length > 0 && (
+            <span className="flex items-center gap-1 text-text-muted">
+              <MessagesSquareIcon className="size-3" aria-hidden />
+              {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
+            </span>
+          )}
+        </button>
+      )}
+      {/* Under the clip the sheet stays mounted, closed: it unfolds and folds back instead of appearing and vanishing. */}
+      {(shown || !segment) && (
       <div
         ref={sheet}
         tabIndex={-1}
         data-work-sheet
         {...(shown ? { "data-open": "" } : {})}
         inert={!shown}
-        className="ds-strip-panel flex flex-col outline-none"
+        className={
+          segment
+            ? "absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
+            : "ds-strip-panel flex flex-col outline-none"
+        }
       >
         <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
           Work
@@ -218,6 +256,7 @@ export function WorkSegment({
         </div>
         <div className="px-2 pt-1.5 pb-0.5 text-[10.5px] text-placeholder">↑↓ select · ↵ open · x stop · esc close</div>
       </div>
+      )}
     </>
   );
 }

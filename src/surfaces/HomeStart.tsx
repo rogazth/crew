@@ -7,6 +7,8 @@ import { StartScreen } from "./WorkspaceStart";
 type Props = {
   /** No project is open yet: the page greets a new user and shows the way in. */
   firstRun: boolean;
+  /** The Home folder, which `@` lists. */
+  cwd: string | null;
   /** A new session in home, with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice, files?: AttachedFile[]) => void;
   onOpenFolder: () => void;
@@ -21,9 +23,12 @@ type Props = {
  * tab it opens is the session's, chat or terminal as Settings say. The chips
  * open on the last pick, and a pick here becomes it.
  */
-export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
+export function HomeStart({ firstRun, cwd, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
   return (
     <StartScreen
+      cwd={cwd}
+      indexFiles={false}
+      rememberPick
       title={firstRun ? "Welcome to Crew" : "What are we working on?"}
       facts={
         <>

@@ -26,3 +26,36 @@ export function clearFirstPrompt(sessionId: string): void {
   prompts.delete(sessionId);
   attached.delete(sessionId);
 }
+
+/**
+ * What a chat's composer holds right now, kept for as long as the chat is
+ * mounted, so a fresh session moved to another worktree (a new session that
+ * replaces it) can take the draft and the attachments along.
+ */
+export type Unsent = { draft: string; files: AttachedFile[] };
+const unsent = new Map<string, Unsent>();
+const carried = new Map<string, Unsent>();
+
+export function noteUnsent(sessionId: string, held: Unsent): void {
+  unsent.set(sessionId, held);
+}
+
+export function forgetUnsent(sessionId: string): void {
+  unsent.delete(sessionId);
+}
+
+export function peekUnsent(sessionId: string): Unsent | undefined {
+  return unsent.get(sessionId);
+}
+
+/** Hands `held` to the chat that opens for `sessionId`. */
+export function carryUnsent(sessionId: string, held: Unsent): void {
+  if (held.draft || held.files.length > 0) carried.set(sessionId, held);
+}
+
+/** What was carried to this session's chat, once. */
+export function takeCarried(sessionId: string): Unsent | undefined {
+  const held = carried.get(sessionId);
+  carried.delete(sessionId);
+  return held;
+}

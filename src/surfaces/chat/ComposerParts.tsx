@@ -18,6 +18,7 @@ import { useState, type ReactNode } from "react";
 import { PANEL, ROW } from "../../chrome/kit";
 import type { PanelEntry } from "../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../lib/contextMeter";
+import { IS_MAC } from "../../lib/hotkey";
 import { providerOf } from "../../lib/providers";
 import type { PanelScope } from "./Panel";
 import type { Session } from "../../lib/types";
@@ -61,7 +62,16 @@ export function clipOf(work: PanelScope | undefined): { state: ClipState; label:
         </>
       ),
     };
-  return { state: "quiet", label: `${agents(all.length)} finished` };
+  // One that failed did not finish: it is counted on its own, and one that was stopped likewise.
+  const failed = all.filter((entry) => entry.state === "failed").length;
+  const stopped = all.filter((entry) => entry.state === "stopped").length;
+  const finished = all.length - failed - stopped;
+  const parts = [
+    ...(finished > 0 ? [`${agents(finished)} finished`] : []),
+    ...(failed > 0 ? [`${failed} failed`] : []),
+    ...(stopped > 0 ? [`${stopped} stopped`] : []),
+  ];
+  return { state: "quiet", label: parts.join(" · ") };
 }
 
 /**
@@ -184,7 +194,7 @@ export function AttachMenu({
             <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />
             <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-text-muted">
               <ImageIcon className="size-4 shrink-0 opacity-70" />
-              Paste a screenshot with ⌘V
+              Paste a screenshot with {IS_MAC ? "⌘V" : "Ctrl+V"}
             </div>
           </Menu.Popup>
         </Menu.Positioner>

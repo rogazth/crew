@@ -19,7 +19,7 @@ import { markedCalls, turnTray } from "../lib/background";
 import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
-import { clearFirstPrompt, peekFirstFiles, peekFirstPrompt } from "../lib/firstPrompt";
+import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPrompt, takeCarried } from "../lib/firstPrompt";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -58,8 +58,14 @@ const PaneContext = createContext<HTMLElement | null>(null);
 export function TurnChat({ session, sessions, cwd, active, trail, readOnly = false, focusLetter }: Props) {
   const embedded = trail !== undefined;
   const { blocks: held, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
-  const [draft, setDraft] = useState("");
-  const [files, setFiles] = useState<AttachedFile[]>([]);
+  // A fresh session moved to another worktree arrives with what was written in the one it replaces.
+  const [carried] = useState(() => takeCarried(session.id));
+  const [draft, setDraft] = useState(carried?.draft ?? "");
+  const [files, setFiles] = useState<AttachedFile[]>(carried?.files ?? []);
+  useEffect(() => {
+    noteUnsent(session.id, { draft, files });
+  }, [session.id, draft, files]);
+  useEffect(() => () => forgetUnsent(session.id), [session.id]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement | null>(null);
   const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);

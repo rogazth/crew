@@ -38,6 +38,7 @@ import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
+import { peekUnsent } from "./lib/firstPrompt";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
 import { worktreeLabel, worktreeOf } from "./lib/worktrees";
@@ -250,7 +251,10 @@ export function App() {
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
 
-  const { newSession, launch } = useLaunch({
+  // The worktree the sidebar's + asked the start screen to start in, until it is used or the sidebar moves on.
+  const [startIn, setStartIn] = useState<string | null>(null);
+  useEffect(() => setStartIn(null), [work.current?.path, active?.id]);
+  const { newSession, startSession, launch } = useLaunch({
     worktree: work.placeIn,
     create,
     markBlank,
@@ -263,8 +267,9 @@ export function App() {
       explorer.setMode("files");
     },
     newBot: sheet.newBot,
-    showStart: () => {
+    showStart: (place) => {
       closePage();
+      setStartIn(place ?? null);
       tabs.select(null);
       // Already on screen, it does not mount again to take the focus.
       window.setTimeout(focusWorkspaceStart, 0);
@@ -290,7 +295,7 @@ export function App() {
       explorer.toggle("search", selectedLine());
     },
     newBot: () => sheet.newBot(),
-    newSession: () => void newSession(),
+    newSession: () => startSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
@@ -329,6 +334,9 @@ export function App() {
               ...(paneSession.serviceTier ? { serviceTier: paneSession.serviceTier } : {}),
             },
             path === active?.path ? null : path,
+            undefined,
+            undefined,
+            peekUnsent(paneSession.id),
           ).then(async (moved) => {
             if (!moved) return;
             // The new one takes the old one's place and, once it is gone, its name.
@@ -391,8 +399,7 @@ export function App() {
             currentWorktree: work.current?.path ?? null,
             onSelectWorktree: work.selectWorktree,
             // A worktree's own menu passes its path; the main checkout is stored as null.
-            onNewSession: (path) =>
-              void newSession(undefined, path === undefined ? work.placeIn : path === active.path ? null : path),
+            onNewSession: (path) => startSession(undefined, path),
             onToggleNotifications: (session) => void update(session.id, { ...session, notifications: !session.notifications }),
             onMarkRead: (session) => {
               void api.markSessionRead(session.id).catch(() => {});
@@ -415,7 +422,7 @@ export function App() {
               ? {
                   actions: (
                     <HomeActions
-                      onNewSession={() => void newSession()}
+                      onNewSession={() => startSession()}
                       onNewBot={() => sheet.newBot()}
                       onOpenFolder={envs.openWorkspace}
                     />
@@ -498,6 +505,7 @@ export function App() {
                 isHome ? (
                   <HomeStart
                     firstRun={workspaces.projects.length === 0}
+                    cwd={active?.path ?? null}
                     onAsk={(text, choice, files) => void newSession(choice, null, text, files)}
                     onOpenFolder={envs.openWorkspace}
                     onNewBot={() => sheet.newBot()}
@@ -507,8 +515,11 @@ export function App() {
                   <WorkspaceStart
                     workspaceId={active.id}
                     places={panePlaces}
-                    defaultPath={work.placeIn ?? active.path}
-                    onAsk={(text, choice, path, files) => void newSession(choice, path === active.path ? null : path, text, files)}
+                    defaultPath={startIn ?? work.placeIn ?? active.path}
+                    onAsk={(text, choice, path, files) => {
+                      setStartIn(null);
+                      void newSession(choice, path === active.path ? null : path, text, files);
+                    }}
                     onNewBot={() => sheet.newBot()}
                     onOpenFile={() => openPalette("files")}
                     onOpenBrowser={() => nav.openBrowser("")}

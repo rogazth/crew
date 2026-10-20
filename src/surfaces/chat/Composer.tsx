@@ -22,18 +22,9 @@ import { effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type 
 import { nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
-  folderChoices,
-  foldersOf,
-  mentionAt,
-  mentionFolder,
-  mergeChoices,
   rememberMention,
-  searchFiles,
   splitMentions,
-  type MentionChoice,
 } from "../../lib/mentions";
-import { listFolder } from "../../lib/api";
-import type { FolderEntry } from "../../lib/protocol";
 import type { CommandEntry } from "../../lib/protocol";
 import {
   completeSlash,
@@ -54,10 +45,12 @@ import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
+import { useMentionMenu } from "./useMentionMenu";
 import { SlashPicker } from "./SlashPicker";
 import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
 import {
   AgentClip,
+  clipOf,
   AttachMenu,
   ContextRing,
   SendButton,
@@ -194,17 +187,7 @@ export function Composer({
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
   const [active, setActive] = useState(0);
-  const mention = mentionAt(draft, cursor);
-  const root = useMemo(() => resolvePath("./")?.replace(/\/+$/, "") ?? "", [resolvePath]);
-  const indexed = useMemo<MentionChoice[]>(() => [...projectFiles, ...foldersOf(projectFiles, root)], [projectFiles, root]);
-  // The folder being typed into is read from disk, once per folder: the index leaves out large folders git ignores.
-  const typedFolder = mention ? mentionFolder(mention.query) : null;
-  const listing = useFolderListing(typedFolder?.folder ?? null, resolvePath);
-  const results = useMemo(() => {
-    if (!mention || !typedFolder) return [];
-    const listed = listing ? folderChoices(listing, typedFolder.folder, typedFolder.rest) : [];
-    return mergeChoices(listed, searchFiles(mention.query, indexed));
-  }, [mention?.query, indexed, listing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { mention, indexed, results } = useMentionMenu(draft, cursor, projectFiles, resolvePath);
   const [picked, setPicked] = useState<readonly string[]>([]);
   const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...picked]), [indexed, picked]);
 
@@ -389,7 +372,10 @@ export function Composer({
   // The one round button: Stop while a turn runs and there is nothing to send, Send as soon as there is.
   const stopping = working && draft.trim().length === 0 && files.length === 0;
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
-  const hints = composerHints({ working, escBack, whileWorking });
+  const current = fitChoice(choiceOf(session));
+  const stepsEffort = !!onOptions && effortsOf(current.provider, current.model).length > 1;
+  const hasClip = clipOf(work) !== null;
+  const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
 
   // A mention is marked where it is typed, in the text; the row over the field never repeats it.
   const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
@@ -421,7 +407,7 @@ export function Composer({
   return (
     <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
       <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
-        {work && (
+        {work && hasClip && (
           <WorkSegment
             work={work}
             open={sheet === "work"}
@@ -519,6 +505,8 @@ export function Composer({
         {!centered && <WorktreeSegment session={session} />}
         {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
         {session.paused && <PausedSegment />}
+        {/* Shells, processes and conversations with no agent to put a clip up still have their sheet: this opens it. */}
+        {work && !hasClip && <WorkSegment segment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
         {optionsPending ? (
@@ -527,7 +515,7 @@ export function Composer({
           </span>
         ) : (
           !centered && (
-            // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
+            // While a turn runs the keys do something other than they seem to; idle, only ⇧Tab's effort stepping is named.
             <span className="ds-hints" data-key-hints data-shown>
               {hints.map(({ key, does }) => (
                 <span key={key}>
@@ -541,23 +529,4 @@ export function Composer({
       </div>
     </div>
   );
-}
-
-/** What `folder` (relative to the session's) holds, read when it is first typed; null until it is read. */
-function useFolderListing(folder: string | null, resolvePath: (path: string) => string | null): FolderEntry[] | null {
-  const [listing, setListing] = useState<{ folder: string; entries: FolderEntry[] } | null>(null);
-  useEffect(() => {
-    if (folder === null) return;
-    const path = resolvePath(folder || "./")?.replace(/\/+$/, "");
-    if (!path) return;
-    let live = true;
-    listFolder(path).then(
-      (entries) => live && setListing({ folder, entries }),
-      () => live && setListing({ folder, entries: [] }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [folder, resolvePath]);
-  return listing && listing.folder === folder ? listing.entries : null;
 }

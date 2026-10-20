@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
+import { publishWorktrees } from "../lib/placeStore";
 import type { Workspace, Worktree } from "../lib/types";
 import { asListed } from "../lib/worktrees";
 
@@ -52,6 +53,10 @@ export function useWorktrees(workspace: Workspace | null) {
   }, [workspaceId, chosen]);
 
   const answer = listed[path];
+  // The chat's context row reads the same answer.
+  useEffect(() => {
+    if (path && answer) publishWorktrees(path, answer);
+  }, [path, answer]);
   const known = !!answer && answer.length > 0;
   const list = useMemo(
     () => (answer && answer.length > 0 ? asListed(answer, path) : path ? [standIn(path)] : []),
