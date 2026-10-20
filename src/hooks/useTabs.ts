@@ -9,6 +9,7 @@ import {
   openTab,
   panesOf,
   patchBrowserTab,
+  clearTerminalInput,
   parseTabs,
   persistedTabs,
   pinTab,
@@ -202,6 +203,11 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [mutateIn],
   );
 
+  const clearInput = useCallback(
+    (id: string, tabId: string) => mutateIn(id, (s) => clearTerminalInput(s, tabId)),
+    [mutateIn],
+  );
+
   /** The strips as of the last render, for reads outside one. */
   const live = useRef(registry);
   useEffect(() => {
@@ -304,6 +310,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     openIn,
     adopt,
     patchBrowser,
+    clearInput,
     dropWorkspace,
     unsavedIn,
     strips,

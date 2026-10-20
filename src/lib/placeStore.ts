@@ -2,6 +2,8 @@
 // them, shared by whoever reads it: the sidebar's hooks publish every answer
 // they get, and the chat's context row reads the same one, so a branch
 // switched or a workspace renamed shows where it is used without a launch.
+import { listWorkspaces, listWorktrees } from "./api";
+import { onWorkspacesChanged } from "./client/registry";
 import type { Workspace, Worktree } from "./types";
 
 const trim = (path: string) => path.replace(/\/+$/, "");
@@ -59,4 +61,80 @@ export function mainBranchOf(root: string): string | null {
     if (tree?.main && tree.branch) return tree.branch;
   }
   return null;
+}
+
+const treesInFlight = new Map<string, Promise<void>>();
+let workspacesInFlight: Promise<void> | null = null;
+
+/** Asks git for the repository at `root` and publishes the answer; one ask at a time per root, however many readers want it. */
+export function readTrees(root: string): Promise<void> {
+  const key = trim(root);
+  const running = treesInFlight.get(key);
+  if (running) return running;
+  const ask = listWorktrees(key)
+    .then(
+      (list) => publishWorktrees(key, list),
+      () => {
+        if (treeKnown(key) === undefined) publishWorktrees(key, []);
+      },
+    )
+    .finally(() => void treesInFlight.delete(key));
+  treesInFlight.set(key, ask);
+  return ask;
+}
+
+/** Asks for the workspaces and publishes the answer; concurrent asks share one. */
+export function readWorkspaces(): Promise<void> {
+  if (workspacesInFlight) return workspacesInFlight;
+  const ask = listWorkspaces()
+    .then(publishWorkspaces, () => {
+      if (workspacesKnown() === null) publishWorkspaces([]);
+    })
+    .finally(() => {
+      workspacesInFlight = null;
+    });
+  workspacesInFlight = ask;
+  return ask;
+}
+
+// The checkouts some reader shows, counted. The window coming back and a
+// workspace changing are watched once for all of them, from the first watcher
+// to the last, instead of once per reader.
+const watchedRoots = new Map<string, number>();
+let watchers = 0;
+let stopWatching: (() => void) | null = null;
+
+function startWatching() {
+  const onFocus = () => {
+    for (const root of watchedRoots.keys()) void readTrees(root);
+  };
+  window.addEventListener("focus", onFocus);
+  const offWorkspaces = onWorkspacesChanged(() => void readWorkspaces());
+  stopWatching = () => {
+    window.removeEventListener("focus", onFocus);
+    offWorkspaces();
+  };
+}
+
+/** Keeps the places fresh while a reader shows them: `root` is re-read when the window gets focus, workspaces when they change. */
+export function watchPlaces(root: string | null): () => void {
+  const key = root ? trim(root) : null;
+  if (key) watchedRoots.set(key, (watchedRoots.get(key) ?? 0) + 1);
+  watchers += 1;
+  if (watchers === 1) startWatching();
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    if (key) {
+      const left = (watchedRoots.get(key) ?? 1) - 1;
+      if (left <= 0) watchedRoots.delete(key);
+      else watchedRoots.set(key, left);
+    }
+    watchers -= 1;
+    if (watchers === 0) {
+      stopWatching?.();
+      stopWatching = null;
+    }
+  };
 }

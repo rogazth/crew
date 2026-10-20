@@ -77,14 +77,25 @@ export function useProviderAttention(): Attention {
   );
   const reachable = links.filter((link) => link.status === "online" && !link.mismatch).map((link) => link.id);
   const key = reachable.join("|");
+  // A failed read is tried again the next time the machine comes back (its key changes).
   useEffect(() => {
-    for (const envId of key ? key.split("|") : []) {
+    const ids = key ? key.split("|") : [];
+    for (const envId of ids) {
       if (known.has(envId)) continue;
       api
         .providerStatus(envId, false)
         .then((found) => remember(envId, found))
         .catch(() => {});
     }
+    // A job that ends changes what the CLIs report (installed, update, account): the counts follow.
+    const offJob = api.onProviderJob((job, envId) => {
+      if (job.phase === "running" || !ids.includes(envId)) return;
+      api
+        .providerStatus(envId, true)
+        .then((found) => remember(envId, found))
+        .catch(() => {});
+    });
+    return offJob;
   }, [key]);
   let count = 0;
   let signedOut = false;

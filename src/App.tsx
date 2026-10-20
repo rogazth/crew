@@ -513,6 +513,7 @@ export function App() {
                   />
                 ) : active ? (
                   <WorkspaceStart
+                    key={active.id}
                     workspaceId={active.id}
                     places={panePlaces}
                     defaultPath={startIn ?? work.placeIn ?? active.path}
@@ -543,6 +544,7 @@ export function App() {
               onOpenFileInBrowser={nav.openFileInBrowser}
               onOpenSession={nav.openSessionById}
               onPatchBrowser={tabs.patchBrowser}
+              onClearTerminalInput={tabs.clearInput}
               onOpenBrowserTab={tabs.openIn}
               onAdoptBrowserTab={tabs.adopt}
               files={files}

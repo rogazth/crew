@@ -53,6 +53,16 @@ export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   };
 }
 
+/** A terminal tab's typed command was written: drop it, so nothing can type it again. Same state back when there is none. */
+export function clearTerminalInput(state: TabState, id: string): TabState {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  const tab = state.tabs[index];
+  if (!tab || tab.kind !== "stub" || tab.input === undefined) return state;
+  const tabs = state.tabs.slice();
+  tabs[index] = Object.fromEntries(Object.entries(tab).filter(([key]) => key !== "input")) as Tab;
+  return { ...state, tabs };
+}
+
 /** Each call a new shell, in the worktree it was asked from. */
 export function newTerminalTab(worktree: string | null, input?: string): Tab {
   const tab: Tab = { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
