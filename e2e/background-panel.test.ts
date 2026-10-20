@@ -308,7 +308,8 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   await send("shell");
   await idle();
 
-  const work = inChat().getByRole("button", { name: /shell/ });
+  // The agents clip opens the sheet (it names the agents, not the shell); without agents the status line's segment does.
+  const work = crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]");
   await work.waitFor();
   await work.click();
   await sheet().waitFor();
