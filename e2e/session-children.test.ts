@@ -12,8 +12,6 @@ import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
 import { installFakeOpencode, launchCrew, newSession, sendInChat, stripTabIds, waitFor, type Crew } from "./harness.ts";
 
-const WORK_SHEET = "the Work sheet opens only from the agents clip until S7 #83 of docs/plans/2026-10-19-design-system-finish.md";
-
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CREW = path.join(ROOT, "target/debug/crew");
 
@@ -30,7 +28,7 @@ async function shots(crew: Crew, name: string) {
   await crew.window.emulateMedia({ colorScheme: null });
 }
 
-test("a session a session started is in the status line and the Work sheet, and opens in the same tab", { skip: WORK_SHEET }, async (t) => {
+test("a session a session started is in the status line and the Work sheet, and opens in the same tab", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
@@ -52,7 +50,7 @@ test("a session a session started is in the status line and the Work sheet, and 
   });
 
   // One line under the composer says so; there is no chip, no bar, no sidebar row.
-  const work = crew.window.getByRole("button", { name: "1 agent", exact: true });
+  const work = crew.window.getByRole("button", { name: /^1 agent/ });
   await work.waitFor({ timeout: 10_000 });
   assert.equal(await crew.window.getByText("Sessions", { exact: true }).count(), 0, "no Sessions strip");
   assert.equal(await crew.window.getByText("Conversations", { exact: true }).count(), 0, "no Conversations in a bar");

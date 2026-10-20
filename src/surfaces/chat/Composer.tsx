@@ -50,6 +50,7 @@ import { SlashPicker } from "./SlashPicker";
 import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
 import {
   AgentClip,
+  clipOf,
   AttachMenu,
   ContextRing,
   SendButton,
@@ -373,6 +374,7 @@ export function Composer({
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
   const current = fitChoice(choiceOf(session));
   const stepsEffort = !!onOptions && effortsOf(current.provider, current.model).length > 1;
+  const hasClip = clipOf(work) !== null;
   const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
 
   // A mention is marked where it is typed, in the text; the row over the field never repeats it.
@@ -405,7 +407,7 @@ export function Composer({
   return (
     <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
       <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
-        {work && (
+        {work && hasClip && (
           <WorkSegment
             work={work}
             open={sheet === "work"}
@@ -503,6 +505,8 @@ export function Composer({
         {!centered && <WorktreeSegment session={session} />}
         {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
         {session.paused && <PausedSegment />}
+        {/* Shells, processes and conversations with no agent to put a clip up still have their sheet: this opens it. */}
+        {work && !hasClip && <WorkSegment segment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
         {optionsPending ? (

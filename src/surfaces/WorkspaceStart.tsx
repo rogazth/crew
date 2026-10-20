@@ -190,13 +190,13 @@ export function StartScreen({
   useEffect(() => field.current?.focus(), []);
 
   const [files, setFiles] = useState<AttachedFile[]>([]);
-  const addPaths = useCallback((paths: string[]) => {
+  const addPaths = (paths: string[]) => {
     setFiles((prev) => {
       const seen = new Set(prev.map((file) => file.path));
       return [...prev, ...paths.filter((item) => !seen.has(item) && seen.add(item)).map(attachedFrom)];
     });
     field.current?.focus();
-  }, []);
+  };
   const { uploads, start: startUploads, dismiss: dismissUpload, busy: uploading } = useUploads(addPaths);
 
   // A file the machine in front cannot read from this Mac's disk goes to its temp dir first.
