@@ -109,6 +109,8 @@ export type IndexEntry = { id: string; label: string; page: SettingsSectionId; k
 const SETTINGS: IndexEntry[] = [
   { id: "retention", label: "Delete inactive sessions", page: "general", keywords: "cleanup retention old" },
   { id: "notify-needs-you", label: "Dock badge", page: "notifications", keywords: "dock badge needs you waiting" },
+  { id: "login", label: "Open at login", page: "general", keywords: "startup launch sign in boot routines" },
+  { id: "reopen", label: "Reopen where you left off", page: "general", keywords: "startup restore workspace tabs home launch" },
   { id: "crew-command", label: "crew command", page: "general", keywords: "cli path terminal install" },
   { id: "bypass", label: "Bypass permissions", page: "general", keywords: "danger skip approvals yolo" },
   { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },

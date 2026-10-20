@@ -33,6 +33,7 @@ import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
 import { watchOwner } from "./owner";
 import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
+import { registerLoginItemIpc } from "./login-item";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
 import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
@@ -503,6 +504,7 @@ function registerIpc(): void {
   registerFileIpc();
   registerRemoteIpc(daemonInfo, { restart: restartLocalDaemon, logs: localDaemonLogs });
   registerCliIpc();
+  registerLoginItemIpc();
   registerAppInfoIpc();
 }
 

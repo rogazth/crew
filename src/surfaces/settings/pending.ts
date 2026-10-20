@@ -879,6 +879,3 @@ export function syncInstalled(found: ProviderId[]) {
   };
   emit();
 }
-
-/** A fake async step: resolves after `ms`, for the simulated work above. */
-export const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
