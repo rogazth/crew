@@ -28,6 +28,7 @@ type UpdateProps = {
   onDownload: () => void;
   onSkip: () => void;
   onRestart: () => void;
+  onCancel?: () => void;
 };
 
 const KIND: Record<string, { label: string; tone: string }> = {
@@ -39,7 +40,7 @@ const KIND: Record<string, { label: string; tone: string }> = {
 /** The mark in the rail, on the real updater: nothing until a release is offered. */
 export function RailUpdate() {
   const state = useUpdateState();
-  const { download, skip, restart } = useUpdateActions();
+  const { download, skip, restart, cancel } = useUpdateActions();
   if (
     state.phase !== "available" &&
     state.phase !== "downloading" &&
@@ -59,7 +60,7 @@ export function RailUpdate() {
   const phase: UpdatePhase = state.phase === "available" ? "available" : state.phase === "ready" ? "ready" : "downloading";
   const progress =
     state.phase === "downloading" ? (state.total ? state.received / state.total : 0) : state.phase === "available" ? 0 : 1;
-  return <UpdateButton release={release} phase={phase} progress={progress} onDownload={download} onSkip={skip} onRestart={restart} />;
+  return <UpdateButton release={release} phase={phase} progress={progress} onDownload={download} onSkip={skip} onRestart={restart} onCancel={cancel} />;
 }
 
 export function UpdateButton(props: UpdateProps) {
@@ -105,7 +106,7 @@ export function UpdateButton(props: UpdateProps) {
 }
 
 /** What changed, and the one thing to do about it. Shared with the About page. */
-export function ReleaseCard({ release, phase: update, progress, onDownload, onSkip, onRestart, onClose }: UpdateProps & { onClose?: () => void }) {
+export function ReleaseCard({ release, phase: update, progress, onDownload, onSkip, onRestart, onCancel, onClose }: UpdateProps & { onClose?: () => void }) {
   return (
     <div className="flex flex-col">
       <div className="flex items-start gap-3 p-4 pb-3">
@@ -133,20 +134,27 @@ export function ReleaseCard({ release, phase: update, progress, onDownload, onSk
       )}
       <div className="flex items-center gap-2 p-3 pl-4">
         {update === "downloading" ? (
-          <div className="flex flex-1 flex-col gap-1.5">
-            <div className="flex justify-between text-[12px] text-text-muted">
-              <span>Downloading</span>
-              <span className="tabular-nums">{Math.round(progress * 100)}%</span>
+          <>
+            <div className="flex flex-1 flex-col gap-1.5">
+              <div className="flex justify-between text-[12px] text-text-muted">
+                <span>Downloading</span>
+                <span className="tabular-nums">{Math.round(progress * 100)}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-selected">
+                <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${progress * 100}%` }} />
+              </div>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-selected">
-              <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${progress * 100}%` }} />
-            </div>
-          </div>
+            {onCancel && (
+              <Button variant="ghost" onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
+          </>
         ) : (
           <>
             <span className="flex-1" />
             {update === "ready" ? (
-              <Button variant="primary" keys="⌘⏎" onClick={onRestart}>
+              <Button variant="primary" onClick={onRestart}>
                 Restart to install
               </Button>
             ) : (

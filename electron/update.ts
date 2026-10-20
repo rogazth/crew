@@ -211,10 +211,10 @@ async function stage(manifest: Manifest, target: string): Promise<void> {
   const controller = new AbortController();
   aborting = controller;
   const offer = offerOf(manifest);
-  const dir = await mkdtemp(path.join(tmpdir(), "crew-update-"));
+  let dir: string | null = null;
   try {
+    dir = await mkdtemp(path.join(tmpdir(), "crew-update-"));
     const zip = path.join(dir, path.basename(manifest.zip));
-    set({ phase: "downloading", offer, received: 0, total: null });
     let sent = 0;
     await download(manifest.zip, zip, manifest.sha256, controller.signal, (received, total) => {
       // A chunk lands every few kilobytes; the bar only needs a few frames a second.
@@ -236,7 +236,7 @@ async function stage(manifest: Manifest, target: string): Promise<void> {
     applied = false;
     set({ phase: "ready", offer });
   } catch (error) {
-    await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true });
     if (controller.signal.aborted) {
       set({ phase: "available", offer });
       return;
@@ -268,6 +268,8 @@ export function installStagedOnQuit(): void {
 function startDownload(): void {
   const target = bundle();
   if (phase.phase !== "available" || !offered || !target) return;
+  // Claim the download before stage() awaits anything, so a second click can't start another.
+  set({ phase: "downloading", offer: offerOf(offered), received: 0, total: null });
   void stage(offered, target);
 }
 
