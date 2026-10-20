@@ -27,6 +27,8 @@ export type ConnStatus = "connecting" | "online" | "offline";
 export class Connection {
   status: ConnStatus = "connecting";
   latency: number | null = null;
+  /** When (ms since the epoch) the daemon last answered: any message, or a heartbeat. Null until the first. */
+  lastSeen: number | null = null;
   protocol: number | null = null;
   version: string | null = null;
   /** Why the last attempt failed, in words for Settings. Cleared once online. */
@@ -277,6 +279,7 @@ export class Connection {
   }
 
   private onMessage(event: MessageEvent) {
+    this.lastSeen = Date.now();
     if (typeof event.data !== "string") {
       const bytes = new Uint8Array(event.data as ArrayBuffer);
       if (bytes.byteLength < 4) return;
@@ -371,10 +374,10 @@ export class Connection {
     void this.request("ping", {})
       .then(() => {
         const latency = Math.round(performance.now() - started);
-        if (latency !== this.latency) {
-          this.latency = latency;
-          this.onChange?.();
-        }
+        this.lastSeen = Date.now();
+        this.latency = latency;
+        // Each heartbeat moves lastSeen, so the links republish with it.
+        this.onChange?.();
       })
       .catch(() => {})
       .finally(() => {
