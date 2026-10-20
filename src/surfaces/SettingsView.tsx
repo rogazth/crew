@@ -10,6 +10,7 @@ import { GeneralPage } from "./settings/GeneralPage";
 import { InstalledProviders } from "./settings/InstalledProviders";
 import { KeybindingsPage } from "./settings/KeybindingsPage";
 import { SettingsPage, Toasts } from "./settings/ui";
+import { UsagePage } from "./settings/UsagePage";
 import { NotificationSettings } from "./NotificationSettings";
 import { TerminalSettings } from "./TerminalSettings";
 
@@ -20,12 +21,10 @@ type Props = {
 };
 
 /**
- * One page per section. Appearance and Keybindings are the redesigned pages,
- * and so are About and General;
- * the rest are the components that work against the real daemon and host, in
- * the same frame, until streams S2–S4 of docs/plans/2026-10-19-design-system-finish.md
- * give Usage, Providers and Environments their redesigned,
- * real pages (see settings/pages.ts for the ones still pending).
+ * One page per section. Appearance, Keybindings, About, General, Usage and
+ * Environments are the redesigned pages; the rest are the components that work
+ * against the real daemon and host, in the same frame (settings/pages.ts lists
+ * any section still pending).
  */
 export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
   // A page that is still pending has no nav entry; a stale request for it lands on General.
@@ -75,7 +74,7 @@ function Page({ section, workspaces, onOpenTerminal }: Props) {
     case "about":
       return <AboutPage />;
     case "usage":
-      return null;
+      return <UsagePage />;
   }
 }
 
