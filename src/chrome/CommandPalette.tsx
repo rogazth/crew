@@ -211,7 +211,7 @@ export function CommandPalette(props: Props) {
 
   return (
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={props.onClose}>
-      <div className="absolute inset-0 bg-black/15" />
+      <div className="absolute inset-0 bg-(--backdrop)" />
       <div
         role="dialog"
         aria-modal="true"

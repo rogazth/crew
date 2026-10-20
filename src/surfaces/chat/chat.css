@@ -619,3 +619,13 @@
 .crew-bubble .crew-file-ref:hover {
   background: var(--color-hover);
 }
+
+/* On a new session's first screen the composer sits high, with the cards below it:
+   the file and command pickers open downward there, since upward they would run
+   out of the sheet. */
+.ds-composer[data-roomy] .crew-popover {
+  top: 100%;
+  bottom: auto;
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+}

@@ -260,7 +260,7 @@ export function Overlay({
   // otherwise become the containing block for `fixed` and clip the dialog to it.
   return createPortal(
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div className="absolute inset-0 bg-black/15" />
+      <div className="absolute inset-0 bg-(--backdrop)" />
       <div
         role="dialog"
         aria-modal="true"
@@ -348,7 +348,7 @@ export function Alert({
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !next && onDismiss()}>
       <AlertDialog.Portal>
-        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-black/15" />
+        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-(--backdrop)" />
         <AlertDialog.Popup
           initialFocus={initialFocus}
           onKeyDown={onKeyDown}

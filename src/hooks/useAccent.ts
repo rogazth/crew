@@ -6,7 +6,12 @@ const KEY = "app:accent";
 /** This window's copy of the pick, so the first paint is in the right palette before the store answers. */
 const MIRROR = "crew-accent";
 /** The redesign's dev bar kept its pick here; read once, then gone. */
-const LEGACY = { direction: "crew-proto-direction", theme: "crew-proto-theme", update: "crew-proto-update" } as const;
+const LEGACY = {
+  direction: "crew-proto-direction",
+  theme: "crew-proto-theme",
+  update: "crew-proto-update",
+  review: "crew-proto-review-state",
+} as const;
 
 let current: AccentId = DEFAULT_ACCENT;
 const listeners = new Set<() => void>();
@@ -39,7 +44,8 @@ function set(next: AccentId) {
 /**
  * Applies the palette to <html> before the first render, then reconciles with
  * the stored pick. A pick the redesign's dev bar left in localStorage moves
- * into the store once; its theme and simulated update have no use any more.
+ * into the store once. Its theme (the app's own colour mode holds that), its
+ * simulated update and its review state have no use any more and are dropped.
  */
 export function bootAccent() {
   set(parseAccent(read(MIRROR)));

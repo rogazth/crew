@@ -90,7 +90,7 @@ function overlayRuns(parts: readonly { kind: string; text: string }[]) {
           {part.text}
         </span>,
       );
-    } else if (part.kind === "mention") {
+    } else if (part.kind === "mention" || part.kind === "token") {
       runs.push(
         <mark key={index} className="crew-mention-run">
           {part.text}
@@ -429,7 +429,7 @@ export function Composer({
           />
         )}
       </AgentClip>
-      <form onSubmit={submit} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
+      <form onSubmit={submit} data-composer className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
@@ -526,7 +526,7 @@ export function Composer({
         ) : (
           !centered && (
             // Only while a turn runs, as the shipped composer: then the keys do something other than they seem to.
-            <span className="ds-hints" data-shown>
+            <span className="ds-hints" data-key-hints data-shown>
               {hints.map(({ key, does }) => (
                 <span key={key}>
                   <kbd>{key}</kbd>
