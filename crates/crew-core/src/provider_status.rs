@@ -427,6 +427,9 @@ mod tests {
         let quick = crate::fakes::install(&dir, "quick", "#!/bin/sh\necho \"codex-cli 9.9.9\"\n");
         assert_eq!(run(&quick, &["--version"], LOOKUP_TIMEOUT).and_then(|out| parse_version(&out)).as_deref(), Some("9.9.9"));
         let quiet = crate::fakes::install(&dir, "quiet", "#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n");
-        assert_eq!(parse_codex_login(&run(&quiet, &["login", "status"], LOOKUP_TIMEOUT).unwrap_or_default()).signed_in, Some(false));
+        assert_eq!(
+            parse_codex_login(&run(&quiet, &["login", "status"], LOOKUP_TIMEOUT).unwrap_or_default()).signed_in,
+            Some(false)
+        );
     }
 }

@@ -144,7 +144,10 @@ mod tests {
         let limits: Value = serde_json::from_str(LIMITS).unwrap();
         let account: Value = serde_json::from_str(ACCOUNT).unwrap();
         let read = reading(&limits, Some(&account), 5).unwrap();
-        assert_eq!((read.account.as_deref(), read.plan.as_deref(), read.source.as_str()), (Some("a@b.dev"), Some("plus"), "app-server"));
+        assert_eq!(
+            (read.account.as_deref(), read.plan.as_deref(), read.source.as_str()),
+            (Some("a@b.dev"), Some("plus"), "app-server")
+        );
         assert_eq!(reading(&limits, None, 5).unwrap().account.as_deref(), Some("8bedcad8"));
         assert!(reading(&json!({}), None, 5).is_none());
     }

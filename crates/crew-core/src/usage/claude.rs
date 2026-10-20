@@ -86,7 +86,8 @@ mod tests {
             }
         });
         let windows = parse_rate_limit(rec.as_object().unwrap(), 0);
-        let got: Vec<_> = windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.used_percent, w.window_minutes, w.resets_at)).collect();
+        let got: Vec<_> =
+            windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.used_percent, w.window_minutes, w.resets_at)).collect();
         assert_eq!(got[0], ("five_hour", "5 hours", 53.0, Some(300), Some(1_792_470_000_000)));
         assert_eq!(got[1].0, "seven_day");
         assert_eq!(got[1].1, "Weekly");

@@ -70,12 +70,18 @@ pub fn parse_summary(text: &str) -> Option<(Option<String>, Vec<UsageWindow>)> {
 /// The token `cursor-agent login` stored, if it can be found cheaply.
 fn access_token() -> Option<String> {
     // The token goes into a curl config: anything but a JWT's characters is refused.
-    keychain_token().or_else(file_token).filter(|token| !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+    keychain_token()
+        .or_else(file_token)
+        .filter(|token| !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
 }
 
 #[cfg(target_os = "macos")]
 fn keychain_token() -> Option<String> {
-    let found = run("/usr/bin/security", &["find-generic-password", "-s", "cursor-access-token", "-a", "cursor-user", "-w"], Duration::from_secs(10))?;
+    let found = run(
+        "/usr/bin/security",
+        &["find-generic-password", "-s", "cursor-access-token", "-a", "cursor-user", "-w"],
+        Duration::from_secs(10),
+    )?;
     Some(found.trim().to_string()).filter(|token| !token.is_empty())
 }
 

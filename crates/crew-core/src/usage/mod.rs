@@ -73,7 +73,8 @@ impl UsageHost {
                 .query_map([], |row| row.get::<_, String>(0))?
                 .filter_map(|text| serde_json::from_str(&text.ok()?).ok())
                 .collect();
-            readings.sort_by(|a, b| (a.provider.as_str(), a.account.as_deref()).cmp(&(b.provider.as_str(), b.account.as_deref())));
+            readings
+                .sort_by(|a, b| (a.provider.as_str(), a.account.as_deref()).cmp(&(b.provider.as_str(), b.account.as_deref())));
             let history = conn
                 .prepare_cached("SELECT provider, account, day, percent FROM usage_history WHERE day >= ?1 ORDER BY day")?
                 .query_map(params![oldest], |row| {
@@ -304,10 +305,7 @@ fn same_reading(a: &PlanUsage, b: &PlanUsage) -> bool {
 
 /// The share used of the longest window, which is what a day's high is of.
 fn longest_window_percent(windows: &[UsageWindow]) -> Option<f64> {
-    windows
-        .iter()
-        .max_by_key(|w| w.window_minutes.unwrap_or(0))
-        .map(|w| w.used_percent)
+    windows.iter().max_by_key(|w| w.window_minutes.unwrap_or(0)).map(|w| w.used_percent)
 }
 
 /// What a window of this many minutes is called.
@@ -367,7 +365,14 @@ pub(crate) fn parse_iso_ms(text: &str) -> Option<i64> {
 /// Runs a CLI to its end and returns what it printed, or nothing if it fails
 /// or outlasts `timeout`.
 pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(path).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn().ok()?;
+    let mut child = Command::new(path)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut text = String::new();
@@ -393,13 +398,18 @@ pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String
     reader.join().ok()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn window(id: &str, used: f64, minutes: i64) -> UsageWindow {
-        UsageWindow { id: id.into(), label: window_label(minutes), used_percent: used, window_minutes: Some(minutes), resets_at: None }
+        UsageWindow {
+            id: id.into(),
+            label: window_label(minutes),
+            used_percent: used,
+            window_minutes: Some(minutes),
+            resets_at: None,
+        }
     }
 
     fn reading(account: Option<&str>, windows: Vec<UsageWindow>, at: i64) -> PlanUsage {

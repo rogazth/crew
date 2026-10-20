@@ -9,7 +9,8 @@ use serde_json::Value;
 use super::run;
 
 pub fn read(bin: &str) -> Option<PlanUsage> {
-    let json = run(bin, &["stats", "--days", "7", "--json", "--cost"], Duration::from_secs(30)).and_then(|text| parse_json(&text));
+    let json =
+        run(bin, &["stats", "--days", "7", "--json", "--cost"], Duration::from_secs(30)).and_then(|text| parse_json(&text));
     let (tokens, cost) = match json {
         Some(found) => found,
         None => parse_text(&run(bin, &["stats", "--days", "7"], Duration::from_secs(30))?)?,

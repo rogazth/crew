@@ -259,26 +259,6 @@ export function updateCrewd(id: string) {
   }, steps.length * 900);
 }
 
-export function restartDaemon(id: string) {
-  const env = envById(id);
-  if (!env) return;
-  patchEnv(id, { busy: "Restarting" });
-  window.setTimeout(() => {
-    patchEnv(id, { busy: null });
-    toast("crewd restarted");
-  }, 1400);
-}
-
-export function renameEnv(id: string, name: string) {
-  patchEnv(id, { name });
-}
-
-export function removeEnv(id: string) {
-  envs = envs.filter((env) => env.id !== id);
-  if (viewing === id) viewing = LOCAL_ENV;
-  emitEnvs();
-}
-
 /* ── Adding a machine ───────────────────────────────────────────────── */
 
 export type SshConfigHost = { alias: string; hostname: string; user: string; port: number };
@@ -465,11 +445,6 @@ export function toneOf(env: EnvMock): Tone {
   if (env.busy) return "accent";
   if (env.state === "connected" && env.relay) return "warning";
   return STATE_TONE[env.state];
-}
-
-/** Where a machine is, the way ssh would be told. */
-export function whereOf(env: EnvMock): string {
-  return env.kind === "local" ? env.hostname : (env.ssh ?? env.address ?? env.name);
 }
 
 /** Its own words for "here": this Mac, or the machine's name. */
