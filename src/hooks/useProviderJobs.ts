@@ -48,6 +48,8 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
   const [flow, setFlow] = useState<ProviderLoginFlow | null>(null);
   const [loginEnd, setLoginEnd] = useState<ProviderLoginEvent | null>(null);
   const settled = useRef(onSettled);
+  // The device-code sign-in in flight, so leaving the machine or the page can cancel it.
+  const flowRef = useRef<ProviderLoginFlow | null>(null);
   useEffect(() => {
     settled.current = onSettled;
   });
@@ -80,6 +82,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
   useEffect(() => {
     let alive = true;
     setJobs(known.get(envId) ?? {});
+    flowRef.current = null;
     setFlow(null);
     setLoginEnd(null);
     const offJob = api.onProviderJob((job, env) => {
@@ -89,6 +92,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
     });
     const offLogin = api.onProviderLogin((event, env) => {
       if (env !== envId || !alive) return;
+      if (flowRef.current?.loginId === event.loginId) flowRef.current = null;
       setFlow((current) => (current?.loginId === event.loginId ? null : current));
       setLoginEnd(event);
     });
@@ -103,6 +107,9 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
       alive = false;
       offJob();
       offLogin();
+      const open = flowRef.current;
+      flowRef.current = null;
+      if (open) void api.providerLoginCancel(envId, open.loginId).catch(() => {});
     };
   }, [envId, put, putListed]);
 
@@ -160,6 +167,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
   const startLogin = useCallback(async () => {
     setLoginEnd(null);
     const started = await api.providerLoginStart(envId, "codex");
+    flowRef.current = started;
     setFlow(started);
     return started;
   }, [envId]);
