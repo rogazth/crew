@@ -95,9 +95,12 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
 
   /** The install running now, if any: cancelling aborts it. */
   let installing: AbortController | null = null;
+  /** Settles once the install running now has let go of the machine, so a new one can start. */
+  let settled: Promise<unknown> = Promise.resolve();
 
-  ipcMain.handle("remotes:cancel-install", () => {
+  ipcMain.handle("remotes:cancel-install", async () => {
     installing?.abort();
+    await settled;
   });
 
   ipcMain.handle("remotes:install", async (event, input: InstallInput) => {
@@ -105,7 +108,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     if (installing) throw new Error("Another machine is being set up");
     const controller = new AbortController();
     installing = controller;
-    try {
+    const work = (async () => {
       // The form offers the release's port; a dev or local build keeps off it, so it never meets the release's crewd.
       const port = input.port === undefined || input.port === DEFAULT_PORT ? layout().port : input.port;
       // A crewd already running there at this app's protocol is paired with as it is.
@@ -143,6 +146,10 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       await putToken(row.id, paired.token);
       machinesChanged();
       return row;
+    })();
+    settled = work.catch(() => {});
+    try {
+      return await work;
     } finally {
       installing = null;
     }

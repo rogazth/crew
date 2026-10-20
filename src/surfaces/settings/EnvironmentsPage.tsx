@@ -1,9 +1,9 @@
 // Environments: this Mac and every machine sessions can run on, each a raised
 // card with where it is, how it's connected, the connection and load as small
 // charts, then the network switches. Adding one is a guided dialog
-// (AddMachineFlow). Simulated (pending.ts) and not reachable in the app until
-// S4 of docs/plans/2026-10-19-design-system-finish.md; the real page is
-// surfaces/EnvironmentSettings.tsx.
+// (AddMachineFlow, which is real). The cards are simulated (pending.ts) and not
+// reachable in the app until S4 of docs/plans/2026-10-19-design-system-finish.md;
+// the real page is surfaces/EnvironmentSettings.tsx.
 import { Menu } from "@base-ui/react/menu";
 import {
   ArrowDownToLineIcon,

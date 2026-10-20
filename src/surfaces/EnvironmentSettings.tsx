@@ -29,7 +29,7 @@ import { PROVIDERS } from "../lib/providers";
 import { INSTALL_STEPS, compareVersions, errorText as message, type Tailnet } from "../lib/remotes";
 import { openWorkspaceOn, subscribeAdd, takeAddRequest, WAKE_ON, WARN_RELAY } from "../lib/remoteUi";
 import type { Workspace } from "../lib/types";
-import { AddMachine } from "./AddMachine";
+import { AddMachineFlow } from "./settings/AddMachineFlow";
 
 type Props = {
   workspaces: Workspace[];
@@ -172,31 +172,16 @@ export function EnvironmentSettings({ workspaces, onOpenTerminal }: Props) {
         <p className={`-mt-5 px-2.5 text-[12px] ${notice.tone === "error" ? "text-danger" : "text-text-muted"}`}>{notice.text}</p>
       )}
 
-      {host &&
-        (adding ? (
-          <SettingsSection title="New machine">
-            <AddMachine
-              tailnet={tailnet}
-              links={remotes}
-              onRefresh={readTailnet}
-              onCancel={() => setAdding(false)}
-              onInstalled={() => {
-                void refreshRemotes();
-                readTailnet();
-              }}
-              onOpenWorkspace={(envId) => {
-                setAdding(false);
-                openWorkspaceOn(envId);
-              }}
-            />
-          </SettingsSection>
-        ) : (
+      {host && (
+        <>
+          {adding && <AddMachineFlow onClose={() => setAdding(false)} />}
           <div className="-mt-5 px-1">
             <Button icon={PlusIcon} onClick={() => setAdding(true)}>
               Add machine
             </Button>
           </div>
-        ))}
+        </>
+      )}
 
       <SettingsSection title="Network">
         <SettingsRow label="Tailscale" description="Peer to peer over your tailnet. No Crew server.">
