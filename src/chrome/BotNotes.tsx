@@ -1,4 +1,5 @@
 import { PlusIcon, XIcon } from "lucide-react";
+import { useRef } from "react";
 import { Button, IconButton, TextArea } from "./kit";
 import type { useBotNotes } from "../hooks/useBotNotes";
 import { newNoteEntry, noteTexts, notesUsed } from "../lib/botNotes";
@@ -12,6 +13,9 @@ const count = (n: number) => n.toLocaleString("en-US");
  */
 export function BotNotes({ notes }: { notes: ReturnType<typeof useBotNotes> }) {
   const { shown, entries, cap, error, change: onChange } = notes;
+  // A removed row takes its focused button with it, and focus on the page
+  // leaves Escape out of the sheet: it goes to "Add note" instead.
+  const add = useRef<HTMLButtonElement>(null);
   if (!shown) return null;
   const used = entries ? notesUsed(noteTexts(entries)) : 0;
   const over = used > cap;
@@ -41,11 +45,14 @@ export function BotNotes({ notes }: { notes: ReturnType<typeof useBotNotes> }) {
               <IconButton
                 icon={XIcon}
                 label="Remove note"
-                onClick={() => onChange(entries.filter((row) => row.key !== entry.key))}
+                onClick={() => {
+                  add.current?.focus();
+                  onChange(entries.filter((row) => row.key !== entry.key));
+                }}
               />
             </div>
           ))}
-          <Button variant="ghost" icon={PlusIcon} className="self-start" onClick={() => onChange([...entries, newNoteEntry()])}>
+          <Button ref={add} variant="ghost" icon={PlusIcon} className="self-start" onClick={() => onChange([...entries, newNoteEntry()])}>
             Add note
           </Button>
         </div>
