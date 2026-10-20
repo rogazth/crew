@@ -17,6 +17,8 @@ export type EnvLink = {
   /** Why the last attempt failed. Null while online. */
   error: string | null;
   latency: number | null;
+  /** When (ms since the epoch) the daemon last answered a message or heartbeat; null before the first. */
+  lastSeen: number | null;
   mismatch: boolean;
   version: string | null;
   home: string | null;
@@ -362,6 +364,7 @@ function publish() {
       status: conn.status,
       error: conn.error,
       latency: conn.latency,
+      lastSeen: conn.lastSeen,
       mismatch: conn.mismatch,
       version: machine?.version ?? conn.version,
       home: machine?.home ?? null,

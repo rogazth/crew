@@ -74,12 +74,14 @@ export type RemotesHost = {
   onProgress(cb: (step: InstallStep) => void): () => void;
   /** `warning`: crewd was updated and runs, but lingering is off, so it may stop at logout. */
   update(id: string): Promise<{ warning: string | null }>;
+  /** `id` is a remote's, or `"local"` for this Mac's crewd (its window reloads once it is back). */
   restart(id: string): Promise<void>;
   /**
    * `wipe` deletes `~/.crew` on the machine. Leaving it is the ordinary answer.
    * The machine leaves Crew even when SSH fails; `warning` says what was left running.
    */
   remove(id: string, wipe: boolean): Promise<{ warning: string | null }>;
+  /** The tail of the daemon's log: a remote's, or `"local"` for this Mac's `crewd.log`. */
   logs(id: string): Promise<string>;
   token(id: string): Promise<string | null>;
   /** A daemon that is already running, for tests and a second local `crewd serve`. */
