@@ -6,7 +6,7 @@ import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
 import { lastUsed, sessionTabId, type TabRegistry } from "../lib/tabs";
 import type { Session, Tab, Workspace, Worktree } from "../lib/types";
-import { asListed, contextId, placePath, sessionPath, unlistedWorktrees, worktreeHue, type TabScope } from "../lib/worktrees";
+import { asListed, contextId, placePath, sessionPath, unlistedWorktrees, type TabScope } from "../lib/worktrees";
 import { useTabRegroup, useTabScope } from "./useTabScope";
 import { useTabs } from "./useTabs";
 import { useWorktrees } from "./useWorktrees";
@@ -192,11 +192,6 @@ export function useWorkContext(
   }, []);
   useTabRegroup(regroup);
 
-  /** Each worktree's hue, by its place in the list, for tab chips and the context bar. */
-  const hues = useMemo(
-    () => new Map(worktrees.list.map((tree, index) => [tree.path, worktreeHue(index)])),
-    [worktrees.list],
-  );
 
   return {
     worktrees,
@@ -211,7 +206,6 @@ export function useWorkContext(
     selectWorktreeIn,
     step,
     selectAt,
-    hues,
     pathOf,
     placeOf,
     tabPlaceOf,

@@ -1,58 +1,28 @@
 // Appearance: theme as three little windows, the style (the palette) as
-// swatches, density, text size and bot faces, with a live preview that wears
-// every choice. Theme and style are real (useColorMode, useAccent); density
-// and text size are local until S6 of docs/plans/2026-10-19-design-system-finish.md.
+// swatches and bot faces, with a live preview that wears every choice. Density
+// and chat text size come back with S6 of docs/plans/2026-10-19-design-system-finish.md.
 import { ArrowUpIcon, CheckIcon } from "lucide-react";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
-import { Segmented } from "../../chrome/kit";
 import { useBotAvatar } from "../../hooks/useBotAvatar";
 import { useAccent } from "../../hooks/useAccent";
 import { useColorMode } from "../../hooks/useColorMode";
 import { ACCENTS, type AccentId } from "../../lib/accent";
 import { BOT_AVATARS } from "../../lib/botAvatar";
 import { COLOR_MODES } from "../../lib/colorMode";
-import { Group, Heading, RAISED, Row, SettingsPage } from "./ui";
-
-type Density = "comfortable" | "compact";
-const SIZES = [12, 13, 14, 15, 16] as const;
-type Size = (typeof SIZES)[number];
-
-/** Kept across page switches, like a real preference would be. */
-let saved: { density: Density; size: Size; still: boolean } = { density: "comfortable", size: 13, still: false };
+import { Heading, RAISED, SettingsPage } from "./ui";
 
 export function AppearancePage() {
-  const [prefs, setPrefs] = useState(saved);
-  const set = (change: Partial<typeof prefs>) => {
-    saved = { ...prefs, ...change };
-    setPrefs(saved);
-  };
   return (
     <SettingsPage title="Appearance" wide>
       <div className="grid grid-cols-1 items-start gap-8 @[900px]:grid-cols-[minmax(0,1fr)_288px]">
         <div className="order-2 flex min-w-0 flex-col gap-8 @[900px]:order-1">
           <ThemePicker />
           <StylePicker />
-          <Group title="Reading">
-            <Row id="density" label="Density" description="Fit more rows in lists.">
-              <Segmented<Density>
-                label="Density"
-                value={prefs.density}
-                onChange={(density) => set({ density })}
-                options={[
-                  { value: "comfortable", label: "Comfortable" },
-                  { value: "compact", label: "Compact" },
-                ]}
-              />
-            </Row>
-            <Row id="text-size" label="Chat text size">
-              <SizeSlider value={prefs.size} onChange={(size) => set({ size })} />
-            </Row>
-          </Group>
           <AvatarPicker />
         </div>
         <div className="order-1 @[900px]:sticky @[900px]:top-6 @[900px]:order-2">
-          <Preview {...prefs} />
+          <Preview />
         </div>
       </div>
     </SettingsPage>
@@ -205,49 +175,6 @@ function Swatch({ light, dark }: { light: string; dark: string }) {
   return <span aria-hidden className="size-9 shrink-0 shadow-[inset_0_0_0_1px_var(--color-border)]" style={style} />;
 }
 
-/* ── Reading ────────────────────────────────────────────────────────── */
-
-function SizeSlider({ value, onChange }: { value: Size; onChange: (size: Size) => void }) {
-  const at = SIZES.indexOf(value);
-  return (
-    <div className="flex items-center gap-3">
-      <span className="text-[11px] text-text-muted" aria-hidden>
-        A
-      </span>
-      <div role="radiogroup" aria-label="Chat text size" className="relative flex h-6 w-40 items-center">
-        <span className="absolute inset-x-2 h-1 rounded-full bg-selected" />
-        <span
-          className="absolute left-2 h-1 rounded-full bg-accent transition-[width] duration-150 motion-reduce:transition-none"
-          style={{ width: `calc((100% - 16px) * ${at / (SIZES.length - 1)})` }}
-        />
-        <span className="relative flex w-full justify-between">
-          {SIZES.map((size, i) => (
-            <button
-              key={size}
-              type="button"
-              role="radio"
-              aria-checked={size === value}
-              aria-label={`${size} px`}
-              onClick={() => onChange(size)}
-              className="grid size-4 place-items-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
-            >
-              {size === value ? (
-                <span className="size-4 rounded-full bg-canvas shadow-[0_0_0_1.5px_var(--color-accent),0_1px_3px_oklch(0%_0_0/0.2)]" />
-              ) : (
-                <span className={`size-1.5 rounded-full ${i < at ? "bg-inverse/80" : "bg-text-muted/50"}`} />
-              )}
-            </button>
-          ))}
-        </span>
-      </div>
-      <span className="text-[16px] leading-none text-text-muted" aria-hidden>
-        A
-      </span>
-      <span className="w-10 text-right text-[12px] text-text-muted tabular-nums">{value} px</span>
-    </div>
-  );
-}
-
 /* ── Bots ───────────────────────────────────────────────────────────── */
 
 const FACES = ["crew", "scout", "atlas"];
@@ -274,8 +201,7 @@ function AvatarPicker() {
 
 /* ── Preview ────────────────────────────────────────────────────────── */
 
-function Preview({ density, size, still }: { density: Density; size: Size; still: boolean }) {
-  const row = density === "compact" ? "h-7" : "h-8";
+function Preview() {
   return (
     <figure className={`${RAISED} flex flex-col gap-2 rounded-[20px] p-2`}>
       <figcaption className="flex items-center justify-between px-2 pt-1 text-[11px] text-text-muted">
@@ -283,7 +209,7 @@ function Preview({ density, size, still }: { density: Density; size: Size; still
         <span>Live</span>
       </figcaption>
       <div className="flex h-[210px] overflow-hidden rounded-xl bg-sidebar @[900px]:h-[300px]">
-        <div className={`flex w-[104px] shrink-0 flex-col p-1.5 ${density === "compact" ? "gap-0" : "gap-0.5"}`}>
+        <div className={`flex w-[104px] shrink-0 flex-col p-1.5 gap-0.5`}>
           <p className="px-1.5 pt-1 pb-1 text-[10px] text-text-muted">Sessions</p>
           {[
             { seed: "atlas", name: "Atlas", on: true, dot: "working" },
@@ -292,14 +218,14 @@ function Preview({ density, size, still }: { density: Density; size: Size; still
           ].map((s) => (
             <span
               key={s.seed}
-              className={`flex ${row} items-center gap-1.5 rounded-chrome px-1.5 text-[12px] ${s.on ? "bg-selected font-medium" : ""}`}
+              className={`flex h-8 items-center gap-1.5 rounded-chrome px-1.5 text-[12px] ${s.on ? "bg-selected font-medium" : ""}`}
             >
-              <BotAvatar seed={s.seed} className="size-4" animated={s.dot === "working" && !still} />
+              <BotAvatar seed={s.seed} className="size-4" animated={s.dot === "working"} />
               <span className="min-w-0 flex-1 truncate">{s.name}</span>
               {s.dot === "wants" && <span className="size-1.5 rounded-full bg-warning" />}
               {s.dot === "working" && (
                 <span
-                  className={`size-2 rounded-full border-[1.5px] border-accent/25 border-t-accent ${still ? "" : "animate-spin"}`}
+                  className={`size-2 rounded-full border-[1.5px] border-accent/25 border-t-accent animate-spin`}
                 />
               )}
             </span>
@@ -313,13 +239,13 @@ function Preview({ density, size, still }: { density: Density; size: Size; still
           <span className="flex-1" />
           <p
             className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-fill px-2.5 py-1.5 leading-snug"
-            style={{ fontSize: size }}
+           
           >
             Make the empty state friendlier
           </p>
           <div className="flex items-start gap-2">
-            <BotAvatar seed="atlas" className="size-5" animated={!still} />
-            <p className="min-w-0 flex-1 leading-snug" style={{ fontSize: size }}>
+            <BotAvatar seed="atlas" className="size-5" animated />
+            <p className="min-w-0 flex-1 leading-snug">
               Done. The list now says what to do next, with a button to start.
             </p>
           </div>

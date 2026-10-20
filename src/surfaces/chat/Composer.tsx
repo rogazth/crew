@@ -429,7 +429,7 @@ export function Composer({
           />
         )}
       </AgentClip>
-      <form onSubmit={submit} data-composer className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
+      <form onSubmit={submit} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}

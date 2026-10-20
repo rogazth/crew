@@ -69,13 +69,6 @@ export function worktreeLabel(tree: Worktree): string {
 }
 
 
-const HUES = [250, 150, 25, 300, 80, 190];
-
-/** A stable hue per worktree, so a tab's chip and its sidebar line agree. */
-export function worktreeHue(index: number): number {
-  return HUES[((index % HUES.length) + HUES.length) % HUES.length]!;
-}
-
 /** The worktree a session runs in, from the list git gave; the main checkout when its own is gone. */
 export function worktreeOf(session: Session, workspace: Workspace, worktrees: Worktree[]): Worktree | undefined {
   const path = sessionPath(session, workspace, worktrees);

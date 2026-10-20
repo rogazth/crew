@@ -43,8 +43,8 @@ async function newChat(workspaceId: string): Promise<Session> {
  * screen stay mounted, hidden.
  */
 function composer(session?: Session) {
-  const named = session ? `[aria-label="Message ${session.name}"]` : "";
-  return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
+  if (session) return crew.window.locator(`form[data-session="${session.id}"] textarea:visible`);
+  return crew.window.locator("textarea:not(.xterm-helper-textarea):visible");
 }
 
 /** The terminals on screen. */

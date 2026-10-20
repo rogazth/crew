@@ -121,15 +121,16 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
       [shot, shot],
       ["~/pics/home.png", path.join(crew.home, "pics/home.png")],
     ] as const) {
-      // The image before took the pane: back to the chat.
+      // A chip opens the image in the lightbox over the chat; Esc puts it away.
       await sessionTab(crew, chat).click();
       await page.locator(`.crew-file-ref[title="${chip}"]`).last().click();
-      const opened = page.getByRole("img", { name: file });
+      const lightbox = page.getByRole("dialog", { name: path.basename(file) });
+      await lightbox.waitFor();
+      const opened = lightbox.locator("img");
       await waitFor(() => opened.evaluate((img: HTMLImageElement) => img.naturalWidth === 2), { message: `${chip} loads` });
-      assert.ok(
-        proxy.reads.some((line) => line.includes(`root=${path.dirname(file)}`) && line.includes(path.basename(file))),
-        `devbox served ${chip}: ${JSON.stringify(proxy.reads)}`,
-      );
+      // The lightbox reads the file itself, not through devbox's proxy: only the palette's image does.
+      await page.keyboard.press("Escape");
+      await lightbox.waitFor({ state: "detached" });
     }
   } finally {
     proxy?.close();

@@ -819,8 +819,8 @@ export async function openShell(crew: Crew): Promise<void> {
  * Tabs that are not on screen stay mounted, hidden.
  */
 export function composerOf(crew: Crew, session?: Session): Locator {
-  const named = session ? `[aria-label="Message ${session.name}"]` : "";
-  return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
+  if (session) return crew.window.locator(`form[data-session="${session.id}"] textarea:visible`);
+  return crew.window.locator("textarea:not(.xterm-helper-textarea):visible");
 }
 
 /** Types `text` in the chat on screen and sends it. */
@@ -832,10 +832,12 @@ export async function sendInChat(crew: Crew, text: string): Promise<void> {
 }
 
 /** A session's row in the sidebar panel, by the name it shows. */
-export function sessionRow(crew: Crew, name: string): Locator {
+export function sessionRow(crew: Crew, target: string | Session): Locator {
+  // Every new session is called "New session": a Session picks its row by id.
+  if (typeof target !== "string") return crew.window.locator(`[data-sidebar-panel] button[data-session="${target.id}"]`);
   return crew.window
     .locator("[data-sidebar-panel] button[data-session]")
-    .filter({ has: crew.window.getByText(name, { exact: true }) });
+    .filter({ has: crew.window.getByText(target, { exact: true }) });
 }
 
 /** A session's pill in the tab strip on screen. */

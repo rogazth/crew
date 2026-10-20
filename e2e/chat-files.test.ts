@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { composerOf, launchCrew, newSession, sendInChat, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { composerOf, launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 let workspace: Workspace;
@@ -44,10 +44,12 @@ test("a bare file name is a chip when the folder the reply names holds it, and p
   await reply.locator("code.crew-inline-code").filter({ hasText: "missing.png" }).waitFor();
   assert.equal(await reply.locator(".crew-file-ref").count(), 1, "only the file that is there is a chip");
 
+  // An image opens in the lightbox, from the folder the reply named.
   await chip.click();
-  await waitFor(async () => (await stripTabIds(crew)).some((id) => id.includes(path.join(shots, "a.png"))), {
-    message: "the chip opens the file in the folder the reply named",
-  });
+  const lightbox = crew.window.getByRole("dialog", { name: "a.png" });
+  await lightbox.waitFor();
+  await crew.window.keyboard.press("Escape");
+  await lightbox.waitFor({ state: "detached" });
 });
 
 test("`@` offers a folder git ignores, and the message sends it", async () => {
@@ -57,7 +59,8 @@ test("`@` offers a folder git ignores, and the message sends it", async () => {
   const menu = crew.window.getByRole("listbox", { name: "Files" });
   const folder = menu.getByRole("option").filter({ hasText: "reference/" }).first();
   await folder.waitFor();
-  await folder.click();
+  // Tab goes into the folder: the mention stays `@reference/`, with no space after it.
+  await field.press("Tab");
   assert.equal(await field.inputValue(), "look at @reference/");
   // Into the folder: what it holds, read from disk.
   await menu.getByRole("option").filter({ hasText: "t3code/" }).first().waitFor();

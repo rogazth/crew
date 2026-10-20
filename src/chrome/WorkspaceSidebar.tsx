@@ -985,7 +985,7 @@ function Tile({ session, active, selected, failed, onSelect, onMenu, onClearSele
     <button
       type="button"
       data-nav
-      data-session
+      data-session={session.id}
       data-selected={selected || undefined}
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
@@ -1035,7 +1035,7 @@ function Line({ session, prefs, active, selected, dot, onSelect, onMenu, onClear
     <button
       type="button"
       data-nav
-      data-session
+      data-session={session.id}
       data-selected={selected || undefined}
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
@@ -1105,7 +1105,7 @@ function TwoLines({
     <button
       type="button"
       data-nav
-      data-session
+      data-session={session.id}
       data-selected={selected || undefined}
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}

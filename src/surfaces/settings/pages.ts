@@ -29,7 +29,7 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
   appearance: {
     id: "appearance",
     label: "Appearance",
-    description: "Theme, style and density.",
+    description: "Theme, style and bot faces.",
     icon: PaletteIcon,
   },
   notifications: {
@@ -107,19 +107,13 @@ export const NAV_GROUPS: NavGroup[] = GROUPS.map((group) => ({
 export type IndexEntry = { id: string; label: string; page: SettingsSectionId; keywords?: string };
 
 const SETTINGS: IndexEntry[] = [
-  { id: "tabs", label: "Tabs", page: "general", keywords: "per worktree strip together" },
   { id: "retention", label: "Delete inactive sessions", page: "general", keywords: "cleanup retention old" },
-  { id: "notify-needs-you", label: "Dock badge", page: "general", keywords: "dock badge needs you waiting" },
+  { id: "notify-needs-you", label: "Dock badge", page: "notifications", keywords: "dock badge needs you waiting" },
   { id: "crew-command", label: "crew command", page: "general", keywords: "cli path terminal install" },
-  { id: "login", label: "Open at login", page: "general", keywords: "startup launch" },
-  { id: "bypass", label: "Bypass permissions", page: "providers", keywords: "danger skip approvals yolo" },
+  { id: "bypass", label: "Bypass permissions", page: "general", keywords: "danger skip approvals yolo" },
   { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },
   { id: "style", label: "Style and accent colour", page: "appearance", keywords: "brand ink crew cobalt teal blue" },
-  { id: "density", label: "Density", page: "appearance", keywords: "compact comfortable spacing" },
-  { id: "text-size", label: "Chat text size", page: "appearance", keywords: "font zoom" },
   { id: "avatar", label: "Bot avatar style", page: "appearance", keywords: "faces dicebear" },
-  { id: "default-agent", label: "Preferred agent", page: "providers", keywords: "default provider model new sessions" },
-  { id: "access", label: "Default access", page: "providers", keywords: "permissions ask edits auto full" },
   { id: "provider-claude", label: "Claude Code", page: "providers", keywords: "anthropic sign in" },
   { id: "provider-codex", label: "Codex", page: "providers", keywords: "openai chatgpt" },
   { id: "provider-opencode", label: "OpenCode", page: "providers", keywords: "sst install" },
@@ -141,7 +135,6 @@ const SETTINGS: IndexEntry[] = [
   { id: "usage-limits", label: "Plan limits", page: "usage", keywords: "usage quota rate limit session weekly reset" },
   { id: "usage-rings", label: "Rings on the rail", page: "usage", keywords: "usage indicator rail widget" },
   { id: "usage-alerts", label: "Usage alerts", page: "usage", keywords: "notify warn limit threshold" },
-  { id: "providers-env", label: "Providers per machine", page: "providers", keywords: "environment remote install cli ssh per machine" },
 ];
 
 let index: IndexEntry[] | null = null;

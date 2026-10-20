@@ -545,25 +545,6 @@
   color: var(--color-icon);
 }
 
-.ds-resume {
-  display: flex;
-  height: 36px;
-  width: 100%;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  border-radius: 10px;
-  text-align: left;
-  outline: none;
-  transition: background-color 120ms var(--ease-out);
-}
-.ds-resume:hover {
-  background: var(--color-hover);
-}
-.ds-resume:focus-visible {
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
-}
-
 .ds-keys {
   display: flex;
   flex-wrap: wrap;
@@ -585,19 +566,9 @@
   font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1;
 }
 
-/* What appears answers an action; nothing else moves. */
-.ds-rise {
-  animation: ds-rise 260ms var(--ease-out) both;
-}
-@keyframes ds-rise {
-  from { transform: translateY(6px); opacity: 0; }
-  to { transform: none; opacity: 1; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .ds-strip,
-  .ds-send[data-swapped] > svg,
-  .ds-rise {
+  .ds-send[data-swapped] > svg {
     animation: none;
   }
   .ds-strip,

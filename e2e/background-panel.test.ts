@@ -166,7 +166,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   await page.getByText("Done: tidy the imports").waitFor();
-  await page.locator(`textarea[aria-label="Message Lint pass"]`).waitFor();
+  await page.locator(`form[data-composer] textarea`).waitFor();
 
   // One header, a breadcrumb: where it is, once.
   assert.equal(await visible("[data-thread-header]").count(), 1, "exactly one header is on screen");

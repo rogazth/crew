@@ -126,7 +126,7 @@ test("a session that asks raises a card for its CLI's tool call, its row reads N
 
   // Out of sight it says so on its row, and keeps saying it: nothing answers for the user.
   await sessionTab(crew, other).click();
-  const row = sessionRow(crew, session.name);
+  const row = sessionRow(crew, session);
   await waitFor(async () => (await lightIn(row)) === "Needs input", { message: "the row reads Needs input" });
   await holdsFor(
     2000,
