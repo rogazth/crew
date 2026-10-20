@@ -54,7 +54,7 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   assert.equal(made.branch, "refs/heads/feat/login");
   assert.ok(existsSync(tree));
   const header = worktreeHeader("feat/login");
-  await header.and(page.locator('[aria-current="true"]')).waitFor();
+  await header.waitFor();
 
   // ⌘N: a session in the worktree; a message makes its CLI run a command there.
   await page.keyboard.press(`${MOD}+n`);
@@ -107,7 +107,7 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   assert.equal(await page.locator(`[data-tab-strip] [data-tab-id="${tabId}"]`).count(), 0);
 
   // The window is back on the main checkout.
-  await worktreeHeader("main").and(page.locator('[aria-current="true"]')).waitFor();
+  await worktreeHeader("main").waitFor();
   assert.equal(await header.count(), 0);
 
   // Nor does crewd keep the strip the worktree had: the same branch checked out

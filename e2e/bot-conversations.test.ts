@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
 import { launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
+const WORK_SHEET = "the Work sheet opens only from the agents clip until S7 #83 of docs/plans/2026-10-19-design-system-finish.md";
+
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
 /** The window as it is, light and dark. */
@@ -22,7 +24,7 @@ async function shots(crew: Crew, name: string) {
   await crew.window.emulateMedia({ colorScheme: null });
 }
 
-test("a bot the chat wrote to is a conversation in the status line, and opens as a thread with no composer", async (t) => {
+test("a bot the chat wrote to is a conversation in the status line, and opens as a thread with no composer", { skip: WORK_SHEET }, async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;

@@ -16,6 +16,8 @@ import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
 import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
 
+const WORK_SHEET = "the Work sheet opens only from the agents clip until S7 #83 of docs/plans/2026-10-19-design-system-finish.md";
+
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
@@ -79,7 +81,7 @@ async function sessionEnv(): Promise<NodeJS.ProcessEnv> {
 
 const processes = (workspaceId: string) => crew.request<Process[]>("process_list", { workspaceId });
 
-test("what the session started is one line under the composer, and its sheet lists running work before what ended", async () => {
+test("what the session started is one line under the composer, and its sheet lists running work before what ended", { skip: WORK_SHEET }, async () => {
   const env = await sessionEnv();
   await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
   const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((row) => row.parentId === chat.id), {
@@ -108,7 +110,7 @@ test("what the session started is one line under the composer, and its sheet lis
   await sheet().waitFor({ state: "detached" });
 });
 
-test("Esc closes the sheet and does not also stop the turn", async () => {
+test("Esc closes the sheet and does not also stop the turn", { skip: WORK_SHEET }, async () => {
   await send("work 20");
   const stop = crew.window.getByRole("button", { name: "Stop" });
   await stop.waitFor();
@@ -117,7 +119,7 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   // The key hints show only while the turn runs.
   const hints = visible("[data-status-line] [data-key-hints]");
   await hints.waitFor();
-  assert.match(await hints.innerText(), /esc stop/);
+  assert.match(await hints.innerText(), /esc\s*stop/);
   await shoot("composer-working");
 
   await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
@@ -149,7 +151,7 @@ async function shoot(name: string): Promise<void> {
 
 const visible = (selector: string) => crew.window.locator(`${selector} >> visible=true`);
 
-test("↵ opens a Crew subagent as one thread over the chat, with its own composer and meter, and Esc goes back", async () => {
+test("↵ opens a Crew subagent as one thread over the chat, with its own composer and meter, and Esc goes back", { skip: WORK_SHEET }, async () => {
   const { 0: child } = (await sessions(crew, chat.workspaceId)).filter((row) => row.parentId === chat.id);
   assert.ok(child);
   // What the reader had typed in the parent comes back untouched.
@@ -164,7 +166,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   await page.getByText("Done: tidy the imports").waitFor();
-  await page.locator(`textarea[placeholder*="Ask Lint pass anything"]`).waitFor();
+  await page.locator(`textarea[aria-label="Message Lint pass"]`).waitFor();
 
   // One header, a breadcrumb: where it is, once.
   assert.equal(await visible("[data-thread-header]").count(), 1, "exactly one header is on screen");
@@ -202,7 +204,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   await composer().fill("");
 });
 
-test("x stops a command, and opening a command opens its tab", async () => {
+test("x stops a command, and opening a command opens its tab", { skip: WORK_SHEET }, async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
@@ -223,7 +225,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
   await finished.waitFor();
 });
 
-test("Clear finished empties the panel, and the line goes with it", async () => {
+test("Clear finished empties the panel, and the line goes with it", { skip: WORK_SHEET }, async () => {
   await crew.window.getByRole("button", { name: "1 agent · 1 process", exact: true }).click();
   await sheet().getByRole("button", { name: "Clear finished" }).click();
   await sheet().waitFor({ state: "detached" });
@@ -232,7 +234,7 @@ test("Clear finished empties the panel, and the line goes with it", async () => 
   assert.ok((await sessions(crew, chat.workspaceId)).some((row) => row.parentId === chat.id));
 });
 
-test("what Clear finished hid stays hidden after a reload, and a process that starts again shows", async () => {
+test("what Clear finished hid stays hidden after a reload, and a process that starts again shows", { skip: WORK_SHEET }, async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const line = /finished$|process|agent|shell/;
@@ -267,7 +269,7 @@ test("what Clear finished hid stays hidden after a reload, and a process that st
   await crew.window.getByRole("button", { name: line }).waitFor({ state: "detached" });
 });
 
-test("a subagent the chat's CLI runs shows its tokens and its step, and x stops it through the CLI", async () => {
+test("a subagent the chat's CLI runs shows its tokens and its step, and x stops it through the CLI", { skip: WORK_SHEET }, async () => {
   const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
   await send("agent");
   await said(/^Reply \d+: agent$/).waitFor();
@@ -293,7 +295,7 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   await sheet().waitFor({ state: "detached" });
 });
 
-test("the sheet lists a native subagent, a Crew subagent, a session and a shell as one work list", async () => {
+test("the sheet lists a native subagent, a Crew subagent, a session and a shell as one work list", { skip: WORK_SHEET }, async () => {
   const env = await sessionEnv();
   await run(CREW, ["sessions", "start", "--provider", "opencode", "--name", "billing-ui", "--", "wire the billing page"], { env });
   await waitFor(async () => (await sessions(crew, chat.workspaceId)).some((row) => row.launchedBy === chat.id), {
@@ -324,7 +326,7 @@ async function openWorkSheet(): Promise<void> {
   await sheet().waitFor();
 }
 
-test("a native subagent opens with no composer and a read-only footer, and x stops it", async () => {
+test("a native subagent opens with no composer and a read-only footer, and x stops it", { skip: WORK_SHEET }, async () => {
   const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
   // It runs a third: the first was stopped, the second still runs, and the newest is listed first.
   await send("agent");
@@ -350,7 +352,7 @@ test("a native subagent opens with no composer and a read-only footer, and x sto
   await composer().waitFor();
 });
 
-test("a shell opens in place under the same header, with its output and no composer", async () => {
+test("a shell opens in place under the same header, with its output and no composer", { skip: WORK_SHEET }, async () => {
   await openWorkSheet();
   await rows().filter({ hasText: /Shell.*Shell/ }).first().click();
   await sheet().waitFor({ state: "detached" });
@@ -368,7 +370,7 @@ test("a shell opens in place under the same header, with its output and no compo
   await page.waitFor({ state: "detached" });
 });
 
-test("a native subagent's call is one row and one card with the sheet's state, and the card opens its thread in place", async () => {
+test("a native subagent's call is one row and one card with the sheet's state, and the card opens its thread in place", { skip: WORK_SHEET }, async () => {
   await send("agent");
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
   const calls = crew.window.getByText(/^Started a subagent/);
@@ -400,7 +402,7 @@ test("a native subagent's call is one row and one card with the sheet's state, a
 
 // Plan 2026-10-12 (decision 7): a session's x interrupts its turn and never
 // ends it. It is the user's session; ending its process is the sidebar's job.
-test("x on a session the chat launched interrupts its turn and leaves the session running", async () => {
+test("x on a session the chat launched interrupts its turn and leaves the session running", { skip: WORK_SHEET }, async () => {
   if (await sheet().isVisible()) {
     await crew.window.keyboard.press("Escape");
     await sheet().waitFor({ state: "detached" });

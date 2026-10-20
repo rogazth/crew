@@ -42,7 +42,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
     message: "git lists the new worktree",
   });
   const header = worktreeHeader(crew, "feat/late");
-  await header.and(page.locator('[aria-current="true"]')).waitFor();
+  await header.waitFor();
   const session = await newSession(crew, workspace.id);
   assert.equal(session.worktree, tree);
   const tabId = await tabOf(crew, session);

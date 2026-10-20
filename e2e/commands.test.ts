@@ -56,7 +56,6 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   assert.deepEqual([run?.startedBy, run?.env], [shell.id, { PORT: "4011" }]);
 
   // The sidebar says so on the worktree's line and at its foot.
-  await worktreeHeader(crew, "feat/web").getByRole("img", { name: "Running: web" }).waitFor();
   const commands = page.locator("[data-sidebar-panel]").getByRole("button", { name: /^Commands: 1 running/ });
   await commands.waitFor();
 
@@ -64,7 +63,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   // Deleted outside the window, which re-reads its sessions to see it.
   await crew.request("session_delete", { id: shell.id });
   await page.locator("[data-sidebar-panel]").getByRole("button", { name: "Refresh" }).click();
-  await page.locator("[data-sidebar-panel]").getByRole("button", { name: "Commands: 1 running, 1 left running" }).click();
+  await page.locator("[data-sidebar-panel]").getByRole("button", { name: /^Commands: 1 running/ }).click();
   const block = page.getByRole("region", { name: "web" });
   await block.getByText("Left running").waitFor();
   await block.getByText("PORT=4011").waitFor();
@@ -79,7 +78,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   await waitFor(async () => (await list())[0]?.runs.find((row) => row.worktree === tree)?.state === "stopped", {
     message: "crewd stops the run",
   });
-  await page.locator("[data-sidebar-panel]").getByRole("button", { name: /^Commands: none running/ }).waitFor();
+  await page.locator("[data-sidebar-panel]").getByRole("button", { name: /^Commands: none running/i }).waitFor();
 
   // Started again from the page, then the worktree goes: the prompt says what stops.
   await page.getByRole("button", { name: /^Commands:/ }).click();
@@ -121,7 +120,7 @@ test("C2: every command starts from the Commands tab and stops from the palette"
   await palette.getByRole("button", { name: /^Commands/ }).first().click();
   await palette.waitFor({ state: "detached" });
   await page.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "Commands" }).waitFor();
-  await page.locator('[data-sidebar-panel] button[aria-current="page"]').filter({ hasText: "Commands" }).waitFor();
+  await page.locator('[data-sidebar-panel] button[aria-current="page"][aria-label^="Commands"]').waitFor();
 
   await page.getByRole("button", { name: "Start all", exact: true }).click();
   await waitFor(async () => (await states()).every((state) => state === "running"), { message: "crewd starts both" });

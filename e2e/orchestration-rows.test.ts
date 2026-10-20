@@ -186,7 +186,7 @@ test("a child's question is answered from the parent's chat: options on the lett
   const child = await askingChild("refunds-api", "Check the refund limits ASKQUESTION");
   const letter = crew.window.locator("[data-letter]").filter({ hasText: /Partial refunds over 90 days/ });
   await letter.waitFor({ timeout: 30_000 });
-  assert.match(flat(await letter.innerText()), /refunds-api asks · waits on an answer/);
+  assert.match(flat(await letter.innerText()), /refunds-api asks waits on an answer/);
   const keep = letter.getByRole("button", { name: "Keep the 90-day limit" });
   await keep.waitFor();
   assert.match(flat(await letter.innerText()), /You or .* can answer/);
@@ -222,7 +222,7 @@ test("a child's approval is decided from the parent's chat when the parent could
   const child = await askingChild("billing-ui", "Run the billing fixtures ASKAPPROVAL");
   const letter = crew.window.locator("[data-letter]").filter({ hasText: /wants to use/i });
   await letter.waitFor({ timeout: 30_000 });
-  assert.match(flat(await letter.innerText()), /billing-ui asks · waits on an answer/);
+  assert.match(flat(await letter.innerText()), /billing-ui asks waits on an answer/);
   const allow = letter.getByRole("button", { name: /^Allow/ });
   await allow.waitFor();
   assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");

@@ -43,7 +43,7 @@ async function newChat(workspaceId: string): Promise<Session> {
  * screen stay mounted, hidden.
  */
 function composer(session?: Session) {
-  const named = session ? `[placeholder*="Ask ${session.name} anything"]` : "";
+  const named = session ? `[aria-label="Message ${session.name}"]` : "";
   return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
 }
 
@@ -98,7 +98,7 @@ function alive(pid: number): boolean {
 
 /** The context meter under the composer: its ring's percentage and its card's text. */
 function meter() {
-  return crew.window.locator("span.group:visible").filter({ hasText: "Context window" });
+  return crew.window.locator("[data-context-meter]:visible");
 }
 
 test("a new Claude session opens the chat with no terminal, and its reply streams in", async () => {
@@ -170,9 +170,9 @@ test("the access and effort chips reach the running CLI as control requests, wit
   const before = await controls();
   assert.equal(before.some((line) => line.startsWith("set_permission_mode")), false);
 
-  // ⇧Tab in the composer moves the chip, and the next turn tells the CLI.
-  const chat = composer();
-  await chat.press("Shift+Tab");
+  // The Access chip moves the access, and the next turn tells the CLI. (⇧Tab steps the effort.)
+  await crew.window.getByRole("button", { name: "Access" }).click();
+  await crew.window.getByRole("menuitemradio", { name: /^Accept edits/ }).click();
   await crew.window.getByRole("button", { name: "Access" }).getByText("Accept edits").waitFor();
   await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).autonomy === "edits", {
     message: "the row keeps the access",
@@ -416,7 +416,7 @@ function bubble(text: string) {
 
 /** The chips above the message box. */
 function chips() {
-  return crew.window.locator("form.crew-composer:visible span.rounded-full").filter({ hasText: /this turn|next turn/ });
+  return crew.window.locator("form[data-composer]:visible span.rounded-full").filter({ hasText: /this turn|next turn/ });
 }
 
 /** The chat on screen's reply paragraphs that start with `prefix` (earlier chats stay mounted, hidden). */

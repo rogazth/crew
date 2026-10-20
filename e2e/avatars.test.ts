@@ -56,18 +56,12 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   });
   const born = await faceOf(crew, "Scout");
 
-  // Settings › Appearance › Avatar style: anything but the one in use.
+  // Settings › Appearance › Bot faces: any style but the one in use.
   await pressChord(crew, `${MOD}+,`);
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
-  const select = page.getByRole("combobox", { name: "Avatar style" });
-  const current = (await select.innerText()).trim();
-  await select.click();
-  const options = page.getByRole("option");
-  await options.first().waitFor();
-  const labels = (await options.allInnerTexts()).map((label) => label.trim());
-  const other = labels.find((label) => label !== current);
-  assert.ok(other, `a style other than ${current} among ${labels.join(", ")}`);
-  await page.getByRole("option", { name: other, exact: true }).click();
+  const styles = page.getByRole("radiogroup", { name: "Avatar style" });
+  await styles.waitFor();
+  await styles.getByRole("radio", { checked: false }).first().click();
   const style = await waitFor(
     async () => {
       const value = await stored(crew, "bot:avatar");

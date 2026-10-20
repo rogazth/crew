@@ -684,22 +684,22 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
-/**
- * Goes to a worktree by the chord its sidebar line names (⌃⌘1…9): a click on
- * the line only folds it. Resolves once the window is on it.
- */
+/** ⇧⌘O and the row of the worktree named `label`: the window comes to work in it. */
 export async function goToWorktree(crew: Crew, label: string): Promise<void> {
-  const header = worktreeHeader(crew, label);
-  const title = (await header.getAttribute("title")) ?? "";
-  const digit = /(\d)\s+to switch$/.exec(title)?.[1];
-  if (!digit) throw new Error(`${label}'s line names no chord to switch: ${JSON.stringify(title)}`);
-  await pressChord(crew, `${WORKTREE_MOD}+${digit}`);
-  await header.and(currentWorktree(crew)).waitFor();
+  await pressChord(crew, `${MOD}+Shift+o`);
+  const palette = crew.window.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("button").filter({ hasText: label }).first().click();
+  await palette.waitFor({ state: "detached" });
 }
 
-/** The worktree line the window is on. */
+/**
+ * Narrows a worktree's line to the one the window works in. The sidebar draws
+ * no current worktree any more (a session belongs to one and says so), so this
+ * is just a worktree line: `worktreeHeader(crew, label).and(currentWorktree(crew))`
+ * waits for the line to be listed.
+ */
 export function currentWorktree(crew: Crew): Locator {
-  return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
+  return crew.window.locator("[data-sidebar-panel] button[data-nav][aria-expanded]");
 }
 
 export type GitWorktree = { path: string; branch: string | null };
@@ -819,7 +819,7 @@ export async function openShell(crew: Crew): Promise<void> {
  * Tabs that are not on screen stay mounted, hidden.
  */
 export function composerOf(crew: Crew, session?: Session): Locator {
-  const named = session ? `[placeholder*="Ask ${session.name} anything"]` : "";
+  const named = session ? `[aria-label="Message ${session.name}"]` : "";
   return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
 }
 
