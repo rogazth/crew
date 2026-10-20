@@ -375,18 +375,19 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 
   const sessionRow = (session: Session) => {
     const editing = session.id === renaming ? rename(session) : null;
-    if (mode === "worktree" || !showTree)
+    const tree = treeOf(session);
+    // No worktree to name (Home, or a main checkout with no branch): no second line to say so.
+    if (mode === "worktree" || !showTree || !tree || (tree.main && !tree.branch))
       return editing ? (
         <RenameRow key={session.id} className="h-8 px-1" {...editing} />
       ) : (
         <Line key={session.id} {...card(session)} onRename={() => setRenaming(session.id)} />
       );
-    const tree = treeOf(session);
     return (
       <TwoLines
         key={session.id}
         {...card(session)}
-        place={{ label: tree ? worktreeLabel(tree) : "main", tree }}
+        place={{ label: worktreeLabel(tree), tree }}
         editing={editing}
         onRename={() => setRenaming(session.id)}
       />
@@ -1127,7 +1128,7 @@ function TwoLines({
   onRemove,
   onRename,
 }: CardProps & {
-  place: { label: string; tree: Worktree | undefined };
+  place: { label: string; tree: Worktree };
   editing: { initial: string; onCommit: (name: string) => void; onCancel: () => void } | null;
   onRename: () => void;
 }) {
