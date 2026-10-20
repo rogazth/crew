@@ -28,6 +28,12 @@ import type {
   PageSnapshot,
   Process,
   ProcessSpec,
+  ProviderJob,
+  ProviderJobAction,
+  ProviderJobMethod,
+  ProviderLoginCommand,
+  ProviderLoginEvent,
+  ProviderLoginFlow,
   ProviderStatus,
   RemoteEnv,
   SearchFiles,
@@ -499,6 +505,49 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
  */
 export const providerStatus = (envId: string, refresh = false): Promise<ProviderStatus[]> =>
   client.request("provider_status", { refresh }, envId);
+
+/**
+ * Starts a job on that machine's CLI (install, update, reinstall, uninstall,
+ * logout). Without `method`, an update uses the CLI's own updater and the rest
+ * follow how the CLI got there. One job per provider at a time: a second start
+ * rejects. Progress arrives as `onProviderJob` events.
+ */
+export const providerJobStart = (
+  envId: string,
+  provider: string,
+  action: ProviderJobAction,
+  method?: ProviderJobMethod,
+): Promise<ProviderJob> =>
+  client.request("provider_job_start", method ? { provider, action, method } : { provider, action }, envId);
+
+/** Kills the job's process group; it ends as `cancelled`. */
+export const providerJobCancel = (envId: string, id: string): Promise<void> =>
+  client.request("provider_job_cancel", { id }, envId);
+
+/** Running jobs and the last few finished ones, oldest first. */
+export const providerJobList = (envId: string): Promise<ProviderJob[]> => client.request("provider_job_list", {}, envId);
+
+/** Told with the whole job each time it changes (`provider-job`). */
+export const onProviderJob = (listener: (job: ProviderJob, envId: string) => void): (() => void) =>
+  client.on("provider-job", (payload, env) => listener(payload as ProviderJob, env));
+
+/** What to run in a terminal tab on that machine to sign in (`login`) or out (`logout`) by hand. */
+export const providerLogin = (envId: string, provider: string): Promise<ProviderLoginCommand> =>
+  client.request("provider_login", { provider }, envId);
+
+/** Codex only: starts the device-code sign-in; show the code and open the URL. Its end arrives as `onProviderLogin`. */
+export const providerLoginStart = (envId: string, provider = "codex"): Promise<ProviderLoginFlow> =>
+  client.request("provider_login_start", { provider }, envId);
+
+export const providerLoginCancel = (envId: string, loginId: string): Promise<boolean> =>
+  client.request("provider_login_cancel", { loginId }, envId);
+
+/** Told how a device-code sign-in ended (`provider-login`): done, failed or cancelled. */
+export const onProviderLogin = (listener: (event: ProviderLoginEvent, envId: string) => void): (() => void) =>
+  client.on("provider-login", (payload, env) => listener(payload as ProviderLoginEvent, env));
+
+/** The install method last chosen for a provider on a machine, kept with `stateSet`. */
+export const providerMethodKey = (envId: string, provider: string): string => `providerMethod.${envId}.${provider}`;
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 

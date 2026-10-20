@@ -10,6 +10,7 @@ mod letters;
 mod mcp;
 mod messages;
 mod processes;
+mod providers;
 mod sessions;
 mod turns;
 mod usage;
@@ -21,6 +22,7 @@ pub use letters::*;
 pub use mcp::*;
 pub use messages::*;
 pub use processes::*;
+pub use providers::*;
 pub use sessions::*;
 pub use turns::*;
 pub use usage::*;
@@ -213,6 +215,10 @@ pub struct ProviderStatus {
     #[ts(optional)]
     pub latest: Option<String>,
     pub update_available: bool,
+    /// The ways this machine can install the CLI: only those whose tool (npm,
+    /// brew, curl) is there, and only those the CLI ships through.
+    #[serde(default)]
+    pub methods: Vec<ProviderJobMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<ProviderAccount>,

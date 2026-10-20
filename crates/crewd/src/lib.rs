@@ -74,6 +74,9 @@ struct Hosts {
     children: Arc<SessionTools>,
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
+    /// Installs, updates and sign-outs of this machine's agent CLIs, and the Codex device-code sign-in.
+    provider_jobs: crew_core::provider_job::ProviderJobs,
+    provider_logins: crew_core::provider_login::ProviderLogins,
 }
 
 /// Where the daemon listens and the token a client has to bring.
@@ -596,6 +599,12 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     config.processes.set_events(hub.clone());
+    let provider_jobs = crew_core::provider_job::ProviderJobs::new();
+    let job_events = hub.clone();
+    provider_jobs.set_listener(Arc::new(move |job| job_events.emit("provider-job", job)));
+    let provider_logins = crew_core::provider_login::ProviderLogins::new();
+    let login_events = hub.clone();
+    provider_logins.set_listener(Arc::new(move |event| login_events.emit("provider-login", event)));
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
@@ -608,6 +617,8 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         exit: exit_tx,
         children,
         socks_port: 0,
+        provider_jobs,
+        provider_logins,
     };
     // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
@@ -1686,6 +1697,33 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "provider_status" => {
             let proto::ProviderStatusRequest { refresh } = parse(params)?;
             json(block(move || Ok::<_, String>(crew_core::provider_status::all(refresh))).await?)
+        }
+        "provider_job_start" => {
+            let request: proto::ProviderJobStart = parse(params)?;
+            let jobs = hosts.provider_jobs.clone();
+            json(block(move || jobs.start(request)).await?)
+        }
+        "provider_job_cancel" => {
+            let proto::ProviderJobCancel { id } = parse(params)?;
+            let jobs = hosts.provider_jobs.clone();
+            json(block(move || jobs.cancel(&id)).await?)
+        }
+        "provider_job_list" => json(hosts.provider_jobs.list()),
+        "provider_login" => {
+            let proto::ProviderRef { provider } = parse(params)?;
+            json(crew_core::provider_login::command(&provider)?)
+        }
+        "provider_login_start" => {
+            let proto::ProviderRef { provider } = parse(params)?;
+            if provider != "codex" {
+                return Err(format!("{provider} signs in through a terminal; there is no in-app flow"));
+            }
+            let logins = hosts.provider_logins.clone();
+            json(block(move || logins.start_codex()).await?)
+        }
+        "provider_login_cancel" => {
+            let proto::ProviderLoginCancel { login_id } = parse(params)?;
+            json(hosts.provider_logins.cancel(&login_id))
         }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;

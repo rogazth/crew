@@ -3,7 +3,7 @@
 //! session's own app-server sends.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use super::window_label;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The windows of a rate-limit snapshot (`primary`, `secondary`) and the plan.
 pub fn parse_rate_limits(limits: &Value) -> (Vec<UsageWindow>, Option<String>) {
@@ -42,51 +43,109 @@ pub fn parse_account(result: &Value) -> (Option<String>, Option<String>) {
     (text("email"), text("planType"))
 }
 
-/// Starts an app-server, asks it, and stops it: usage is readable with no
-/// session running.
-pub fn probe(bin: &str) -> Option<PlanUsage> {
-    let mut child =
-        Command::new(bin).arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
-    let mut stdin = child.stdin.take()?;
-    let stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::channel::<Value>();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                if tx.send(message).is_err() {
-                    break;
+/// A running `codex app-server`: the JSON-lines it prints arrive on `rx`, and
+/// the process ends with the value. Usage and account probes live a moment;
+/// a device-code sign-in lives until the account answers.
+pub struct AppServer {
+    child: Child,
+    stdin: ChildStdin,
+    pub rx: mpsc::Receiver<Value>,
+    next_id: u64,
+}
+
+impl AppServer {
+    /// Starts the server and says hello. `bin` is the resolved `codex`.
+    pub fn start(bin: &str) -> Option<Self> {
+        let mut child = Command::new(bin)
+            .arg("app-server")
+            .env("PATH", crate::shell_path::joined())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        };
+        let (tx, rx) = mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                    if tx.send(message).is_err() {
+                        break;
+                    }
                 }
             }
+        });
+        let mut server = Self { child, stdin, rx, next_id: 0 };
+        let hello = json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "crew", "title": "Crew", "version": "0" } } });
+        let sent = writeln!(server.stdin, "{hello}").and_then(|_| writeln!(server.stdin, "{}", json!({ "method": "initialized", "params": {} })));
+        sent.ok()?;
+        Some(server)
+    }
+
+    /// Sends a request; the id its answer will carry.
+    pub fn send(&mut self, method: &str, params: Option<Value>) -> Option<u64> {
+        self.next_id += 1;
+        let mut request = json!({ "id": self.next_id, "method": method });
+        if let Some(params) = params {
+            request["params"] = params;
         }
-    });
-    let requests = [
-        json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "crew", "title": "Crew", "version": "0" } } }),
-        json!({ "method": "initialized", "params": {} }),
-        json!({ "id": 2, "method": "account/rateLimits/read" }),
-        json!({ "id": 3, "method": "account/read", "params": { "refreshToken": false } }),
-    ];
-    let sent = requests.iter().try_for_each(|request| writeln!(stdin, "{request}"));
-    let (mut limits, mut account) = (None, None);
-    if sent.is_ok() {
-        let deadline = Instant::now() + PROBE_TIMEOUT;
-        while limits.is_none() || account.is_none() {
-            let Some(wait) = deadline.checked_duration_since(Instant::now()) else {
-                break;
-            };
-            let Ok(message) = rx.recv_timeout(wait) else {
-                break;
-            };
-            match message.get("id").and_then(Value::as_u64) {
-                Some(2) => limits = Some(message.get("result").cloned().unwrap_or(Value::Null)),
-                Some(3) => account = Some(message.get("result").cloned().unwrap_or(Value::Null)),
-                _ => {}
+        writeln!(self.stdin, "{request}").ok()?;
+        Some(self.next_id)
+    }
+
+    /// The answers to `ids` (their `result`, or `Null` for an error), as far as they come before `timeout`.
+    pub fn collect(&self, ids: &[u64], timeout: Duration) -> std::collections::HashMap<u64, Value> {
+        let deadline = Instant::now() + timeout;
+        let mut answers = std::collections::HashMap::new();
+        while ids.iter().any(|id| !answers.contains_key(id)) {
+            let Some(wait) = deadline.checked_duration_since(Instant::now()) else { break };
+            let Ok(message) = self.rx.recv_timeout(wait) else { break };
+            if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                answers.insert(id, message.get("result").cloned().unwrap_or(Value::Null));
+            }
+        }
+        answers
+    }
+
+    /// One request and its answer; None when the server fails it or is silent.
+    pub fn call(&mut self, method: &str, params: Option<Value>, timeout: Duration) -> Option<Value> {
+        let id = self.send(method, params)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let message = self.rx.recv_timeout(deadline.checked_duration_since(Instant::now())?).ok()?;
+            if message.get("id").and_then(Value::as_u64) == Some(id) {
+                return message.get("result").cloned();
             }
         }
     }
-    drop(stdin);
-    let _ = child.kill();
-    let _ = child.wait();
-    reading(limits.as_ref()?, account.as_ref(), crate::store::now_millis())
+}
+
+impl Drop for AppServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The signed-in account of a short-lived app-server: `account/read`, whose
+/// result is `{ account: { type, email, planType } | null, requiresOpenaiAuth }`.
+pub fn read_account(bin: &str) -> Option<Value> {
+    let mut server = AppServer::start(bin)?;
+    server.call("account/read", Some(json!({ "refreshToken": false })), ACCOUNT_TIMEOUT)
+}
+
+/// Starts an app-server, asks it, and stops it: usage is readable with no
+/// session running.
+pub fn probe(bin: &str) -> Option<PlanUsage> {
+    let mut server = AppServer::start(bin)?;
+    let limits = server.send("account/rateLimits/read", None)?;
+    let account = server.send("account/read", Some(json!({ "refreshToken": false })))?;
+    let mut answers = server.collect(&[limits, account], PROBE_TIMEOUT);
+    reading(&answers.remove(&limits)?, answers.get(&account), crate::store::now_millis())
 }
 
 /// A reading out of the two results; none when Codex has no rate limits to show.

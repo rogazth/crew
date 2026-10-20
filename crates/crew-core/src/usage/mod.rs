@@ -5,7 +5,7 @@
 //! own and hands `record` a [`PlanUsage`].
 
 mod claude;
-mod codex;
+pub(crate) mod codex;
 mod cursor;
 mod opencode;
 
