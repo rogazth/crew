@@ -95,13 +95,22 @@ describe("crossings", () => {
   it("learns on the first look, tells once on a crossing, and again after a reset", () => {
     const first = crossings(at(95), null, 90);
     expect(first.fresh).toHaveLength(0);
-    expect(crossings(at(96), first.over, 90).fresh).toHaveLength(0);
-    const low = crossings(at(20), first.over, 90);
-    const again = crossings(at(91), low.over, 90);
+    expect(crossings(at(96), first.look, 90).fresh).toHaveLength(0);
+    const low = crossings(at(20), first.look, 90);
+    const again = crossings(at(91), low.look, 90);
     expect(again.fresh).toHaveLength(1);
   });
   it("tells when a window climbs past it", () => {
     const low = crossings(at(50), null, 90);
-    expect(crossings(at(92), low.over, 90).fresh).toHaveLength(1);
+    expect(crossings(at(92), low.look, 90).fresh).toHaveLength(1);
+  });
+  it("only learns a window that first appears already past it", () => {
+    const first = crossings(at(50), null, 90);
+    const other = (used: number) =>
+      mergeSnapshots([{ readings: [plan({ account: "b@x", windows: [{ id: "five_hour", label: "5 hours", usedPercent: used }] })], history: [] }], NOW);
+    const both = [...at(50), ...other(95)];
+    const arrived = crossings(both, first.look, 90);
+    expect(arrived.fresh).toHaveLength(0);
+    expect(crossings([...at(50), ...other(96)], arrived.look, 90).fresh).toHaveLength(0);
   });
 });
