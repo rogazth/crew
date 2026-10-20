@@ -37,6 +37,7 @@ import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
+import { peekUnsent } from "./lib/firstPrompt";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
 import { worktreeLabel } from "./lib/worktrees";
