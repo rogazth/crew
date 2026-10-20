@@ -124,6 +124,8 @@ export type Tab = (
       title: string;
       worktree?: string | null;
       signIn?: { sessionId: string; server: string; command: string[] };
+      /** Typed into the shell once it is up, then Enter: a command someone asked Crew to start for them. Never written to disk. */
+      input?: string;
     }
   /** One run of a workspace command: its output, in the worktree it runs in (null, the main checkout). */
   | { id: string; kind: "process"; processId: string; title: string; worktree: string | null }

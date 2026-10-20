@@ -7,8 +7,8 @@ import { AppearancePage } from "./settings/AppearancePage";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { EnvironmentsPage } from "./settings/EnvironmentsPage";
 import { GeneralPage } from "./settings/GeneralPage";
-import { InstalledProviders } from "./settings/InstalledProviders";
 import { KeybindingsPage } from "./settings/KeybindingsPage";
+import { ProvidersPage } from "./settings/ProvidersPage";
 import { SettingsPage, Toasts } from "./settings/ui";
 import { NotificationSettings } from "./NotificationSettings";
 import { TerminalSettings } from "./TerminalSettings";
@@ -16,7 +16,7 @@ import { TerminalSettings } from "./TerminalSettings";
 type Props = {
   section: SettingsSectionId;
   workspaces: Workspace[];
-  onOpenTerminal: (envId: string) => Promise<void>;
+  onOpenTerminal: (envId: string, input?: string) => Promise<void>;
 };
 
 /**
@@ -67,11 +67,7 @@ function Page({ section, workspaces, onOpenTerminal }: Props) {
     case "environments":
       return <EnvironmentsPage workspaces={workspaces} onOpenTerminal={onOpenTerminal} />;
     case "providers":
-      return (
-        <Framed section={section}>
-          <InstalledProviders />
-        </Framed>
-      );
+      return <ProvidersPage onOpenTerminal={onOpenTerminal} />;
     case "about":
       return <AboutPage />;
     case "usage":

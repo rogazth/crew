@@ -2,6 +2,7 @@
 // on the row and lights it), and the pages grouped by what they govern.
 import { ArrowDownToLineIcon, ArrowLeftIcon, CornerDownLeftIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useProviderAttention } from "../hooks/useProviderStatus";
 import { useUpdateActions, useUpdateState } from "../hooks/useUpdate";
 import type { SettingsSectionId } from "../lib/settings";
 import { NAV_GROUPS, PAGES, PENDING, settingsIndex, type IndexEntry } from "../surfaces/settings/pages";
@@ -166,6 +167,7 @@ function UpdatePill({ onOpen }: { onOpen: () => void }) {
 }
 
 function Groups({ section, onSelect }: { section: SettingsSectionId; onSelect: (id: SettingsSectionId) => void }) {
+  const attention = useProviderAttention();
   return (
     <div className="flex flex-col gap-4">
       {NAV_GROUPS.map((group, gi) => (
@@ -181,6 +183,7 @@ function Groups({ section, onSelect }: { section: SettingsSectionId; onSelect: (
                 label={page.label}
                 active={on}
                 icon={<Glyph className={`size-4 ${on ? "text-text" : "text-icon"}`} />}
+                end={id === "providers" && attention.count > 0 ? <AttentionBadge attention={attention} /> : undefined}
                 onClick={() => {
                   requestJump(null);
                   onSelect(id);
@@ -191,6 +194,20 @@ function Groups({ section, onSelect }: { section: SettingsSectionId; onSelect: (
         </div>
       ))}
     </div>
+  );
+}
+
+/** Updates waiting and signed-out CLIs, on the Providers row. */
+function AttentionBadge({ attention }: { attention: { count: number; signedOut: boolean } }) {
+  return (
+    <span
+      title={attention.signedOut ? "Updates available or signed out" : "Updates available"}
+      className={`grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums ${
+        attention.signedOut ? "bg-warning/20 text-warning" : "bg-info/15 text-info"
+      }`}
+    >
+      {attention.count}
+    </span>
   );
 }
 

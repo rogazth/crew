@@ -18,7 +18,7 @@ type Props = {
   activeWorkspace: Workspace | null;
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
-  onOpenTerminal: (envId: string) => Promise<void>;
+  onOpenTerminal: (envId: string, input?: string) => Promise<void>;
 };
 
 /**
