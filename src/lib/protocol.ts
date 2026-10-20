@@ -628,7 +628,7 @@ os: string, arch: string, hostname: string, home: string, cpus: number,
  */
 load: number, memoryTotal: number, 
 /**
- * Absent where the OS does not say cheaply (macOS).
+ * Memory the OS can hand out without swapping.
  */
 memoryAvailable?: number, 
 /**
@@ -650,6 +650,32 @@ opencode?: string,
  * Absent on the window's own daemon.
  */
 socksPort?: number, };
+
+/**
+ * `machine_metrics`: the samples the daemon has kept, oldest first.
+ */
+export type MachineMetricsQuery = { 
+/**
+ * Only samples taken after this time (ms since the epoch).
+ */
+since?: number, };
+
+/**
+ * One reading of the machine's load, kept by the daemon so a chart opens with history.
+ */
+export type MachineSample = { 
+/**
+ * Milliseconds since the epoch.
+ */
+at: number, 
+/**
+ * All cores together, 0 to 100, averaged over the interval since the last sample.
+ */
+cpuPercent: number, 
+/**
+ * Bytes in use (total minus what the OS can hand out).
+ */
+memUsed: number, memTotal: number, };
 
 /**
  * A session's box changed: a letter arrived, was handed to a turn, went

@@ -21,6 +21,7 @@ import type {
   MailboxEdit,
   MailboxReorder,
   MachineInfo,
+  MachineSample,
   McpSignIn,
   McpStatus,
   MessagePage,
@@ -491,5 +492,9 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
   client.request("dir_list", { path }, envId);
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
+
+/** The daemon's CPU and memory samples, oldest first (about every 30 s, for about 2 h); `since` is a time in ms. */
+export const machineMetrics = (envId: string, since?: number): Promise<MachineSample[]> =>
+  client.request("machine_metrics", since === undefined ? {} : { since }, envId);
 
 export { ackPty, attachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";

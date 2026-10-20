@@ -5,7 +5,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crew_core::agent::AgentHost;
-use crew_protocol::{DirEntry, DirListing, MachineInfo, PROTOCOL};
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+use crew_protocol::{DirEntry, DirListing, MachineInfo, MachineSample, PROTOCOL};
 
 /// The agent CLIs Settings reports as found or missing.
 const AGENT_CLIS: &[&str] = &["claude", "codex", "cursor-agent", "opencode"];
@@ -167,12 +171,69 @@ fn memory() -> (u64, Option<u64>) {
 
 #[cfg(not(target_os = "linux"))]
 fn memory() -> (u64, Option<u64>) {
-    // SAFETY: sysconf only reads configuration values.
-    let (pages, size) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
-    if pages <= 0 || size <= 0 {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total = system.total_memory();
+    if total == 0 {
         return (0, None);
     }
-    (pages as u64 * size as u64, None)
+    (total, Some(system.available_memory()))
+}
+
+/// How often the sampler reads, and how many readings it keeps: two hours.
+const SAMPLE_EVERY: Duration = Duration::from_secs(30);
+const SAMPLES_KEPT: usize = 240;
+
+static SAMPLES: OnceLock<Mutex<VecDeque<MachineSample>>> = OnceLock::new();
+
+fn samples() -> &'static Mutex<VecDeque<MachineSample>> {
+    SAMPLES.get_or_init(|| Mutex::new(VecDeque::with_capacity(SAMPLES_KEPT)))
+}
+
+fn push_sample(buffer: &mut VecDeque<MachineSample>, sample: MachineSample) {
+    if buffer.len() >= SAMPLES_KEPT {
+        buffer.pop_front();
+    }
+    buffer.push_back(sample);
+}
+
+/// Starts the sampler once per process; further calls do nothing. CPU is the
+/// average since the previous reading, so the first one waits a moment.
+pub fn start_sampler() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("crewd-metrics".into()).spawn(|| {
+        let mut system = sysinfo::System::new();
+        system.refresh_cpu_usage();
+        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL * 5);
+        loop {
+            system.refresh_cpu_usage();
+            system.refresh_memory();
+            let total = system.total_memory();
+            let sample = MachineSample {
+                at: now_millis(),
+                cpu_percent: system.global_cpu_usage().clamp(0.0, 100.0),
+                mem_used: total.saturating_sub(system.available_memory()),
+                mem_total: total,
+            };
+            push_sample(&mut samples().lock().unwrap_or_else(|e| e.into_inner()), sample);
+            std::thread::sleep(SAMPLE_EVERY);
+        }
+    });
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+/// The readings kept, oldest first; with `since`, only those taken after it.
+pub fn metrics(since: Option<u64>) -> Vec<MachineSample> {
+    let buffer = samples().lock().unwrap_or_else(|e| e.into_inner());
+    buffer.iter().filter(|sample| since.is_none_or(|t| sample.at > t)).cloned().collect()
 }
 
 #[cfg(test)]
@@ -184,6 +245,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_buffer_keeps_the_newest_samples() {
+        let mut buffer = VecDeque::new();
+        for at in 0..(SAMPLES_KEPT as u64 + 5) {
+            push_sample(&mut buffer, MachineSample { at, cpu_percent: 1.0, mem_used: 1, mem_total: 2 });
+        }
+        assert_eq!(buffer.len(), SAMPLES_KEPT);
+        assert_eq!(buffer.front().map(|s| s.at), Some(5));
     }
 
     #[test]

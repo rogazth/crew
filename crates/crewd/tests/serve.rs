@@ -157,6 +157,12 @@ async fn daemon_info_and_dir_list() {
     assert!(info["installed"].is_array(), "{info}");
     assert!(info["cpus"].as_u64().is_some_and(|cpus| cpus >= 1), "{info}");
 
+    // The sampler's first reading comes after a second; a later `since` leaves none.
+    let metrics = call(&mut ws, 9, "machine_metrics", json!({})).await.expect("machine_metrics");
+    assert!(metrics.is_array(), "{metrics}");
+    let later = call(&mut ws, 10, "machine_metrics", json!({ "since": u64::MAX / 2 })).await.expect("since");
+    assert_eq!(later, json!([]));
+
     let tree = temp("tree");
     std::fs::create_dir_all(tree.join("app/.git")).unwrap();
     std::fs::create_dir_all(tree.join("Notes")).unwrap();

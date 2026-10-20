@@ -698,6 +698,7 @@ async fn run(
             }
         }
     }
+    machine::start_sampler();
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
@@ -1661,6 +1662,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 info.socks_port = Some(socks_port);
             }
             json(info)
+        }
+        "machine_metrics" => {
+            let proto::MachineMetricsQuery { since } = parse(params)?;
+            json(machine::metrics(since))
         }
         "dir_list" => {
             let proto::DirList { path } = parse(params)?;

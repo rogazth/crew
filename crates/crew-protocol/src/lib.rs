@@ -114,7 +114,7 @@ pub struct MachineInfo {
     pub load: f64,
     #[ts(type = "number")]
     pub memory_total: u64,
-    /// Absent where the OS does not say cheaply (macOS).
+    /// Memory the OS can hand out without swapping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub memory_available: Option<u64>,
@@ -133,6 +133,34 @@ pub struct MachineInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub socks_port: Option<u16>,
+}
+
+/// One reading of the machine's load, kept by the daemon so a chart opens with history.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MachineSample {
+    /// Milliseconds since the epoch.
+    #[ts(type = "number")]
+    pub at: u64,
+    /// All cores together, 0 to 100, averaged over the interval since the last sample.
+    pub cpu_percent: f32,
+    /// Bytes in use (total minus what the OS can hand out).
+    #[ts(type = "number")]
+    pub mem_used: u64,
+    #[ts(type = "number")]
+    pub mem_total: u64,
+}
+
+/// `machine_metrics`: the samples the daemon has kept, oldest first.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MachineMetricsQuery {
+    /// Only samples taken after this time (ms since the epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub since: Option<u64>,
 }
 
 /// A machine the window reaches. The token that opens it is not here: the
