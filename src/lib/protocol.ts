@@ -899,6 +899,50 @@ export type ProcessUpdate = { workspaceId: string, id: string, name?: string, co
 
 export type ProjectFile = { name: string, path: string, relative: string, };
 
+/**
+ * Who a CLI is signed in as. `signed_in` is None when the CLI did not say.
+ */
+export type ProviderAccount = { signedIn: boolean | null, email?: string, 
+/**
+ * `max`, `pro`, `ChatGPT`, whatever the CLI calls the plan.
+ */
+plan?: string, };
+
+/**
+ * One agent CLI on one machine.
+ */
+export type ProviderStatus = { 
+/**
+ * Crew's provider id: `claude`, `cursor`, `codex`, `opencode`.
+ */
+id: string, 
+/**
+ * The CLI's name on PATH: `cursor-agent` for `cursor`.
+ */
+binary: string, installed: boolean, 
+/**
+ * The resolved binary.
+ */
+path?: string, 
+/**
+ * The bare version, `2.1.42`; the CLI's own line when it has no number.
+ */
+version?: string, 
+/**
+ * The newest release; absent when it could not be looked up (offline).
+ */
+latest?: string, updateAvailable: boolean, account?: ProviderAccount, 
+/**
+ * Why the CLI cannot run, when it is there but unusable (opencode 1.x).
+ */
+note?: string, };
+
+/**
+ * Asks a daemon for its agent CLIs' state. `refresh` skips the cached
+ * latest-version and account lookups.
+ */
+export type ProviderStatusRequest = { refresh: boolean, };
+
 export type PtyAck = { id: string, processed: number, };
 
 export type PtyAttach = { id: string, from: number, };

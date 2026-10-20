@@ -135,6 +135,63 @@ pub struct MachineInfo {
     pub socks_port: Option<u16>,
 }
 
+/// Asks a daemon for its agent CLIs' state. `refresh` skips the cached
+/// latest-version and account lookups.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProviderStatusRequest {
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+/// Who a CLI is signed in as. `signed_in` is None when the CLI did not say.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProviderAccount {
+    pub signed_in: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub email: Option<String>,
+    /// `max`, `pro`, `ChatGPT`, whatever the CLI calls the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan: Option<String>,
+}
+
+/// One agent CLI on one machine.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProviderStatus {
+    /// Crew's provider id: `claude`, `cursor`, `codex`, `opencode`.
+    pub id: String,
+    /// The CLI's name on PATH: `cursor-agent` for `cursor`.
+    pub binary: String,
+    pub installed: bool,
+    /// The resolved binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// The bare version, `2.1.42`; the CLI's own line when it has no number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+    /// The newest release; absent when it could not be looked up (offline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub latest: Option<String>,
+    pub update_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<ProviderAccount>,
+    /// Why the CLI cannot run, when it is there but unusable (opencode 1.x).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
 /// A machine the window reaches. The token that opens it is not here: the
 /// window keeps that in the keychain.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]

@@ -27,6 +27,7 @@ import type {
   PageSnapshot,
   Process,
   ProcessSpec,
+  ProviderStatus,
   RemoteEnv,
   SearchFiles,
   ThreadLetter,
@@ -489,6 +490,13 @@ export const deleteRemoteRecord = (id: string): Promise<void> => client.request(
 
 export const listDir = (envId: string, path: string): Promise<DirListing> =>
   client.request("dir_list", { path }, envId);
+
+/**
+ * The agent CLIs on one machine, as that machine's daemon sees them: path,
+ * version, newest release and account. `refresh` skips the daemon's caches.
+ */
+export const providerStatus = (envId: string, refresh = false): Promise<ProviderStatus[]> =>
+  client.request("provider_status", { refresh }, envId);
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 

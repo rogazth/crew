@@ -1675,6 +1675,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Names { names } = parse(params)?;
             json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
+        "provider_status" => {
+            let proto::ProviderStatusRequest { refresh } = parse(params)?;
+            json(block(move || Ok::<_, String>(crew_core::provider_status::all(refresh))).await?)
+        }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
             // Cursor and Codex list their models; the others keep Crew's own list.
