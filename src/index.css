@@ -673,6 +673,10 @@ html[data-sidebar-resize="active"] * {
 .crew-chip-on-ink {
   background: color-mix(in srgb, var(--color-canvas) 70%, transparent);
 }
+/* The chat's text size: the transcript and the composer read it. Settings > Appearance sets it on <html>. */
+:root {
+  --chat-text: 14px;
+}
 /* The composer's field: a textarea over an overlay that paints the same text with mentions marked. */
 .crew-composer-field {
   display: block;
@@ -685,8 +689,8 @@ html[data-sidebar-resize="active"] * {
   background: transparent;
   outline: none;
   font: inherit;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--chat-text);
+  line-height: calc(var(--chat-text) * 1.5);
   letter-spacing: -0.1px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -744,8 +748,8 @@ html[data-sidebar-resize="active"] * {
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  font-size: 14.5px;
-  line-height: 23px;
+  font-size: calc(var(--chat-text) + 0.5px);
+  line-height: calc(var(--chat-text) * 1.64);
   letter-spacing: -0.1px;
 }
 /* The agent's prose sits flush on the canvas, as ChatGPT and Grok set it: the
@@ -824,19 +828,19 @@ html[data-sidebar-resize="active"] * {
   }
 }
 .crew-md [data-streamdown^="heading"] {
-  font-size: 14.5px;
+  font-size: calc(var(--chat-text) + 0.5px);
   font-weight: 600;
-  line-height: 22px;
+  line-height: calc(var(--chat-text) * 1.57);
   letter-spacing: -0.2px;
 }
 .crew-md [data-streamdown="heading-1"] {
-  font-size: 20px;
-  line-height: 28px;
+  font-size: calc(var(--chat-text) + 6px);
+  line-height: calc(var(--chat-text) * 2);
   letter-spacing: -0.4px;
 }
 .crew-md [data-streamdown="heading-2"] {
-  font-size: 17px;
-  line-height: 25px;
+  font-size: calc(var(--chat-text) + 3px);
+  line-height: calc(var(--chat-text) * 1.79);
   letter-spacing: -0.3px;
 }
 .crew-md [data-streamdown="heading-4"],
@@ -1232,8 +1236,8 @@ html[data-sidebar-resize="active"] * {
   overflow-wrap: anywhere;
 }
 .crew-thread-bubble .crew-md {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: var(--chat-text);
+  line-height: calc(var(--chat-text) * 1.57);
 }
 .crew-thread-bubble .crew-code {
   background: var(--color-canvas);
@@ -1553,4 +1557,44 @@ button:not(:disabled):active {
   img[src*="cursor"] {
     filter: invert(1);
   }
+}
+
+/* Reduced motion follows the OS: nothing pulses or slides; a spinner turns slowly so work still reads as work. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse { animation: none; }
+  .animate-spin { animation-duration: 3s; }
+}
+
+/* The chat text size slider: a native range, so it drags and takes the arrow keys, drawn in the app's tokens. */
+.crew-range {
+  --fill: 0%;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.crew-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-accent) var(--fill), var(--color-selected) var(--fill));
+}
+.crew-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: var(--color-canvas);
+  box-shadow: 0 0 0 1.5px var(--color-accent), 0 1px 3px oklch(0% 0 0 / 0.2);
+  transition: transform 120ms ease-out;
+}
+.crew-range:active::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+.crew-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1.5px var(--color-accent), 0 0 0 4px color-mix(in oklab, var(--color-focus) 50%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-range::-webkit-slider-thumb { transition: none; }
 }
