@@ -20,6 +20,8 @@ use serde_json::Value;
 use crate::shell_path;
 
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// cursor-agent's `about` and `status` measured 7 to 24 seconds.
+const CURSOR_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(20);
 /// The newest release changes rarely, and asking costs a network round trip.
 const LATEST_TTL: Duration = Duration::from_secs(60 * 60);
@@ -117,8 +119,8 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
     let want_about = cursor && (cached_latest.is_none() || cached_account.is_none());
 
     let (version, npm, about, account) = thread::scope(|scope| {
-        let version = scope.spawn(|| run(path, &["--version"]).and_then(|out| parse_version(&out)));
-        let about = want_about.then(|| scope.spawn(|| run(path, &["about", "--format", "json"])));
+        let version = scope.spawn(|| run(path, &["--version"], LOOKUP_TIMEOUT).and_then(|out| parse_version(&out)));
+        let about = want_about.then(|| scope.spawn(|| run(path, &["about", "--format", "json"], CURSOR_TIMEOUT)));
         let npm = match (&cached_latest, spec.npm) {
             (None, Some(pkg)) => Some(scope.spawn(move || npm_latest(pkg))),
             _ => None,
@@ -141,7 +143,11 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
         None => {
             let latest = npm.or_else(|| about.as_ref().and_then(|(latest, _)| latest.clone()));
             // Offline leaves it unknown; cache that too, so a page that polls does not ask every time.
-            with_cache(spec.id, |c| c.latest = Some((Instant::now(), latest.clone())));
+            // A lookup that timed out or failed is not an answer, though: ask again next time.
+            let failed = want_about && about.is_none();
+            if latest.is_some() || !failed {
+                with_cache(spec.id, |c| c.latest = Some((Instant::now(), latest.clone())));
+            }
             latest
         }
     };
@@ -165,10 +171,10 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
 
 fn account_of(id: &str, path: &Path) -> Option<ProviderAccount> {
     Some(match id {
-        "claude" => parse_claude_auth(&run(path, &["auth", "status"])?),
-        "codex" => parse_codex_login(&run(path, &["login", "status"])?),
-        "cursor" => parse_cursor_status(&run(path, &["status", "--format", "json"])?),
-        "opencode" => parse_opencode_auth(&run(path, &["auth", "list"])?),
+        "claude" => parse_claude_auth(&run(path, &["auth", "status"], LOOKUP_TIMEOUT)?),
+        "codex" => parse_codex_login(&run(path, &["login", "status"], LOOKUP_TIMEOUT)?),
+        "cursor" => parse_cursor_status(&run(path, &["status", "--format", "json"], CURSOR_TIMEOUT)?),
+        "opencode" => parse_opencode_auth(&run(path, &["auth", "list"], LOOKUP_TIMEOUT)?),
         _ => return None,
     })
 }
@@ -179,14 +185,14 @@ fn npm_latest(package: &str) -> Option<String> {
         return None;
     }
     let url = format!("https://registry.npmjs.org/{package}/latest");
-    let out = run(Path::new("curl"), &["-fsS", "-m", "5", "-H", "accept: application/json", &url])?;
+    let out = run(Path::new("curl"), &["-fsS", "-m", "5", "-H", "accept: application/json", &url], LOOKUP_TIMEOUT)?;
     parse_npm_latest(&out)
 }
 
 /// stdout of `path args`, or stderr when stdout is empty (some CLIs print
 /// their status there). The exit code is ignored: a signed-out CLI says so and
 /// exits 1. None when it does not start or does not answer in time.
-fn run(path: &Path, args: &[&str]) -> Option<String> {
+fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     let mut child = Command::new(path)
         .args(args)
         .env("PATH", shell_path::joined())
@@ -206,7 +212,7 @@ fn run(path: &Path, args: &[&str]) -> Option<String> {
     }
     let stdout = drain(child.stdout.take()?);
     let stderr = drain(child.stderr.take()?);
-    let deadline = Instant::now() + LOOKUP_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -270,11 +276,8 @@ pub fn parse_codex_login(text: &str) -> ProviderAccount {
     if !lower.contains("logged in") {
         return ProviderAccount::default();
     }
-    let plan = lower.find("using ").map(|at| {
-        let how = line[at + "using ".len()..].trim();
-        how.strip_prefix("an ").or_else(|| how.strip_prefix("a ")).unwrap_or(how).to_string()
-    });
-    ProviderAccount { signed_in: Some(true), email: None, plan: plan.filter(|plan| !plan.is_empty()) }
+    // It only says how the login was made (ChatGPT, an API key), not the plan.
+    ProviderAccount { signed_in: Some(true), email: None, plan: None }
 }
 
 pub fn parse_cursor_status(json: &str) -> ProviderAccount {
@@ -384,9 +387,9 @@ mod tests {
     #[test]
     fn codex_login_reads_the_sentence() {
         let chatgpt = parse_codex_login("Logged in using ChatGPT\n");
-        assert_eq!((chatgpt.signed_in, chatgpt.plan.as_deref()), (Some(true), Some("ChatGPT")));
+        assert_eq!((chatgpt.signed_in, chatgpt.plan.as_deref()), (Some(true), None));
         let key = parse_codex_login("Logged in using an API key - sk-***\n");
-        assert_eq!((key.signed_in, key.plan.as_deref()), (Some(true), Some("API key - sk-***")));
+        assert_eq!((key.signed_in, key.plan.as_deref()), (Some(true), None));
         assert_eq!(parse_codex_login("Not logged in").signed_in, Some(false));
         assert_eq!(parse_codex_login("something else").signed_in, None);
         assert_eq!(parse_codex_login("").signed_in, None);
@@ -422,8 +425,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("crew-provider-status-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("folder");
         let quick = crate::fakes::install(&dir, "quick", "#!/bin/sh\necho \"codex-cli 9.9.9\"\n");
-        assert_eq!(run(&quick, &["--version"]).and_then(|out| parse_version(&out)).as_deref(), Some("9.9.9"));
+        assert_eq!(run(&quick, &["--version"], LOOKUP_TIMEOUT).and_then(|out| parse_version(&out)).as_deref(), Some("9.9.9"));
         let quiet = crate::fakes::install(&dir, "quiet", "#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n");
-        assert_eq!(parse_codex_login(&run(&quiet, &["login", "status"]).unwrap_or_default()).signed_in, Some(false));
+        assert_eq!(parse_codex_login(&run(&quiet, &["login", "status"], LOOKUP_TIMEOUT).unwrap_or_default()).signed_in, Some(false));
     }
 }
