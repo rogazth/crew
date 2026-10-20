@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { app, BrowserWindow, ipcMain, powerMonitor } from "electron";
 import { CHANNELS } from "../src/lib/browser/bridge";
+import { LOCAL } from "../src/lib/client/route";
 import { isMachineAlias } from "../src/lib/browser/machines";
 import type { RemoteEnv } from "../src/lib/protocol";
 import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote } from "../src/lib/remotes";
@@ -58,7 +59,10 @@ function layout() {
   return remoteLayout(channelOf(app.isPackaged, release));
 }
 
-export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
+/** What "this Mac" does for `restart` and `logs`, in place of ssh. */
+export type LocalDaemon = { restart(): Promise<void>; logs(): Promise<string> };
+
+export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: LocalDaemon): void {
   powerMonitor.on("resume", () => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send("remotes:wake");
@@ -143,6 +147,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
   });
 
   ipcMain.handle("remotes:restart", async (_event, id: unknown) => {
+    if (id === LOCAL) return thisMac.restart();
     const row = await requireRow(getDaemon, id);
     await restartDaemon(targetOf(row), layout());
   });
@@ -163,6 +168,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
   });
 
   ipcMain.handle("remotes:logs", async (_event, id: unknown) => {
+    if (id === LOCAL) return thisMac.logs();
     const row = await requireRow(getDaemon, id);
     return daemonLogs(targetOf(row), layout());
   });

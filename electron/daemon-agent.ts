@@ -5,7 +5,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
 import {
@@ -43,6 +43,11 @@ export type AgentLink = {
   info(): DaemonInfo | null;
   // Stop watching; crewd keeps running. For a plain quit.
   release(): void;
+  // Settings' "Restart": launchd kills and starts crewd again, and the watchdog
+  // sees the new one and tells the window (onNewDaemon). Resolves once it answers.
+  restart(): Promise<void>;
+  // The tail of crewd.log, which launchd appends crewd's output to.
+  logs(lines?: number): Promise<string>;
   // "Quit Crew and Stop Everything": crewd stops its processes and exits 0,
   // which launchd takes as "leave it down".
   shutdown(): Promise<void>;
@@ -78,6 +83,32 @@ function run(file: string, args: string[], timeout = 30_000): Promise<string> {
       else resolve(stdout);
     });
   });
+}
+
+const LOG_TAIL_LINES = 200;
+// The last bytes of a log are enough for its last lines, without reading months of it.
+const LOG_TAIL_BYTES = 256 * 1024;
+
+/** The last `lines` lines of a log; says so when there is none. */
+export async function tailLog(file: string, lines = LOG_TAIL_LINES): Promise<string> {
+  let handle;
+  try {
+    handle = await open(file, "r");
+    const { size } = await handle.stat();
+    const length = Math.min(size, LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const text = buffer.toString("utf8").split("\n");
+    // The first line of a window cut mid-file is partial.
+    if (size > length) text.shift();
+    while (text.length && text[text.length - 1] === "") text.pop();
+    return text.slice(-lines).join("\n");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return `No log at ${file}`;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -286,6 +317,14 @@ export async function connectAgent(options: Options, sys: System = system): Prom
   return {
     info: () => (current ? { url: current.url, token: current.token } : null),
     release,
+    restart: async () => {
+      if (stopping) throw new Error("Crew is quitting");
+      // A tick in flight may be in launchctl too; let it finish first.
+      await tick;
+      await start(true);
+      if (!(await fresh(current))) throw new Error(`crewd did not come up within ${ms.start / 1000} s.\nLog: ${log}`);
+    },
+    logs: (lines) => tailLog(log, lines),
     shutdown: async () => {
       release();
       // A tick past its last check may still be in launchctl; stopping
