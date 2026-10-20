@@ -63,6 +63,20 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
     [envId],
   );
 
+  // A snapshot read before a live event can arrive after it: it must not take a job that has ended back to running.
+  const putListed = useCallback(
+    (job: ProviderJob) => {
+      setJobs((all) => {
+        const have = all[job.provider];
+        if (have && have.id === job.id && have.phase !== "running") return all;
+        const next = { ...all, [job.provider]: job };
+        known.set(envId, next);
+        return next;
+      });
+    },
+    [envId],
+  );
+
   useEffect(() => {
     let alive = true;
     setJobs(known.get(envId) ?? {});
@@ -82,7 +96,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
     api
       .providerJobList(envId)
       .then((list) => {
-        if (alive) for (const job of list) put(job);
+        if (alive) for (const job of list) putListed(job);
       })
       .catch(() => {});
     return () => {
@@ -90,7 +104,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
       offJob();
       offLogin();
     };
-  }, [envId, put]);
+  }, [envId, put, putListed]);
 
   // The remembered methods, read once per machine.
   useEffect(() => {
