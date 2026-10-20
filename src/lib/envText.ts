@@ -8,9 +8,20 @@ export function statusText(link: EnvLink): string {
   return "Offline";
 }
 
-/** How ssh reaches it: `user@alias` from ~/.ssh/config, or `user@host`. */
+/** How ssh reaches it: `user@alias` from ~/.ssh/config, `user@host`, or `ssh://user@host:port`. */
 export function whereOf(link: EnvLink): string {
   const target = link.ssh ?? link.host;
   if (!target) return "";
+  if (target.startsWith("ssh://")) {
+    const rest = target.slice("ssh://".length);
+    return link.user && !rest.includes("@") ? `ssh://${link.user}@${rest}` : target;
+  }
   return link.user ? `${link.user}@${target}` : target;
+}
+
+/** The bare host of an ssh target: no `ssh://`, user or port. */
+export function bareHost(target: string): string {
+  const rest = target.replace(/^ssh:\/\//, "");
+  const host = rest.slice(rest.lastIndexOf("@") + 1);
+  return host.replace(/:\d+$/, "");
 }

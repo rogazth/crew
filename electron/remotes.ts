@@ -73,7 +73,9 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     const bin = TAILSCALE.find((file) => existsSync(file));
     if (!bin) return { state: "missing", account: null, message: "Tailscale is not installed on this Mac", devices: [] };
     const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {}).catch(() => []);
-    const added = new Set(rows.flatMap((row) => [row.host, row.name, row.ssh].filter(Boolean)));
+    const added = new Set(
+      rows.flatMap((row) => [row.host, row.name, row.ssh, row.ssh?.replace(/^ssh:\/\//, "").replace(/^.*@/, "").replace(/:\d+$/, "")].filter(Boolean)),
+    );
     try {
       const { stdout } = await exec(bin, ["status", "--json"], { timeout: 8_000, maxBuffer: 8_000_000 });
       return tailnetFrom(JSON.parse(stdout), added);

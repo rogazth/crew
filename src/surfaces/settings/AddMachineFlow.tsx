@@ -27,6 +27,7 @@ import {
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Field, IconButton, Overlay, TextInput } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
+import { bareHost } from "../../lib/envText";
 import { useEnvLinks } from "../../hooks/useEnvLinks";
 import * as api from "../../lib/api";
 import { refreshRemotes } from "../../lib/client/registry";
@@ -147,7 +148,11 @@ export function AddMachineFlow({ onClose }: { onClose: () => void }) {
   const aliasOf = (device: TailscaleDevice) =>
     sshHosts.find((item) => [device.ip, device.dns, device.host].includes(item.hostname) || item.alias === device.host) ?? null;
   const matched = new Set(devices.map(aliasOf).filter((item): item is SshHost => item !== null).map((item) => item.alias));
-  const added = new Set(links.flatMap((link) => [link.ssh, link.host].filter((value): value is string => !!value)));
+  const added = new Set(
+    links.flatMap((link) =>
+      [link.ssh, link.host].filter((value): value is string => !!value).flatMap((value) => [value, bareHost(value)]),
+    ),
+  );
   const isAdded = (...values: string[]) => values.some((value) => added.has(value));
 
   const sshChoices: Choice[] = sshHosts
