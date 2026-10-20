@@ -2,20 +2,18 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as api from "../lib/api";
 import { client } from "../lib/client";
 import type { SessionCreated } from "../lib/protocol";
-import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
+import { tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
-import { lastUsed, sessionTabId, type TabRegistry } from "../lib/tabs";
-import type { Session, Tab, Workspace, Worktree } from "../lib/types";
-import { asListed, contextId, placePath, sessionPath, unlistedWorktrees, type TabScope } from "../lib/worktrees";
-import { useTabRegroup, useTabScope } from "./useTabScope";
+import { lastUsed, sessionTabId } from "../lib/tabs";
+import type { Session, Workspace } from "../lib/types";
+import { placePath, sessionPath, unlistedWorktrees } from "../lib/worktrees";
 import { useTabs } from "./useTabs";
 import { useWorktrees } from "./useWorktrees";
 
 /**
  * Where you are working: the workspace, the worktree inside it, and the tab
- * strip that goes with them. Per worktree, each worktree has its own strip and
- * the worktree picks it. All together, one strip holds them all and the tab on
- * screen says which worktree you are in.
+ * strip that goes with them. One strip holds the whole workspace's tabs, and
+ * the tab on screen says which worktree you are in.
  */
 export function useWorkContext(
   workspace: Workspace | null,
@@ -23,18 +21,16 @@ export function useWorkContext(
   everywhere: { workspaces: Workspace[]; sessions: Session[] },
 ) {
   const worktrees = useWorktrees(workspace);
-  const { scope } = useTabScope();
   const chosen = worktrees.active;
-  const context = workspace && chosen ? contextId(workspace, chosen.path, scope) : (workspace?.id ?? null);
-  // All together, with worktrees to tell apart, each tab names its own: its
-  // chip on the strip, and whose tabs fold together.
+  const context = workspace?.id ?? null;
+  // With worktrees to tell apart, each tab names its own, for the pane's worktree line.
   const { known, list } = worktrees;
   const tabPlaceOf = useMemo<PlaceOf | null>(
     () =>
-      scope === "all" && workspace && known && list.length > 1
+      workspace && known && list.length > 1
         ? (tab) => tabPlace(tab, workspace, list, sessions)
         : null,
-    [known, list, scope, sessions, workspace],
+    [known, list, sessions, workspace],
   );
   const tabs = useTabs(context, tabPlaceOf);
 
@@ -59,45 +55,44 @@ export function useWorkContext(
     [listed, workspace?.id],
   );
 
-  // All together, the tab on screen names the worktree; a file or page tab leaves the chosen one, and
+  // The tab on screen names the worktree; a file or page tab leaves the chosen one, and
   // so does a bot's: it belongs to the workspace, so talking to it keeps you where you stand.
   const onScreen = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
-  const tabTree = scope === "all" && onScreen ? sessions.find((s) => s.id === onScreen && s.kind !== "bot") : undefined;
+  const tabTree = onScreen ? sessions.find((s) => s.id === onScreen && s.kind !== "bot") : undefined;
   const tabPath = tabTree ? pathOf(tabTree) : null;
   const current = worktrees.list.find((tree) => tree.path === tabPath) ?? chosen;
 
-  /** The worktree at `path` becomes current; the answer says which strip a tab of it joins. */
+  /** The worktree at `path` becomes current. */
   const routeTo = useCallback(
     (path: string | null) => {
-      if (!workspace || !path || path === current?.path) return null;
+      if (!path || path === current?.path) return;
       worktrees.select(path);
-      const target = contextId(workspace, path, scope);
-      return { context: target === context ? null : target };
     },
-    [context, current?.path, scope, workspace, worktrees],
+    [current?.path, worktrees],
   );
 
-  /** The same for the worktree `session` runs in. */
+  /** The same for the worktree `session` runs in; a bot belongs to the workspace and leaves you where you stand. */
   const route = useCallback(
-    (session: Session) => (scope === "all" && session.kind === "bot" ? null : routeTo(pathOf(session))),
-    [pathOf, routeTo, scope],
+    (session: Session) => {
+      if (session.kind !== "bot") routeTo(pathOf(session));
+    },
+    [pathOf, routeTo],
   );
 
   /**
-   * All together, going to a worktree brings up the tab last used there, or
-   * none, so the strip agrees. Per worktree its own strip already shows it.
+   * Going to a worktree brings up the tab last used there, or none, so the
+   * strip agrees.
    */
   const selectWorktree = useCallback(
     (path: string) => {
       worktrees.select(path);
-      if (scope !== "all") return;
       tabs.selectLastUsed((tab) => {
         if (tab.kind !== "session") return false;
         const session = sessions.find((s) => s.id === tab.sessionId);
         return session !== undefined && pathOf(session) === path;
       });
     },
-    [pathOf, scope, sessions, tabs, worktrees],
+    [pathOf, sessions, tabs, worktrees],
   );
 
   /**
@@ -109,7 +104,7 @@ export function useWorkContext(
     async (workspaceId: string, path: string) => {
       worktrees.select(path, workspaceId);
       const target = everywhere.workspaces.find((ws) => ws.id === workspaceId);
-      if (scope !== "all" || !target) return;
+      if (!target) return;
       const [own, strips] = await Promise.all([api.listSessions(workspaceId), tabs.strips([workspaceId])]);
       const tab = lastUsed(strips[workspaceId]!, (tab) => {
         if (tab.kind !== "session") return false;
@@ -118,7 +113,7 @@ export function useWorkContext(
       });
       if (tab) tabs.selectIn(workspaceId, tab.id);
     },
-    [everywhere.workspaces, scope, tabs, worktrees],
+    [everywhere.workspaces, tabs, worktrees],
   );
 
   const step = useCallback(
@@ -139,24 +134,21 @@ export function useWorkContext(
     [selectWorktree, worktrees.list],
   );
 
-  // Switching between tabs per worktree and all together rearranges every
-  // workspace's strips: this one's as the screen has them, the others' as crewd
-  // keeps them.
-  const latest = useRef({ workspace, current, tabs, worktrees, everywhere, scope });
+  const latest = useRef({ tabs, everywhere });
   useEffect(() => {
-    latest.current = { workspace, current, tabs, worktrees, everywhere, scope };
+    latest.current = { tabs, everywhere };
   });
 
   // A session handed to the user (`start_session`) joins its
-  // worktree's strip behind whatever is on screen, and works on its prompt out of
+  // workspace's strip behind whatever is on screen, and works on its prompt out of
   // sight: the window stays where it was.
   useEffect(() => {
     const unsubscribe = client.on("session-created", (payload) => {
       const { session, open } = payload as SessionCreated;
-      const { tabs, everywhere, scope } = latest.current;
+      const { tabs, everywhere } = latest.current;
       const of = everywhere.workspaces.find((ws) => ws.id === session.workspaceId);
       if (!open || !of) return;
-      tabs.adopt(contextId(of, session.worktree ?? of.path, scope), {
+      tabs.adopt(of.id, {
         id: sessionTabId(session.id),
         kind: "session",
         sessionId: session.id,
@@ -164,38 +156,9 @@ export function useWorkContext(
     });
     return () => unsubscribe();
   }, []);
-  const regroup = useCallback(async (to: TabScope, commit: () => void) => {
-    const { workspace: shown, current: here, tabs, worktrees, everywhere } = latest.current;
-    const plans = await Promise.all(
-      everywhere.workspaces.map((ws) => {
-        const mine = ws.id === shown?.id;
-        const own = everywhere.sessions.filter((session) => session.workspaceId === ws.id);
-        return Promise.all([
-          mine && worktrees.known ? worktrees.list : api.listWorktrees(ws.path).then((list) => asListed(list, ws.path)),
-          mine ? (here?.path ?? null) : api.stateGet(`worktree:${ws.id}`),
-        ])
-          .then(([list, stored]) => regroupOne(ws, list, stored, own, to, tabs.strips))
-          // A workspace git cannot list keeps its strips as they are.
-          .catch(() => null);
-      }),
-    );
-    const next: TabRegistry = {};
-    const gone: string[] = [];
-    for (const plan of plans) {
-      if (!plan) continue;
-      Object.assign(next, plan.next);
-      gone.push(...plan.gone);
-      if (plan.select) worktrees.select(plan.select, plan.workspaceId);
-    }
-    tabs.replace(next, gone);
-    commit();
-  }, []);
-  useTabRegroup(regroup);
-
 
   return {
     worktrees,
-    scope,
     tabs,
     current,
     /** What a new session stores as its worktree: null for the main checkout. */
@@ -210,42 +173,4 @@ export function useWorkContext(
     placeOf,
     tabPlaceOf,
   };
-}
-
-/**
- * One workspace's strips for a new scope. Per worktree to all together, its
- * worktrees' strips join into the workspace's, the one on screen staying on
- * screen. Back, the joined strip splits into theirs, and the worktree that
- * holds the tab on screen is the one to show. `stored` is the worktree chosen
- * before the switch, when there is one.
- */
-async function regroupOne(
-  workspace: Workspace,
-  list: Worktree[],
-  stored: string | null,
-  sessions: Session[],
-  to: TabScope,
-  read: (ids: string[]) => Promise<TabRegistry>,
-) {
-  const paths = [workspace.path, ...list.flatMap((tree) => (tree.main ? [] : [tree.path]))];
-  const chosen = paths.find((path) => path === stored) ?? workspace.path;
-  const strip = (path: string) => contextId(workspace, path, "worktree");
-  const placeOf = (tab: Tab) => tabPlace(tab, workspace, list, sessions);
-
-  if (to === "all") {
-    const ids = paths.map(strip);
-    const strips = await read(ids);
-    const joined = joinStrips(ids.map((id) => strips[id]!), strips[strip(chosen)]?.activeId ?? null);
-    const gone = ids.filter((id) => id !== workspace.id);
-    return { workspaceId: workspace.id, next: { [workspace.id]: joined }, gone, select: null };
-  }
-
-  const joined = (await read([workspace.id]))[workspace.id]!;
-  // All together, the session on screen says which worktree is current.
-  const onScreen = joined.tabs.find((tab) => tab.id === joined.activeId);
-  const current = (onScreen?.kind === "session" && placeOf(onScreen)) || chosen;
-  const split = splitStrip(joined, paths, current, placeOf);
-  const next = Object.fromEntries([...split].map(([path, state]) => [strip(path), state]));
-  const select = (onScreen && placeOf(onScreen)) || current;
-  return { workspaceId: workspace.id, next, gone: [], select: paths.includes(select) ? select : current };
 }

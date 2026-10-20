@@ -1,8 +1,5 @@
 import type { Session, Workspace, Worktree } from "./types";
 
-/** Whether the tab strip follows the worktree on screen, or holds the whole workspace's tabs. */
-export type TabScope = "worktree" | "all";
-
 /**
  * Where a session runs: its worktree while git lists it, else the main
  * checkout. `worktrees` is git's list, null until git answers, when the
@@ -41,24 +38,6 @@ export function unlistedWorktrees(sessions: Session[], workspace: Workspace, wor
  */
 export function asListed(list: Worktree[], workspacePath: string): Worktree[] {
   return list.map((tree) => (tree.main ? { ...tree, path: workspacePath } : tree));
-}
-
-/**
- * The key a tab strip is stored and mounted under. The main checkout shares the
- * workspace's own key, so the tabs a workspace had before worktrees stay put;
- * every other worktree gets its own strip unless tabs are kept together.
- */
-export function contextId(workspace: Workspace, worktreePath: string, scope: TabScope): string {
-  if (scope === "all" || worktreePath === workspace.path) return workspace.id;
-  return `${workspace.id}@${worktreePath}`;
-}
-
-/** The workspace id and, for a worktree's own strip, its path. */
-export function parseContext(id: string): { workspaceId: string; worktree: string | null } {
-  const at = id.indexOf("@");
-  return at < 0
-    ? { workspaceId: id, worktree: null }
-    : { workspaceId: id.slice(0, at), worktree: id.slice(at + 1) };
 }
 
 /** What a worktree is called: its branch, or its folder when its HEAD is detached, as agents leave theirs. */
