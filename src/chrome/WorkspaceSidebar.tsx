@@ -97,6 +97,7 @@ export type WorkspaceSidebarProps = {
 };
 
 const NO_TREES: string[] = [];
+const NO_COMMANDS: string[] = [];
 
 // ── Reading a session's state ───────────────────────────────────────────────
 
@@ -490,7 +491,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                       count={section.sessions.length}
                       loudest={loudest(section.sessions, activeId)}
                       showDiff={shows(prefs, "diff")}
-                      running={props.running?.get(section.tree.path)?.length ?? 0}
+                      running={props.running?.get(section.tree.path) ?? NO_COMMANDS}
                       onFold={(next) => fold(section.key, next)}
                       onAdd={() => props.onNewSession(section.tree!.path)}
                       onMenu={(point) => setMenu({ kind: "worktree", point, tree: section.tree! })}
@@ -716,6 +717,7 @@ function NameField({ initial, onDone }: { initial: string; onDone: (name: string
 function CommandsPill({
   live,
   asking,
+  orphans,
   open,
   onToggle,
   running,
@@ -733,7 +735,14 @@ function CommandsPill({
     const tree = worktrees.find((t) => t.path === path);
     return list.map((name) => (worktrees.length > 1 && tree ? `${name} · ${worktreeLabel(tree)}` : name));
   });
-  const said = [live > 0 ? `${live} running` : "None running", asking > 0 ? `${asking} to review` : null, ...names].filter(Boolean).join("\n");
+  const said = [
+    live > 0 ? `${live} running` : "None running",
+    orphans > 0 ? `${orphans} left running with no session to answer for ${orphans === 1 ? "it" : "them"}` : null,
+    asking > 0 ? `${asking} to review` : null,
+    ...names,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <button
       type="button"
@@ -744,7 +753,7 @@ function CommandsPill({
       onClick={onToggle}
       data-tauri-drag-region="false"
       className={`flex h-6 shrink-0 items-center gap-1 rounded-md text-[12px] outline-none transition-colors focus-visible:bg-hover ${live > 0 ? "pr-1.5 pl-1" : "w-6 justify-center"} ${
-        open ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"
+        open ? "bg-selected text-text" : orphans > 0 ? "text-warning hover:bg-hover" : "text-icon hover:bg-hover hover:text-text"
       }`}
     >
       <span className="relative grid place-items-center">
@@ -828,7 +837,7 @@ function WorktreeHeading({
   count: number;
   loudest: SessionStatus;
   showDiff: boolean;
-  running: number;
+  running: string[];
   onFold: (open: boolean) => void;
   onAdd: () => void;
   onMenu: (point: MenuPoint) => void;
@@ -839,7 +848,7 @@ function WorktreeHeading({
         type="button"
         data-nav
         aria-expanded={open}
-        title={tree.path}
+        title={running.length > 0 ? `${tree.path}\n${running.length} running\n${running.join("\n")}` : tree.path}
         onClick={() => onFold(!open)}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={(event) => {
@@ -856,7 +865,9 @@ function WorktreeHeading({
         </span>
         <span className="min-w-0 flex-1 truncate font-medium">{worktreeLabel(tree)}</span>
         <span className="flex shrink-0 items-center gap-2 transition-opacity group-hover/tree:opacity-0">
-          {running > 0 && <LayersIcon className="size-3 text-success" />}
+          {running.length > 0 && (
+            <LayersIcon aria-label={`${running.length} commands running`} className="size-3 text-success" />
+          )}
           {open && showDiff && (tree.add > 0 || tree.del > 0) && (
             <span className="text-[11px] tabular-nums">
               <span className="text-success">+{tree.add}</span> <span className="text-danger">−{tree.del}</span>
