@@ -82,8 +82,8 @@ impl BackgroundHost {
         };
         let now = crate::store::now_millis();
         // The seeded design profile keeps its running rows as seeded, as the
-        // store keeps its working sessions (`CREW_KEEP_STATUS`).
-        let keep = std::env::var_os("CREW_KEEP_STATUS").is_some();
+        // store keeps its working sessions (debug builds only, `CREW_KEEP_STATUS`).
+        let keep = crate::store::keep_status();
         {
             let mut map = host.inner.lock().unwrap_or_else(|e| e.into_inner());
             for (session_id, rows) in saved {

@@ -2261,8 +2261,8 @@ impl TurnHost {
     /// clears them.
     fn close_tray(&self, session_id: &str) {
         // The seeded design profile keeps its running rows as seeded: no CLI
-        // ever ran them, so none going away ends them (`CREW_KEEP_STATUS`).
-        if std::env::var_os("CREW_KEEP_STATUS").is_some() {
+        // ever ran them, so none going away ends them (debug builds only, `CREW_KEEP_STATUS`).
+        if crate::store::keep_status() {
             return;
         }
         let now = crate::store::now_millis();

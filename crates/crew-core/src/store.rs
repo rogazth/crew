@@ -71,7 +71,7 @@ impl Store {
         crate::mailbox::release_unfinished(&conn).map_err(|e| e.to_string())?;
         // The seeded design profile keeps its working and waiting rows as seeded,
         // so every status can be looked at without a live turn behind it.
-        if std::env::var_os("CREW_KEEP_STATUS").is_none() {
+        if !keep_status() {
             settle_open_turns(&conn).map_err(|e| e.to_string())?;
         }
         Ok(Self { conn: Arc::new(Mutex::new(conn)), listener: Arc::new(Mutex::new(None)) })
@@ -676,6 +676,14 @@ fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute("UPDATE sessions SET status = ?3, updated_at = ?2 WHERE id = ?1", params![id, now_millis(), status])?;
     }
     Ok(())
+}
+
+/// Whether the seeded design profile (`npm run app:design`) wants its working and
+/// waiting rows left as seeded, with no live turn behind them (`CREW_KEEP_STATUS`).
+/// Only a debug build honours it: a release build always settles what a stopped
+/// daemon left open.
+pub fn keep_status() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("CREW_KEEP_STATUS").is_some()
 }
 
 pub fn now_millis() -> i64 {
