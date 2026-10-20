@@ -1,6 +1,7 @@
 // What each settings page is called, what it governs,
 // where it sits in the nav, and a static index of the settings on it, so the
 // nav's search can find a single row and jump to it.
+import { loginItemHost } from "../../lib/host";
 import {
   BellIcon,
   BotIcon,
@@ -142,13 +143,28 @@ const SETTINGS: IndexEntry[] = [
 ];
 
 let index: IndexEntry[] | null = null;
+// Open at login is shown only where the OS has a login item for this build, as General decides; learned once.
+let loginSupported = false;
+let askedLogin = false;
 
 /** Every setting, then every command with a shortcut, so "zoom" finds Zoom In. */
 export function settingsIndex(): IndexEntry[] {
+  if (!askedLogin) {
+    askedLogin = true;
+    loginItemHost()
+      ?.get()
+      .then((state) => {
+        loginSupported = state.supported;
+        index = null;
+      })
+      .catch(() => {});
+  }
   if (index) return index;
   const bindings = bindingGroups().flatMap((group) =>
     group.rows.map((row): IndexEntry => ({ id: `kb:${row.id}`, label: row.label, page: "keybindings", keywords: group.title })),
   );
-  index = [...SETTINGS, ...bindings].filter((entry) => !PENDING.includes(entry.page));
+  index = [...SETTINGS, ...bindings].filter(
+    (entry) => !PENDING.includes(entry.page) && (entry.id !== "login" || loginSupported),
+  );
   return index;
 }

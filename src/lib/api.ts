@@ -314,6 +314,9 @@ export const stateGet = (key: string): Promise<string | null> => client.request(
 export const stateSet = (key: string, value: string): Promise<void> =>
   client.request("state_set", { key, value });
 
+/** The state keys that start with `prefix`. A daemon without the call rejects. */
+export const stateKeys = (prefix: string): Promise<string[]> => client.request("state_keys", { prefix });
+
 export const stateDelete = (key: string): Promise<void> => client.request("state_delete", { key });
 
 export const reorderSessions = (ids: string[]): Promise<void> =>

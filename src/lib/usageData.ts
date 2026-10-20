@@ -125,26 +125,37 @@ export function ofProvider(readings: Reading[], provider: string): Reading | und
 
 export type Crossing = { reading: Reading; window: Window };
 
+/** What the alerts have seen of each window: the ones past the threshold, and the ones seen under it. */
+export type Look = { over: Set<string>; below: Set<string> };
+
 /**
- * The windows that went past `at` since the last look. `over` is every window
- * already past it (so one alert per crossing, not per reading); the first look
- * (`over` null) reports nothing, it only learns what is already high.
+ * The windows that went past `at` since the last look. A window alerts only
+ * when it was seen under `at` before and is past it now, so one that is
+ * already high when it first appears (a machine that has just come online,
+ * the first look at all) is learned, not announced. Windows missing from this
+ * look (a machine that is away) keep what was known of them.
  */
 export function crossings(
   readings: Reading[],
-  over: Set<string> | null,
+  look: Look | null,
   at: number,
-): { fresh: Crossing[]; over: Set<string> } {
-  const next = new Set<string>();
+): { fresh: Crossing[]; look: Look } {
+  const over = new Set(look?.over);
+  const below = new Set(look?.below);
   const fresh: Crossing[] = [];
   for (const reading of readings)
     for (const window of reading.windows) {
-      if (window.used < at) continue;
       const key = `${accountKey(reading)}|${window.id}`;
-      next.add(key);
-      if (over && !over.has(key)) fresh.push({ reading, window });
+      if (window.used < at) {
+        over.delete(key);
+        below.add(key);
+        continue;
+      }
+      if (look && !look.over.has(key) && look.below.has(key)) fresh.push({ reading, window });
+      over.add(key);
+      below.delete(key);
     }
-  return { fresh, over: next };
+  return { fresh, look: { over, below } };
 }
 
 /** At the pace so far in this window, how long until it is spent; null when it outlasts the reset or the pace is unknown. */

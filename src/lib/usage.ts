@@ -2,12 +2,12 @@
 // it: one store fed by every connected machine's crewd (a slice per machine,
 // replaced whole on `usage-changed`, deduped by account), the pace math, which
 // providers have a ring on the rail, and the alerts.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "./api";
 import { getLinks, subscribeLinks } from "./client/registry";
 import { notify } from "./host";
 import type { UsageSnapshot } from "./protocol";
-import { crossings, hasWindows, mergeSnapshots, peak, type Crossing, type Reading, type Window } from "./usageData";
+import { crossings, hasWindows, mergeSnapshots, peak, type Crossing, type Look, type Reading, type Window } from "./usageData";
 
 export { runsOutIn } from "./usageData";
 export type { Reading, Window } from "./usageData";
@@ -21,7 +21,7 @@ const slices = new Map<string, UsageSnapshot>();
 const watchers = new Set<() => void>();
 let readings: Reading[] = [];
 let fresh: Freshness = { updatedAt: null, refreshing: false };
-let looked: Set<string> | null = null;
+let looked: Look | null = null;
 
 function publish() {
   readings = mergeSnapshots(slices.values(), Date.now());
@@ -237,23 +237,34 @@ function onlineEnvs(): string[] {
     .map((link) => link.id);
 }
 
-/** Reads every connected machine; with `ask`, each crewd asks its CLIs again first. */
-export async function refreshUsage(ask = true): Promise<void> {
+// Refreshes under way; "Refreshing…" ends with the last of them, not the first.
+let asking = 0;
+
+/** Reads every connected machine, or only `only`; with `ask`, each crewd asks its CLIs again first. */
+export async function refreshUsage(ask = true, only?: string[]): Promise<void> {
   if (ask) {
+    asking += 1;
     fresh = { ...fresh, refreshing: true };
     for (const watch of watchers) watch();
   }
-  await Promise.allSettled(
-    onlineEnvs().map((id) =>
-      api
-        .usageRead(ask, id)
-        .then((snapshot) => setSlice(id, snapshot))
-        .catch(() => {}),
-    ),
-  );
-  if (ask) {
-    fresh = { ...fresh, refreshing: false };
-    for (const watch of watchers) watch();
+  const envs = onlineEnvs().filter((id) => !only || only.includes(id));
+  try {
+    await Promise.allSettled(
+      envs.map((id) =>
+        api
+          .usageRead(ask, id)
+          .then((snapshot) => setSlice(id, snapshot))
+          .catch(() => {}),
+      ),
+    );
+  } finally {
+    if (ask) {
+      asking -= 1;
+      if (asking === 0) {
+        fresh = { ...fresh, refreshing: false };
+        for (const watch of watchers) watch();
+      }
+    }
   }
 }
 
@@ -279,10 +290,16 @@ export function useUsageSync() {
   useEffect(() => api.onUsageChanged((snapshot, envId) => setSlice(envId, snapshot)), []);
   // A machine that comes online is read; one that left the list is dropped.
   const online = useSyncExternalStore(subscribeLinks, () => onlineEnvs().join("|"));
+  const read = useRef<Set<string> | null>(null);
   useEffect(() => {
     const known = new Set(getLinks().map((link) => link.id));
     for (const id of [...slices.keys()]) if (!known.has(id)) setSlice(id, null);
-    void refreshUsage(false).then(() => refreshUsage(true));
+    // Only a machine not read yet is asked; the others keep their reading until the interval.
+    const now = onlineEnvs();
+    const added = read.current ? now.filter((id) => !read.current!.has(id)) : now;
+    read.current = new Set(now);
+    if (added.length === 0) return;
+    void refreshUsage(false, added).then(() => refreshUsage(true, added));
   }, [online]);
   // Resets count down between reads.
   useEffect(() => {
@@ -371,7 +388,7 @@ function alertOn(list: Reading[]) {
   if (looked === null && list.length === 0) return;
   const result = crossings(list, looked, NOTIFY_AT);
   const first = looked === null;
-  looked = result.over;
+  looked = result.look;
   if (first || !alerts.notify) return;
   for (const crossing of result.fresh) void notify({ ...describe(crossing), target: null }).catch(() => {});
 }

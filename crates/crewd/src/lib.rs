@@ -1542,6 +1542,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             Ok(Value::Null)
         }
+        "state_keys" => {
+            #[derive(Deserialize)]
+            struct Prefix {
+                prefix: String,
+            }
+            let Prefix { prefix } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || app_state::keys(&store, prefix)).await?)
+        }
         "state_delete" => {
             let Key { key } = parse(params)?;
             let store = hosts.store.clone();

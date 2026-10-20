@@ -83,7 +83,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
 /**
  * W3's story up to the restart: a worktree made in crew, a session working in
  * it, the worktree removed from the system's terminal, the window told by
- * focus. The app is then restarted, with tabs kept per worktree or all together.
+ * focus. The app is then restarted.
  */
 async function strand(t: TestContext) {
   let crew = await launchCrew();
