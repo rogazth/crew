@@ -106,13 +106,18 @@ pub fn available_methods(provider: &str) -> Vec<ProviderJobMethod> {
 /// How an installed binary got there, read from where it sits.
 pub fn detect_method(path: &Path) -> ProviderJobMethod {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    for text in [canonical.to_string_lossy(), path.to_string_lossy()] {
-        if text.contains("/Cellar/") || text.contains("/Caskroom/") || text.starts_with("/opt/homebrew/") || text.starts_with("/home/linuxbrew/") {
+    let texts = [canonical.to_string_lossy(), path.to_string_lossy()];
+    for text in &texts {
+        if text.contains("/Cellar/") || text.contains("/Caskroom/") {
             return ProviderJobMethod::Brew;
         }
         if text.contains("/node_modules/") {
             return ProviderJobMethod::Npm;
         }
+    }
+    // A prefix alone says Homebrew, last: npm globals under Homebrew's node live there too.
+    if texts.iter().any(|text| text.starts_with("/opt/homebrew/") || text.starts_with("/home/linuxbrew/")) {
+        return ProviderJobMethod::Brew;
     }
     ProviderJobMethod::Script
 }
@@ -139,9 +144,10 @@ fn install_command(spec: &Spec, method: ProviderJobMethod) -> Result<String, Str
 fn update_command(spec: &Spec, method: ProviderJobMethod) -> Result<String, String> {
     match method {
         ProviderJobMethod::Native => Ok(native_update(spec)),
-        ProviderJobMethod::Npm => {
-            spec.npm.map(|pkg| format!("npm install -g {pkg}@latest")).ok_or_else(|| format!("{} has no npm package", spec.binary))
-        }
+        ProviderJobMethod::Npm => spec
+            .npm
+            .map(|pkg| format!("npm install -g {pkg}@latest"))
+            .ok_or_else(|| format!("{} has no npm package", spec.binary)),
         ProviderJobMethod::Brew => brew_package(spec.id)
             .map(|(cask, name)| format!("brew upgrade {}{name}", if cask { "--cask " } else { "" }))
             .ok_or_else(|| format!("{} is not in Homebrew", spec.binary)),
@@ -171,11 +177,15 @@ fn uninstall_command(spec: &Spec, method: ProviderJobMethod, path: &Path, home: 
             if !inside {
                 return Err(format!("{} is installed outside your home folder; remove {} by hand", spec.binary, path.display()));
             }
-            let data = match spec.id {
-                "claude" => "$HOME/.local/share/claude",
-                _ => "$HOME/.local/share/cursor-agent",
+            let (data, extra) = match spec.id {
+                "claude" => ("$HOME/.local/share/claude", String::new()),
+                // `agent` is removed only when it links into cursor-agent.
+                "cursor" => (
+                    "$HOME/.local/share/cursor-agent",
+                    " && case \"$(readlink \"$HOME/.local/bin/agent\" 2>/dev/null)\" in *cursor-agent*) rm -f \"$HOME/.local/bin/agent\";; esac".to_string(),
+                ),
+                _ => return Err(format!("{} has no uninstaller; remove {} by hand", spec.binary, path.display())),
             };
-            let extra = if spec.id == "cursor" { " \"$HOME/.local/bin/agent\"" } else { "" };
             Ok(format!("rm -f {}{extra} && rm -rf \"{data}\"", quote(&path.to_string_lossy())))
         }
     }
@@ -263,7 +273,10 @@ impl Tail {
                         self.current.clear();
                         self.returned = false;
                     }
-                    self.current.push(byte);
+                    // No newline for a long while: keep the head, drop the rest.
+                    if self.current.len() < LINE_CHARS * 4 {
+                        self.current.push(byte);
+                    }
                 }
             }
         }
@@ -347,7 +360,8 @@ impl ProviderJobs {
 
     pub fn start(&self, request: ProviderJobStart) -> Result<ProviderJob, String> {
         let spec = spec(&request.provider)?;
-        let installed = if spec.binary == "opencode" { shell_path::resolve_opencode().ok() } else { shell_path::resolve(spec.binary) };
+        let installed =
+            if spec.binary == "opencode" { shell_path::resolve_opencode().ok() } else { shell_path::resolve(spec.binary) };
         let home = shell_path::home_dir();
         let plan = plan(&request.provider, request.action, request.method, installed.as_deref(), home.as_deref())?;
         self.start_plan(&request.provider, request.action, plan)
@@ -484,6 +498,11 @@ impl ProviderJobs {
             .map_err(|why| format!("could not start `{}`: {why}", step.command))?;
         let pid = child.id() as i32;
         self.update(id, |entry| entry.pid = Some(pid));
+        // A cancel that came before the pid was known had no group to stop.
+        if self.cancelled(id) {
+            unsafe { libc::kill(-pid, libc::SIGTERM) };
+            let _ = child.kill();
+        }
         let mut tail = Tail::default();
         if let Some(mut out) = child.stdout.take() {
             let mut buffer = [0u8; 4096];
@@ -522,7 +541,12 @@ impl ProviderJobs {
 mod tests {
     use super::*;
 
-    fn start(provider: &str, action: ProviderJobAction, method: Option<ProviderJobMethod>, path: Option<&str>) -> Result<Plan, String> {
+    fn start(
+        provider: &str,
+        action: ProviderJobAction,
+        method: Option<ProviderJobMethod>,
+        path: Option<&str>,
+    ) -> Result<Plan, String> {
         plan(provider, action, method, path.map(Path::new), Some("/Users/me"))
     }
     fn commands(plan: &Plan) -> Vec<&str> {
@@ -566,7 +590,10 @@ mod tests {
         assert_eq!(commands(&start("codex", Update, Some(Npm), at).unwrap()), ["npm install -g @openai/codex@latest"]);
         assert_eq!(commands(&start("codex", Update, Some(Brew), at).unwrap()), ["brew upgrade codex"]);
         assert_eq!(commands(&start("claude", Update, Some(Brew), at).unwrap()), ["brew upgrade --cask claude-code"]);
-        assert_eq!(commands(&start("cursor", Update, Some(Script), at).unwrap()), ["curl https://cursor.com/install -fsS | bash"]);
+        assert_eq!(
+            commands(&start("cursor", Update, Some(Script), at).unwrap()),
+            ["curl https://cursor.com/install -fsS | bash"]
+        );
         assert_eq!(start("claude", Update, None, None).unwrap_err(), "claude is not installed");
     }
 
@@ -586,14 +613,20 @@ mod tests {
         );
         assert_eq!(
             commands(&start("cursor", Uninstall, None, Some("/Users/me/.local/bin/cursor-agent")).unwrap()),
-            ["rm -f '/Users/me/.local/bin/cursor-agent' \"$HOME/.local/bin/agent\" && rm -rf \"$HOME/.local/share/cursor-agent\""]
+            ["rm -f '/Users/me/.local/bin/cursor-agent' && case \"$(readlink \"$HOME/.local/bin/agent\" 2>/dev/null)\" in *cursor-agent*) rm -f \"$HOME/.local/bin/agent\";; esac && rm -rf \"$HOME/.local/share/cursor-agent\""]
         );
-        assert_eq!(commands(&start("opencode", Uninstall, Some(ProviderJobMethod::Script), script).unwrap()), ["opencode uninstall --force"]);
+        assert_eq!(
+            commands(&start("opencode", Uninstall, Some(ProviderJobMethod::Script), script).unwrap()),
+            ["opencode uninstall --force"]
+        );
         let again = start("claude", Reinstall, None, script).unwrap();
         assert_eq!(again.method, Some(ProviderJobMethod::Script));
         assert_eq!(
             commands(&again),
-            ["rm -f '/Users/me/.local/bin/claude' && rm -rf \"$HOME/.local/share/claude\"", "curl -fsSL https://claude.ai/install.sh | bash"]
+            [
+                "rm -f '/Users/me/.local/bin/claude' && rm -rf \"$HOME/.local/share/claude\"",
+                "curl -fsSL https://claude.ai/install.sh | bash"
+            ]
         );
         assert_eq!(again.steps.iter().map(|s| s.label).collect::<Vec<_>>(), ["Uninstalling", "Installing"]);
         let swap = start("codex", Reinstall, Some(ProviderJobMethod::Brew), npm).unwrap();
@@ -625,6 +658,28 @@ mod tests {
         assert_eq!(detect_method(Path::new("/usr/local/Cellar/codex/1/bin/codex")), ProviderJobMethod::Brew);
         assert_eq!(detect_method(Path::new("/x/lib/node_modules/@openai/codex/bin/codex")), ProviderJobMethod::Npm);
         assert_eq!(detect_method(Path::new("/Users/me/.local/bin/claude")), ProviderJobMethod::Script);
+        // Homebrew's node keeps npm globals under its prefix.
+        assert_eq!(detect_method(Path::new("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex")), ProviderJobMethod::Npm);
+    }
+
+    #[test]
+    fn a_script_uninstall_never_reaches_into_cursor_data_for_other_clis() {
+        let at = Some("/Users/me/.local/bin/codex");
+        let home = "/Users/me";
+        let spec = super::spec("codex").unwrap();
+        for method in [ProviderJobMethod::Script, ProviderJobMethod::Native] {
+            let err = uninstall_command(&spec, method, Path::new(at.unwrap()), Some(home)).unwrap_err();
+            assert!(err.contains("by hand"), "{err}");
+        }
+        let cursor = super::spec("cursor").unwrap();
+        let command =
+            uninstall_command(&cursor, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/cursor-agent"), Some(home))
+                .unwrap();
+        assert!(command.contains("cursor-agent\"") && command.contains("readlink"), "{command}");
+        let claude = super::spec("claude").unwrap();
+        let command =
+            uninstall_command(&claude, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/claude"), Some(home)).unwrap();
+        assert!(!command.contains("cursor-agent") && !command.contains("agent\""), "{command}");
     }
 
     #[test]
@@ -661,6 +716,14 @@ mod tests {
         assert!(lines[1].ends_with("..."));
     }
 
+    #[test]
+    fn a_line_without_a_newline_is_capped() {
+        let mut tail = Tail::default();
+        tail.push(&vec![b'x'; LINE_CHARS * 40]);
+        assert!(tail.current.len() <= LINE_CHARS * 4);
+        assert_eq!(tail.lines().len(), 1);
+    }
+
     fn wait_for(jobs: &ProviderJobs, id: &str) -> ProviderJob {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
@@ -673,7 +736,10 @@ mod tests {
     }
 
     fn plan_of(commands: &[(&'static str, &str)]) -> Plan {
-        Plan { method: None, steps: commands.iter().map(|(label, command)| Step { label, command: command.to_string() }).collect() }
+        Plan {
+            method: None,
+            steps: commands.iter().map(|(label, command)| Step { label, command: command.to_string() }).collect(),
+        }
     }
 
     #[test]
@@ -683,14 +749,26 @@ mod tests {
         let log = seen.clone();
         jobs.set_listener(Arc::new(move |job| log.lock().unwrap().push(job.phase)));
 
-        let ok = jobs.start_plan("claude", ProviderJobAction::Reinstall, plan_of(&[("Uninstalling", "echo gone"), ("Installing", "echo fresh >&2")])).unwrap();
+        let ok = jobs
+            .start_plan(
+                "claude",
+                ProviderJobAction::Reinstall,
+                plan_of(&[("Uninstalling", "echo gone"), ("Installing", "echo fresh >&2")]),
+            )
+            .unwrap();
         assert_eq!(ok.phase, ProviderJobPhase::Running);
         let done = wait_for(&jobs, &ok.id);
         assert_eq!((done.phase, done.error.clone(), done.step.clone()), (ProviderJobPhase::Done, None, None));
         assert_eq!(done.last_lines, ["fresh"]);
         assert_eq!(seen.lock().unwrap().last(), Some(&ProviderJobPhase::Done));
 
-        let bad = jobs.start_plan("claude", ProviderJobAction::Update, plan_of(&[("Updating", "echo no network; exit 3"), ("Installing", "echo never")])).unwrap();
+        let bad = jobs
+            .start_plan(
+                "claude",
+                ProviderJobAction::Update,
+                plan_of(&[("Updating", "echo no network; exit 3"), ("Installing", "echo never")]),
+            )
+            .unwrap();
         let failed = wait_for(&jobs, &bad.id);
         assert_eq!(failed.phase, ProviderJobPhase::Failed);
         assert_eq!(failed.error.as_deref(), Some("`echo no network; exit 3` exited with status 3"));
@@ -707,7 +785,8 @@ mod tests {
     #[test]
     fn one_job_per_provider_and_cancel_ends_the_process_group() {
         let jobs = ProviderJobs::new();
-        let first = jobs.start_plan("cursor", ProviderJobAction::Update, plan_of(&[("Updating", "echo started; sleep 30")])).unwrap();
+        let first =
+            jobs.start_plan("cursor", ProviderJobAction::Update, plan_of(&[("Updating", "echo started; sleep 30")])).unwrap();
         let err = jobs.start_plan("cursor", ProviderJobAction::Update, plan_of(&[("Updating", "echo no")])).unwrap_err();
         assert!(err.contains("already running"), "{err}");
         // Another provider is not blocked.
@@ -715,7 +794,9 @@ mod tests {
         assert_eq!(wait_for(&jobs, &other.id).phase, ProviderJobPhase::Done);
         // Let the first one print, then stop it.
         let deadline = Instant::now() + Duration::from_secs(10);
-        while jobs.list().iter().find(|job| job.id == first.id).is_some_and(|job| job.last_lines.is_empty()) && Instant::now() < deadline {
+        while jobs.list().iter().find(|job| job.id == first.id).is_some_and(|job| job.last_lines.is_empty())
+            && Instant::now() < deadline
+        {
             thread::sleep(Duration::from_millis(20));
         }
         let started = Instant::now();
