@@ -6,9 +6,7 @@
 // shows here as it does there.
 import { useEffect, useSyncExternalStore } from "react";
 import { useWorkspaceLink } from "../../hooks/useEnvLinks";
-import { listWorkspaces, listWorktrees } from "../../lib/api";
-import { onWorkspacesChanged } from "../../lib/client/registry";
-import { placesVersion, publishWorkspaces, publishWorktrees, subscribePlaces, mainBranchOf, treeKnown, workspacesKnown } from "../../lib/placeStore";
+import { placesVersion, readTrees, readWorkspaces, subscribePlaces, mainBranchOf, treeKnown, watchPlaces, workspacesKnown } from "../../lib/placeStore";
 import type { Session, Worktree } from "../../lib/types";
 import { useChatActions } from "./context";
 
@@ -30,17 +28,6 @@ export type Where = {
 
 const trim = (path: string) => path.replace(/\/+$/, "");
 
-function readTrees(root: string) {
-  void listWorktrees(root).then(
-    (list) => publishWorktrees(root, list),
-    () => treeKnown(root) === undefined && publishWorktrees(root, []),
-  );
-}
-
-function readWorkspaces() {
-  void listWorkspaces().then(publishWorkspaces, () => workspacesKnown() ?? publishWorkspaces([]));
-}
-
 export function useWhere(session: Pick<Session, "workspaceId">): Where {
   const { resolvePath } = useChatActions();
   const root = trim(resolvePath("./") ?? "");
@@ -50,17 +37,10 @@ export function useWhere(session: Pick<Session, "workspaceId">): Where {
   const list = workspacesKnown();
 
   useEffect(() => {
-    if (!root) return;
-    if (treeKnown(root) === undefined) readTrees(root);
-    const again = () => readTrees(root);
-    window.addEventListener("focus", again);
-    return () => window.removeEventListener("focus", again);
+    if (root && treeKnown(root) === undefined) void readTrees(root);
+    if (workspacesKnown() === null) void readWorkspaces();
+    return watchPlaces(root || null);
   }, [root]);
-
-  useEffect(() => {
-    if (workspacesKnown() === null) readWorkspaces();
-    return onWorkspacesChanged(readWorkspaces);
-  }, []);
 
   const workspace = list?.find((one) => one.id === session.workspaceId);
   const name = workspace?.name;
