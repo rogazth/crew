@@ -39,11 +39,20 @@ type CrewHost = {
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
   colorMode: ColorModeHost;
+  keybindings?: KeybindingsHost;
   cli?: CliHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
   remotes?: RemotesHost;
+};
+
+/** The keybindings file, through the native open and save dialogs. Absent outside Electron. */
+export type KeybindingsHost = {
+  /** The text of the .json the user picked; null when they cancel. */
+  importFile(): Promise<string | null>;
+  /** The path it was saved to; null when they cancel. */
+  exportFile(text: string): Promise<string | null>;
 };
 
 /** The rest of what a notification needs from main. */
@@ -200,6 +209,10 @@ export function remotesHost(): RemotesHost | null {
 
 export function colorModeHost(): ColorModeHost | null {
   return crewHost()?.colorMode ?? null;
+}
+
+export function keybindingsHost(): KeybindingsHost | null {
+  return crewHost()?.keybindings ?? null;
 }
 
 export function cliHost(): CliHost | null {

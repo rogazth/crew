@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -15,6 +15,7 @@ import {
   Notification,
   session,
   type OpenDialogOptions,
+  type SaveDialogOptions,
 } from "electron";
 import {
   installBrowser,
@@ -456,6 +457,29 @@ function registerIpc(): void {
     if (canceled || filePaths.length === 0) return null;
     if (opts.multiple && !opts.directory) return filePaths;
     return filePaths[0] ?? null;
+  });
+  // Keybindings travel as a JSON file the user picks: the same native dialogs, filtered to .json.
+  ipcMain.handle("keybindings-import", async (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    if (target && !target.isVisible()) target.show();
+    const options: OpenDialogOptions = { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] };
+    const { canceled, filePaths } = target ? await dialog.showOpenDialog(target, options) : await dialog.showOpenDialog(options);
+    const file = filePaths[0];
+    if (canceled || !file) return null;
+    if (statSync(file).size > 1_000_000) throw new Error("That file is too large to be a keybindings file.");
+    return readFileSync(file, "utf8");
+  });
+  ipcMain.handle("keybindings-export", async (event, text: string) => {
+    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    if (target && !target.isVisible()) target.show();
+    const options: SaveDialogOptions = {
+      defaultPath: "crew-keybindings.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    };
+    const { canceled, filePath } = target ? await dialog.showSaveDialog(target, options) : await dialog.showSaveDialog(options);
+    if (canceled || !filePath) return null;
+    writeFileSync(filePath, String(text));
+    return filePath;
   });
   ipcMain.handle("home-dir", () => homedir());
   // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
