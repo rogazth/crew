@@ -51,7 +51,7 @@ Plan limits per provider, read through each CLI's supported channel.
 Each machine's crewd answers for its own CLIs.
 
 - 36 Version of each CLI (`--version`).
-- 37 Latest version: npm registry for `@anthropic-ai/claude-code`, `@openai/codex`, `opencode-ai`; Cursor from `cursor-agent about --format json` (`latestVersion`).
+- 37 Latest version: npm registry for `@anthropic-ai/claude-code`, `@openai/codex`, `@opencode/cli` (`opencode-ai` is stuck on 1.x); Cursor from `cursor-agent about --format json` (`latestVersion`).
 - 38 Account and plan: `claude auth status` (JSON), Codex `account/read`, `cursor-agent status --format json`, `opencode auth list`.
 - 39 Real binary path, Reveal in Finder (`filesHost().reveal`), Open terminal (pass `onOpenTerminal` down).
 - 40 Install, update, reinstall, uninstall as crewd jobs on the target machine, with progress events and cancel; the install method (npm / brew / script) is persisted. Update commands: `claude update`, `codex update`, `cursor-agent update`, `opencode upgrade`.
