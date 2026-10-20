@@ -38,7 +38,7 @@ import type { MachineSample } from "../../lib/protocol";
 import { INSTALL_STEPS, compareVersions, errorText as message, type Tailnet } from "../../lib/remotes";
 import { openWorkspaceOn, subscribeAdd, takeAddRequest, WAKE_ON, WARN_RELAY } from "../../lib/remoteUi";
 import type { Workspace } from "../../lib/types";
-import { AddMachine } from "../AddMachine";
+import { AddMachineFlow } from "./AddMachineFlow";
 import { manageProviders } from "./route";
 import { Callout, Chip, Group, Row, SettingsPage, ToggleRow, toast, type Tone } from "./ui";
 
@@ -198,24 +198,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
         )}
       </section>
 
-      {host && adding && (
-        <Group title="New machine">
-          <AddMachine
-            tailnet={tailnet}
-            links={remotes}
-            onRefresh={readTailnet}
-            onCancel={() => setAdding(false)}
-            onInstalled={() => {
-              void refreshRemotes();
-              readTailnet();
-            }}
-            onOpenWorkspace={(envId) => {
-              setAdding(false);
-              openWorkspaceOn(envId);
-            }}
-          />
-        </Group>
-      )}
+      {host && adding && <AddMachineFlow onClose={() => { setAdding(false); readTailnet(); }} />}
 
       <Group title="Network">
         <Row id="tailscale" label="Tailscale" description="Peer-to-peer over your tailnet. No Crew server.">

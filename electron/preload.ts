@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     tailnet: () => ipcRenderer.invoke("remotes:tailnet"),
     sshHosts: () => ipcRenderer.invoke("remotes:ssh-hosts"),
     install: (input: InstallInput) => ipcRenderer.invoke("remotes:install", input),
+    cancelInstall: () => ipcRenderer.invoke("remotes:cancel-install"),
     onProgress: (cb: (step: InstallStep) => void) => listen("remotes:progress", cb),
     update: (id: string) => ipcRenderer.invoke("remotes:update", id),
     restart: (id: string) => ipcRenderer.invoke("remotes:restart", id),

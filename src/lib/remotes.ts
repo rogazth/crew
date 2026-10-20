@@ -32,15 +32,32 @@ export type InstallInput = {
   ssh: string;
   /** Empty to let ~/.ssh/config (or the Mac's login) pick it. */
   user: string;
+  /** The port crewd listens on (the proxy takes the next one). */
   port?: number;
+  /** The port ssh dials, when it is not the one ~/.ssh/config (or 22) gives. */
+  sshPort?: number;
 };
 
-export type InstallStepId = "reach" | "ssh" | "upload" | "service" | "pair" | "clis";
+export type InstallStepId = "reach" | "ssh" | "existing" | "upload" | "service" | "pair" | "clis";
+
+/** Why a step failed, in words that say what to do. Anything not recognised has only `message`. */
+export type InstallFailure = {
+  code: "unreachable" | "auth" | "port" | "other";
+  message: string;
+  hint: string;
+  /** A command to copy and run, when there is one. */
+  fix?: string;
+};
 
 export type InstallStep = {
   id: InstallStepId;
-  state: "running" | "done" | "error";
+  /** "skipped": a crewd that already runs there needs no upload or service. */
+  state: "running" | "done" | "error" | "skipped";
   detail?: string;
+  /** Bytes sent and in all, while the upload runs. */
+  received?: number;
+  total?: number;
+  failure?: InstallFailure;
   /** "install" for a new machine; a machine's id while it updates. */
   job: string;
 };
@@ -50,6 +67,7 @@ export const INSTALL_JOB = "install";
 export const INSTALL_STEPS: { id: InstallStepId; label: string }[] = [
   { id: "reach", label: "Reach the machine" },
   { id: "ssh", label: "Sign in over SSH" },
+  { id: "existing", label: "Look for an existing crewd" },
   { id: "upload", label: "Upload crewd" },
   { id: "service", label: "Start the service" },
   { id: "pair", label: "Pair" },

@@ -3,7 +3,18 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isTailnetIp, LINGER_COMMAND, lingerWarning, linuxArch, remoteLayout, serviceUnit, swapBinary, writeLayoutCommand } from "./remote-ssh";
+import {
+  isTailnetIp,
+  LINGER_COMMAND,
+  lingerWarning,
+  linuxArch,
+  remoteLayout,
+  serviceUnit,
+  sshArgs,
+  sshDestination,
+  swapBinary,
+  writeLayoutCommand,
+} from "./remote-ssh";
 
 describe("linux installer", () => {
   it("maps uname to the builds Crew ships", () => {
@@ -123,5 +134,19 @@ describe("lingering", () => {
 
   it("warns when the check could not run at all", () => {
     expect(lingerWarning("Connection reset by peer", "me")).toContain("(Connection reset by peer)");
+  });
+});
+
+describe("an SSH port", () => {
+  it("is handed to ssh only when one was asked for", () => {
+    expect(sshArgs({ destination: "falcon" }, "/tmp/c")).not.toContain("-p");
+    const args = sshArgs({ destination: "falcon", user: "deploy", port: 2222 }, "/tmp/c");
+    expect(args.slice(args.indexOf("-l"))).toEqual(["-l", "deploy", "-p", "2222", "--", "falcon"]);
+  });
+
+  it("stays in the destination a machine keeps, so later runs dial it", () => {
+    expect(sshDestination({ destination: "falcon" })).toBe("falcon");
+    expect(sshDestination({ destination: "falcon", port: 2222 })).toBe("ssh://falcon:2222");
+    expect(sshDestination({ destination: "ssh://falcon:2222", port: 2222 })).toBe("ssh://falcon:2222");
   });
 });
