@@ -56,7 +56,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onCon
   const confirmDelete = (entry: RoutineEntry) =>
     onConfirm({
       title: `Delete routine "${entry.routine.name}"?`,
-      description: `${entry.session.name} stops running it. Its history goes with it.`,
+      description: `${entry.session.name} stops running it. History is deleted.`,
       action: "Delete",
       onConfirm: async () => {
         setOpen(null);
@@ -105,7 +105,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onCon
   return (
     <PageFrame
       title="Routines"
-      subtitle="Standing orders: a bot wakes on a schedule with a saved instruction."
+      subtitle="Wake a bot on a schedule with saved instructions."
       actions={
         <Button variant="primary" icon={PlusIcon} disabled={bots.length === 0} onClick={startNew}>
           New routine
@@ -167,8 +167,8 @@ function Empty({ hasAny, hasBots, filter }: { hasAny: boolean; hasBots: boolean;
   const line = hasAny
     ? `No ${filter} routines.`
     : hasBots
-      ? "No routines yet. A routine wakes a bot on a schedule with a saved instruction."
-      : "Routines run inside a bot's conversation. Create a bot first.";
+      ? "No routines yet"
+      : "Create a bot to add routines.";
   return (
     <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-text-muted">
       {line}

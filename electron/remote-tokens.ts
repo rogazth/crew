@@ -36,6 +36,9 @@ export async function putToken(id: string, token: string): Promise<void> {
 
 export async function getToken(id: string): Promise<string | null> {
   const blob = (await read())[id];
+  // The seeded design profile (scripts/seed.mjs) cannot reach the keychain:
+  // a dev build takes its machines' tokens as written.
+  if (blob?.startsWith("plain:") && !app.isPackaged) return blob.slice("plain:".length);
   if (!blob || !safeStorage.isEncryptionAvailable()) return null;
   try {
     return safeStorage.decryptString(Buffer.from(blob, "base64"));

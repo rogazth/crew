@@ -2,7 +2,7 @@ import { ArrowDownAZIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRi
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { isDeleteChord } from "../lib/hotkey";
-import { SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
+import { COPY_PATH, SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
 
 const ICONS: Record<MenuIcon, Icon> = {
   edit: PencilIcon,
@@ -50,9 +50,30 @@ type Props = {
   onClose: () => void;
   /** Said above the actions: whose menu this is, when a right-click leaves any doubt. */
   title?: string;
+  /** A folder the menu is about: shown under the title, cut to its tail, and copied whole by a Copy Path action. */
+  path?: string;
   /** When set, the name field sits at the top of the popover and focuses on open. */
   rename?: { initial: string; onCommit: (name: string) => void };
 };
+
+/** The end of a path, from a folder boundary: the part that tells one checkout from another. */
+function pathTail(path: string, max = 30): string {
+  const trimmed = path.replace(/\/+$/, "");
+  if (trimmed.length <= max) return trimmed;
+  const tail = trimmed.slice(-max);
+  const cut = tail.indexOf("/");
+  return `…${cut >= 0 ? tail.slice(cut) : tail}`;
+}
+
+/** Copy Path joins the first group of actions, unless the menu already has one or its key is taken. */
+function withCopyPath(actions: MenuEntry[]): MenuEntry[] {
+  const own = actions.filter((entry): entry is MenuAction => entry !== SEPARATOR);
+  if (own.some((action) => action.id === COPY_PATH.id)) return actions;
+  const taken = own.some((action) => keyOf(action) === keyOf(COPY_PATH));
+  const copy = taken ? { ...COPY_PATH, hotkey: "" } : COPY_PATH;
+  const at = actions.indexOf(SEPARATOR);
+  return at < 0 ? [...actions, copy] : [...actions.slice(0, at), copy, ...actions.slice(at)];
+}
 
 function keyOf(action: MenuAction): string {
   return action.hotkey.toLowerCase();
@@ -63,7 +84,16 @@ function keyOf(action: MenuAction): string {
  * ↑↓ walk the actions, ↵ runs one, and each action's letter runs it directly.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
  */
-export function ActionMenu({ point, actions, onPick, onClose, title, rename }: Props) {
+export function ActionMenu({ point, actions: given, onPick: pick, onClose, title, path, rename }: Props) {
+  const actions = path ? withCopyPath(given) : given;
+  const onPick = (id: string) => {
+    if (path && id === COPY_PATH.id && !given.some((entry) => entry !== SEPARATOR && entry.id === id)) {
+      void navigator.clipboard.writeText(path);
+      onClose();
+      return;
+    }
+    pick(id);
+  };
   const surface = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const skipCommit = useRef(false);
@@ -161,11 +191,21 @@ export function ActionMenu({ point, actions, onPick, onClose, title, rename }: P
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
       className={`fixed z-50 min-w-52 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
-        rename ? "w-60" : "w-max"
+        rename || path ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}
     >
-      {title && <div className="truncate px-2 pt-1.5 pb-1 text-[11px] text-text-muted">{title}</div>}
+      {/* Zero intrinsic width: a long title or path is cut to the menu, it never makes the menu wider. */}
+      {title && (
+        <div className={`w-0 min-w-full truncate px-2 pt-1.5 ${path ? "text-[12px] font-medium text-text" : "pb-1 text-[11px] text-text-muted"}`}>
+          {title}
+        </div>
+      )}
+      {path && (
+        <div title={path} className={`w-0 min-w-full truncate px-2 pb-1.5 text-[11px] text-text-muted ${title ? "" : "pt-1.5"}`}>
+          {pathTail(path)}
+        </div>
+      )}
       {rename && (
         <input
           ref={input}

@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 let chat: Session;
@@ -25,11 +25,7 @@ before(async () => {
   });
   await installFakeOpencode(crew);
   await crew.reload();
-  const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
-  chat = await waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "the new chat reaches crewd",
-  });
+  chat = await newSession(crew, workspace.id);
   await composer().waitFor();
 });
 
@@ -102,7 +98,7 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
   assert.match(rows[0]!, /Reply with pong.*Subagent · (?:[^·]+ · )?done/s, rows[0]);
   await shoot("work");
   await crew.window.keyboard.press("Escape");
-  await sheet().waitFor({ state: "detached" });
+  await sheet().waitFor({ state: "hidden" });
 });
 
 test("Stop on a running subagent ends the child and not the parent's turn", async () => {

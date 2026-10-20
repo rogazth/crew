@@ -91,6 +91,23 @@ export function nativeReport(block: Block): string | null {
   return text ? text : null;
 }
 
+/**
+ * When a native subagent's report landed. The call block is where the agent was
+ * started, so its own time would pin every report to the start; its last step is
+ * the closest the transcript gets to the moment it answered. A call with no
+ * steps keeps its own time, and the report stays under its card.
+ */
+export function nativeReportAt(block: Block): number | undefined {
+  const detail = agentDetail(block);
+  if (!detail?.output?.trim()) return undefined;
+  const steps = detail.steps ?? [];
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const at = steps[index]?.at;
+    if (at !== undefined) return at;
+  }
+  return block.at;
+}
+
 /** A letter's words without the daemon's "It exited (why)." lead: the model reads it, the transcript does not. */
 export function exitedless(block: Block): string {
   return block.letterKind === "report" ? block.text.replace(/^It exited \([^)\n]*\)\.\s*/, "") : block.text;

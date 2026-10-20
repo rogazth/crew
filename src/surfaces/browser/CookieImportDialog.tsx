@@ -55,12 +55,10 @@ export function CookieImportDialog({ source, onClose, onImported }: Props) {
     ) : (
       <div className="flex flex-col gap-2">
         <p>
-          Pages in every workspace open signed in wherever {label} is. macOS asks to let Crew read {browser}'s
-          keychain entry.
+          Pages open signed in wherever {label} is. macOS will ask for {browser}'s keychain entry.
         </p>
         <p>
-          Google and YouTube accounts don't come over: sign in to Google here. Some sites end a sign-in that two browsers share, so
-          you may have to sign in to them again in {browser}.
+          Google accounts don't transfer; sign in here. Some sites may sign you out of {browser}.
         </p>
       </div>
     );

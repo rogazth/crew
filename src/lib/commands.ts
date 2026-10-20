@@ -1,4 +1,5 @@
 import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotkeys";
+import { parseChord, toHotkey } from "./chords";
 import type { LiveCommand } from "./keymap";
 
 /** `also` are further chords for the same command, for keys that sit elsewhere on other layouts. */
@@ -6,14 +7,14 @@ type Command = { label: string; keys?: RegisterableHotkey; also?: RegisterableHo
 
 /**
  * App commands. The id is what handlers, menus, and settings share.
- * `keys` is the default binding; user overrides land here later. A command
+ * `keys` is the default binding; the user's overrides replace it (see setKeyOverrides). A command
  * without one is reached only from the palette and its buttons.
  * A command only fires while something has registered a handler — that is the when.
  * `repeat` lets a held chord keep firing; everything else fires once per press.
  */
 export const COMMANDS = {
   // Tabs — browser conventions, so the muscle memory transfers.
-  "open-launcher": { label: "New Tab", keys: "Mod+T" },
+  "open-launcher": { label: "New tab", keys: "Mod+T" },
   close: { label: "Close Tab", keys: "Mod+W" },
   "reopen-tab": { label: "Reopen Closed Tab", keys: "Mod+Shift+T" },
   // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the
@@ -111,21 +112,61 @@ export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[];
 const handlers = new Map<CommandId, () => void>();
 const listeners = new Set<() => void>();
 let flushing = false;
-let published = "";
+let published = "|{}";
 
 export function isCommandId(id: string): id is CommandId {
   return id in COMMANDS;
 }
 
-export function keysFor(id: CommandId): RegisterableHotkey | undefined {
+/**
+ * What the user changed: a stored chord ("Mod+Shift+K") in place of the default
+ * binding, or null for a command left without one. An override replaces every
+ * default chord of the command, `also` included.
+ */
+export type KeyOverrides = Readonly<Record<string, string | null>>;
+
+let overrides: KeyOverrides = {};
+let resolved = new Map<string, RegisterableHotkey[]>();
+const overrideListeners = new Set<() => void>();
+
+export function keyOverrides(): KeyOverrides {
+  return overrides;
+}
+
+/** Binds the commands as `next` says, in the window's dispatcher and (through the live list) in main. */
+export function setKeyOverrides(next: KeyOverrides): void {
+  overrides = next;
+  resolved = new Map();
+  for (const [id, chord] of Object.entries(next)) {
+    if (!isCommandId(id)) continue;
+    const parsed = chord === null ? null : parseChord(chord);
+    if (chord === null) resolved.set(id, []);
+    else if (parsed) resolved.set(id, [toHotkey(parsed) as RegisterableHotkey]);
+  }
+  changed();
+  for (const listener of overrideListeners) listener();
+}
+
+export function onKeyOverridesChange(cb: () => void): () => void {
+  overrideListeners.add(cb);
+  return () => {
+    overrideListeners.delete(cb);
+  };
+}
+
+/** The chords the command ships with, whatever the user changed. */
+export function defaultKeysFor(id: CommandId): RegisterableHotkey[] {
   const command: Command = COMMANDS[id];
-  return command.keys;
+  return command.keys ? [command.keys, ...(command.also ?? [])] : [];
+}
+
+export function keysFor(id: CommandId): RegisterableHotkey | undefined {
+  return allKeysFor(id)[0];
 }
 
 /** Every chord that runs the command: the one shown first, then the others. */
 export function allKeysFor(id: CommandId): RegisterableHotkey[] {
-  const command: Command = COMMANDS[id];
-  return command.keys ? [command.keys, ...(command.also ?? [])] : [];
+  return resolved.get(id) ?? defaultKeysFor(id);
 }
 
 /** macOS writes modifiers in one order, ⌃⌥⇧⌘, run together with the key. */
@@ -142,12 +183,25 @@ export function commandChords(id: CommandId): string[] {
   return allKeysFor(id).map(chordLabel);
 }
 
+/** Every chord the command ships with, as the platform spells it. */
+export function defaultChords(id: CommandId): string[] {
+  return defaultKeysFor(id).map(chordLabel);
+}
+
+/** A stored chord as the platform spells it; the text itself when it is not one. */
+export function storedChordLabel(chord: string): string {
+  const parsed = parseChord(chord);
+  return parsed ? chordLabel(toHotkey(parsed) as RegisterableHotkey) : chord;
+}
+
 function chordLabel(keys: RegisterableHotkey): string {
   const shown = formatForDisplay(keys).replace("^", "⌃");
   if (!MAC_ORDER.some((glyph) => shown.includes(glyph))) return shown;
   const parts = shown.split(/\s+/).join("");
   const mods = MAC_ORDER.filter((glyph) => parts.includes(glyph)).join("");
-  return mods + [...parts].filter((glyph) => !MAC_ORDER.includes(glyph)).join("");
+  const key = [...parts].filter((glyph) => !MAC_ORDER.includes(glyph)).join("");
+  // The formatter writes a "+" key as nothing at all, leaving ⌘ for ⌘+.
+  return mods + (key || "+");
 }
 
 export function repeatable(id: CommandId): boolean {
@@ -190,7 +244,7 @@ function changed(): void {
   flushing = true;
   queueMicrotask(() => {
     flushing = false;
-    const live = COMMAND_IDS.filter((id) => handlers.has(id)).join(" ");
+    const live = `${COMMAND_IDS.filter((id) => handlers.has(id)).join(" ")}|${JSON.stringify(overrides)}`;
     if (live === published) return;
     published = live;
     for (const listener of listeners) listener();

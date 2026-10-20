@@ -11,8 +11,6 @@ import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
 import { Transcript } from './Transcript';
 
-const HEAD_FADE = '[mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]';
-
 /** One level of the way down to the open thread: a session that holds the level below it. */
 export type Crumb = {
   id: string;
@@ -150,7 +148,7 @@ export function AgentView({
       // Only the innermost thread answers.
       if (open.at(-1) !== token.current) return;
       // Esc that something in the page already used (a picker, a card) is not a way out; the work sheet takes it first.
-      if (event.key === 'Escape' && !event.defaultPrevented && !root.current?.querySelector('[data-work-sheet]')) onClose();
+      if (event.key === 'Escape' && !event.defaultPrevented && !root.current?.querySelector('[data-work-sheet][data-open]')) onClose();
       const target = event.target as HTMLElement;
       if (
         event.key === 'x' &&
@@ -168,7 +166,13 @@ export function AgentView({
 
   const tokens = tokensLabel(entry);
   const model = modelLine(entry);
-  const state = entry.state[0]!.toUpperCase() + entry.state.slice(1);
+  // Still running, but what waits on the user says so: the same words as the status line.
+  const state =
+    entry.attention === 'approval'
+      ? 'Needs approval'
+      : entry.attention === 'question'
+        ? 'Asks'
+        : entry.state[0]!.toUpperCase() + entry.state.slice(1);
   const branch = worktree ? worktree.split('/').pop() : null;
   const meta: ReactNode[] = [KIND_LABEL[entry.kind]];
   if (entry.kind === 'shell') meta.push(command?.command ?? entry.title);
@@ -186,7 +190,7 @@ export function AgentView({
     <SubagentTranscript calls={blocks} working={view.state === 'running'} active={active} />
   ) : (
     <div className="mx-auto w-full max-w-[840px] px-6 pt-8">
-      <p className="py-0.5 text-[12.5px] text-text-muted">Its steps are in the transcript, where it started.</p>
+      <p className="py-0.5 text-[12.5px] text-text-muted">Steps are in the parent transcript.</p>
     </div>
   );
   const footer = !entry.writable && <ReadOnlyFooter entry={entry} parent={parent?.name ?? 'the session'} stoppable={stoppable} />;
@@ -208,7 +212,7 @@ export function AgentView({
           {model && <span className="shrink-0 text-[12px] text-text-muted">{model}</span>}
           <span className="mx-1.5 h-4 w-px shrink-0 bg-hairline" />
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums">
-            <StateDot state={entry.state} />
+            {entry.attention ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" /> : <StateDot state={entry.state} />}
             <span className="text-text">{state}</span>
             {elapsed}
           </span>
@@ -234,7 +238,7 @@ export function AgentView({
       </header>
       <div className="relative z-0 flex min-h-0 flex-1 flex-col pt-14">
         {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
-        <div className={`relative flex min-h-0 flex-1 flex-col ${HEAD_FADE}`}>{body}</div>
+        <div className="relative flex min-h-0 flex-1 flex-col">{body}</div>
       </div>
       {footer}
     </div>

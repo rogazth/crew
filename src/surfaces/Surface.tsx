@@ -49,7 +49,7 @@ export function Surface({
   if (!hasWorkspace) {
     return (
       <EmptyState
-        title="No workspace yet."
+        title="No workspace"
         action={{ label: "Choose a folder", onClick: onCreateWorkspace }}
       />
     );
@@ -57,7 +57,7 @@ export function Surface({
   if (!tab) {
     if (empty) return empty;
     return (
-      <EmptyState title={`Open a bot, a session, or ${commandKeys("go-to-file")} for a file.`} />
+      <EmptyState title={`Open a bot or session, or ${commandKeys("go-to-file")} for a file`} />
     );
   }
   if (tab.kind === "stub") {
@@ -89,6 +89,6 @@ export function Surface({
   }
 
   const session = sessions.find((s) => s.id === tab.sessionId);
-  if (!session) return <EmptyState title="Session not found." />;
+  if (!session) return <EmptyState title="Session not found" />;
   return null;
 }

@@ -1,4 +1,3 @@
-import { FolderIcon } from "lucide-react";
 import { FileTypeIcon } from "./FileTypeIcon";
 
 /**
@@ -14,7 +13,7 @@ export function FileRef({ path, full, onOpen }: { path: string; full?: boolean; 
   const dir = full && cut >= 0 ? path.slice(0, cut + 1) : "";
   return (
     <button type="button" onClick={() => onOpen(path)} title={path} className="crew-file-ref">
-      {path.endsWith("/") ? <FolderIcon className="size-3 shrink-0 text-icon" aria-hidden /> : <FileTypeIcon name={name} className="size-3" />}
+      <FileTypeIcon name={name} dir={path.endsWith("/")} className="size-3" />
       <span className="crew-file-ref-path">
         {dir && <span className="crew-file-ref-dir">{dir}</span>}
         <span className="crew-file-ref-name">{name}</span>

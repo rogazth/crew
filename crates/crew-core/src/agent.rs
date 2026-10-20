@@ -207,7 +207,17 @@ impl AgentHost {
     /// The names that resolve, asked again each time so a CLI installed
     /// mid-session shows up. opencode costs a `--version` run to answer.
     pub fn installed(names: Vec<String>) -> Vec<String> {
-        names.into_iter().filter(|name| !name.contains('/') && Self::resolve(name).is_ok()).collect()
+        // A dev build can be told some CLIs are missing, so the design profile
+        // (`npm run app:design -- --missing=…`) shows them as not installed.
+        let missing = match cfg!(debug_assertions) {
+            true => std::env::var("CREW_MISSING_PROVIDERS").unwrap_or_default(),
+            false => String::new(),
+        };
+        names
+            .into_iter()
+            .filter(|name| !missing.split(',').any(|gone| gone.trim() == name))
+            .filter(|name| !name.contains('/') && Self::resolve(name).is_ok())
+            .collect()
     }
 
     pub fn spawn(

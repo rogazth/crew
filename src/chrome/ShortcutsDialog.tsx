@@ -26,7 +26,7 @@ function sections(): { group: string; rows: Row[] }[] {
       group: "Create",
       rows: [
         [commandKeys("new-session"), "New session in this worktree"],
-        [commandKeys("new-bot"), "New bot — pick a worktree or a new branch"],
+        [commandKeys("new-bot"), "New bot in this workspace"],
         [commandKeys("new-worktree"), "New worktree"],
         [commandKeys("open-workspace"), "Open workspace"],
       ],

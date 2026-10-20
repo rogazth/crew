@@ -1,7 +1,7 @@
 import { client } from "./client";
 import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
-import { base64OfFile, extensionFor, fileSource, upload } from "./upload";
+import { base64OfFile, CHUNK, extensionFor, fileSource, upload } from "./upload";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BackgroundList,
@@ -21,12 +21,20 @@ import type {
   MailboxEdit,
   MailboxReorder,
   MachineInfo,
+  MachineSample,
   McpSignIn,
   McpStatus,
   MessagePage,
   PageSnapshot,
   Process,
   ProcessSpec,
+  ProviderJob,
+  ProviderJobAction,
+  ProviderJobMethod,
+  ProviderLoginCommand,
+  ProviderLoginEvent,
+  ProviderLoginFlow,
+  ProviderStatus,
   RemoteEnv,
   SearchFiles,
   ThreadLetter,
@@ -35,11 +43,12 @@ import type {
   ThreadPair,
   TurnSendNow,
   TurnStarted,
+  UsageSnapshot,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Up to here a file travels in one message. */
-const SINGLE_CALL = 4 * 1024 * 1024;
+const SINGLE_CALL = CHUNK;
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -305,6 +314,9 @@ export const stateGet = (key: string): Promise<string | null> => client.request(
 export const stateSet = (key: string, value: string): Promise<void> =>
   client.request("state_set", { key, value });
 
+/** The state keys that start with `prefix`. A daemon without the call rejects. */
+export const stateKeys = (prefix: string): Promise<string[]> => client.request("state_keys", { prefix });
+
 export const stateDelete = (key: string): Promise<void> => client.request("state_delete", { key });
 
 export const reorderSessions = (ids: string[]): Promise<void> =>
@@ -357,10 +369,12 @@ export async function writeTempFile(
   file: File,
   envId = focusEnv(),
   onProgress?: (sent: number) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const extension = extensionFor(file.name, file.type);
   // A small one is a single call, which a daemon from before pieces still answers.
   if (file.size <= SINGLE_CALL) {
+    signal?.throwIfAborted();
     const path = await client.request<string>(
       "write_temp_file",
       { extension, base64Contents: await base64OfFile(file) },
@@ -369,7 +383,7 @@ export async function writeTempFile(
     onProgress?.(file.size);
     return path;
   }
-  return upload(fileSource(file), envId, extension, onProgress);
+  return upload(fileSource(file), envId, extension, onProgress, signal);
 }
 
 /** A new file at `path`, parent folders included. Fails rather than overwrite. */
@@ -488,6 +502,73 @@ export const deleteRemoteRecord = (id: string): Promise<void> => client.request(
 export const listDir = (envId: string, path: string): Promise<DirListing> =>
   client.request("dir_list", { path }, envId);
 
+/**
+ * The agent CLIs on one machine, as that machine's daemon sees them: path,
+ * version, newest release and account. `refresh` skips the daemon's caches.
+ */
+export const providerStatus = (envId: string, refresh = false): Promise<ProviderStatus[]> =>
+  client.request("provider_status", { refresh }, envId);
+
+/**
+ * Starts a job on that machine's CLI (install, update, reinstall, uninstall,
+ * logout). Without `method`, an update uses the CLI's own updater and the rest
+ * follow how the CLI got there. One job per provider at a time: a second start
+ * rejects. Progress arrives as `onProviderJob` events.
+ */
+export const providerJobStart = (
+  envId: string,
+  provider: string,
+  action: ProviderJobAction,
+  method?: ProviderJobMethod,
+): Promise<ProviderJob> =>
+  client.request("provider_job_start", method ? { provider, action, method } : { provider, action }, envId);
+
+/** Kills the job's process group; it ends as `cancelled`. */
+export const providerJobCancel = (envId: string, id: string): Promise<void> =>
+  client.request("provider_job_cancel", { id }, envId);
+
+/** Running jobs and the last few finished ones, oldest first. */
+export const providerJobList = (envId: string): Promise<ProviderJob[]> => client.request("provider_job_list", {}, envId);
+
+/** Told with the whole job each time it changes (`provider-job`). */
+export const onProviderJob = (listener: (job: ProviderJob, envId: string) => void): (() => void) =>
+  client.on("provider-job", (payload, env) => listener(payload as ProviderJob, env));
+
+/** What to run in a terminal tab on that machine to sign in (`login`) or out (`logout`) by hand. */
+export const providerLogin = (envId: string, provider: string): Promise<ProviderLoginCommand> =>
+  client.request("provider_login", { provider }, envId);
+
+/** Codex only: starts the device-code sign-in; show the code and open the URL. Its end arrives as `onProviderLogin`. */
+export const providerLoginStart = (envId: string, provider = "codex"): Promise<ProviderLoginFlow> =>
+  client.request("provider_login_start", { provider }, envId);
+
+export const providerLoginCancel = (envId: string, loginId: string): Promise<boolean> =>
+  client.request("provider_login_cancel", { loginId }, envId);
+
+/** Told how a device-code sign-in ended (`provider-login`): done, failed or cancelled. */
+export const onProviderLogin = (listener: (event: ProviderLoginEvent, envId: string) => void): (() => void) =>
+  client.on("provider-login", (payload, env) => listener(payload as ProviderLoginEvent, env));
+
+/** The install method last chosen for a provider on a machine, kept with `stateSet`. */
+export const providerMethodKey = (envId: string, provider: string): string => `providerMethod.${envId}.${provider}`;
+
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 
+/** The daemon's CPU and memory samples, oldest first (about every 30 s, for about 2 h); `since` is a time in ms. */
+export const machineMetrics = (envId: string, since?: number): Promise<MachineSample[]> =>
+  client.request("machine_metrics", since === undefined ? {} : { since }, envId);
+
 export { ackPty, attachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";
+
+/**
+ * What each provider account on a machine has spent of its plan, and a week of
+ * history. `refresh` asks the CLIs again first; `envId` names the machine
+ * (the focused one by default). Two machines may report the same account:
+ * `PlanUsage.account` is what to dedupe them on.
+ */
+export const usageRead = (refresh = false, envId?: string): Promise<UsageSnapshot> =>
+  client.request("usage_read", { refresh }, envId);
+
+/** Told with a machine's whole snapshot each time one of its readings changes (`usage-changed`). */
+export const onUsageChanged = (listener: (snapshot: UsageSnapshot, envId: string) => void): (() => void) =>
+  client.on("usage-changed", (payload, env) => listener(payload as UsageSnapshot, env));

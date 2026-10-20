@@ -50,7 +50,7 @@ test("C1: the crew command installs from Settings, runs, and uninstalls", async 
   await section.getByText(`It links into ${dir}.`).waitFor();
 
   await section.getByRole("button", { name: "Install" }).click();
-  await section.getByText(`Linked at ${link}.`).waitFor();
+  await section.getByText("Linked at").waitFor();
   assert.equal(await readlink(link), source);
 
   // The linked command is the CLI, and it finds the app's daemon.
@@ -87,7 +87,7 @@ test("C1: the crew command installs from Settings, runs, and uninstalls", async 
 
   await answerDialog(crew, 0);
   await section.getByRole("button", { name: "Install" }).click();
-  await section.getByText(`Linked at ${link}.`).waitFor();
+  await section.getByText("Linked at").waitFor();
   assert.equal(await readlink(link), source);
 
   // Uninstall never touches a crew that is not Crew's.

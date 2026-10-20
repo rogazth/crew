@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { BotAvatar } from "./BotAvatar";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
+import { useNow } from "../hooks/useNow";
 import { useThread } from "../hooks/useThread";
 import { modelLabel, providerOf } from "../lib/providers";
 import { statusLabel } from "../lib/status";
-import { elapsed } from "../lib/time";
+import { turnStart } from "../lib/transcriptRows";
+import { duration } from "../lib/time";
 import type { Session } from "../lib/types";
 
 /** Where the card hangs: under the pill, its left edge on the pill's. */
@@ -18,6 +20,7 @@ export type PeekAnchor = { left: number; top: number };
  * where it runs, and the last thing it said.
  */
 export function TabPeek({ session, branch, anchor }: { session: Session; branch: string | null; anchor: PeekAnchor }) {
+  const working = session.status === "working";
   return createPortal(
     <div
       role="tooltip"
@@ -42,25 +45,38 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
       </div>
 
       <div className="flex items-center gap-2 text-[12px]">
-        <span className="flex items-center gap-1.5 rounded-full bg-card px-2 py-0.5 ring-1 ring-hairline">
+        <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-card px-2 py-0.5 ring-1 ring-hairline">
           {session.status === "idle" ? (
             <span className="size-2 rounded-full bg-border-strong" />
           ) : (
             <StatusDot status={session.status} className="size-3" />
           )}
-          {statusLabel(session.status)}
-          <span className="text-text-muted tabular-nums">· {elapsed(session.updatedAt)}</span>
+          {working ? (
+            <WorkingFor sessionId={session.id} />
+          ) : (
+            statusLabel(session.status)
+          )}
         </span>
-        <span className="flex min-w-0 items-center gap-1 text-text-muted">
-          <GitBranchIcon className="size-3 shrink-0 text-icon" />
-          <span className="truncate">{branch ?? "main"}</span>
-        </span>
+        {session.kind !== "bot" && branch && (
+          <span className="flex min-w-0 items-center gap-1 text-text-muted">
+            <GitBranchIcon className="size-3 shrink-0 text-icon" />
+            <span className="truncate">{branch}</span>
+          </span>
+        )}
       </div>
 
       {session.kind === "bot" && <LastWords sessionId={session.id} />}
     </div>,
     document.body,
   );
+}
+
+/** How long the turn now running has run: from its start in the transcript, not from the session's last update. */
+function WorkingFor({ sessionId }: { sessionId: string }) {
+  const { blocks } = useThread(sessionId);
+  const now = useNow(1000, true);
+  const since = turnStart(blocks);
+  return <span className="tabular-nums">{since === undefined ? "Working" : `Working for ${duration(Math.max(0, now - since))}`}</span>;
 }
 
 /** The newest line the bot wrote, or what it is doing if it is mid-turn. */

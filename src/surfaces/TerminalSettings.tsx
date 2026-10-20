@@ -57,7 +57,7 @@ export function TerminalSettings() {
         <SettingsRow label="Font size" description="Size of terminal text, in pixels.">
           {stepper("fontSize", "Font size", LIMITS.fontSize)}
         </SettingsRow>
-        <SettingsRow label="Font family" description="Monospace font for every terminal.">
+        <SettingsRow id="terminal-font" label="Font family" description="Monospace font for every terminal.">
           <Reset
             hidden={prefs.fontFamily === DEFAULT_TERMINAL_PREFS.fontFamily}
             onClick={() => set("fontFamily", DEFAULT_TERMINAL_PREFS.fontFamily)}

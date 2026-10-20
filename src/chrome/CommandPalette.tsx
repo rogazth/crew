@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeftIcon, ArrowRightIcon, BookOpenIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, ServerIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, TableIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, BookOpenIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, LayersIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, TableIcon, type LucideIcon as Icon } from "lucide-react";
 import { BotAvatar } from "./BotAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Footer, GroupHeader } from "./kit";
@@ -211,7 +211,7 @@ export function CommandPalette(props: Props) {
 
   return (
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={props.onClose}>
-      <div className="absolute inset-0 bg-black/15" />
+      <div className="absolute inset-0 bg-(--backdrop)" />
       <div
         role="dialog"
         aria-modal="true"
@@ -334,7 +334,7 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "browser-hard-reload": RotateCwIcon,
   "browser-devtools": CodeXmlIcon,
   "open-history": HistoryIcon,
-  "open-commands": ServerIcon,
+  "open-commands": LayersIcon,
   "start-all-commands": PlayIcon,
   "stop-all-commands": SquareIcon,
   shortcuts: KeyboardIcon,

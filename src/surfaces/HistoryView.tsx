@@ -72,13 +72,13 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
 
   function clear(range: ClearRange) {
     const what = {
-      hour: "Pages visited in the last hour are forgotten.",
-      today: "Pages visited today are forgotten.",
-      all: "Every page the browser has recorded is forgotten.",
+      hour: "Removes the last hour.",
+      today: "Removes today's pages.",
+      all: "Removes all history.",
     }[range];
     onConfirm({
       title: "Clear browsing history?",
-      description: `${what} Open tabs stay as they are.`,
+      description: `${what} Open tabs stay.`,
       action: "Clear",
       onConfirm: async () => {
         await api.browserHistoryClear(clearSince(range)).catch(() => {});
@@ -191,12 +191,12 @@ function Row({
 
 function Blank({ searching, text }: { searching: boolean; text: string }) {
   if (searching) {
-    return <p className="py-16 text-center text-[13px] text-text-muted">Nothing matches {`"${text}"`}.</p>;
+    return <p className="py-16 text-center text-[13px] text-text-muted">No results for {`"${text}"`}</p>;
   }
   return (
     <div className="flex flex-col items-center gap-2 py-20 text-center">
       <HistoryIcon className="size-5 text-placeholder" />
-      <p className="text-[13px] text-text-muted">Pages you open in the browser show up here.</p>
+      <p className="text-[13px] text-text-muted">No history yet</p>
     </div>
   );
 }

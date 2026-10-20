@@ -14,6 +14,11 @@ type Props = {
   /** A new token puts the keyboard in the box; `query` fills it, as a selection does in VS Code. */
   focus: { token: number; query?: string } | null;
   onOpenFile: (file: ProjectFile) => void;
+  /** The box shows only when asked for; closed, the tree shows whatever was typed. */
+  visible: boolean;
+  onClose: () => void;
+  /** What shows while the box is empty: the tree. It stays mounted under a search. */
+  children?: ReactNode;
 };
 
 type Answer = { key: string } & ({ result: FileSearchResult; error: null } | { result: null; error: string });
@@ -27,7 +32,7 @@ const DEBOUNCE_MS = 150;
 const count = new Intl.NumberFormat();
 
 /** Text in the workspace's files, VS Code's ⌘⇧F: the daemon searches, this lists what it found. */
-export function SearchPanel({ root, focus, onOpenFile }: Props) {
+export function SearchPanel({ root, focus, onOpenFile, visible, onClose, children }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   // Mounted by the shortcut itself when the explorer was closed: the token is new, and so is the text.
@@ -56,7 +61,7 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
     input.current?.select();
   }, [focus]);
 
-  const text = query.trim() === "" ? "" : query;
+  const text = !visible || query.trim() === "" ? "" : query;
   const request = useMemo(
     () => ({ cwd: root, query: text, caseSensitive, wholeWord, regex, include, exclude }),
     [root, text, caseSensitive, wholeWord, regex, include, exclude],
@@ -121,6 +126,11 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
   }
 
   function onInputKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
     if (event.key !== "ArrowDown" || rows.length === 0) return;
     event.preventDefault();
     setCursor(Math.max(cursor, 0));
@@ -159,14 +169,14 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
   const result = shown?.result;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-col gap-1.5 px-2 pt-2 pb-1.5">
+      <div hidden={!visible} className="flex shrink-0 flex-col gap-1.5 px-2 pt-2 pb-1.5">
         <div className="flex items-center gap-1">
           {/* The kit's TextInput, with the flags inside it as VS Code has them. */}
           <div className="flex h-8 min-w-0 flex-1 items-center rounded-md bg-canvas pr-1 ring ring-border transition-shadow focus-within:ring-[1.5px] focus-within:ring-focus/50">
             <input
               ref={input}
               aria-label="Search in files"
-              placeholder="Search"
+              placeholder="Search text in files"
               spellCheck={false}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -187,8 +197,12 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
         )}
         <Summary searching={searching} error={shown?.error ?? null} result={result ?? null} empty={text === ""} />
       </div>
+      <div hidden={text !== ""} className="flex min-h-0 flex-1 flex-col">
+        {children}
+      </div>
       <div
         ref={list}
+        hidden={text === ""}
         role="tree"
         aria-label="Search results"
         tabIndex={rows.length > 0 ? 0 : -1}
@@ -238,7 +252,7 @@ function FileRow({ file, open }: { file: FileMatches; open: boolean }) {
       <ChevronRightIcon
         className={`ml-1.5 size-3.5 shrink-0 text-icon transition-transform duration-100 ${open ? "rotate-90" : ""}`}
       />
-      <FileTypeIcon name={name} />
+      <FileTypeIcon name={name} className="size-4" />
       <span className="shrink-0 truncate">{name}</span>
       <span className="min-w-0 flex-1 truncate text-[12px] text-text-muted" title={file.relative}>
         {folder}

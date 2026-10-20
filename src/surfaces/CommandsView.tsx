@@ -1,7 +1,6 @@
-import { EllipsisIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, SquareTerminalIcon } from "lucide-react";
+import { EllipsisIcon, GitBranchIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, SquareTerminalIcon } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import { ActionMenu } from "../chrome/ActionMenu";
-import { BranchDot } from "../chrome/BranchDot";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Button, Field, Footer, IconButton, Overlay, PageFrame, Select, TextArea } from "../chrome/kit";
 import { ProcessDialog } from "../chrome/ProcessDialog";
@@ -24,14 +23,16 @@ import {
   specChanges,
   specOf,
   stateLabel,
+  stateTone,
   type Process,
   type ProcessRun,
 } from "../lib/processes";
 import { elapsed } from "../lib/time";
 import type { Session } from "../lib/types";
+import { EmptyCommands } from "./EmptyCommands";
 
 /** A worktree a command can run in: `worktree` null is the main checkout. */
-export type Place = { worktree: string | null; label: string; hue: number };
+export type Place = { worktree: string | null; label: string };
 
 type Props = {
   workspaceId: string;
@@ -71,13 +72,13 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
     <PageFrame
       inTab
       title="Commands"
-      subtitle="Dev servers, watchers and workers, defined once for the workspace and run in any of its worktrees."
+      subtitle="Dev servers and watchers, run in any worktree."
       actions={
         <>
           {live > 0 && (
             <Button
               icon={SquareIcon}
-              title={`Stop ${live === 1 ? "the run" : `all ${live} runs`} up in this workspace`}
+              title={`Stop ${live === 1 ? "the run" : `all ${live} runs`}`}
               onClick={() => void processes.stopAll()}
             >
               Stop all
@@ -86,7 +87,7 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
           {startable > 0 && (
             <Button
               icon={PlayIcon}
-              title={`Start every command not running in ${here.label}`}
+              title={`Start all in ${here.label}`}
               onClick={() => void processes.startAll(here.worktree)}
             >
               Start all
@@ -109,10 +110,7 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
       ))}
 
       {list !== null && list.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-text-muted">
-          No commands yet. Add the ones you start by hand, like <code className="font-mono text-[12px]">npm run dev</code>,
-          and run them in any worktree. Agents use them too.
-        </p>
+        <EmptyCommands onNew={() => setEditing({})} />
       ) : (
         <div className="flex flex-col gap-2">
           {list?.map((process) => (
@@ -196,6 +194,7 @@ function CommandBlock({
   return (
     <section
       aria-label={process.name}
+      data-command
       className="flex flex-col rounded-xl ring-1 ring-border"
       onContextMenu={(event) => {
         event.preventDefault();
@@ -274,19 +273,19 @@ function RunRow({
   const act = (command: "start" | "stop" | "restart") =>
     void processes.run(command, process, run.worktree, command === "start" ? rerunEnv(process, run) : undefined);
   return (
-    <li className="group/run flex h-9 items-center gap-2.5 px-3">
+    <li data-run className="group/run flex h-9 items-center gap-2.5 px-3">
       <ProcessDot run={run} />
       <span className="min-w-0 max-w-48 shrink truncate" title={run.worktree ?? place.label}>
         {place.label}
       </span>
-      <span className="shrink-0 text-[12px] text-text-muted">
+      <span data-run-state={run.state} data-tone={stateTone(run)} className="shrink-0 text-[12px] text-text-muted">
         {stateLabel(run)}
         {live && run.startedAt !== null && run.state === "running" && ` · ${elapsed(run.startedAt)}`}
       </span>
       {url && <ServedLink url={url} className="max-w-56" />}
       <span className="min-w-0 flex-1 truncate text-[12px] text-text-muted">
         {orphan ? (
-          <span className="rounded-full bg-warning/15 px-1.5 text-[11px] text-warning" title={`Started by ${starter}`}>
+          <span data-orphan className="rounded-full bg-warning/15 px-1.5 text-[11px] text-warning" title={`Started by ${starter}`}>
             Left running
           </span>
         ) : (
@@ -319,7 +318,6 @@ function placeOf(places: Place[], worktree: string | null): Place {
     places.find((place) => place.worktree === worktree) ?? {
       worktree,
       label: worktree?.split("/").pop() ?? "main",
-      hue: 0,
     }
   );
 }
@@ -348,7 +346,7 @@ function RunDialog({
   const options = places.map((place) => ({
     value: place.worktree ?? KEY_MAIN,
     label: place.label,
-    icon: <BranchDot hue={place.hue} />,
+    icon: <GitBranchIcon aria-hidden className="size-3.5" />,
   }));
 
   async function run() {
@@ -387,7 +385,7 @@ function RunDialog({
         </Field>
         <Field
           label="Environment for this run"
-          hint={Object.keys(process.env).length > 0 ? `Over the command's: ${formatEnv(process.env).replaceAll("\n", ", ")}` : undefined}
+          hint={Object.keys(process.env).length > 0 ? `Overrides the command's: ${formatEnv(process.env).replaceAll("\n", ", ")}` : undefined}
           error={env.error}
         >
           <TextArea
@@ -430,6 +428,7 @@ function ApprovalCard({ process, sessions, processes }: { process: Process; sess
   return (
     <section
       aria-label={`${process.name} is waiting for your approval`}
+      data-process-approval
       className="flex flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-warning/40"
     >
       <p>

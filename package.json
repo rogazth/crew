@@ -8,8 +8,6 @@
   "productName": "Crew",
   "scripts": {
     "dev": "vite",
-    "prototype:chat": "CREW_PORT=1430 vite --open '/?prototype=chat'",
-    "prototype:chat:app": "VITE_CREW_PROTOTYPE=chat CREW_PORT=1430 CREW_USER_DATA=\"$HOME/Library/Application Support/Crew Prototype\" node scripts/app.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "app": "node scripts/app.mjs",
@@ -17,7 +15,9 @@
     "seed": "node scripts/seed.mjs",
     "app:build": "node scripts/app-build.mjs",
     "icon": "node scripts/icon.mjs",
+    "licenses": "node scripts/licenses.mjs",
     "sounds": "node scripts/sounds.mjs",
+    "file-icons": "node scripts/file-icons.mjs",
     "prepare": "husky",
     "postinstall": "patch-package",
     "lint": "eslint src",
@@ -117,6 +117,10 @@
         "to": "crew"
       },
       {
+        "from": "target/licenses.txt",
+        "to": "licenses.txt"
+      },
+      {
         "from": "target/linux/crewd-linux-x64",
         "to": "crewd-linux-x64"
       },
@@ -152,10 +156,5 @@
       "identity": "-"
     },
     "afterSign": "scripts/sign-mac.cjs"
-  },
-  "reactDoctor": {
-    "ignore": {
-      "files": ["prototype/**"]
-    }
   }
 }

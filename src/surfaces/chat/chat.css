@@ -1,0 +1,602 @@
+/*
+ * The composer and the empty states (a new session's first screen, Home).
+ * Unlayered on purpose, so it beats Tailwind's utilities without !important,
+ * and loaded after index.css so it wins ties with its rules.
+ */
+
+/* ── The composer ─────────────────────────────────────────────────────────
+   One raised surface. Radius 22 outside, 8 of padding at the toolbar, so the
+   chips and the round send button sit concentric in its corners. */
+
+.ds-composer {
+  --composer-r: 22px;
+  --composer-p: 8px;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px var(--composer-p) var(--composer-p);
+  border-radius: var(--composer-r);
+  background: var(--color-surface);
+  box-shadow:
+    0 0 0 1px var(--color-hairline),
+    0 1px 2px oklch(0% 0 0 / 0.04),
+    0 12px 32px -18px oklch(0% 0 0 / 0.16);
+}
+/* Focus deepens the lift a touch; no drawn outline, no halo. */
+.ds-composer:focus-within {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-hairline) 60%, var(--color-border)),
+    0 1px 2px oklch(0% 0 0 / 0.05),
+    0 15px 37px -18px oklch(0% 0 0 / 0.2);
+}
+.ds-composer button:not(:disabled):active {
+  transform: scale(0.96);
+  transition-timing-function: var(--ease-spring);
+}
+
+/* The field keeps the shipped metrics (the overlay that marks mentions must
+   match the textarea to the pixel); the side padding lives on its wrapper. */
+.ds-composer-text {
+  position: relative;
+  padding: 2px 8px 0;
+}
+/* The overlay sits exactly over the textarea's box, inside the wrapper's padding. */
+.ds-composer-text > .crew-composer-overlay {
+  inset: 2px 8px auto;
+}
+.ds-composer-text .crew-composer-field {
+  font-size: var(--chat-text);
+  line-height: calc(var(--chat-text) * 1.5);
+  min-height: calc(var(--chat-text) * 1.5);
+}
+/* A new chat's composer is the page: two lines of room to start in. */
+.ds-composer[data-roomy] .ds-composer-text .crew-composer-field {
+  min-height: calc(var(--chat-text) * 3);
+}
+
+/* An `@path` in the draft wears what it will wear once sent (`.crew-file-ref`):
+   the card fill, no ring. The shadow only widens the same fill past the glyphs
+   (padding would move the overlay off the caret). */
+.ds-composer-text .crew-mention-run {
+  border-radius: 5px;
+  background: var(--color-card);
+  color: inherit;
+  box-shadow: 0 0 0 2px var(--color-card);
+}
+/* Inline `code`: one pill, the same ground and edge as the transcript's
+   (`.crew-inline-code`). Its ticks are still typed, so they stay, unseen, as
+   the pill's padding; the field's font is kept so nothing moves off the caret. */
+.ds-composer-text .ds-code-run {
+  border-radius: 6px;
+  background: var(--color-card);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.ds-composer-text .ds-code-tick {
+  color: transparent;
+}
+/* A `-`, `*` or `+` list marker reads as a bullet: the character is hidden
+   and a dot drawn in its place, centred on the same advance. */
+.ds-composer-text .ds-bullet {
+  position: relative;
+  color: transparent;
+}
+.ds-composer-text .ds-bullet::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  transform: translate(-50%, -50%);
+}
+
+/* Where the message goes: the context row, quiet until it matters. */
+.ds-context {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+}
+.ds-tag {
+  display: inline-flex;
+  height: 22px;
+  max-width: 260px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ds-tag > svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--color-icon);
+  opacity: 0.8;
+}
+.ds-tag > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The toolbar's round icon button: the attach menu. */
+.ds-icon-btn {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-icon);
+  outline: none;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.ds-icon-btn:hover,
+.ds-icon-btn[data-popup-open] {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+.ds-icon-btn:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+
+/* Model, effort and speed read as one chip: a soft track, and each trigger a
+   pill inside it, so hover and open light a whole shape, never a half. Nothing
+   in it changes size or moves: no scale on press, no ring on focus but inset. */
+.ds-model-group {
+  display: inline-flex;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--color-card);
+}
+.ds-model-group > button {
+  --tw-ring-shadow: 0 0 #0000;
+  position: relative;
+  height: 26px;
+  box-shadow: none;
+  border-radius: 999px;
+  padding-inline: 9px;
+  color: var(--color-text);
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.ds-model-group > button + button::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--color-hairline);
+  transition: opacity 120ms var(--ease-out);
+}
+/* A lit pill hides the rules on both its sides. */
+.ds-model-group > button:is(:hover, [data-popup-open], [aria-pressed="true"])::before,
+.ds-model-group > button:is(:hover, [data-popup-open], [aria-pressed="true"]) + button::before {
+  opacity: 0;
+}
+.ds-model-group > button:hover {
+  background: var(--color-hover);
+}
+.ds-model-group > button[data-popup-open] {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-hairline), 0 1px 2px oklch(0% 0 0 / 0.06);
+}
+.ds-model-group > button[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+.ds-model-group > button:focus-visible {
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+.ds-composer .ds-model-group > button:active,
+.ds-composer .ds-access > button:active {
+  transform: none;
+}
+
+/* Access sits on its own, flat until hovered. */
+.ds-access > button {
+  --tw-ring-shadow: 0 0 #0000;
+  height: 30px;
+  box-shadow: none;
+  color: var(--color-text-muted);
+}
+.ds-access > button:hover,
+.ds-access > button[data-popup-open] {
+  color: var(--color-text);
+}
+
+/* The one primary action. It morphs into Stop while a turn runs; the strip
+   over the composer says it is working, so the button wears nothing more. */
+.ds-send {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-inverse);
+  outline: none;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.ds-send:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+.ds-send:disabled {
+  background: var(--color-fill);
+  color: var(--color-placeholder);
+}
+.ds-send:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 3.5px color-mix(in oklab, var(--color-focus) 70%, transparent);
+}
+.ds-send[data-swapped] > svg {
+  animation: ds-pop 180ms var(--ease-spring);
+}
+.ds-send[data-stop] {
+  background: var(--color-text);
+  color: var(--color-canvas);
+}
+@keyframes ds-pop {
+  from { transform: scale(0.5); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* The context window as a ring by the send button. */
+.ds-ring {
+  position: relative;
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  cursor: default;
+}
+.ds-ring[data-full] {
+  color: var(--color-warning);
+}
+.ds-ring:hover {
+  background: var(--color-hover);
+}
+.ds-ring-card {
+  visibility: hidden;
+  position: absolute;
+  right: -4px;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: 248px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-float);
+  color: var(--color-text);
+  text-align: left;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out), visibility 140ms;
+}
+.ds-ring:hover .ds-ring-card {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+}
+
+/* The status line under the composer: segments left, hints right. Hints
+   only show while you are typing here; the rest of the time they are noise. */
+.ds-status {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+.ds-hints {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  color: var(--color-placeholder);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 160ms var(--ease-out);
+}
+.ds-composer-wrap:focus-within .ds-hints,
+.ds-hints[data-shown] {
+  opacity: 1;
+}
+.ds-hints kbd {
+  display: inline-grid;
+  min-width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  padding: 0 4px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  font-family: inherit; font-size: 10.5px; font-weight: 500; line-height: 1;
+}
+
+/* ── The agent clip ───────────────────────────────────────────────────────
+   A slim tab tucked behind the composer's top edge, there only while the chat
+   has agents. Amber when one waits on you. A click slides the same tab's
+   panel up out of it: the panel is the tab's own child, wearing its ground,
+   and it rests behind the tab until called, its rows already laid out, so
+   what rises is the whole thing, not a window opening on it. Only transform
+   moves (compositor, never layout), fast and without bounce; folding back is
+   quicker still. */
+
+.ds-strip {
+  position: relative;
+  z-index: 0;
+  height: 44px;
+  margin: 0 18px -14px;
+  border-radius: 14px 14px 0 0;
+  background: var(--color-fill);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 24px;
+  animation: ds-strip-in 220ms var(--ease-out);
+  transition: border-radius 140ms var(--ease-out);
+  /* The panel waits inside the tab's own box: nothing of it shows below the tab, and every other side is open. */
+  clip-path: inset(-100vh -100vw 0 -100vw);
+}
+/* Unfolded, the tab's own corners square off where the panel joins it. */
+.ds-strip[data-open] {
+  border-radius: 0;
+}
+.ds-strip b {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.ds-strip-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 12px;
+  border-radius: 14px 14px 0 0;
+  /* Opaque: it is what the resting panel slides out from behind. */
+  background: var(--color-fill);
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms var(--ease-out);
+}
+.ds-strip-head:hover {
+  background: color-mix(in oklab, var(--color-fill) 95%, var(--color-text));
+}
+.ds-strip-head:focus-visible {
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+.ds-strip[data-open] .ds-strip-head {
+  border-radius: 0;
+}
+.ds-strip-chevron {
+  color: var(--color-placeholder);
+  transition: transform 160ms var(--ease-out);
+}
+.ds-strip[data-open] .ds-strip-chevron {
+  transform: rotate(180deg);
+}
+.ds-strip-glyph {
+  display: grid;
+  width: 16px;
+  height: 24px;
+  flex-shrink: 0;
+  place-items: center;
+}
+/* Nothing runs: only ended agents are left to look at. */
+.ds-strip-rest {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-placeholder);
+}
+.ds-strip-halo {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-warning);
+}
+@keyframes ds-strip-in {
+  from { transform: translateY(14px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+/* The panel sits on the tab's top edge (a pixel under it, so no seam shows).
+   Resting, it is pushed down behind the tab, hidden and inert; open, it is
+   where it sits. */
+.ds-strip-panel {
+  position: absolute;
+  z-index: 0;
+  inset-inline: 0;
+  bottom: calc(100% - 1px);
+  max-height: min(50vh, 380px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 6px 4px;
+  border-radius: 14px 14px 0 0;
+  background: var(--color-fill);
+  color: var(--color-text);
+  transform: translateY(calc(100% + 1px));
+  visibility: hidden;
+  will-change: transform;
+  transition:
+    transform 140ms cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 140ms;
+}
+.ds-strip-panel[data-open] {
+  transform: none;
+  visibility: visible;
+  transition: transform 200ms var(--ease-out);
+}
+/* The rows' tiles were drawn for the surface; on the tab's ground they lift off it the same way. */
+.ds-strip-panel [data-entry] > span:first-child,
+.ds-strip-panel [data-conversation] > span:first-child {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-hairline);
+}
+.ds-strip-panel [data-entry] > span:first-child > span:last-child {
+  background: var(--color-fill);
+}
+
+/* ── Empty states: a new session, Home ──────────────────────────────────── */
+
+.ds-fact {
+  display: inline-flex;
+  height: 26px;
+  max-width: 280px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ds-fact > svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--color-icon);
+}
+.ds-fact > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A fact that can be changed: it answers the pointer like any chip, and says it opens a list. */
+.ds-fact-button {
+  outline: none;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.ds-fact-button:hover,
+.ds-fact-button[data-popup-open] {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+.ds-fact-button:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+.ds-fact > svg:last-child:not(:first-child) {
+  width: 12px;
+  height: 12px;
+}
+.ds-fact[data-tone="warning"] {
+  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
+  color: var(--color-warning);
+}
+.ds-fact[data-tone="warning"] > svg {
+  color: currentColor;
+}
+
+/* A way in: a filled card, no outline; the glyph sits on the card itself. */
+.ds-starter {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: var(--color-card);
+  text-align: left;
+  outline: none;
+  transition: background-color 120ms var(--ease-out), transform 160ms var(--ease-spring);
+}
+.ds-starter:hover {
+  background: var(--color-hover);
+}
+.ds-starter:active {
+  transform: scale(0.985);
+}
+.ds-starter:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
+}
+.ds-starter > svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  color: var(--color-icon);
+}
+
+.ds-keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  color: var(--color-placeholder);
+  font-size: 11.5px;
+}
+.ds-keys kbd {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 5px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-strip,
+  .ds-send[data-swapped] > svg {
+    animation: none;
+  }
+  .ds-strip,
+  .ds-strip-chevron,
+  .ds-strip-panel {
+    transition: none;
+  }
+}
+
+/* A file pill is one fill wherever it shows: in a reply, in your bubble, in the
+   composer. No hairline, no lighter variant inside the bubble. */
+.crew-file-ref,
+.crew-bubble .crew-file-ref,
+[data-file-chip] {
+  background: var(--color-card);
+  box-shadow: none;
+}
+.crew-file-ref:hover,
+.crew-bubble .crew-file-ref:hover {
+  background: var(--color-hover);
+}
+
+/* On a new session's first screen the composer sits high, with the cards below it:
+   the file and command pickers open downward there, since upward they would run
+   out of the sheet. */
+.ds-composer[data-roomy] .crew-popover {
+  top: 100%;
+  bottom: auto;
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+}

@@ -1,9 +1,8 @@
-import type { Access } from "./providers";
+import type { Effort } from "./providers";
 
-/** The access ⇧Tab moves to in the chat: the provider's next mode, short of full. */
-export function nextAccess(current: string, offered: Access[]): Access | null {
-  const ring: Access[] = offered.filter((access) => access !== "full");
-  if (ring.length < 2) return null;
-  const at = ring.indexOf(current as Access);
-  return ring[(at + 1) % ring.length] ?? null;
+/** The effort ⇧Tab moves to in the chat: the model's next level, then round to the lowest. */
+export function nextEffort(current: string, offered: readonly Effort[]): Effort | null {
+  if (offered.length < 2) return null;
+  const at = offered.indexOf(current as Effort);
+  return offered[(at + 1) % offered.length] ?? null;
 }

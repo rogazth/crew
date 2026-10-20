@@ -243,8 +243,8 @@ function Offline({ env }: { env: EnvLink }) {
       <p className="font-medium">{connecting ? `Connecting to ${env.name}…` : env.mismatch ? `${env.name} needs an update` : `${env.name} is offline`}</p>
       <p className="max-w-72 text-[12px] text-text-muted">
         {env.mismatch
-          ? "Its crewd speaks another protocol. Update it from Settings › Environments."
-          : (env.error ?? `Crew can't reach ${env.host ?? "the machine"} on your tailnet. Check that it is on and Tailscale is running.`)}
+          ? "Incompatible crewd. Update it in Settings › Environments."
+          : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and Tailscale is running.`)}
       </p>
       {!connecting && !env.mismatch && (
         <Button variant="secondary" onClick={() => reconnect(env.id)}>

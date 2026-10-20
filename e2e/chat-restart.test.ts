@@ -18,11 +18,10 @@ import {
   holdsFor,
   launchCrew,
   lightIn,
-  MOD,
   newSession,
-  pressChord,
   remoteRequest,
   sendInChat,
+  startChat,
   sessionRow,
   sessionTab,
   storedStatus,
@@ -34,7 +33,7 @@ import {
 
 /** The row's light and crewd's status, as one reading. */
 async function state(crew: Crew, session: Session): Promise<{ light: string; stored: Session["status"] | null }> {
-  const [light, stored] = await Promise.all([lightIn(sessionRow(crew, session.name)), storedStatus(crew, session.id)]);
+  const [light, stored] = await Promise.all([lightIn(sessionRow(crew, session)), storedStatus(crew, session.id)]);
   return { light, stored };
 }
 
@@ -208,18 +207,13 @@ test("a session whose machine's crewd restarted mid-turn resumes its CLI there, 
     await window.locator("[data-sidebar-panel]").getByText("api", { exact: true }).first().waitFor();
 
     const list = () => remoteRequest<Session[]>(remote!, "session_list", { workspaceId: workspace.id });
-    const known = new Set((await list()).map((row) => row.id));
-    await pressChord(crew, `${MOD}+n`);
-    const session = await waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-      message: "the session is created on the machine",
-    });
+    const session = await startChat(crew, "work 6", list);
     const status = async () => (await remoteRequest<Session | null>(remote!, "session_get", { id: session.id }))?.status ?? null;
     const launches = async () =>
       (await crew.claudeLaunches()).filter((launch) => launch.argv.includes(session.id) && !launch.argv.includes("--strict-mcp-config"));
 
-    await sendInChat(crew, "work 6");
     await waitFor(async () => (await launches()).length === 1, { message: "the machine starts the CLI", timeout: 15_000 });
-    await waitFor(async () => (await lightIn(sessionRow(crew, session.name))) === "Working", { message: "the turn runs" });
+    await waitFor(async () => (await lightIn(sessionRow(crew, session))) === "Working", { message: "the turn runs" });
     await waitFor(async () => (await heard(crew, api, session)).includes("work 6"), { message: "the CLI took the message in" });
     const [first] = await launches();
 
@@ -230,7 +224,7 @@ test("a session whose machine's crewd restarted mid-turn resumes its CLI there, 
 
     const again = await waitFor(async () => (await launches())[1], { message: "the machine starts the CLI again", timeout: 15_000 });
     assert.equal(argAfter(again.argv, "--resume"), session.id, JSON.stringify(again.argv));
-    await waitFor(async () => (await lightIn(sessionRow(crew, session.name))) !== "Working" && (await status()) !== "working", {
+    await waitFor(async () => (await lightIn(sessionRow(crew, session))) !== "Working" && (await status()) !== "working", {
       message: "the turn the restart cut off runs again and ends",
       timeout: 30_000,
     });

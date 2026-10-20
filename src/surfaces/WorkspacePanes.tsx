@@ -9,13 +9,12 @@ import type { Confirm } from '../chrome/ConfirmDialog';
 import type { Process } from '../lib/processes';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, Tab, Workspace } from '../lib/types';
-import { parseContext } from '../lib/worktrees';
 import { homeFor } from '../lib/client/registry';
 import { homePath, resolvePath } from '../lib/terminalPaths';
 
 /**
  * A pane with where it runs resolved to a directory: where its session runs,
- * else the worktree its strip belongs to, else the workspace folder.
+ * else the workspace folder.
  */
 export type MountedPane = Pane & { cwd: string };
 
@@ -38,6 +37,8 @@ type Props = {
   onOpenFileInBrowser: (file: { path: string; relative: string }) => void;
   onOpenSession: (sessionId: string) => void;
   onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
+  /** A terminal tab's typed command was written: forget it. */
+  onClearTerminalInput?: (workspaceId: string, tabId: string) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   /** An agent needs this tab in that strip: add it behind the one on screen. */
   onAdoptBrowserTab: (context: string, tab: Tab) => void;
@@ -69,6 +70,7 @@ export function WorkspacePanes({
   onOpenFileInBrowser,
   onOpenSession,
   onPatchBrowser,
+  onClearTerminalInput,
   onOpenBrowserTab,
   onAdoptBrowserTab,
   files,
@@ -91,8 +93,7 @@ export function WorkspacePanes({
   const mounted = useMemo(() => {
     const where = new Map(placement.split('\n').map((line) => line.split('\t') as [string, string]));
     return panes.flatMap((pane) => {
-      const context = parseContext(pane.workspaceId);
-      const workspace = workspaces.find((w) => w.id === context.workspaceId);
+      const workspace = workspaces.find((w) => w.id === pane.workspaceId);
       if (!workspace) return [];
       const tab = pane.tab;
       const cwd =
@@ -100,7 +101,7 @@ export function WorkspacePanes({
           ? (where.get(tab.sessionId) ?? workspace.path)
           : tab.kind === 'stub' && tab.worktree !== undefined
             ? placeOf(tab.worktree, workspace)
-            : placeOf(context.worktree, workspace);
+            : placeOf(null, workspace);
       return [{ ...pane, cwd }];
     });
   }, [panes, placement, placeOf, workspaces]);
@@ -155,7 +156,7 @@ export function WorkspacePanes({
           renderCommands={renderCommands}
         />
       </DiffsPool>
-      <Terminals panes={mounted} onOpenFile={onOpenFile} />
+      <Terminals panes={mounted} onOpenFile={onOpenFile} {...(onClearTerminalInput && { onInputSent: onClearTerminalInput })} />
       <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
         <TurnChats panes={mounted} sessions={sessions} />

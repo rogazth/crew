@@ -9,6 +9,7 @@ import {
   openTab,
   panesOf,
   patchBrowserTab,
+  clearTerminalInput,
   parseTabs,
   persistedTabs,
   pinTab,
@@ -25,6 +26,7 @@ import {
 import { collapseGroup, collapseOthers, expandGroup, revealActive, visibleIn, type PlaceOf } from '../lib/tabGroups';
 import type { BrowserTabPatch } from '../lib/tabs';
 import type { Tab } from '../lib/types';
+import { migrateLegacyTabs } from '../lib/tabsMigration';
 import { discardEdits, fileName, unsavedTabs } from '../lib/unsavedEdits';
 
 const NO_COLLAPSED: string[] = [];
@@ -33,8 +35,7 @@ const NO_COLLAPSED: string[] = [];
 const within = (id: string, key: string) => key === id || (!id.includes('@') && key.startsWith(`${id}@`));
 
 /**
- * Tabs belong to a context — a workspace, or one worktree of it when tabs are
- * kept per worktree — and survive a restart. A context this window has shown
+ * Tabs belong to a context — a workspace — and survive a restart. A context this window has shown
  * keeps its entry for the rest of the run: its panes stay mounted behind the one
  * on screen, which is what keeps their processes alive across a switch.
  * `placeOf` names each tab's worktree while tabs are kept together and a
@@ -53,8 +54,8 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
   const restore = useCallback((id: string) => {
     if (asked.current.has(id)) return;
     asked.current.add(id);
-    void api
-      .stateGet(`tabs:${id}`)
+    void migrateLegacyTabs()
+      .then(() => api.stateGet(`tabs:${id}`))
       .then(parseTabs)
       .catch(() => NO_TABS)
       // A tab opened into this context before its saved ones arrived joins them.
@@ -202,6 +203,11 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [mutateIn],
   );
 
+  const clearInput = useCallback(
+    (id: string, tabId: string) => mutateIn(id, (s) => clearTerminalInput(s, tabId)),
+    [mutateIn],
+  );
+
   /** The strips as of the last render, for reads outside one. */
   const live = useRef(registry);
   useEffect(() => {
@@ -245,6 +251,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
 
   /** Strips as they stand: live when this window holds them, else as crewd saved them. */
   const strips = useCallback(async (ids: string[]) => {
+    await migrateLegacyTabs();
     const stored = await Promise.all(
       ids.map((id) => api.stateGet(`tabs:${id}`).then(parseTabs).catch(() => NO_TABS)),
     );
@@ -303,6 +310,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     openIn,
     adopt,
     patchBrowser,
+    clearInput,
     dropWorkspace,
     unsavedIn,
     strips,

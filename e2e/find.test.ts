@@ -91,7 +91,7 @@ test("↵ in the code editor's search brings each next match on screen", async (
   await editor().click();
   await crew.window.keyboard.press(`${MOD}+ArrowUp`);
   await crew.window.keyboard.press(`${MOD}+f`);
-  const field = crew.window.getByPlaceholder("Search").filter({ visible: true });
+  const field = crew.window.locator("input[data-search]").filter({ visible: true });
   await field.waitFor();
   await field.fill("needle");
   await shows("needle = 1;", "the first match is on screen");

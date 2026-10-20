@@ -74,6 +74,9 @@ struct Hosts {
     children: Arc<SessionTools>,
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
+    /// Installs, updates and sign-outs of this machine's agent CLIs, and the Codex device-code sign-in.
+    provider_jobs: crew_core::provider_job::ProviderJobs,
+    provider_logins: crew_core::provider_login::ProviderLogins,
 }
 
 /// Where the daemon listens and the token a client has to bring.
@@ -528,6 +531,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // What a turn left running in the background reaches every window.
     let tray = hub.clone();
     turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
+    // So does a change in what a plan has spent.
+    let plans = hub.clone();
+    turns.usage().set_listener(Arc::new(move |snapshot| plans.emit("usage-changed", snapshot)));
     // A session's `/` menu changing reaches every window.
     let menu = hub.clone();
     turns.commands().set_listener(Arc::new(move |change| menu.emit("commands-changed", change)));
@@ -593,6 +599,12 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     config.processes.set_events(hub.clone());
+    let provider_jobs = crew_core::provider_job::ProviderJobs::new();
+    let job_events = hub.clone();
+    provider_jobs.set_listener(Arc::new(move |job| job_events.emit("provider-job", job)));
+    let provider_logins = crew_core::provider_login::ProviderLogins::new();
+    let login_events = hub.clone();
+    provider_logins.set_listener(Arc::new(move |event| login_events.emit("provider-login", event)));
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
@@ -605,6 +617,8 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         exit: exit_tx,
         children,
         socks_port: 0,
+        provider_jobs,
+        provider_logins,
     };
     // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
@@ -698,6 +712,7 @@ async fn run(
             }
         }
     }
+    machine::start_sampler();
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
@@ -1366,8 +1381,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_update" => {
             let p: SessionUpdate = parse(params)?;
             let store = hosts.store.clone();
-            block(move || session::update(&store, p.id, p.name, p.provider, p.model, p.description, p.notifications, p.autonomy))
-                .await?;
+            let row = block(move || {
+                session::update(&store, p.id.clone(), p.name, p.provider, p.model, p.description, p.notifications, p.autonomy)?;
+                session::get(&store, p.id)
+            })
+            .await?;
+            // A bot moved to another CLI from its composer: every window shows the new chips.
+            if let Some(row) = row {
+                hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
+            }
             Ok(Value::Null)
         }
         "session_rename" => {
@@ -1520,6 +1542,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             Ok(Value::Null)
         }
+        "state_keys" => {
+            #[derive(Deserialize)]
+            struct Prefix {
+                prefix: String,
+            }
+            let Prefix { prefix } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || app_state::keys(&store, prefix)).await?)
+        }
         "state_delete" => {
             let Key { key } = parse(params)?;
             let store = hosts.store.clone();
@@ -1655,6 +1686,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             json(info)
         }
+        "machine_metrics" => {
+            let proto::MachineMetricsQuery { since } = parse(params)?;
+            json(machine::metrics(since))
+        }
         "dir_list" => {
             let proto::DirList { path } = parse(params)?;
             json(block(move || machine::dir_list(&path)).await?)
@@ -1668,6 +1703,37 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Names { names } = parse(params)?;
             json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
+        "provider_status" => {
+            let proto::ProviderStatusRequest { refresh } = parse(params)?;
+            json(block(move || Ok::<_, String>(crew_core::provider_status::all(refresh))).await?)
+        }
+        "provider_job_start" => {
+            let request: proto::ProviderJobStart = parse(params)?;
+            let jobs = hosts.provider_jobs.clone();
+            json(block(move || jobs.start(request)).await?)
+        }
+        "provider_job_cancel" => {
+            let proto::ProviderJobCancel { id } = parse(params)?;
+            let jobs = hosts.provider_jobs.clone();
+            json(block(move || jobs.cancel(&id)).await?)
+        }
+        "provider_job_list" => json(hosts.provider_jobs.list()),
+        "provider_login" => {
+            let proto::ProviderRef { provider } = parse(params)?;
+            json(crew_core::provider_login::command(&provider)?)
+        }
+        "provider_login_start" => {
+            let proto::ProviderRef { provider } = parse(params)?;
+            if provider != "codex" {
+                return Err(format!("{provider} signs in through a terminal; there is no in-app flow"));
+            }
+            let logins = hosts.provider_logins.clone();
+            json(block(move || logins.start_codex()).await?)
+        }
+        "provider_login_cancel" => {
+            let proto::ProviderLoginCancel { login_id } = parse(params)?;
+            json(hosts.provider_logins.cancel(&login_id))
+        }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
             // Cursor and Codex list their models; the others keep Crew's own list.
@@ -1677,6 +1743,19 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 _ => Vec::new(),
             };
             json(models)
+        }
+        "usage_read" => {
+            let p: proto::UsageRead = parse(params)?;
+            let usage = hosts.turns.usage().clone();
+            json(
+                block(move || {
+                    if p.refresh.unwrap_or(false) {
+                        usage.refresh();
+                    }
+                    usage.snapshot()
+                })
+                .await?,
+            )
         }
         "agent_fast_mode" => json(block(|| Ok::<_, String>(provider_session::claude_fast_mode())).await?),
         "turn_start" => {
@@ -3917,6 +3996,17 @@ for line in sys.stdin:
         assert_eq!(kept.result, Some(serde_json::json!("{}")), "a neighbouring key went too");
         let again = rpc(&mut ws, 6, "state_delete", serde_json::json!({ "key": "tabs:w@/tmp/feat" })).await;
         assert!(again.ok, "deleting a missing key is not an error");
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn usage_read_answers_with_the_stored_readings_and_no_cli() {
+        let dir = test_dir("usage-read");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let read = rpc(&mut ws, 1, "usage_read", serde_json::json!({})).await;
+        assert!(read.ok, "{}", read.error.unwrap_or_default());
+        assert_eq!(read.result, Some(serde_json::json!({ "readings": [], "history": [] })));
         handle.shutdown();
     }
 }

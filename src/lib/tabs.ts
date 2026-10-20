@@ -37,7 +37,13 @@ export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incogn
  */
 export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   const { activeId, recent, collapsed } = state;
-  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab));
+  // A command typed for someone runs once: a tab saved with it would run it again on the next launch.
+  const tabs = state.tabs
+    .filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab))
+    .map((tab) => {
+      if (tab.kind !== "stub" || tab.input === undefined) return tab;
+      return Object.fromEntries(Object.entries(tab).filter(([key]) => key !== "input")) as Tab;
+    });
   const kept = new Set(tabs.map((tab) => tab.id));
   return {
     tabs,
@@ -47,9 +53,20 @@ export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   };
 }
 
+/** A terminal tab's typed command was written: drop it, so nothing can type it again. Same state back when there is none. */
+export function clearTerminalInput(state: TabState, id: string): TabState {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  const tab = state.tabs[index];
+  if (!tab || tab.kind !== "stub" || tab.input === undefined) return state;
+  const tabs = state.tabs.slice();
+  tabs[index] = Object.fromEntries(Object.entries(tab).filter(([key]) => key !== "input")) as Tab;
+  return { ...state, tabs };
+}
+
 /** Each call a new shell, in the worktree it was asked from. */
-export function newTerminalTab(worktree: string | null): Tab {
-  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
+export function newTerminalTab(worktree: string | null, input?: string): Tab {
+  const tab: Tab = { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
+  return input ? { ...tab, input } : tab;
 }
 
 /** A terminal that runs an MCP server's login for a session, in the worktree it was asked from. */
@@ -425,7 +442,7 @@ export function browserTitle(title: string, url: string): string {
   } catch {
     // Not a URL yet: a blank tab.
   }
-  return "New Tab";
+  return "New tab";
 }
 
 /** Every workspace whose tabs this window has restored, not just the one on screen. */

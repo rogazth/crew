@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
+import { publishWorkspaces } from "../lib/placeStore";
 import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
+import { parseReopen, REOPEN_KEY } from "../lib/startup";
 import { nameFromPath, resolveActive } from "../lib/workspaces";
 
 export function useWorkspaces() {
@@ -18,11 +20,19 @@ export function useWorkspaces() {
     api
       .homeWorkspace()
       .catch(() => null)
-      .then(() => Promise.all([api.listWorkspaces(), api.getActiveWorkspace()]))
-      .then(([list, active]) => {
+      .then(() =>
+        Promise.all([
+          api.listWorkspaces(),
+          api.getActiveWorkspace(),
+          api.stateGet(REOPEN_KEY).catch(() => null),
+        ]),
+      )
+      .then(([list, active, reopen]) => {
         if (cancelled) return;
         setWorkspaces(list);
-        setActiveId(resolveActive(list, active)?.id ?? null);
+        // "Reopen where you left off" off: start at Home, not at the saved workspace. Its tabs restore as always.
+        const start = parseReopen(reopen) ? active : (list.find((w) => w.home)?.id ?? active);
+        setActiveId(resolveActive(list, start)?.id ?? null);
       })
       .catch((e) => !cancelled && setError(String(e)))
       .finally(() => !cancelled && setLoading(false));
@@ -30,6 +40,10 @@ export function useWorkspaces() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!loading) publishWorkspaces(workspaces);
+  }, [loading, workspaces]);
 
   // A machine that was offline or slow at launch answers later; its workspaces join the rail then.
   useEffect(

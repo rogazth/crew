@@ -52,6 +52,7 @@ import { useChatActions, useLetterScope, WorkContext } from "./context";
 import { Note, UserMessage } from "./Message";
 import { StateDot } from "./Panel";
 import type { Session } from "../../lib/types";
+import { AgentRow } from "./AgentRow";
 
 /** streamdown is half a megabyte: a long text loads it when it is first drawn. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -85,7 +86,7 @@ export function ToolLine({
 
 /** A card hanging under a row: indented to the row's text, hairline, the app's radius. */
 export function Hang({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
+  return <div data-hang className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
 }
 
 /** Who a name stands for: a bot is its face, an agent its CLI's mark. */
@@ -115,7 +116,7 @@ function usePeer(id: string | undefined, name: string, provider?: string): Peer 
 }
 
 /** A name inside a sentence: set off from the words before it, its mark a little apart from it, long names cut. */
-const PEER_CHIP = "ml-0.5 inline-flex h-[18px] max-w-[24em] items-center gap-1.5 align-top font-medium text-text";
+const PEER_CHIP = "crew-peer ml-0.5 inline-flex h-[18px] max-w-[24em] items-center gap-1.5 align-top font-medium text-text";
 
 /** The mark and the name, in `text-text`; a click opens that party (its thread, or a bot's chat). */
 export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
@@ -148,6 +149,7 @@ export function AgentLine({
   title,
   meta,
   peer,
+  entry,
   onOpen,
 }: {
   state: PanelState;
@@ -155,24 +157,16 @@ export function AgentLine({
   meta: string;
   /** Set when the line names the agent: a card of several lines. */
   peer?: Peer;
+  /** The work list's entry for it, when it has one. */
+  entry?: PanelEntry | undefined;
   onOpen?: (() => void) | undefined;
 }) {
-  const body = (
-    <>
-      <StateDot state={state} />
-      {peer ? <PeerMark peer={peer} className="size-3.5" /> : null}
-      <span className="min-w-0 shrink truncate text-text">{title}</span>
-      <span className="min-w-0 flex-1" />
-      <span className="max-w-[55%] shrink-0 truncate text-text-muted tabular-nums">{meta}</span>
-    </>
-  );
-  const className = "flex w-full items-center gap-2.5 px-3 py-2 text-left text-[12.5px] leading-[18px]";
-  if (!onOpen) return <div data-agent-card className={className}>{body}</div>;
-  return (
-    <button type="button" data-agent-card onClick={onOpen} className={`${className} transition-colors hover:bg-hover`}>
-      {body}
-    </button>
-  );
+  const { sessions, owner } = useLetterScope();
+  const sessionId = entry?.id.startsWith("session:") ? entry.id.slice("session:".length) : peer?.id;
+  const session = sessionId ? sessions.find((row) => row.id === sessionId) : undefined;
+  // A native subagent wears its parent's mark.
+  const parent = sessions.find((row) => row.id === owner?.id)?.provider;
+  return <AgentRow state={state} title={title} meta={meta} peer={peer} entry={entry} session={session} fallback={parent} onOpen={onOpen} />;
 }
 
 /** A long text, folded at seven lines with a way to read it all. */
@@ -183,7 +177,7 @@ export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: stri
   return (
     <div className="flex flex-col">
       <div
-        className={`relative text-[14px] leading-[21px] ${folds && !open ? "overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]" : ""}`}
+        className={`relative text-[length:var(--chat-text)] leading-[21px] ${folds && !open ? "overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]" : ""}`}
         style={folds && !open ? { maxHeight: `${lines * 21}px` } : undefined}
       >
         <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
@@ -257,7 +251,6 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
   const peer: Peer = { name: nativeName(detail), provider };
   const state = detail.thread ? view.state : (entry?.state ?? view.state);
   const meta = agentMeta(entry ? { ...entryFacts(entry), state } : { state, activity: view.current });
-  const report = state === "done" ? nativeReport(block) : null;
   return (
     <div className="flex flex-col gap-1.5">
       <ToolLine icon={BotIcon} id={block.id} marked={marked}>
@@ -276,12 +269,24 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
           state={state}
           title={firstLine(detail.prompt ?? "") || detail.description || "Subagent"}
           meta={meta}
+          entry={entry}
           onOpen={entry ? () => openAgent(entry.id) : undefined}
         />
       </Hang>
-      {report ? <Report peer={peer} text={report} target={entry?.id} /> : null}
     </div>
   );
+});
+
+/** A native subagent's report as a row of its own, drawn where it landed after the call. */
+export const SubagentReport = memo(function SubagentReport({ block }: { block: Block }) {
+  const entries = useContext(WorkContext);
+  const { sessions, owner } = useLetterScope();
+  const detail = agentDetail(block);
+  const report = nativeReport(block);
+  if (!detail || !report) return null;
+  const entry = entryOfCall(entries, block);
+  const provider = entry?.provider ?? sessions.find((row) => row.id === owner?.id)?.provider;
+  return <Report peer={{ name: nativeName(detail), provider }} text={report} target={entry?.id} />;
 });
 
 /** The line a Crew start makes for one session: the work list's entry, else what the call said. */
@@ -316,7 +321,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
         <ToolLine icon={MessagesSquareIcon} id={block.id} marked={marked}>
           {startedSessionsSentence(targets)}
         </ToolLine>
-        <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">They're yours: in the sidebar, and in Work while they run.</span>
+        <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">In your sidebar, and in Work while running.</span>
         <Hang className="divide-y divide-hairline">
           {targets.map((target, index) => {
             const peer = peerOf(target);
@@ -338,6 +343,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
                 title={peer.name}
                 meta={line.meta}
                 peer={peer}
+                entry={line.entry}
                 onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
               />
             );
@@ -364,6 +370,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
           state={line.state}
           title={firstLine(started.prompt) || peer.name}
           meta={line.meta}
+          entry={line.entry}
           onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
         />
       </Hang>
@@ -500,8 +507,9 @@ function ChildAsk({ child, ask, by, onBy }: { child: Session; ask: Block; by: bo
                 onBy();
                 answer(child, ask.question!.requestId, { [question.question]: option.label });
               }}
+              data-picked={picked === option.label ? "" : undefined}
               className={`h-7 rounded-md px-2.5 text-[12.5px] ring-1 transition-colors ${
-                picked === option.label ? "bg-selected text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
+                picked === option.label ? "text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
               }`}
             >
               {option.label}
@@ -548,7 +556,7 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
   // A session's question names its tag only while its request is open.
   const tagged = tag && (!child || (ask && isOpen(ask)));
   return (
-    <div data-letter={block.letterId} className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
+    <div data-letter={block.letterId} data-letter-in className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
       <span className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-card">
         <PeerMark peer={peer} className="size-3.5" />
       </span>
@@ -566,7 +574,7 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
             <span className="font-medium text-text">{peer.name}</span>
           )}
           <span className="text-text-muted">{word}</span>
-          {tagged ? <span className="text-placeholder">· {tag}</span> : null}
+          {tagged ? <span data-letter-tag className="text-placeholder"><span data-sep>· </span>{tag}</span> : null}
         </div>
         {/* The options are buttons under it: the letter's own list of them would say them twice. */}
         <LongText text={child && ask?.role === "question" ? optionless(exitedless(block)) : exitedless(block)} fold={block.letterKind !== "started"} />

@@ -11,7 +11,6 @@ import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
   gitWorktrees,
-  goToWorktree,
   launchCrew,
   newSession,
   sendInChat,
@@ -83,17 +82,15 @@ test("a session in the main checkout hands its task to a new session on a worktr
   assert.ok(!started.argv.some((arg) => arg.includes(task)), "the task is not on the command line");
 
   // The window lists the worktree, with no focus to prompt a reread, and the
-  // session under it. The window stays on the main checkout, so it comes folded.
+  // session under it.
   const header = worktreeHeader(crew, "feat/handoff");
   await header.waitFor({ timeout: 15_000 });
-  assert.equal(await header.getAttribute("aria-expanded"), "false");
-  await header.click();
+  assert.equal(await header.getAttribute("aria-expanded"), "true");
   const row = sessionRow(crew, "feat/handoff");
   await row.waitFor({ timeout: 15_000 });
 
   // Its chat has the task as the message it was launched with, from the
   // caller, and the fake claude's reply to it.
-  await goToWorktree(crew, "feat/handoff");
   await sessionTab(crew, handedTo).click();
   const reply = crew.window.getByText(/^Reply 1: .*Build the login form\./).first();
   await reply.waitFor({ timeout: 15_000 });

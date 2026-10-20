@@ -64,8 +64,8 @@ export function parseResolved(text: string): Resolved {
 }
 
 /** What `ssh [-l user] destination` would connect to, per the user's config. */
-export async function resolveSsh(destination: string, user?: string): Promise<Resolved> {
-  const args = ["-G", ...(user ? ["-l", user] : []), "--", destination];
+export async function resolveSsh(destination: string, user?: string, port?: number): Promise<Resolved> {
+  const args = ["-G", ...(user ? ["-l", user] : []), ...(port ? ["-p", String(port)] : []), "--", destination];
   const { stdout } = await exec("ssh", args, { timeout: 5_000 });
   return parseResolved(stdout);
 }

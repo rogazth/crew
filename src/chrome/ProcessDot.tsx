@@ -15,6 +15,8 @@ export function ProcessDot({ run, className = "" }: { run: ProcessRun | undefine
   return (
     <span
       role="img"
+      data-process-dot={run?.state ?? "stopped"}
+      data-tone={stateTone(run)}
       aria-label={label}
       title={label}
       className={`flex size-3.5 shrink-0 items-center justify-center ${className}`}

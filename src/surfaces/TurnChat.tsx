@@ -10,7 +10,7 @@ import { useThread } from "../hooks/useThread";
 import { useUploads } from "../hooks/useUploads";
 import { onAgentRequest, peekAgentRequest, takeAgentRequest } from "../lib/agentRoute";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
-import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
+import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, updateSession, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { focusEnv } from "../lib/client/registry";
 import { LOCAL } from "../lib/client/route";
@@ -19,7 +19,7 @@ import { markedCalls, turnTray } from "../lib/background";
 import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
-import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
+import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPrompt, takeCarried } from "../lib/firstPrompt";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -58,8 +58,14 @@ const PaneContext = createContext<HTMLElement | null>(null);
 export function TurnChat({ session, sessions, cwd, active, trail, readOnly = false, focusLetter }: Props) {
   const embedded = trail !== undefined;
   const { blocks: held, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
-  const [draft, setDraft] = useState("");
-  const [files, setFiles] = useState<AttachedFile[]>([]);
+  // A fresh session moved to another worktree arrives with what was written in the one it replaces.
+  const [carried] = useState(() => takeCarried(session.id));
+  const [draft, setDraft] = useState(carried?.draft ?? "");
+  const [files, setFiles] = useState<AttachedFile[]>(carried?.files ?? []);
+  useEffect(() => {
+    noteUnsent(session.id, { draft, files });
+  }, [session.id, draft, files]);
+  useEffect(() => () => forgetUnsent(session.id), [session.id]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement | null>(null);
   const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);
@@ -76,6 +82,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   // turn that is running, the user's messages for the next turn above the composer.
   const pending = usePending(session.id, true);
   const blocks = useMemo(() => [...held, ...queuedLetters(transcriptPending(pending), held)], [held, pending]);
+  // A session with history draws nothing until it is read: drawn early, its empty chat (the intro, the
+  // composer centred) would show for a beat and then jump away as the transcript lands.
+  const settling = !ready && held.length === 0 && (!!session.providerSessionId || (session.cursor ?? 0) > 0);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
   const whileWorking = whileWorkingOf(session.kind, session.provider);
   const panel = useBackgroundPanel(session, sessions, processes);
@@ -161,8 +170,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   useEffect(() => {
     const prompt = peekFirstPrompt(session.id);
     if (!prompt) return;
+    const files = peekFirstFiles(session.id);
     clearFirstPrompt(session.id);
-    void send(session, cwd, prompt);
+    void send(session, cwd, prompt, files);
   }, [cwd, session]);
 
   const addPaths = useCallback((paths: string[]) => {
@@ -190,7 +200,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         list.map((file) => ({
           name: file.name || "pasted file",
           size: file.size,
-          run: (onProgress) => writeTempFile(file, env, onProgress),
+          run: (onProgress, signal) => writeTempFile(file, env, onProgress, signal),
         })),
       );
     },
@@ -205,7 +215,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     for (const path of paths) {
       const source = await pathSource(path).catch(() => null);
       if (!source) continue;
-      startUploads([{ name: source.name, size: source.size, run: (onProgress) => upload(source, env, extensionFor(source.name), onProgress) }]);
+      startUploads([{ name: source.name, size: source.size, run: (onProgress, signal) => upload(source, env, extensionFor(source.name), onProgress, signal) }]);
     }
   }, [addPaths, startUploads]);
 
@@ -213,6 +223,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
 
   // Nobody has talked to a session of the user's yet: it can still be another provider's CLI.
   const fresh = session.kind === "terminal" && ready && held.length === 0 && pending.length === 0 && !working;
+  // A bot is an identity, not a CLI: between turns it moves to another provider, which starts it a new conversation.
+  const botSwitch = session.kind === "bot" && ready && !working;
   const { update: remember } = useDefaultAgent();
   // Each turn starts its CLI from the row: the next one runs what the chips say.
   // A pick is also what the next new session starts with.
@@ -227,8 +239,19 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       };
       if (next.provider === session.provider) void setSessionOptions(session.id, options).catch(() => {});
       else if (fresh) void switchSessionProvider(session.id, { provider: next.provider, ...options }).catch(() => {});
+      else if (botSwitch)
+        void updateSession(session.id, {
+          name: session.name,
+          provider: next.provider,
+          model: next.model,
+          description: session.description,
+          notifications: session.notifications,
+          autonomy: next.access,
+        })
+          .then(() => setSessionOptions(session.id, options))
+          .catch(() => {});
     },
-    [fresh, remember, session.id, session.provider],
+    [botSwitch, fresh, remember, session],
   );
 
   const submit = useCallback(
@@ -367,6 +390,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   return (
     <div
       ref={bindPane}
+      data-file-drop={over || undefined}
       className={`relative flex flex-col bg-canvas ${embedded ? "min-h-0 flex-1" : "h-full"}`}
     >
       <PaneContext value={host}>
@@ -375,7 +399,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
           <BackgroundContext value={backgroundScope}>
             <WorkContext value={panel.all}>
             {/* Under a thread the chat stays mounted, hidden and inert: its scroll, draft and open sheet come back as they were. */}
-            <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen ? "invisible" : ""}`}>
+            <div inert={threadOpen} className={`flex min-h-0 flex-1 flex-col ${threadOpen || settling ? "invisible" : ""}`}>
             <DefaultChatSurface
               session={session}
               blocks={blocks}
@@ -403,7 +427,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onApprove={approve}
               onAnswer={reply}
               onOptions={changeOptions}
-              switchProvider={fresh}
+              switchProvider={fresh || botSwitch}
               {...(embedded ? { inThread: true } : {})}
               readOnly={readOnly}
             />

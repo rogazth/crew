@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -15,6 +15,7 @@ import {
   Notification,
   session,
   type OpenDialogOptions,
+  type SaveDialogOptions,
 } from "electron";
 import {
   installBrowser,
@@ -26,17 +27,19 @@ import {
 } from "./browser";
 import { openExternal } from "./external";
 import { release, sha } from "./build-info";
-import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./daemon-agent";
+import { connectAgent, launchdStandIn, tailLog, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
 import { watchOwner } from "./owner";
 import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
+import { registerLoginItemIpc } from "./login-item";
 import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
 import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
-import { watchForUpdates } from "./update";
+import { registerAppInfoIpc } from "./app-info";
+import { installStagedOnQuit, watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
 type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -58,6 +61,8 @@ let starting: Promise<void> | null = null;
 // the one restart a crash gets.
 const STEADY_MS = 60_000;
 let upSince = 0;
+// A restart from Settings stops the child itself, so its exit is not a crash.
+let restartingChild = false;
 
 function crewdPath(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crewd");
@@ -280,7 +285,7 @@ async function startDaemon(): Promise<void> {
       if (timer) clearTimeout(timer);
     }
     void exited.then((error) => {
-      if (stopping) return;
+      if (stopping || restartingChild) return;
       void recover(error).catch((retryError) => {
         dialog.showErrorBox("Crew", String(retryError));
         app.quit();
@@ -313,6 +318,45 @@ async function stopDaemon(): Promise<void> {
     });
     proc.kill("SIGTERM");
   });
+}
+
+/** Settings' "Restart" for this Mac's crewd: the LaunchAgent's, or dev's child. */
+async function restartLocalDaemon(): Promise<void> {
+  if (agent) return agent.restart();
+  if (stopping) throw new Error("Crew is quitting");
+  if (starting) await starting.catch(() => {});
+  restartingChild = true;
+  try {
+    const proc = child;
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        // crewd's stop grace (5 s) and the PTY host's second, with room.
+        const timer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          resolve();
+        }, 8000);
+        proc.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        proc.kill("SIGTERM");
+      });
+    }
+    restarts = 0;
+    await startDaemon();
+  } finally {
+    restartingChild = false;
+  }
+  // Its terminals are gone with it: the window starts over, as after a crash.
+  win?.reload();
+}
+
+/** The tail of this Mac's crewd.log. Dev's child writes to Crew's stderr and keeps none. */
+async function localDaemonLogs(): Promise<string> {
+  const file = path.join(app.getPath("userData"), "crewd.log");
+  const text = await tailLog(file);
+  if (!agent && text.startsWith("No log at")) return "crewd runs as a child of this Crew and writes to its console, not to a file.";
+  return text;
 }
 
 // Kept by main, not crewd, so the window opens in the mode before the renderer loads.
@@ -415,6 +459,29 @@ function registerIpc(): void {
     if (opts.multiple && !opts.directory) return filePaths;
     return filePaths[0] ?? null;
   });
+  // Keybindings travel as a JSON file the user picks: the same native dialogs, filtered to .json.
+  ipcMain.handle("keybindings-import", async (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    if (target && !target.isVisible()) target.show();
+    const options: OpenDialogOptions = { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] };
+    const { canceled, filePaths } = target ? await dialog.showOpenDialog(target, options) : await dialog.showOpenDialog(options);
+    const file = filePaths[0];
+    if (canceled || !file) return null;
+    if (statSync(file).size > 1_000_000) throw new Error("That file is too large to be a keybindings file.");
+    return readFileSync(file, "utf8");
+  });
+  ipcMain.handle("keybindings-export", async (event, text: string) => {
+    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    if (target && !target.isVisible()) target.show();
+    const options: SaveDialogOptions = {
+      defaultPath: "crew-keybindings.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    };
+    const { canceled, filePath } = target ? await dialog.showSaveDialog(target, options) : await dialog.showSaveDialog(options);
+    if (canceled || !filePath) return null;
+    writeFileSync(filePath, String(text));
+    return filePath;
+  });
   ipcMain.handle("home-dir", () => homedir());
   // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
   ipcMain.handle("app-zoom", (event, delta: number) => {
@@ -435,8 +502,10 @@ function registerIpc(): void {
   registerNotifyIpc(() => win, createWindow);
   registerBrowserIpc();
   registerFileIpc();
-  registerRemoteIpc(daemonInfo);
+  registerRemoteIpc(daemonInfo, { restart: restartLocalDaemon, logs: localDaemonLogs });
   registerCliIpc();
+  registerLoginItemIpc();
+  registerAppInfoIpc();
 }
 
 registerFileScheme();
@@ -542,6 +611,9 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// A release the user downloaded but did not restart into goes in as Crew closes.
+app.on("will-quit", installStagedOnQuit);
 
 app.on("before-quit", (event) => {
   // Packaged: crewd and everything it runs stay up; the app only lets go.

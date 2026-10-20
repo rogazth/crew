@@ -7,8 +7,9 @@ import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
-import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall } from "./Orchestration";
+import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
 import { AssistantMessage, DateBreak, Note, SharedFiles, TurnFooter, UserMessage } from "./Message";
+import { agentDetail } from "../../lib/subagent";
 
 type Props = {
   rows: Row[];
@@ -104,7 +105,11 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
       case "report":
         return (
           <div key={row.block.id} className={className}>
-            <ReportLetter block={row.block} marked={focusId} />
+            {agentDetail(row.block) ? (
+              <SubagentReport block={row.block} />
+            ) : (
+              <ReportLetter block={row.block} marked={focusId} />
+            )}
           </div>
         );
       case "shared":

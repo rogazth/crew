@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, sendInChat, sessions, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, sessions, startChat, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -38,11 +38,8 @@ test("claude resolves to the fake, and a new session launches it in the workspac
 
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.window.keyboard.press(`${MOD}+n`);
-  const session = await waitFor(async () => (await sessions(crew, workspace.id)).find((s) => s.kind === "terminal"), {
-    message: "the new session reaches crewd",
-  });
-  await sendInChat(crew, "hello");
+  // ⌘N is the start screen; the session is made by its first send.
+  const session = await startChat(crew, "hello", () => sessions(crew, workspace.id));
   const launch = await waitFor(async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(session.id)), {
     message: "the fake claude starts",
   });

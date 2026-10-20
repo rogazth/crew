@@ -765,6 +765,8 @@ pub struct TurnHost {
     mcp_status: crate::mcp_status::McpHost,
     /// The one `opencode serve` every opencode session runs on.
     opencode: opencode_server::OpencodeServer,
+    /// What the providers' plans have spent, as turns and probes report it.
+    usage: crate::usage::UsageHost,
     /// The newest context reading of each session, merged as they come.
     contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
     /// Sessions whose process is up with no turn on it, since when. Apart from
@@ -798,6 +800,7 @@ impl TurnHost {
         // What the last daemon left on the boards comes back here, its running
         // entries stopped: no process of theirs is left to read or stop.
         let background = crate::background::BackgroundHost::persisted(store.clone());
+        let usage = crate::usage::UsageHost::new(store.clone());
         Self {
             agents,
             store,
@@ -824,6 +827,7 @@ impl TurnHost {
             commands: crate::commands::CommandsHost::default(),
             mcp_status: crate::mcp_status::McpHost::default(),
             opencode: opencode_server::OpencodeServer::default(),
+            usage,
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
@@ -839,6 +843,11 @@ impl TurnHost {
     /// when they change.
     pub fn background(&self) -> &crate::background::BackgroundHost {
         &self.background
+    }
+
+    /// The plans' usage: crewd reads it, and hears when it changes.
+    pub fn usage(&self) -> &crate::usage::UsageHost {
+        &self.usage
     }
 
     /// Every folder's `/` menu: crewd hears when one changes.
@@ -2260,6 +2269,11 @@ impl TurnHost {
     /// it: the tray keeps the rows, stopped and saying so, until the user
     /// clears them.
     fn close_tray(&self, session_id: &str) {
+        // The seeded design profile keeps its running rows as seeded: no CLI
+        // ever ran them, so none going away ends them (debug builds only, `CREW_KEEP_STATUS`).
+        if crate::store::keep_status() {
+            return;
+        }
         let now = crate::store::now_millis();
         self.background.touch(session_id, |board| board.end(now, crate::background::CLI_EXITED));
     }
@@ -3667,6 +3681,10 @@ impl TurnHost {
         };
         if string_field(Some(&rec), "type").as_deref() == Some("keep_alive") {
             return;
+        }
+        // The plan's windows, which the CLI only reports with a turn.
+        if string_field(Some(&rec), "type").as_deref() == Some("rate_limit_event") {
+            self.usage.claude_event(&rec);
         }
         if let Some(cancel_id) = parse_control_cancel_id(&rec) {
             let mut map = self.lock();

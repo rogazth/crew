@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeSessions, DEFAULT_PREFS, parsePrefs, trimSection } from "./sidebarPrefs";
+import { arrangeSessions, DEFAULT_PREFS, LEGACY_KEYS, legacyPrefs, parsePrefs, trimSection } from "./sidebarPrefs";
 import type { Session } from "./types";
 
 const session = (
@@ -12,7 +12,7 @@ const session = (
 
 describe("parsePrefs", () => {
   it("drops what older builds stored and keeps what still means something", () => {
-    const raw = JSON.stringify({ grouping: "status", ordering: "manual", show: ["avatar", "status"] });
+    const raw = JSON.stringify({ grouping: "tree", ordering: "manual", show: ["avatar", "status"] });
     expect(parsePrefs(raw)).toEqual({ ...DEFAULT_PREFS, ordering: "manual", show: ["status"] });
   });
 
@@ -22,9 +22,33 @@ describe("parsePrefs", () => {
     expect(parsePrefs(JSON.stringify({ limit: 7, recency: "year" }))).toMatchObject({ limit: 10, recency: "any" });
   });
 
+  it("keeps the layout the view menu picked", () => {
+    const raw = JSON.stringify({ groupBy: "status", showWorktree: false, hiddenTrees: ["/a", 3, "/b"] });
+    expect(parsePrefs(raw)).toMatchObject({ groupBy: "status", showWorktree: false, hiddenTrees: ["/a", "/b"] });
+    expect(parsePrefs(JSON.stringify({ groupBy: "other" })).groupBy).toBe(DEFAULT_PREFS.groupBy);
+  });
+
   it("falls back to the defaults on garbage", () => {
     expect(parsePrefs("{")).toEqual(DEFAULT_PREFS);
     expect(parsePrefs(null).ordering).toBe("updated");
+  });
+});
+
+describe("legacyPrefs", () => {
+  const stored: Record<string, string> = {
+    [LEGACY_KEYS.groupBy]: '"status"',
+    [LEGACY_KEYS.hiddenTrees]: '["/w/a"]',
+    [LEGACY_KEYS.showWorktree]: "false",
+  };
+
+  it("reads what the dev build kept", () => {
+    expect(legacyPrefs((key) => stored[key] ?? null)).toEqual({ groupBy: "status", hiddenTrees: ["/w/a"], showWorktree: false });
+  });
+
+  it("skips what is missing or unreadable", () => {
+    expect(legacyPrefs(() => null)).toEqual({});
+    expect(legacyPrefs(() => "{")).toEqual({});
+    expect(legacyPrefs((key) => (key === LEGACY_KEYS.groupBy ? '"sideways"' : null))).toEqual({});
   });
 });
 

@@ -1,7 +1,7 @@
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
-import { ChevronDownIcon, ChevronUpIcon, MessageCircleQuestionIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, MessageCircleQuestionIcon } from "lucide-react";
 import { Button } from "../../chrome/kit";
 import { Kbd } from "../../chrome/Kbd";
 import { useEffect, useRef, useState } from "react";
@@ -82,6 +82,9 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
       const target = event.target as HTMLElement | null;
       const typing = target?.matches("input, textarea, [contenteditable]") ?? false;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // A card under an open thread is not on screen: the keys are the thread's. In a thread, Esc goes back, it never decides.
+      if (card.current?.closest("[inert]")) return;
+      if (event.key === "Escape" && card.current?.closest("[data-agent-view]")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onAnswer(ask!.requestId, null);
@@ -121,7 +124,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
         <span className="min-w-0 flex-1 truncate font-medium">{many ? "Questions" : "Question"}</span>
         {current.multiSelect ? <span className="shrink-0 text-[12px] text-text-muted">Pick any</span> : null}
       </div>
-      <p className="text-[14.5px] leading-[21px]">{current.question}</p>
+      <p className="text-[length:calc(var(--chat-text)+0.5px)] leading-[21px]">{current.question}</p>
       <div className="crew-options flex flex-col">
         <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
         <label className={CHOICE}>
@@ -147,7 +150,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
               onClick={() => setStep(step - 1)}
               className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
             >
-              <ChevronUpIcon className="size-3.5" />
+              <ArrowLeftIcon className="size-3.5" />
             </button>
             {step + 1} / {questions.length}
             <button
@@ -157,7 +160,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
               onClick={() => setStep(step + 1)}
               className="grid size-6 place-items-center rounded-md transition-colors enabled:hover:bg-hover enabled:hover:text-text disabled:opacity-40"
             >
-              <ChevronDownIcon className="size-3.5" />
+              <ArrowRightIcon className="size-3.5" />
             </button>
           </span>
         ) : null}

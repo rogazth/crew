@@ -1,8 +1,5 @@
 import type { Session, Workspace, Worktree } from "./types";
 
-/** Whether the tab strip follows the worktree on screen, or holds the whole workspace's tabs. */
-export type TabScope = "worktree" | "all";
-
 /**
  * Where a session runs: its worktree while git lists it, else the main
  * checkout. `worktrees` is git's list, null until git answers, when the
@@ -43,38 +40,12 @@ export function asListed(list: Worktree[], workspacePath: string): Worktree[] {
   return list.map((tree) => (tree.main ? { ...tree, path: workspacePath } : tree));
 }
 
-/**
- * The key a tab strip is stored and mounted under. The main checkout shares the
- * workspace's own key, so the tabs a workspace had before worktrees stay put;
- * every other worktree gets its own strip unless tabs are kept together.
- */
-export function contextId(workspace: Workspace, worktreePath: string, scope: TabScope): string {
-  if (scope === "all" || worktreePath === workspace.path) return workspace.id;
-  return `${workspace.id}@${worktreePath}`;
-}
-
-/** The workspace id and, for a worktree's own strip, its path. */
-export function parseContext(id: string): { workspaceId: string; worktree: string | null } {
-  const at = id.indexOf("@");
-  return at < 0
-    ? { workspaceId: id, worktree: null }
-    : { workspaceId: id.slice(0, at), worktree: id.slice(at + 1) };
-}
-
-/** What a worktree is called: its branch, or its folder when its HEAD is detached, as agents leave theirs. */
+/** What a worktree is called: its branch, or its folder when it has none (a detached HEAD, as agents leave theirs, or a main checkout on none). */
 export function worktreeLabel(tree: Worktree): string {
   if (tree.branch) return tree.branch;
-  if (tree.main) return "No branch";
   return tree.path.split("/").filter(Boolean).at(-1) ?? "Detached";
 }
 
-
-const HUES = [250, 150, 25, 300, 80, 190];
-
-/** A stable hue per worktree, so a tab's chip and its sidebar line agree. */
-export function worktreeHue(index: number): number {
-  return HUES[((index % HUES.length) + HUES.length) % HUES.length]!;
-}
 
 /** The worktree a session runs in, from the list git gave; the main checkout when its own is gone. */
 export function worktreeOf(session: Session, workspace: Workspace, worktrees: Worktree[]): Worktree | undefined {

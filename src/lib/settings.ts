@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS = [
   { id: "browser", label: "Browser" },
   { id: "environments", label: "Environments" },
   { id: "providers", label: "Providers" },
+  { id: "usage", label: "Usage" },
   { id: "keybindings", label: "Keybindings" },
   { id: "about", label: "About" },
 ] as const;

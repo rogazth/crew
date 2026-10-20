@@ -1,5 +1,5 @@
 import { Menu } from "electron";
-import { checkForUpdates } from "./update";
+import { checkFromMenu } from "./update";
 
 type Actions = { quitAndStopEverything: () => void };
 
@@ -9,7 +9,7 @@ export function buildMenu({ quitAndStopEverything }: Actions): Menu {
       label: "Crew",
       submenu: [
         { role: "about" },
-        { label: "Check for Updates\u2026", click: () => void checkForUpdates(true) },
+        { label: "Check for Updates\u2026", click: checkFromMenu },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },

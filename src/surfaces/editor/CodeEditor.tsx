@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Editor } from "@pierre/diffs/edit";
 import { CodeView, EditProvider } from "@pierre/diffs/react";
+import { useDarkScheme } from "../../hooks/useDarkScheme";
 import { editorSessions } from "../../lib/editorSessions";
 import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
 import { onDiscard } from "../../lib/unsavedEdits";
@@ -20,7 +21,6 @@ type Props = {
 
 const OPTIONS = {
   theme: THEME,
-  themeType: "light" as const,
   disableFileHeader: true,
   overflow: "scroll" as const,
   tokenizeMaxLength: TOKENIZE_MAX_LENGTH,
@@ -44,6 +44,12 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   const [editor] = useState(() => sessions.take(path, loaded, () => new Editor({ persistState: true })));
 
   const host = useRef<HTMLDivElement>(null);
+  const dark = useDarkScheme();
+  // The lines paint their own background and stop at the last one; the pane
+  // takes the same colour so a short file still fills the window.
+  const [paper, setPaper] = useState<string>();
+  const last = useRef(loaded);
+  const options = useMemo(() => ({ ...OPTIONS, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark]);
 
   // A search result's match: on screen and selected, once the Editor has the document.
   useEffect(() => {
@@ -70,6 +76,26 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
     };
   }, [editor, path]);
 
+  useEffect(() => {
+    let frame = 0;
+    const read = (tries = 30) => {
+      const lines = host.current?.querySelector("diffs-container");
+      const colour = lines && getComputedStyle(lines).backgroundColor;
+      if (colour && colour !== "rgba(0, 0, 0, 0)") setPaper(colour);
+      else if (tries > 0) frame = requestAnimationFrame(() => read(tries - 1));
+    };
+    read();
+    return () => cancelAnimationFrame(frame);
+  }, [dark]);
+
+  // A click below the last line belongs to the document: the caret goes to its end.
+  const focusEnd = (event: MouseEvent<HTMLElement>) => {
+    if ((event.target as Element).closest("diffs-container")) return;
+    const rows = last.current.split("\n");
+    event.preventDefault();
+    editor.focus({ lineNumber: rows.length, character: (rows[rows.length - 1] ?? "").length });
+  };
+
   // One item, so CodeView is really "a virtualized File". A stable cacheKey and
   // id are what the Editor keeps the file's state under. `loaded` never changes
   // under a mount: the disk's text taken over the editor's is a new one.
@@ -88,7 +114,7 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // The `overflow-auto` is on the root itself: the library listens for `scroll`
   // there but never styles it.
   return (
-    <div ref={host} className="contents">
+    <div ref={host} className="contents" onMouseDown={focusEnd}>
       <EditProvider
         createEditor={(options) => {
           // The options carry this CodeView's change listener.
@@ -98,11 +124,13 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
       >
         <CodeView
           items={items}
-          options={OPTIONS}
+          options={options}
           editorOptions={{ persistState: true }}
           className="h-full min-h-0 overflow-auto"
+          style={{ backgroundColor: paper }}
           onItemEditChange={(_item, file) => {
             const contents = file.contents;
+            last.current = contents;
             sessions.edited(path, editor, contents);
             onChange(contents);
           }}

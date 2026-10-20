@@ -135,9 +135,10 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   await pressChord(crew, `${MOD}+3`);
   await shows(beta);
 
-  // Renamed from its mark's menu.
+  // Renamed from its mark's menu, in the name at the top of the sidebar.
   await mark(crew, "beta").click({ button: "right" });
-  const field = page().getByRole("menu").getByRole("textbox", { name: "Rename" });
+  await page().getByRole("menu").getByRole("menuitem", { name: "Rename" }).click();
+  const field = page().getByRole("textbox", { name: "Workspace name" });
   await field.fill("Backend");
   await field.press("Enter");
   await waitFor(async () => (await listed(crew)).find((workspace) => workspace.id === beta.id)?.name === "Backend", {

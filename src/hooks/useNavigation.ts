@@ -16,12 +16,11 @@ type Deps = {
   removeSession: (id: string) => Promise<void>;
   closePage: () => void;
   /**
-   * Where a session's tab belongs when that is not the strip on screen: its
-   * worktree is made current, and the tab goes to that worktree's strip.
+   * Opening a session's tab makes the worktree it runs in current.
    */
-  route: (session: Session) => { context: string | null } | null;
+  route: (session: Session) => void;
   /** The same for a worktree by its folder: a command's run belongs to the worktree it runs in. */
-  routeTo: (path: string | null) => { context: string | null } | null;
+  routeTo: (path: string | null) => void;
   /** The main checkout's folder, for a run that is its. */
   root: string | null;
 };
@@ -44,9 +43,8 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     (session: Session) => {
       closePage();
       const tab = { id: sessionTabId(session.id), kind: "session" as const, sessionId: session.id };
-      const elsewhere = route(session);
-      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
-      else tabs.open(tab);
+      route(session);
+      tabs.open(tab);
     },
     [closePage, route, tabs],
   );
@@ -124,9 +122,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   /** A new shell in a workspace's main checkout, on screen or not: the tab waits for the workspace's saved tabs. */
   const openTerminalIn = useCallback(
-    (workspaceId: string) => {
+    (workspaceId: string, input?: string) => {
       closePage();
-      tabs.openIn(workspaceId, newTerminalTab(null));
+      tabs.openIn(workspaceId, newTerminalTab(null, input));
     },
     [closePage, tabs],
   );
@@ -141,21 +139,19 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
       if (!session) return;
       closePage();
       const tab = newSignInTab(session.worktree, { sessionId, server, command });
-      const elsewhere = route(session);
-      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
-      else tabs.open(tab);
+      route(session);
+      tabs.open(tab);
     },
     [closePage, route, sessions, tabs],
   );
 
-  /** A command's run, in a tab of its worktree's strip; the same run again comes back to its tab. */
+  /** A command's run, in a tab; the same run again comes back to its tab. */
   const openProcessRun = useCallback(
     (process: Process, worktree: string | null) => {
       closePage();
       const tab = { id: processTabId(process.id, worktree), kind: "process" as const, processId: process.id, title: process.name, worktree };
-      const elsewhere = routeTo(worktree ?? root);
-      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
-      else tabs.open(tab);
+      routeTo(worktree ?? root);
+      tabs.open(tab);
     },
     [closePage, root, routeTo, tabs],
   );

@@ -9,7 +9,7 @@ import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { BLANK_PAGE, pages, type PageState } from "../../lib/browser/pageStore";
 import { originOf } from "../../lib/browser/permissions";
 import { isWebUrl } from "../../lib/browser/url";
-import { preset, type Viewport } from "../../lib/browser/viewport";
+import { fitScale, preset, type Viewport } from "../../lib/browser/viewport";
 import { stepZoom } from "../../lib/browser/zoom";
 import type { DevToolsDock } from "../../lib/browserPrefs";
 import { runCommand } from "../../lib/commands";
@@ -81,6 +81,25 @@ export function BrowserPane({
   const [found, setFound] = useState({ index: 0, count: 0 });
   // A fixed page size to check a layout at; null fills the pane.
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  // The room around the page, so a size bigger than the pane is shrunk to fit it instead of scrolled.
+  const port = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = port.current;
+    if (!viewport || !el) return;
+    const measure = () => {
+      const style = getComputedStyle(el);
+      setRoom({
+        width: el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        height: el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [viewport !== null]);
+  const scale = viewport ? fitScale(viewport, room) : 1;
   // The profile whose cookies the import dialog is asking about.
   const [importing, setImporting] = useState<CookieSource | null>(null);
   const [panel, onPanel, closePanel] = useToolbarPanel(visible);
@@ -285,7 +304,12 @@ export function BrowserPane({
       <div className={`flex min-h-0 flex-1 ${FLOW[side]}`}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {viewport && <ResponsiveBar viewport={viewport} onChange={setViewport} onClose={() => setViewport(null)} />}
-          <div className={`relative min-h-0 flex-1 ${viewport ? "grid overflow-auto bg-sidebar px-6 pt-4 pb-6" : ""}`}>
+          <div
+            ref={port}
+            className={`relative min-h-0 flex-1 ${
+              viewport ? "grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden bg-sidebar px-6 pt-4 pb-6" : ""
+            }`}
+          >
             {/* React never renders into this one: the guest is appended by hand and must never move.
                 A fixed size restyles it in place; moving it into a frame would destroy the page. */}
             <div
@@ -295,9 +319,13 @@ export function BrowserPane({
                   ? "relative self-start justify-self-center bg-canvas shadow-sm ring-1 ring-hairline [grid-area:1/1]"
                   : "absolute inset-0"
               }
-              style={viewport ? { width: viewport.width, height: viewport.height } : undefined}
+              style={
+                viewport
+                  ? { width: viewport.width, height: viewport.height, transform: `scale(${scale})`, transformOrigin: "top center" }
+                  : undefined
+              }
             />
-            {viewport && <ViewportHandles viewport={viewport} onChange={setViewport} />}
+            {viewport && <ViewportHandles viewport={viewport} scale={scale} onChange={setViewport} />}
             {finding && (
               <FindBar
                 label="Find in page"

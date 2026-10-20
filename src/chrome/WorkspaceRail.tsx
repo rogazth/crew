@@ -6,10 +6,12 @@ import { ActionMenu } from "./ActionMenu";
 import { CrewGlyph } from "./CrewGlyph";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
+import { RailUpdate } from "./UpdateButton";
+import { UsageButton } from "./UsageButton";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
-import { COPY_PATH, DELETE, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
+import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
@@ -28,10 +30,14 @@ type Props = {
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRename: (id: string, name: string) => void;
+  /** "Rename" in a mark's menu: the name is renamed where the sidebar shows it. */
+  onRequestRename: (id: string) => void;
   onRemove: (workspace: Workspace) => void;
   onReorder: (ids: string[]) => void;
   onOpenRoutines: () => void;
   onOpenSettings: () => void;
+  /** Opens Settings on Usage. */
+  onOpenUsage: () => void;
   /** The machine a workspace lives on, for the corner badge. Null on this Mac. */
   remoteOf?: (workspace: Workspace) => EnvLink | null;
 };
@@ -94,7 +100,7 @@ export function WorkspaceRail(props: Props) {
     <nav
       data-sidebar-rail
       aria-label="Workspaces"
-      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-3"
+      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-2"
     >
       {props.home && (
         <HomeMark
@@ -140,6 +146,11 @@ export function WorkspaceRail(props: Props) {
 
       <div className="flex-1" />
 
+      <RailUpdate />
+      <UsageButton onOpenSettings={props.onOpenUsage} />
+
+      {/* The foot sits under a short rule, apart from the marks. */}
+      <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />
       <RailButton
         icon={RefreshCwIcon}
         label="Routines"
@@ -166,16 +177,17 @@ export function WorkspaceRail(props: Props) {
         <ActionMenu
           key={menu.workspace.id}
           point={menu.point}
-          title={`${menu.workspace.name} — ${menu.workspace.path}`}
-          rename={{
-            initial: menu.workspace.name,
-            onCommit: (name) => props.onRename(menu.workspace.id, name),
-          }}
-          actions={[COPY_PATH, SEPARATOR, { ...DELETE, label: "Remove Workspace…" }]}
+          title={menu.workspace.name}
+          path={menu.workspace.path}
+          // Rename opens the name in the sidebar's header.
+          actions={[RENAME, SEPARATOR, { ...DELETE, label: "Remove Workspace…" }]}
           onPick={(id) => {
             const workspace = menu.workspace;
             setMenu(null);
-            if (id === "copy-path") void navigator.clipboard.writeText(workspace.path);
+            if (id === "rename") {
+              props.onSelect(workspace.id);
+              props.onRequestRename(workspace.id);
+            }
             if (id === "delete") props.onRemove(workspace);
           }}
           onClose={() => setMenu(null)}
@@ -300,8 +312,8 @@ function Mark({
       />
       <span
         aria-hidden
-        className={`grid size-9 place-items-center bg-accent text-[12px] font-semibold tracking-wide text-inverse transition-[border-radius,opacity] duration-150 ${
-          current ? "rounded-xl" : "rounded-[18px] opacity-70 group-hover:rounded-xl group-hover:opacity-100"
+        className={`grid size-9 place-items-center text-[12px] font-semibold tracking-wide transition-[border-radius,background-color] duration-150 ${
+          current ? "rounded-xl bg-accent text-inverse" : "rounded-[18px] bg-fill text-text group-hover:rounded-xl group-hover:bg-selected"
         } ${remote && (remote.status === "offline" || remote.mismatch) ? "opacity-35! grayscale" : ""}`}
       >
         {workspaceMark(workspace.name)}

@@ -1,20 +1,16 @@
-import { FolderIcon, GitBranchIcon, PlusIcon, RefreshCwIcon, ShuffleIcon } from "lucide-react";
+import { RefreshCwIcon, ShuffleIcon } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { BotAvatar } from "./BotAvatar";
 import { Button, Card, Field, Footer, Overlay, Select, TextArea, Toggle, type Option } from "./kit";
 import { AccessPicker } from "./ComposerControls";
 import { ModelPicker } from "./ModelPicker";
-import { BranchRefused, type useBotSheet } from "../hooks/useBotSheet";
+import type { useBotSheet } from "../hooks/useBotSheet";
 import { useBotAvatar } from "../hooks/useBotAvatar";
 import { useBotFaces } from "../hooks/useBotFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { BOT_AVATARS, dealSeeds, type BotAvatarId, type BotFace } from "../lib/botAvatar";
 import { ACCESSES, DEFAULT_PROVIDER, accessesOf, defaultModelOf, type ProviderId } from "../lib/providers";
-import type { Autonomy, Session, Worktree } from "../lib/types";
-import { branchError, worktreeLabel } from "../lib/worktrees";
-
-/** Where a new bot works: a worktree that exists (null path: the main checkout), or a branch to make one for. */
-export type Place = { kind: "worktree"; path: string | null } | { kind: "branch"; branch: string };
+import type { Autonomy, Session } from "../lib/types";
 
 export type BotDraft = {
   name: string;
@@ -23,7 +19,6 @@ export type BotDraft = {
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
-  place: Place;
   /** The face it wears: saved against the bot once it exists. */
   face: BotFace;
 };
@@ -31,9 +26,6 @@ export type BotDraft = {
 type Props = {
   /** null = creating. */
   session: Session | null;
-  worktrees: Worktree[];
-  /** Where a new bot starts out working; null is the main checkout. */
-  initialWorktree: string | null;
   existingNames: string[];
   /** null while creating: a routine needs a bot that already exists. */
   onNewRoutine: (() => void) | null;
@@ -47,27 +39,18 @@ const VARIANTS = 7;
 export function BotSheetHost({
   sheet,
   sessions,
-  worktrees,
-  activeWorktree,
   onNewRoutine,
 }: {
   sheet: ReturnType<typeof useBotSheet>;
   sessions: Session[];
-  worktrees: Worktree[];
-  /** The worktree on screen; null is the main checkout. */
-  activeWorktree: string | null;
   onNewRoutine: (sessionId: string) => void;
 }) {
   if (!sheet.sheet) return null;
   const editing = sheet.sheet.session;
-  const asked = sheet.sheet.worktree;
-  const main = worktrees.find((tree) => tree.main)?.path;
   return (
     <BotSheet
       key={editing?.id ?? "new"}
       session={editing}
-      worktrees={worktrees}
-      initialWorktree={asked === undefined ? activeWorktree : asked === main ? null : asked}
       existingNames={sessions.flatMap((s) => (s.kind === "bot" ? [s.name] : []))}
       onNewRoutine={editing ? () => onNewRoutine(editing.id) : null}
       onSave={sheet.save}
@@ -86,9 +69,10 @@ function nameError(name: string, existingNames: string[], current: string | unde
 
 /**
  * Making or tuning a bot, in the palette's frame: who it is (face and name),
- * where it works, what runs it, how it behaves. ⌘↵ saves from anywhere in it.
+ * what runs it, how it behaves. A bot belongs to the workspace, not to a
+ * worktree: the sessions it starts are what work on a branch. ⌘↵ saves from anywhere in it.
  */
-export function BotSheet({ session, worktrees, initialWorktree, existingNames, onNewRoutine, onSave, onClose }: Props) {
+export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose }: Props) {
   // Seeded once per mount (the parent keys us by session): the CLI probe landing
   // mid-edit must not wipe what was typed.
   const { effective } = useDefaultAgent();
@@ -102,7 +86,6 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
           description: session.description,
           notifications: session.notifications,
           autonomy: session.autonomy,
-          place: { kind: "worktree", path: session.worktree },
           face: saved ?? {},
         }
       : {
@@ -112,31 +95,26 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
           description: "",
           notifications: true,
           autonomy: "ask",
-          place: { kind: "worktree", path: initialWorktree },
           // A new bot has no id to draw from yet, so it starts on a seed of its own.
           face: { seed: dealSeeds(1)[0]! },
         },
   );
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
-  // What git said of the new branch; it stands until "Works in" is touched again.
-  const [refused, setRefused] = useState<string | null>(null);
   const update = (patch: Partial<BotDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
   const name = draft.name.trim();
   const named = nameError(name, existingNames, session?.name);
-  const placed = draft.place.kind === "branch" ? branchError(draft.place.branch) : null;
 
   async function submit() {
     setSubmitted(true);
-    if (named || placed || saving) return;
+    if (named || saving) return;
     setSaving(true);
     try {
       // onSave holds the spinner for MIN_SAVE_MS so the row, the tab and this close land together.
       await onSave({ ...draft, name });
       onClose();
-    } catch (error) {
-      if (error instanceof BranchRefused) setRefused(error.message);
+    } catch {
       setSaving(false);
     }
   }
@@ -175,18 +153,6 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
             }
           />
 
-          {!session && (
-            <WorksIn
-              worktrees={worktrees}
-              place={draft.place}
-              error={submitted ? (placed ?? refused) : null}
-              onChange={(place) => {
-                update({ place });
-                setRefused(null);
-              }}
-            />
-          )}
-
           <Field label="Model">
             <ModelPicker
               provider={draft.provider}
@@ -206,7 +172,7 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
             />
           </Field>
 
-          <Field label="Description" hint="What it is for, and how it should work. It reads this every turn.">
+          <Field label="Description" hint="Its role and how to work. Read every turn.">
             <TextArea
               rows={3}
               value={draft.description}
@@ -323,67 +289,3 @@ function FacePicker({
   );
 }
 
-/** Where a new bot works: one of the workspace's worktrees, or a new branch that gets its own. */
-function WorksIn({
-  worktrees,
-  place,
-  error,
-  onChange,
-}: {
-  worktrees: Worktree[];
-  place: Place;
-  error: string | null;
-  onChange: (place: Place) => void;
-}) {
-  const [branch, setBranch] = useState(place.kind === "branch" ? place.branch : "");
-  const row = (key: string, chosen: boolean, onClick: () => void, children: ReactNode) => (
-    <button
-      key={key}
-      type="button"
-      role="radio"
-      aria-checked={chosen}
-      onClick={onClick}
-      className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-border-strong ${
-        chosen ? "bg-selected" : "hover:bg-hover"
-      }`}
-    >
-      {children}
-    </button>
-  );
-  return (
-    <Field label="Works in" error={error}>
-      <div role="radiogroup" aria-label="Works in" className="flex flex-col gap-0.5 rounded-lg bg-card p-1">
-        {worktrees.map((tree) => {
-          const path = tree.main ? null : tree.path;
-          const Glyph = tree.branch || !tree.main ? GitBranchIcon : FolderIcon;
-          return row(tree.path, place.kind === "worktree" && place.path === path, () => onChange({ kind: "worktree", path }), (
-            <>
-              <Glyph className="size-3.5 shrink-0 text-icon" />
-              <span className="min-w-0 flex-1 truncate">{worktreeLabel(tree)}</span>
-              {tree.main && <span className="text-[11px] text-text-muted">main checkout</span>}
-            </>
-          ));
-        })}
-        <div
-          className={`flex h-8 w-full items-center gap-2 rounded-md px-2 ${place.kind === "branch" ? "bg-selected" : "hover:bg-hover"}`}
-        >
-          <PlusIcon className="size-3.5 shrink-0 text-icon" />
-          <input
-            role="radio"
-            aria-checked={place.kind === "branch"}
-            aria-label="New branch"
-            value={branch}
-            placeholder="New branch in a new worktree…"
-            spellCheck={false}
-            onFocus={() => onChange({ kind: "branch", branch })}
-            onChange={(event) => {
-              setBranch(event.target.value);
-              onChange({ kind: "branch", branch: event.target.value });
-            }}
-            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-          />
-        </div>
-      </div>
-    </Field>
-  );
-}

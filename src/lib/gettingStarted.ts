@@ -26,6 +26,6 @@ export function tourSteps(home: Workspace | null, projects: Workspace[], session
     { id: "ask", label: "Ask anything", done: home !== null && sessions.some((s) => s.workspaceId === home.id) },
     { id: "folder", label: "Open a project folder", done: projects.length > 0 },
     { id: "bot", label: "Meet your first bot", done: sessions.some((s) => s.kind === "bot") },
-    { id: "browser", label: "Drive a browser tab", done: memory.browser },
+    { id: "browser", label: "Open a browser tab", done: memory.browser },
   ];
 }

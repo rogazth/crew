@@ -18,6 +18,7 @@ function run(command, args) {
 // crew rides in the bundle beside crewd; Settings › General › Command line links to it.
 await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 await run("node", ["scripts/crewd-linux.mjs"]);
+await run("node", ["scripts/licenses.mjs"]);
 await run("npm", ["run", "build"]);
 await compileElectron();
 await run("npx", ["electron-builder", "--mac", "--arm64", "--dir"]);

@@ -187,7 +187,7 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
             <div className="flex flex-col items-center gap-2 py-20 text-center text-text-muted">
               <MessagesSquareIcon className="size-5 text-icon" />
               <p className="text-[13px]">
-                Nothing written between {first.name} and {second.name} yet.
+                No messages yet
               </p>
             </div>
           ) : (

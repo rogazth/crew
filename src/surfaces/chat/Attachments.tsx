@@ -89,7 +89,7 @@ function Thumbnail({
   );
 }
 
-/** A file on its way to a remote machine: how far it is, or why it stopped. */
+/** A file on its way to a remote machine: how far it is, or why it stopped. The X cancels it, or clears it once failed. */
 function UploadChip({ upload, onDismiss }: { upload: Upload; onDismiss?: () => void }) {
   const failed = upload.error !== undefined;
   const percent = upload.size > 0 ? Math.min(100, Math.round((upload.sent / upload.size) * 100)) : 0;
@@ -101,10 +101,11 @@ function UploadChip({ upload, onDismiss }: { upload: Upload; onDismiss?: () => v
       <FileTypeIcon name={upload.name} className="size-3.5" />
       <span className="min-w-0 truncate">{upload.name}</span>
       <span className={`shrink-0 tabular-nums ${failed ? "text-danger" : "opacity-60"}`}>{failed ? "Failed" : `${percent}%`}</span>
-      {onDismiss && failed && (
+      {onDismiss && (
         <button
           type="button"
-          aria-label={`Dismiss ${upload.name}`}
+          aria-label={`${failed ? "Dismiss" : "Cancel upload of"} ${upload.name}`}
+          title={failed ? "Dismiss" : "Cancel upload"}
           onClick={onDismiss}
           className="-mr-0.5 flex size-4 items-center justify-center rounded text-text-muted transition-colors hover:text-text"
         >
@@ -124,6 +125,7 @@ function FileChip({ file, onRemove, onInk }: { file: AttachedFile; onRemove?: ()
   return (
     <span
       title={file.path}
+      data-file-chip
       className={`inline-flex h-6 max-w-[200px] items-center gap-1.5 rounded-md px-2 text-[12px] leading-4 shadow-[inset_0_0_0_1px_var(--color-hairline)] ${onInk ? "crew-chip-on-ink" : "bg-card"}`}
     >
       <FileTypeIcon name={file.name} className="size-3.5" />
@@ -144,7 +146,7 @@ function FileChip({ file, onRemove, onInk }: { file: AttachedFile; onRemove?: ()
 }
 
 /** The image at rest, on a dim scrim. Arrows walk the strip, Escape and the scrim close. */
-function Lightbox({
+export function Lightbox({
   images,
   index,
   onIndex,

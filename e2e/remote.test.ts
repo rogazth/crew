@@ -11,7 +11,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Locator } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, sendInChat, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, startChat, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
 
 function mark(crew: Crew, name: string): Locator {
   return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
@@ -72,12 +72,9 @@ test("a workspace on another machine opens from ⌘O, runs a session there, and 
     const workspace = remoteList[0]!;
 
     // A session in it runs on the machine: its CLI runs in the repo, and a command lands there.
-    await pressChord(crew, `${MOD}+n`);
-    const session = await waitFor(
-      async () => (await remoteRequest<Session[]>(remote!, "session_list", { workspaceId: workspace.id })).find((row) => row.kind === "terminal"),
-      { message: "the session is created on the machine" },
+    const session = await startChat(crew, "!touch made-on-devbox", () =>
+      remoteRequest<Session[]>(remote!, "session_list", { workspaceId: workspace.id }),
     );
-    await sendInChat(crew, "!touch made-on-devbox");
     await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.cwd === api), {
       message: "the machine's crewd starts the CLI in the repo",
       timeout: 15_000,
@@ -102,7 +99,7 @@ test("a workspace on another machine opens from ⌘O, runs a session there, and 
     // Settings › Environments lists it; its menu closes on a click outside.
     await pressChord(crew, `${MOD}+,`);
     await window.getByText("Environments", { exact: true }).first().click();
-    const actions = window.getByRole("button", { name: "devbox actions" });
+    const actions = window.getByRole("button", { name: "More for devbox" });
     await actions.click();
     const reconnect = window.getByRole("menuitem", { name: "Reconnect" });
     await reconnect.waitFor();

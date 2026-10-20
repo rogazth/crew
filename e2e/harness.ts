@@ -684,20 +684,15 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
-/**
- * Goes to a worktree by the chord its sidebar line names (⌃⌘1…9): a click on
- * the line only folds it. Resolves once the window is on it.
- */
+/** ⇧⌘O and the row of the worktree named `label`: the window comes to work in it. */
 export async function goToWorktree(crew: Crew, label: string): Promise<void> {
-  const header = worktreeHeader(crew, label);
-  const title = (await header.getAttribute("title")) ?? "";
-  const digit = /(\d)\s+to switch$/.exec(title)?.[1];
-  if (!digit) throw new Error(`${label}'s line names no chord to switch: ${JSON.stringify(title)}`);
-  await pressChord(crew, `${WORKTREE_MOD}+${digit}`);
-  await header.and(currentWorktree(crew)).waitFor();
+  await pressChord(crew, `${MOD}+Shift+o`);
+  const palette = crew.window.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("button").filter({ hasText: label }).first().click();
+  await palette.waitFor({ state: "detached" });
 }
 
-/** The worktree line the window is on. */
+/** Narrows a worktree's line to the one the window works in: `worktreeHeader(crew, label).and(currentWorktree(crew))`. */
 export function currentWorktree(crew: Crew): Locator {
   return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
 }
@@ -772,16 +767,68 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   await input.waitFor({ state: "detached" });
 }
 
-/** ⌘N: a session where the window is, once crewd has it and its chat is on screen. */
-export async function newSession(crew: Crew, workspaceId: string): Promise<Session> {
-  const known = new Set((await sessions(crew, workspaceId)).map((session) => session.id));
-  await pressChord(crew, `${MOD}+n`);
-  const session = await waitFor(
-    async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
-    { message: "the new session reaches crewd" },
+/**
+ * A session with no message yet, opened in the window. ⌘N and the sidebar "+"
+ * open a start screen and make the session on its first send, so a blank one
+ * is made in crewd, as the app would, then read and opened from its row.
+ * `worktree` is the folder it works in; null, the main checkout.
+ */
+export async function newSession(crew: Crew, workspaceId: string, worktree: string | null = null): Promise<Session> {
+  // What the start screen would pick: the default agent saved in Settings, else Claude with full access.
+  const raw = await crew.request<string | null>("state_get", { key: "providers:default" });
+  const saved = { provider: "claude", model: "", effort: "", access: "full", ...(JSON.parse(raw ?? "{}") as object) };
+  const made = await crew.request<Session>("session_create", {
+    workspaceId,
+    kind: "terminal",
+    name: "New session",
+    provider: saved.provider,
+    model: saved.model,
+    ...(saved.effort ? { effort: saved.effort } : {}),
+    description: "",
+    autonomy: saved.access,
+    worktree,
+  });
+  const row = sessionRow(crew, made);
+  await waitFor(
+    async () => {
+      if ((await row.count()) === 0) {
+        await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Refresh", exact: true }).click();
+      }
+      return (await row.count()) > 0;
+    },
+    { message: "the new session reaches the sidebar" },
   );
-  await composerOf(crew, session).waitFor();
-  return session;
+  // Its sortable wrapper reads aria-disabled when the list is not draggable, which Playwright takes for a disabled button.
+  await row.first().click({ force: true });
+  await composerOf(crew, made).waitFor();
+  return made;
+}
+
+/**
+ * ⌘N, `text` typed on the start screen and sent: the session is made by that
+ * first send, in the folder on screen. Returns the session `find` reads from crewd
+ * (default: the workspace's one not in `known`).
+ */
+export async function startChat(
+  crew: Crew,
+  text: string,
+  list: () => Promise<Session[]>,
+): Promise<Session> {
+  const known = new Set((await list()).map((row) => row.id));
+  const field = await startScreen(crew);
+  await field.fill(text);
+  await field.press("Enter");
+  return waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
+    message: "the first send makes the session",
+  });
+}
+
+/** ⌘N: the start screen, not a session. */
+export async function startScreen(crew: Crew): Promise<Locator> {
+  await pressChord(crew, `${MOD}+n`);
+  const field = crew.window.locator("[data-workspace-start] textarea");
+  await field.waitFor();
+  return field;
 }
 
 /**
@@ -819,8 +866,8 @@ export async function openShell(crew: Crew): Promise<void> {
  * Tabs that are not on screen stay mounted, hidden.
  */
 export function composerOf(crew: Crew, session?: Session): Locator {
-  const named = session ? `[placeholder*="Ask ${session.name} anything"]` : "";
-  return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
+  if (session) return crew.window.locator(`form[data-session="${session.id}"] textarea:visible`);
+  return crew.window.locator("textarea:not(.xterm-helper-textarea):visible");
 }
 
 /** Types `text` in the chat on screen and sends it. */
@@ -832,10 +879,12 @@ export async function sendInChat(crew: Crew, text: string): Promise<void> {
 }
 
 /** A session's row in the sidebar panel, by the name it shows. */
-export function sessionRow(crew: Crew, name: string): Locator {
+export function sessionRow(crew: Crew, target: string | Session): Locator {
+  // Every new session is called "New session": a Session picks its row by id.
+  if (typeof target !== "string") return crew.window.locator(`[data-sidebar-panel] button[data-session="${target.id}"]`);
   return crew.window
     .locator("[data-sidebar-panel] button[data-session]")
-    .filter({ has: crew.window.getByText(name, { exact: true }) });
+    .filter({ has: crew.window.getByText(target, { exact: true }) });
 }
 
 /** A session's pill in the tab strip on screen. */

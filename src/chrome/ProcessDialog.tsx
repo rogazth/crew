@@ -66,7 +66,7 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
         <Field label="Name">
           <TextInput ref={focus} value={name} placeholder="Dev server" onChange={(event) => setName(event.target.value)} />
         </Field>
-        <Field label="Command" hint="Runs in your shell, so pipes and && work.">
+        <Field label="Command" hint="Runs in your shell; pipes and && work.">
           <TextArea
             value={command}
             placeholder="npm run dev"
@@ -75,7 +75,7 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
             onChange={(event) => setCommand(event.target.value)}
           />
         </Field>
-        <Field label="Folder" hint="Relative to the workspace. Leave empty for its root.">
+        <Field label="Folder" hint="Relative to the workspace. Empty for root.">
           <TextInput value={cwd} placeholder="." className="font-mono text-[12px]" onChange={(event) => setCwd(event.target.value)} />
         </Field>
         <Field label="Environment" error={env.error}>
@@ -91,13 +91,13 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
         <div className="-my-1 flex flex-col">
           <Toggle
             label="Restart on crash"
-            description="Waits longer after each crash. Five in two minutes and it stays down."
+            description="Backs off; stops after 5 crashes in 2 minutes."
             checked={autoRestart}
             onChange={setAutoRestart}
           />
         </div>
         {process?.runs.some(isLive) && (
-          <p className="text-[12px] text-text-muted">It keeps running as it is until you restart it.</p>
+          <p className="text-[12px] text-text-muted">Applies on next restart.</p>
         )}
         {failure && <p className="text-[12px] text-danger">{failure}</p>}
         <button type="submit" hidden />

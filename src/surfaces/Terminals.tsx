@@ -14,6 +14,8 @@ const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default:
 type Props = {
   panes: MountedPane[];
   onOpenFile: (file: ProjectFile) => void;
+  /** A tab's `input` was written to its process: the tab drops it. */
+  onInputSent?: (workspaceId: string, tabId: string) => void;
 };
 
 /**
@@ -22,7 +24,7 @@ type Props = {
  * Unmounting a shell's terminal kills it. A session has no terminal at all:
  * Crew drives its CLI over the provider's protocol, and its tab is a `TurnChat`.
  */
-export function Terminals({ panes, onOpenFile }: Props) {
+export function Terminals({ panes, onOpenFile, onInputSent }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
   const { prefs, update } = useTerminalPrefs();
   const zoom = (delta: number) =>
@@ -68,6 +70,8 @@ export function Terminals({ panes, onOpenFile }: Props) {
             id={pane.id}
             cwd={cwd}
             command={signIn?.command ?? []}
+            {...(tab.input !== undefined && { initialInput: tab.input })}
+            {...(tab.input !== undefined && onInputSent && { onInputSent: () => onInputSent(pane.workspaceId, tab.id) })}
             active={visible}
             // A login leaves the shell behind to read what it said, and its end has the session connect the server.
             shellOnExit={signIn !== undefined}

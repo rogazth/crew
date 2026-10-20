@@ -94,9 +94,10 @@ node scripts/drive-sessions.mjs     # the session tools on every CLI installed, 
 node scripts/shot.mjs               # a screenshot of the chat against the mock
 npm run app:design                  # the app on a seeded profile of its own (port 1421)
 npm run app:design -- --reseed      # wipe that profile and seed it again
+npm run app:design -- --missing=cursor,opencode   # those CLIs read as not installed
 ```
 
-`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), bots and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`), so a working or waiting bot can be looked at without a live turn.
+`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), bots and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`, honoured by debug builds only), so a working or waiting bot can be looked at without a live turn. `--missing=` takes a comma-separated list of providers (`claude`, `codex`, `cursor`, `opencode`) that the daemon reports as not installed, to look at the first-run and empty states of Settings and the pickers; it is also debug-only.
 
 `scripts/drive.mjs` defaults to opencode's free models, which need no credentials, so it runs on a machine with nothing logged in.
 

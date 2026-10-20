@@ -14,6 +14,7 @@ import type {
   RefObject,
   TextareaHTMLAttributes,
 } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Kbd } from "./Kbd";
 
@@ -256,22 +257,31 @@ export function Overlay({
   width?: string;
   label?: string;
 }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  // Opened from a button, focus is still back on the page: take it, so Escape
+  // reaches the dialog. A field inside that focused itself keeps it.
+  useEffect(() => {
+    const el = dialog.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
+  }, []);
   // Portaled: an ancestor with a transform (the sidebar's sliding views) would
   // otherwise become the containing block for `fixed` and clip the dialog to it.
   return createPortal(
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div className="absolute inset-0 bg-black/15" />
+      <div className="absolute inset-0 bg-(--backdrop)" />
       <div
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
           event.stopPropagation();
           onClose();
         }}
-        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden ${SURFACE}`}
+        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden outline-none ${SURFACE}`}
       >
         {children}
       </div>
@@ -348,7 +358,7 @@ export function Alert({
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !next && onDismiss()}>
       <AlertDialog.Portal>
-        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-black/15" />
+        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-(--backdrop)" />
         <AlertDialog.Popup
           initialFocus={initialFocus}
           onKeyDown={onKeyDown}
@@ -466,6 +476,8 @@ export function FilterChip<T extends string>({
     <Menu.Root>
       <Menu.Trigger
         aria-label={label}
+        data-filter-chip
+        {...(lit ? { "data-lit": "" } : {})}
         className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
           lit ? "bg-card text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
         }`}

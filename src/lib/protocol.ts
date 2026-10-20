@@ -628,7 +628,7 @@ os: string, arch: string, hostname: string, home: string, cpus: number,
  */
 load: number, memoryTotal: number, 
 /**
- * Absent where the OS does not say cheaply (macOS).
+ * Memory the OS can hand out without swapping.
  */
 memoryAvailable?: number, 
 /**
@@ -650,6 +650,32 @@ opencode?: string,
  * Absent on the window's own daemon.
  */
 socksPort?: number, };
+
+/**
+ * `machine_metrics`: the samples the daemon has kept, oldest first.
+ */
+export type MachineMetricsQuery = { 
+/**
+ * Only samples taken after this time (ms since the epoch).
+ */
+since?: number, };
+
+/**
+ * One reading of the machine's load, kept by the daemon so a chart opens with history.
+ */
+export type MachineSample = { 
+/**
+ * Milliseconds since the epoch.
+ */
+at: number, 
+/**
+ * All cores together, 0 to 100, averaged over the interval since the last sample.
+ */
+cpuPercent: number, 
+/**
+ * Bytes in use (total minus what the OS can hand out).
+ */
+memUsed: number, memTotal: number, };
 
 /**
  * A session's box changed: a letter arrived, was handed to a turn, went
@@ -757,6 +783,36 @@ export type PathArg = { path: string, };
 export type PathBytes = { path: string, base64Contents: string, };
 
 export type PathContents = { path: string, contents: string, };
+
+/**
+ * What one provider account has spent of its plan, as last read.
+ */
+export type PlanUsage = { provider: string, 
+/**
+ * The account's email (or id), so a client can tell that two machines
+ * read the same account.
+ */
+account?: string, plan?: string, windows: Array<UsageWindow>, 
+/**
+ * Tokens spent over the last seven days, for a provider with no plan windows (opencode).
+ */
+tokens?: number, cost?: number, 
+/**
+ * When it was read, in milliseconds since the epoch.
+ */
+updatedAt: number, 
+/**
+ * Where it came from: `stream`, `app-server`, `api` or `cli`.
+ */
+source: string, 
+/**
+ * Claude's own verdict on the plan limit (`allowed`, `allowed_warning`, `rejected`).
+ */
+status?: string, 
+/**
+ * The same for the overage (extra usage) allowance.
+ */
+overageStatus?: string, };
 
 /**
  * A command of the workspace's inventory, with the runs it has in its worktrees.
@@ -898,6 +954,135 @@ export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exit
 export type ProcessUpdate = { workspaceId: string, id: string, name?: string, command?: string, cwd?: string, env?: { [key in string]: string }, autoRestart?: boolean, };
 
 export type ProjectFile = { name: string, path: string, relative: string, };
+
+/**
+ * Who a CLI is signed in as. `signed_in` is None when the CLI did not say.
+ */
+export type ProviderAccount = { signedIn: boolean | null, email?: string, 
+/**
+ * `max`, `pro`, `ChatGPT`, whatever the CLI calls the plan.
+ */
+plan?: string, };
+
+/**
+ * One job, as `provider_job_start` and `provider_job_list` answer and as the
+ * `provider-job` event carries it on every change.
+ */
+export type ProviderJob = { id: string, provider: string, action: ProviderJobAction, 
+/**
+ * The method the job resolved to.
+ */
+method?: ProviderJobMethod, phase: ProviderJobPhase, 
+/**
+ * What it is doing: `Uninstalling`, `Installing`, `Updating`, ...
+ */
+step?: string, 
+/**
+ * The shell command now running, or the one that failed.
+ */
+command?: string, 
+/**
+ * The tail of its output (stdout and stderr), oldest first.
+ */
+lastLines: Array<string>, error?: string, startedAt: number, };
+
+export type ProviderJobAction = "install" | "update" | "reinstall" | "uninstall" | "logout";
+
+/**
+ * `provider_job_cancel`: kills the job's process group.
+ */
+export type ProviderJobCancel = { id: string, };
+
+/**
+ * How a CLI is put on, or taken off, a machine.
+ */
+export type ProviderJobMethod = "npm" | "brew" | "script" | "native";
+
+export type ProviderJobPhase = "running" | "done" | "failed" | "cancelled";
+
+/**
+ * `provider_job_start`. Without `method`, an update uses the CLI's own
+ * updater and the rest follow how the installed CLI got there (a first
+ * install uses the vendor's script, or npm for Codex).
+ */
+export type ProviderJobStart = { 
+/**
+ * `claude`, `codex`, `cursor`, `opencode`.
+ */
+provider: string, action: ProviderJobAction, method?: ProviderJobMethod, };
+
+export type ProviderLoginCancel = { loginId: string, };
+
+/**
+ * What to type in a terminal tab on the machine to sign in or out by hand.
+ */
+export type ProviderLoginCommand = { provider: string, 
+/**
+ * `claude auth login`.
+ */
+login: string, 
+/**
+ * `claude auth logout`.
+ */
+logout: string, };
+
+/**
+ * The `provider-login` event: how a device-code sign-in ended.
+ */
+export type ProviderLoginEvent = { provider: string, loginId: string, phase: ProviderLoginPhase, error?: string, };
+
+/**
+ * A device-code sign-in the daemon is waiting on: show `user_code`, open
+ * `verification_url`; the `provider-login` event says how it ended.
+ */
+export type ProviderLoginFlow = { provider: string, loginId: string, userCode: string, verificationUrl: string, };
+
+export type ProviderLoginPhase = "pending" | "done" | "failed" | "cancelled";
+
+/**
+ * `provider_login` / `provider_login_start` / `provider_login_cancel`.
+ */
+export type ProviderRef = { provider: string, };
+
+/**
+ * One agent CLI on one machine.
+ */
+export type ProviderStatus = { 
+/**
+ * Crew's provider id: `claude`, `cursor`, `codex`, `opencode`.
+ */
+id: string, 
+/**
+ * The CLI's name on PATH: `cursor-agent` for `cursor`.
+ */
+binary: string, installed: boolean, 
+/**
+ * The resolved binary.
+ */
+path?: string, 
+/**
+ * The bare version, `2.1.42`; the CLI's own line when it has no number.
+ */
+version?: string, 
+/**
+ * The newest release; absent when it could not be looked up (offline).
+ */
+latest?: string, updateAvailable: boolean, 
+/**
+ * The ways this machine can install the CLI: only those whose tool (npm,
+ * brew, curl) is there, and only those the CLI ships through.
+ */
+methods: Array<ProviderJobMethod>, account?: ProviderAccount, 
+/**
+ * Why the CLI cannot run, when it is there but unusable (opencode 1.x).
+ */
+note?: string, };
+
+/**
+ * Asks a daemon for its agent CLIs' state. `refresh` skips the cached
+ * latest-version and account lookups.
+ */
+export type ProviderStatusRequest = { refresh: boolean, };
 
 export type PtyAck = { id: string, processed: number, };
 
@@ -1416,6 +1601,46 @@ export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?:
 export type UploadChunk = { id: string, extension: string, offset: number, base64Contents: string, };
 
 export type UrlKey = { urlKey: string, };
+
+/**
+ * The most an account's longest window stood at on a day (UTC, `YYYY-MM-DD`).
+ */
+export type UsageDay = { provider: string, account?: string, day: string, percent: number, };
+
+/**
+ * `usage_read`. With `refresh`, the CLIs are asked again first.
+ */
+export type UsageRead = { refresh?: boolean, };
+
+/**
+ * Every reading this machine holds, and seven days of history.
+ */
+export type UsageSnapshot = { readings: Array<PlanUsage>, history: Array<UsageDay>, };
+
+/**
+ * One limit of a plan: a share of a rolling window, spent so far.
+ */
+export type UsageWindow = { 
+/**
+ * Stable within a provider: `five_hour`, `seven_day`, `primary`, `cycle`.
+ */
+id: string, 
+/**
+ * What the window is called on screen: "5 hours", "Weekly", "Monthly".
+ */
+label: string, 
+/**
+ * Share used, 0 to 100.
+ */
+usedPercent: number, 
+/**
+ * The window's whole length, when the provider says.
+ */
+windowMinutes?: number, 
+/**
+ * When it resets, in milliseconds since the epoch.
+ */
+resetsAt?: number, };
 
 export type Workspace = { id: string, name: string, path: string, createdAt: number, 
 /**

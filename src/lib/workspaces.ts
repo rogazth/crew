@@ -58,15 +58,8 @@ export function filterSessions(sessions: Session[], query: string): Session[] {
 }
 
 
-/** Sessions open without prompting, so the name is derived: claude, claude 2, … */
-export function nextSessionName(sessions: Session[], base: string): string {
-  const taken = new Set(sessions.flatMap((s) => (s.kind === "terminal" ? [s.name] : [])));
-  if (!taken.has(base)) return base;
-  for (let i = 2; ; i++) {
-    const candidate = `${base} ${i}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
+/** Sessions open without prompting, so they start with this name until their provider or the user names them. */
+export const PLACEHOLDER_SESSION_NAME = "New session";
 
 /** The home prefix says nothing about the folder; `~` keeps the tail visible. */
 export function shortenPath(path: string): string {

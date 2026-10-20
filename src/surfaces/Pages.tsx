@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
@@ -17,7 +18,7 @@ type Props = {
   activeWorkspace: Workspace | null;
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
-  onOpenTerminal: (envId: string) => Promise<void>;
+  onOpenTerminal: (envId: string, input?: string) => Promise<void>;
 };
 
 /**
@@ -33,18 +34,23 @@ export function Pages({
   onOpenTerminal,
 }: Props) {
   const bots = sessions.filter((session) => session.kind === "bot");
+  // The page is a sheet laid over the chrome, like the workspace under the tabs.
+  const sheet = (children: ReactNode) => (
+    <div data-sheet="page" className="h-full">
+      {children}
+    </div>
+  );
   if (page.kind === "settings") {
-    return (
+    return sheet(
       <SettingsView
         section={page.section}
         workspaces={workspaces}
-        onConfirm={onConfirm}
         onOpenTerminal={onOpenTerminal}
-      />
+      />,
     );
   }
   if (page.kind === "routines" && activeWorkspace) {
-    return (
+    return sheet(
       <RoutinesView
         // A draft arriving from the bot drawer has to reopen the editor even
         // when the page is already up.
@@ -54,7 +60,7 @@ export function Pages({
         activeWorkspaceId={activeWorkspace.id}
         bots={bots}
         onConfirm={onConfirm}
-      />
+      />,
     );
   }
   return null;

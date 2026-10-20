@@ -42,8 +42,8 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
     message: "git lists the new worktree",
   });
   const header = worktreeHeader(crew, "feat/late");
-  await header.and(page.locator('[aria-current="true"]')).waitFor();
-  const session = await newSession(crew, workspace.id);
+  await header.waitFor();
+  const session = await newSession(crew, workspace.id, tree);
   assert.equal(session.worktree, tree);
   const tabId = await tabOf(crew, session);
 
@@ -83,9 +83,9 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
 /**
  * W3's story up to the restart: a worktree made in crew, a session working in
  * it, the worktree removed from the system's terminal, the window told by
- * focus. The app is then restarted, with tabs kept per worktree or all together.
+ * focus. The app is then restarted.
  */
-async function strand(t: TestContext, scope: "worktree" | "all") {
+async function strand(t: TestContext) {
   let crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -94,7 +94,7 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
 
   await newWorktree(crew, "feat/gone");
   await worktreeHeader(crew, "feat/gone").and(currentWorktree(crew)).waitFor();
-  const session = await newSession(crew, workspace.id);
+  const session = await newSession(crew, workspace.id, tree);
   assert.equal(session.worktree, tree);
   await sendInChat(crew, "hello");
   const first = await waitFor(async () => (await crew.claudeLaunches()).find((run) => run.argv.includes(session.id)), {
@@ -114,8 +114,6 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
   await worktreeHeader(crew, "feat/gone").waitFor({ state: "detached" });
   await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
 
-  // The setting's own path through Settings is W5's; here it only has to hold at launch.
-  if (scope === "all") await crew.request("state_set", { key: "tabs:scope", value: "all" });
   // The session's process ended with the app; its next start is what matters.
   crew = await crew.restart();
   await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
@@ -155,9 +153,5 @@ async function reopen({ crew, workspace, session, tabId }: Awaited<ReturnType<ty
 }
 
 test("W3: a worktree removed outside crew leaves the window; its session opens in a folder that exists", async (t) => {
-  await reopen(await strand(t, "worktree"));
-});
-
-test("W3b: the same, with tabs all together", async (t) => {
-  await reopen(await strand(t, "all"));
+  await reopen(await strand(t));
 });

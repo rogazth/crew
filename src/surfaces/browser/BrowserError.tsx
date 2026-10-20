@@ -12,7 +12,7 @@ export function BrowserError(props: Props) {
     props.kind === "crash"
       ? { title: "This page stopped.", detail: "Its process ended unexpectedly." }
       : props.kind === "hung"
-        ? { title: "This page isn't responding.", detail: "It may come back on its own. Reloading ends whatever it's stuck on." }
+        ? { title: "This page isn't responding.", detail: "Wait, or reload to stop it." }
         : describeLoadError(props.error.code);
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas px-6 text-center">

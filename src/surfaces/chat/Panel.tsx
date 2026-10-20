@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { BotIcon, MessagesSquareIcon, PauseIcon, ServerIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
+import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
 import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
@@ -30,7 +30,7 @@ export type PanelScope = {
 export function PausedSegment() {
   return (
     <span
-      title="Messages and reports from other sessions still arrive, but no longer start a turn. Write here to resume it."
+      title="Messages still arrive but won't start a turn. Write to resume."
       className="flex h-6 items-center gap-1 px-1.5 text-warning"
     >
       <PauseIcon className="size-3" aria-hidden />
@@ -49,7 +49,7 @@ export function StateDot({ state }: { state: PanelState }) {
 export function PanelKindIcon({ kind, className }: { kind: PanelKind; className: string }) {
   if (kind === "subagent") return <BotIcon className={className} />;
   if (kind === "session") return <MessagesSquareIcon className={className} />;
-  if (kind === "process") return <ServerIcon className={className} />;
+  if (kind === "process") return <LayersIcon className={className} />;
   return <TerminalIcon className={className} />;
 }
 
@@ -73,14 +73,22 @@ export function WorkSegment({
   open,
   onOpenChange,
   onEscape,
+  segment = false,
 }: {
   work: PanelScope;
+  /** Without the agents clip to open it, the sheet has its own entry: a button in the status line that floats the sheet over the composer. */
+  segment?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The sheet was closed with Esc: the composer takes the focus back. */
   onEscape: () => void;
 }) {
-  const { entries, conversations } = work;
+  const { conversations } = work;
+  // The agent clip opens the sheet, so the agents lead: the clip is about them, the rest of the work follows.
+  const entries = useMemo(
+    () => [...work.entries].sort((a, b) => Number(isAgentEntry(b)) - Number(isAgentEntry(a))),
+    [work.entries],
+  );
   const summary = useMemo(() => panelSummary(entries), [entries]);
   const running = entries.length > summary.finished;
   // One list for the keys: the entries, then the conversations.
@@ -94,7 +102,6 @@ export function WorkSegment({
   const total = rows.length;
   const shown = open && total > 0;
   const sheet = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
   // The selection follows an entry, not a row: the list reorders as work ends.
   const [picked, setPicked] = useState<string | null>(null);
   const at = Math.max(0, rows.findIndex((row) => row.id === picked));
@@ -115,7 +122,8 @@ export function WorkSegment({
     if (!shown) return;
     const down = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (sheet.current?.contains(target) || trigger.current?.contains(target)) return;
+      if (sheet.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-agent-strip], [data-work-trigger]")) return;
       onOpenChange(false);
     };
     document.addEventListener("mousedown", down);
@@ -158,91 +166,102 @@ export function WorkSegment({
   if (total === 0) return null;
   return (
     <>
-      <button
-        ref={trigger}
-        type="button"
-        aria-expanded={shown}
-        onClick={() => {
-          // Each time it opens, the selection starts at the top: running work.
-          if (!open) setPicked(null);
-          onOpenChange(!open);
-        }}
-        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
-      >
-        {summary.attention > 0 && (
-          <span className="flex items-center gap-1 text-warning">
-            <TriangleAlertIcon className="size-3" aria-hidden />
-            {summary.attentionText}
-          </span>
-        )}
-        {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
-        {running && <span className="crew-bg-dot" aria-hidden />}
-        {summary.text}
-        {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
-        {conversations.length > 0 && (
-          <span className="flex items-center gap-1 text-text-muted">
-            <MessagesSquareIcon className="size-3" aria-hidden />
-            {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
-          </span>
-        )}
-      </button>
-      {shown && (
-        <div
-          ref={sheet}
-          tabIndex={-1}
-          data-work-sheet
-          className="absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
+      {segment && (
+        <button
+          type="button"
+          data-work-trigger
+          aria-expanded={shown}
+          onClick={() => {
+            // Each time it opens, the selection starts at the top: running work.
+            if (!open) setPicked(null);
+            onOpenChange(!open);
+          }}
+          className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
         >
-          <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
-            Work
-            <span className="flex-1" />
-            {summary.finished > 0 && (
-              <button type="button" onClick={work.onClear} className="rounded px-1.5 hover:bg-hover hover:text-text">
-                Clear finished
-              </button>
-            )}
-          </div>
-          <div role="listbox" aria-label="Work" className="flex flex-col">
-            {rows.map((row, index) =>
-              row.entry ? (
-                <EntryRow
-                  key={row.id}
-                  entry={row.entry}
-                  now={now}
+          {summary.attention > 0 && (
+            <span className="flex items-center gap-1 text-warning">
+              <TriangleAlertIcon className="size-3" aria-hidden />
+              {summary.attentionText}
+            </span>
+          )}
+          {summary.attention > 0 && summary.text && <span className="text-placeholder">·</span>}
+          {running && <span className="crew-bg-dot" aria-hidden />}
+          {summary.text}
+          {(summary.text || summary.attention > 0) && conversations.length > 0 && <span className="text-placeholder">·</span>}
+          {conversations.length > 0 && (
+            <span className="flex items-center gap-1 text-text-muted">
+              <MessagesSquareIcon className="size-3" aria-hidden />
+              {conversations.length} {conversations.length > 1 ? "conversations" : "conversation"}
+            </span>
+          )}
+        </button>
+      )}
+      {/* Under the clip the sheet stays mounted, closed: it unfolds and folds back instead of appearing and vanishing. */}
+      {(shown || !segment) && (
+      <div
+        ref={sheet}
+        tabIndex={-1}
+        data-work-sheet
+        {...(shown ? { "data-open": "" } : {})}
+        inert={!shown}
+        className={
+          segment
+            ? "absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
+            : "ds-strip-panel flex flex-col outline-none"
+        }
+      >
+        <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
+          Work
+          <span className="flex-1" />
+          {summary.finished > 0 && (
+            <button type="button" onClick={work.onClear} className="rounded px-1.5 hover:bg-hover hover:text-text">
+              Clear finished
+            </button>
+          )}
+        </div>
+        <div role="listbox" aria-label="Work" className="flex flex-col">
+          {rows.map((row, index) =>
+            row.entry ? (
+              <EntryRow
+                key={row.id}
+                entry={row.entry}
+                now={now}
+                selected={index === at}
+                error={work.failed[row.id]}
+                onSelect={() => setPicked(row.id)}
+                onOpen={() => {
+                  onOpenChange(false);
+                  work.onOpen(row.entry!);
+                }}
+                onStop={() => work.onStop(row.entry!)}
+              />
+            ) : (
+              <Fragment key={row.id}>
+                {index === entries.length && (
+                  <div className={`px-2 pb-1 text-[11px] text-text-muted ${entries.length > 0 ? "pt-2.5" : "pt-1"}`}>Conversations</div>
+                )}
+                <ConversationRow
+                  conversation={row.conversation!}
+                  sessions={work.sessions}
                   selected={index === at}
-                  error={work.failed[row.id]}
                   onSelect={() => setPicked(row.id)}
                   onOpen={() => {
                     onOpenChange(false);
-                    work.onOpen(row.entry!);
+                    work.onOpenConversation(row.conversation!.thread);
                   }}
-                  onStop={() => work.onStop(row.entry!)}
                 />
-              ) : (
-                <Fragment key={row.id}>
-                  {index === entries.length && (
-                    <div className={`px-2 pb-1 text-[11px] text-text-muted ${entries.length > 0 ? "pt-2.5" : "pt-1"}`}>Conversations</div>
-                  )}
-                  <ConversationRow
-                    conversation={row.conversation!}
-                    sessions={work.sessions}
-                    selected={index === at}
-                    onSelect={() => setPicked(row.id)}
-                    onOpen={() => {
-                      onOpenChange(false);
-                      work.onOpenConversation(row.conversation!.thread);
-                    }}
-                  />
-                </Fragment>
-              ),
-            )}
-          </div>
-          <div className="px-2 pt-1.5 pb-0.5 text-[10.5px] text-placeholder">↑↓ select · ↵ open · x stop · esc close</div>
+              </Fragment>
+            ),
+          )}
         </div>
+        <div className="px-2 pt-1.5 pb-0.5 text-[10.5px] text-placeholder">↑↓ select · ↵ open · x stop · esc close</div>
+      </div>
       )}
     </>
   );
 }
+
+const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
 /** A row of the sheet's keys: an entry of the work, or a conversation. */
 type Row = { id: string; entry?: PanelEntry; conversation?: ConversationEntry };
@@ -306,6 +325,7 @@ function EntryRow({
       role="option"
       aria-selected={selected}
       data-entry={entry.id}
+      data-attention={entry.attention}
       onMouseEnter={onSelect}
       onClick={onOpen}
       className={`group flex w-full cursor-default items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? "bg-hover" : ""}`}
