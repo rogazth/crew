@@ -621,6 +621,15 @@ pub fn delete(store: &Store, key: String) -> Result<(), String> {
     store.with(|conn| write_state(conn, &key, None))
 }
 
+/// The keys that start with `prefix`, in order.
+pub fn keys(store: &Store, prefix: String) -> Result<Vec<String>, String> {
+    store.with(|conn| {
+        conn.prepare_cached("SELECT key FROM app_state WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key")?
+            .query_map(params![prefix], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })
+}
+
 pub fn read_state(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     conn.prepare_cached("SELECT value FROM app_state WHERE key = ?1")?
         .query_row(params![key], |row| row.get::<_, String>(0))
