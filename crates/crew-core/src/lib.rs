@@ -48,6 +48,7 @@ pub mod titles;
 pub mod tools;
 pub mod transcript;
 pub mod turns;
+pub mod usage;
 pub mod working_set;
 pub mod workspace;
 pub mod worktree;

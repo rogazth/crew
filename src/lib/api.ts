@@ -36,6 +36,7 @@ import type {
   ThreadPair,
   TurnSendNow,
   TurnStarted,
+  UsageSnapshot,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
@@ -498,3 +499,16 @@ export const machineMetrics = (envId: string, since?: number): Promise<MachineSa
   client.request("machine_metrics", since === undefined ? {} : { since }, envId);
 
 export { ackPty, attachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";
+
+/**
+ * What each provider account on a machine has spent of its plan, and a week of
+ * history. `refresh` asks the CLIs again first; `envId` names the machine
+ * (the focused one by default). Two machines may report the same account:
+ * `PlanUsage.account` is what to dedupe them on.
+ */
+export const usageRead = (refresh = false, envId?: string): Promise<UsageSnapshot> =>
+  client.request("usage_read", { refresh }, envId);
+
+/** Told with a machine's whole snapshot each time one of its readings changes (`usage-changed`). */
+export const onUsageChanged = (listener: (snapshot: UsageSnapshot, envId: string) => void): (() => void) =>
+  client.on("usage-changed", (payload, env) => listener(payload as UsageSnapshot, env));
