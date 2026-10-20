@@ -458,7 +458,8 @@ export function App() {
             onLaunch={launch}
             context={{
               workspace: isHome ? "Home" : (active?.name ?? ""),
-              branch: "",
+              // The worktree on screen, by its real branch; a checkout with no branch names none.
+              branch: isHome || !work.current || (work.current.main && !work.current.branch) ? "" : worktreeLabel(work.current),
               onSwitch: () => openPalette("context"),
             }}
             groups={null}
