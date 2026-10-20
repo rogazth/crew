@@ -77,6 +77,8 @@ type Props = {
 export function SidebarViewMenu({ prefs, onChange, grouping, worktrees }: Props) {
   const { hiddenTrees, showWorktree } = prefs;
   const filtered = prefs.recency !== DEFAULT_PREFS.recency || prefs.limit !== DEFAULT_PREFS.limit || prefs.hiddenProviders.length > 0 || hiddenTrees.length > 0;
+  // Reset puts back the grouping and the ordering too, whatever the layout on screen.
+  const rearranged = prefs.groupBy !== DEFAULT_GROUPING || prefs.ordering !== DEFAULT_PREFS.ordering;
   const dirty = filtered || (worktrees.length > 0 && grouping !== DEFAULT_GROUPING) || prefs.ordering !== DEFAULT_PREFS.ordering;
   const group = GROUPINGS.find((item) => item.id === grouping);
   const ordering = ORDERINGS.find((item) => item.id === prefs.ordering);
@@ -156,9 +158,17 @@ export function SidebarViewMenu({ prefs, onChange, grouping, worktrees }: Props)
               <span>Filters</span>
               <Menu.Item
                 closeOnClick={false}
-                disabled={!filtered}
+                disabled={!filtered && !rearranged}
                 onClick={() =>
-                  onChange({ ...prefs, recency: DEFAULT_PREFS.recency, limit: DEFAULT_PREFS.limit, hiddenProviders: [], hiddenTrees: [] })
+                  onChange({
+                    ...prefs,
+                    groupBy: DEFAULT_GROUPING,
+                    ordering: DEFAULT_PREFS.ordering,
+                    recency: DEFAULT_PREFS.recency,
+                    limit: DEFAULT_PREFS.limit,
+                    hiddenProviders: [],
+                    hiddenTrees: [],
+                  })
                 }
                 className="cursor-default rounded-md px-1.5 py-0.5 outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover data-highlighted:text-text"
               >

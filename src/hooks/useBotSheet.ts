@@ -7,22 +7,17 @@ import type { useSessions } from "./useSessions";
 
 type Sessions = ReturnType<typeof useSessions>;
 
-/** Git would not make the branch "Works in" asked for; the sheet shows why under it. */
-export class BranchRefused extends Error {}
-
 type Deps = {
   create: Sessions["create"];
   update: Sessions["update"];
   openSession: (session: Session) => void;
-  /** A new branch asked for in the sheet becomes a worktree before the bot is made in it. */
-  createWorktree: (branch: string) => Promise<{ path: string; main: boolean }>;
 };
 
 /** One sheet serves both create and edit. The sheet closes itself so its exit can play. */
-export function useBotSheet({ create, update, openSession, createWorktree }: Deps) {
+export function useBotSheet({ create, update, openSession }: Deps) {
   const [sheet, setSheet] = useState<{ session: Session | null; worktree?: string } | null>(null);
 
-  /** `worktree` preselects where it works: the plus on a worktree's line passes its own. */
+  /** `worktree` is where a new bot is made, from "New bot here" on a worktree; the sheet itself has no picker. */
   const newBot = useCallback(
     (worktree?: string) => setSheet(worktree ? { session: null, worktree } : { session: null }),
     [],
@@ -36,26 +31,18 @@ export function useBotSheet({ create, update, openSession, createWorktree }: Dep
       // Writing is instant, which reads as cheap; the floor holds the spinner so the
       // sidebar row, the tab and the sheet's exit all land on the same beat.
       const settle = new Promise((r) => setTimeout(r, MIN_SAVE_MS));
-      const { place, face, ...fields } = draft;
-      // Where a bot works is chosen once, when it is made.
+      const { face, ...fields } = draft;
       if (editing) {
         await update(editing.id, fields, settle);
         setBotFace(editing.id, face);
         return;
       }
-      const tree =
-        place.kind === "branch"
-          ? await createWorktree(place.branch).catch((error: unknown) => {
-              throw new BranchRefused(error instanceof Error ? error.message : String(error));
-            })
-          : null;
-      const worktree = tree ? (tree.main ? null : tree.path) : place.kind === "worktree" ? place.path : null;
-      const session = await create("bot", { ...fields, worktree }, settle);
+      const session = await create("bot", { ...fields, worktree: sheet?.worktree ?? null }, settle);
       if (!session) return;
       setBotFace(session.id, face);
       openSession(session);
     },
-    [create, createWorktree, openSession, sheet, update],
+    [create, openSession, sheet, update],
   );
 
   return { sheet, newBot, editBot, close, save };

@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Session, Workspace, Worktree } from "./types";
 import {
   branchError,
-  contextId,
   isDirtyRefusal,
-  parseContext,
   removalCost,
   sessionPath,
   unlistedWorktrees,
@@ -24,22 +22,6 @@ const tree = (path: string, branch: string | null, main = false): Worktree => ({
 });
 const trees = [tree("/repo", "master", true), tree("/wt/feat", "feat/avatars")];
 const session = (worktree: string | null) => ({ worktree }) as Session;
-
-describe("contextId", () => {
-  it("keeps the main checkout on the workspace's own strip", () => {
-    expect(contextId(workspace, "/repo", "worktree")).toBe("ws");
-  });
-
-  it("gives any other worktree its own strip, unless tabs are kept together", () => {
-    expect(contextId(workspace, "/wt/feat", "worktree")).toBe("ws@/wt/feat");
-    expect(contextId(workspace, "/wt/feat", "all")).toBe("ws");
-  });
-
-  it("round-trips through parseContext", () => {
-    expect(parseContext("ws@/wt/feat")).toEqual({ workspaceId: "ws", worktree: "/wt/feat" });
-    expect(parseContext("ws")).toEqual({ workspaceId: "ws", worktree: null });
-  });
-});
 
 describe("sessionPath", () => {
   it("is the session's worktree while git lists it, else the main checkout", () => {

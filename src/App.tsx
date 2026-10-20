@@ -159,6 +159,8 @@ export function App() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [dialog, setDialog] = useState<"new-worktree" | "shortcuts" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The workspace whose name the rail asked to rename, until the sidebar settles it.
+  const [renameWanted, setRenameWanted] = useState<string | null>(null);
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
   const {
@@ -232,7 +234,7 @@ export function App() {
     [openFile, treePath],
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
-  const sheet = useBotSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
+  const sheet = useBotSheet({ create, update, openSession: nav.openSession });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
 
   const { activate } = workspaces;
@@ -365,11 +367,13 @@ export function App() {
             // Picking a workspace is going back to it, out from under any page.
             onSelect: (id) => {
               closePage();
+              setRenameWanted(null);
               workspaces.activate(id);
             },
             onCreate: envs.openWorkspace,
             remoteOf: envs.remoteOf,
             onRename: workspaces.rename,
+            onRequestRename: setRenameWanted,
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
@@ -382,7 +386,10 @@ export function App() {
             sessions: listed,
             activeSessionId,
             onSelect: nav.openSession,
-            onNewBot: sheet.newBot,
+            // The main checkout is stored as null, so it asks for no worktree.
+            onNewBot: (path) => sheet.newBot(path === undefined || path === active.path ? undefined : path),
+            currentWorktree: work.current?.path ?? null,
+            onSelectWorktree: work.selectWorktree,
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) =>
               void newSession(undefined, path === undefined ? work.placeIn : path === active.path ? null : path),
@@ -418,6 +425,8 @@ export function App() {
               : undefined,
             running: commandCounts.running,
             onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
+            renameWanted,
+            onRenameSettled: () => setRenameWanted(null),
             onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
             commands: {
               live: commandCounts.live,
@@ -459,7 +468,8 @@ export function App() {
             onLaunch={launch}
             context={{
               workspace: isHome ? "Home" : (active?.name ?? ""),
-              branch: "",
+              // The worktree on screen, by its real branch; a checkout with no branch names none.
+              branch: isHome || !work.current || (work.current.main && !work.current.branch) ? "" : worktreeLabel(work.current),
               onSwitch: () => openPalette("context"),
             }}
             groups={null}

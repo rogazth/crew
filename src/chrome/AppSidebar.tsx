@@ -1,10 +1,9 @@
-import { useEffect, useRef, type ComponentProps } from "react";
+import { useRef, type ComponentProps } from "react";
 import { SettingsSidebar } from "./SettingsSidebar";
 import { SidebarShell, SlidingViews } from "./SidebarShell";
 import { TOGGLE_RESERVE } from "../lib/chrome";
 import { WorkspaceRail } from "./WorkspaceRail";
 import { useSpatialKeys } from "../hooks/useSpatialKeys";
-import { useTabScope } from "../hooks/useTabScope";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "../lib/settings";
 import { WorkspaceSidebar, type WorkspaceSidebarProps } from "./WorkspaceSidebar";
 
@@ -26,9 +25,6 @@ type Props = {
 export function AppSidebar({ open, width, onResize, settings, onSelectSettings, onCloseSettings, rail, sessions }: Props) {
   const root = useRef<HTMLDivElement>(null);
   useSpatialKeys(root);
-  // No worktree is current here: every tab goes in one strip.
-  const { update } = useTabScope();
-  useEffect(() => update("all"), [update]);
 
   return (
     <SidebarShell open={open} width={width} minWidth={200} maxWidth={560} onResize={onResize}>

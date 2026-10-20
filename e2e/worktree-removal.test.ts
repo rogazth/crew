@@ -85,7 +85,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
  * it, the worktree removed from the system's terminal, the window told by
  * focus. The app is then restarted, with tabs kept per worktree or all together.
  */
-async function strand(t: TestContext, scope: "worktree" | "all") {
+async function strand(t: TestContext) {
   let crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -114,8 +114,6 @@ async function strand(t: TestContext, scope: "worktree" | "all") {
   await worktreeHeader(crew, "feat/gone").waitFor({ state: "detached" });
   await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
 
-  // The setting's own path through Settings is W5's; here it only has to hold at launch.
-  if (scope === "all") await crew.request("state_set", { key: "tabs:scope", value: "all" });
   // The session's process ended with the app; its next start is what matters.
   crew = await crew.restart();
   await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
@@ -155,9 +153,5 @@ async function reopen({ crew, workspace, session, tabId }: Awaited<ReturnType<ty
 }
 
 test("W3: a worktree removed outside crew leaves the window; its session opens in a folder that exists", async (t) => {
-  await reopen(await strand(t, "worktree"));
-});
-
-test("W3b: the same, with tabs all together", async (t) => {
-  await reopen(await strand(t, "all"));
+  await reopen(await strand(t));
 });

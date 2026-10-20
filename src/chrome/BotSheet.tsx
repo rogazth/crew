@@ -12,9 +12,6 @@ import { BOT_AVATARS, dealSeeds, type BotAvatarId, type BotFace } from "../lib/b
 import { ACCESSES, DEFAULT_PROVIDER, accessesOf, defaultModelOf, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session } from "../lib/types";
 
-/** Where a new bot works: a worktree that exists (null path: the main checkout), or a branch to make one for. */
-export type Place = { kind: "worktree"; path: string | null } | { kind: "branch"; branch: string };
-
 export type BotDraft = {
   name: string;
   provider: string;
@@ -22,7 +19,6 @@ export type BotDraft = {
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
-  place: Place;
   /** The face it wears: saved against the bot once it exists. */
   face: BotFace;
 };
@@ -90,7 +86,6 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
           description: session.description,
           notifications: session.notifications,
           autonomy: session.autonomy,
-          place: { kind: "worktree", path: session.worktree },
           face: saved ?? {},
         }
       : {
@@ -100,7 +95,6 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
           description: "",
           notifications: true,
           autonomy: "ask",
-          place: { kind: "worktree", path: null },
           // A new bot has no id to draw from yet, so it starts on a seed of its own.
           face: { seed: dealSeeds(1)[0]! },
         },

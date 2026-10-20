@@ -12,7 +12,6 @@ import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
 import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
-import { requestWorkspaceRename } from "../lib/renameBus";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
@@ -31,6 +30,8 @@ type Props = {
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRename: (id: string, name: string) => void;
+  /** "Rename" in a mark's menu: the name is renamed where the sidebar shows it. */
+  onRequestRename: (id: string) => void;
   onRemove: (workspace: Workspace) => void;
   onReorder: (ids: string[]) => void;
   onOpenRoutines: () => void;
@@ -185,7 +186,7 @@ export function WorkspaceRail(props: Props) {
             setMenu(null);
             if (id === "rename") {
               props.onSelect(workspace.id);
-              requestWorkspaceRename(workspace.id);
+              props.onRequestRename(workspace.id);
             }
             if (id === "delete") props.onRemove(workspace);
           }}

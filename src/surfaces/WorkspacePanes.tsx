@@ -9,13 +9,12 @@ import type { Confirm } from '../chrome/ConfirmDialog';
 import type { Process } from '../lib/processes';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, Tab, Workspace } from '../lib/types';
-import { parseContext } from '../lib/worktrees';
 import { homeFor } from '../lib/client/registry';
 import { homePath, resolvePath } from '../lib/terminalPaths';
 
 /**
  * A pane with where it runs resolved to a directory: where its session runs,
- * else the worktree its strip belongs to, else the workspace folder.
+ * else the workspace folder.
  */
 export type MountedPane = Pane & { cwd: string };
 
@@ -91,8 +90,7 @@ export function WorkspacePanes({
   const mounted = useMemo(() => {
     const where = new Map(placement.split('\n').map((line) => line.split('\t') as [string, string]));
     return panes.flatMap((pane) => {
-      const context = parseContext(pane.workspaceId);
-      const workspace = workspaces.find((w) => w.id === context.workspaceId);
+      const workspace = workspaces.find((w) => w.id === pane.workspaceId);
       if (!workspace) return [];
       const tab = pane.tab;
       const cwd =
@@ -100,7 +98,7 @@ export function WorkspacePanes({
           ? (where.get(tab.sessionId) ?? workspace.path)
           : tab.kind === 'stub' && tab.worktree !== undefined
             ? placeOf(tab.worktree, workspace)
-            : placeOf(context.worktree, workspace);
+            : placeOf(null, workspace);
       return [{ ...pane, cwd }];
     });
   }, [panes, placement, placeOf, workspaces]);

@@ -692,14 +692,9 @@ export async function goToWorktree(crew: Crew, label: string): Promise<void> {
   await palette.waitFor({ state: "detached" });
 }
 
-/**
- * Narrows a worktree's line to the one the window works in. The sidebar draws
- * no current worktree any more (a session belongs to one and says so), so this
- * is just a worktree line: `worktreeHeader(crew, label).and(currentWorktree(crew))`
- * waits for the line to be listed.
- */
+/** Narrows a worktree's line to the one the window works in: `worktreeHeader(crew, label).and(currentWorktree(crew))`. */
 export function currentWorktree(crew: Crew): Locator {
-  return crew.window.locator("[data-sidebar-panel] button[data-nav][aria-expanded]");
+  return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
 }
 
 export type GitWorktree = { path: string; branch: string | null };
