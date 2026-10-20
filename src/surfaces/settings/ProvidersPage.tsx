@@ -1,61 +1,51 @@
-// Providers: the default agent for new sessions and what it may do without
-// asking (bypass included), then one card per CLI with its version, account
-// and defaults. Install, update and sign-in are simulated (pending.ts), so the
-// page is not reachable in the app until S3 of
-// docs/plans/2026-10-19-design-system-finish.md.
-import { CheckIcon, FilePenLineIcon, HandIcon, RefreshCwIcon, SparklesIcon, ZapIcon, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+// Providers: the default agent for new sessions (provider, model, effort) and
+// what it may do without asking, then one card per CLI on the machine picked,
+// with its version, account and the jobs that install, update and sign it in.
+import { CheckIcon, FilePenLineIcon, HandIcon, SparklesIcon, ZapIcon, type LucideIcon } from "lucide-react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ProviderList } from "./ProviderList";
-import { Button } from "../../chrome/kit";
+import { PROVIDER_META } from "./providerMeta";
+import { Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useDefaultAgent } from "../../hooks/useDefaultAgent";
 import * as api from "../../lib/api";
 import { BYPASS_KEY } from "../../lib/permissions";
-import { ACCESSES, accessesOf, fitChoice, type Access, type ProviderId } from "../../lib/providers";
-import { checkAll, syncInstalled, useChecking, useProviders, type ProviderMock } from "./pending";
-import { ConfirmDialog, Heading, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
+import {
+  ACCESSES,
+  EFFORT_LABELS,
+  accessesOf,
+  effortsOf,
+  findModel,
+  fitChoice,
+  listedModelsVersion,
+  loadListedModels,
+  modelsOf,
+  subscribeListedModels,
+  type Access,
+  type ProviderDef,
+} from "../../lib/providers";
+import { Heading, Row, SettingsPage } from "./ui";
 
-export function ProvidersPage({ installed }: { installed?: ProviderId[] | undefined }) {
-  const providers = useProviders();
-  const checking = useChecking();
-  const key = installed?.join(",");
-  useEffect(() => {
-    if (key !== undefined) syncInstalled(key ? (key.split(",") as ProviderId[]) : []);
-  }, [key]);
-
-  const check = () =>
-    void checkAll().then((updates) =>
-      toast(
-        updates === 0 ? "All up to date" : `${updates} update${updates === 1 ? "" : "s"} available`,
-        updates === 0 ? "success" : "info",
-      ),
-    );
-
+export function ProvidersPage({ onOpenTerminal }: { onOpenTerminal: (envId: string, input?: string) => Promise<void> }) {
+  // A job that ended on any machine: the list of CLIs on this Mac may have changed.
+  const [settled, setSettled] = useState(0);
   return (
-    <SettingsPage
-      title="Providers"
-      actions={
-        <Button variant="ghost" icon={RefreshCwIcon} loading={checking} onClick={check}>
-          Check updates
-        </Button>
-      }
-    >
-      <Permissions providers={providers} />
-      <DefaultAgent providers={providers} />
-      <ProviderList />
+    <SettingsPage title="Providers">
+      <Permissions />
+      <DefaultAgent refresh={settled} />
+      <ProviderList onOpenTerminal={onOpenTerminal} onSettled={() => setSettled((n) => n + 1)} />
     </SettingsPage>
   );
 }
 
 /* ── Default agent ──────────────────────────────────────────────────── */
 
-function DefaultAgent({ providers }: { providers: ProviderMock[] }) {
-  const { preferred, update } = useDefaultAgent();
-  // The provider is the choice; model and effort ride along from its last use.
-  const pick = (p: ProviderMock) => update(fitChoice({ provider: p.id, model: p.model, effort: p.effort, access: preferred.access }));
-  const current = providers.find((p) => p.id === preferred.provider);
+function DefaultAgent({ refresh }: { refresh: number }) {
+  const { preferred, update, lastOf, installed } = useDefaultAgent(refresh);
+  // The provider is the choice; model, effort and tier ride along from its last use.
+  const pick = (p: ProviderDef) => update(fitChoice({ ...lastOf(p.id), provider: p.id, access: preferred.access }));
+  const current = installed.find((p) => p.id === preferred.provider);
   // Only what can start a session is a choice; with nothing installed there is nothing to prefer.
-  const installed = providers.filter((p) => p.version);
   if (installed.length === 0) return null;
   return (
     <section className="flex flex-col gap-2" data-setting="default-agent">
@@ -86,17 +76,54 @@ function DefaultAgent({ providers }: { providers: ProviderMock[] }) {
                   {on && <CheckIcon className="size-2.5" strokeWidth={3} />}
                 </span>
               </span>
-              <span className="truncate font-medium">{p.name}</span>
+              <span className="truncate font-medium">{PROVIDER_META[p.id].name}</span>
             </button>
           );
         })}
       </div>
-      {current && !current.account && (
-        <p className="px-2.5 text-[12px] text-warning">
-          {current.name} is signed out.
-        </p>
-      )}
+      {current && <ModelAndEffort />}
     </section>
+  );
+}
+
+/** The model and effort a new session of the preferred agent starts with. */
+function ModelAndEffort() {
+  const { preferred, update } = useDefaultAgent();
+  // The CLI's own model list replaces Crew's once it is read.
+  useSyncExternalStore(subscribeListedModels, listedModelsVersion);
+  useEffect(() => {
+    loadListedModels(preferred.provider, api.listedModels);
+  }, [preferred.provider]);
+  const models = modelsOf(preferred.provider);
+  const model = findModel(preferred.provider, preferred.model)?.id ?? preferred.model;
+  const efforts = effortsOf(preferred.provider, preferred.model);
+  const options = models.map((m) => ({ value: m.id, label: m.label }));
+  if (!options.some((o) => o.value === model)) options.unshift({ value: model, label: model || "CLI default" });
+  return (
+    <div className="rounded-xl bg-card px-4" data-setting="default-model">
+      <Row label="Model" description="What a new session runs on.">
+        <Select
+          label="Default model"
+          value={model}
+          options={options}
+          className="w-56"
+          onChange={(next) => update(fitChoice({ ...preferred, model: next }))}
+        />
+      </Row>
+      {efforts.length > 0 && (
+        <div className="border-t border-hairline">
+          <Row label="Effort" description="How hard it thinks.">
+            <Select
+              label="Default effort"
+              value={preferred.effort}
+              options={efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] }))}
+              className="w-56"
+              onChange={(next) => update(fitChoice({ ...preferred, effort: next }))}
+            />
+          </Row>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -121,12 +148,12 @@ const ACCESS_HINTS: Record<Access, string> = {
  * What a new session may do without asking: four tiles that never change
  * size, whichever is picked, and the bypass that overrides them all under them.
  */
-function Permissions({ providers }: { providers: ProviderMock[] }) {
+function Permissions() {
   const { preferred, update } = useDefaultAgent();
+  // Bypass lives in General; it is read here only to say it overrides the tiles.
   const [bypass, setBypass] = useState(false);
-  const [ask, setAsk] = useState<ConfirmAsk | null>(null);
   const supported = accessesOf(preferred.provider);
-  const name = providers.find((p) => p.id === preferred.provider)?.name ?? "This provider";
+  const name = PROVIDER_META[preferred.provider].name;
 
   useEffect(() => {
     let cancelled = false;
@@ -139,40 +166,15 @@ function Permissions({ providers }: { providers: ProviderMock[] }) {
     };
   }, []);
 
-  const saveBypass = (next: boolean) => {
-    setBypass(next);
-    void (next ? api.stateSet(BYPASS_KEY, "on") : api.stateDelete(BYPASS_KEY)).catch(() => {});
-  };
-
   return (
     <section className="flex flex-col gap-2" data-setting="access">
       <Heading title="Permissions" />
-      {/* One card, one permission: the bypass switch, and under it the access new sessions start with, while it's off. */}
       <div className="rounded-xl bg-card p-1.5">
-        <div className="px-2.5">
-          <ToggleRow
-            id="bypass"
-            label="Bypass permissions"
-            description={
-              bypass
-                ? "All sessions run without asking."
-                : "Sessions use their own access level."
-            }
-            checked={bypass}
-            onChange={(next) =>
-              next
-                ? setAsk({
-                    title: "Bypass permissions?",
-                    description: "All agents will edit and run commands without asking.",
-                    action: "Bypass",
-                    onConfirm: () => saveBypass(true),
-                  })
-                : saveBypass(false)
-            }
-          />
-        </div>
+        {bypass && (
+          <p className="px-2.5 py-2 text-[12px] text-text-muted">Bypass permissions is on in General: every session runs without asking.</p>
+        )}
         {!bypass && (
-          <div className="flex flex-col gap-2 border-t border-hairline px-1 pt-3 pb-1">
+          <div className="flex flex-col gap-2 px-1 py-1">
             <p className="px-1.5 text-[12px] font-medium text-text-muted">Default access</p>
             <div role="radiogroup" aria-label="Access for new sessions" className="grid grid-cols-2 gap-2 @[620px]:grid-cols-4">
               {ACCESSES.map((a) => {
@@ -218,7 +220,6 @@ function Permissions({ providers }: { providers: ProviderMock[] }) {
           </div>
         )}
       </div>
-      <ConfirmDialog ask={ask} onClose={() => setAsk(null)} />
     </section>
   );
 }

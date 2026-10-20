@@ -122,9 +122,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   /** A new shell in a workspace's main checkout, on screen or not: the tab waits for the workspace's saved tabs. */
   const openTerminalIn = useCallback(
-    (workspaceId: string) => {
+    (workspaceId: string, input?: string) => {
       closePage();
-      tabs.openIn(workspaceId, newTerminalTab(null));
+      tabs.openIn(workspaceId, newTerminalTab(null, input));
     },
     [closePage, tabs],
   );

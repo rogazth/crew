@@ -37,7 +37,13 @@ export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incogn
  */
 export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   const { activeId, recent, collapsed } = state;
-  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab));
+  // A command typed for someone runs once: a tab saved with it would run it again on the next launch.
+  const tabs = state.tabs
+    .filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab))
+    .map((tab) => {
+      if (tab.kind !== "stub" || tab.input === undefined) return tab;
+      return Object.fromEntries(Object.entries(tab).filter(([key]) => key !== "input")) as Tab;
+    });
   const kept = new Set(tabs.map((tab) => tab.id));
   return {
     tabs,
@@ -48,8 +54,9 @@ export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
 }
 
 /** Each call a new shell, in the worktree it was asked from. */
-export function newTerminalTab(worktree: string | null): Tab {
-  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
+export function newTerminalTab(worktree: string | null, input?: string): Tab {
+  const tab: Tab = { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
+  return input ? { ...tab, input } : tab;
 }
 
 /** A terminal that runs an MCP server's login for a session, in the worktree it was asked from. */

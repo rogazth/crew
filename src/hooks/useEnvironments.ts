@@ -15,7 +15,7 @@ type Deps = {
   closePage: () => void;
   openSettings: (section?: SettingsSectionId) => void;
   /** A new shell in a workspace's main checkout, which need not be on screen yet. */
-  openTerminalIn: (workspaceId: string) => void;
+  openTerminalIn: (workspaceId: string, input?: string) => void;
 };
 
 /**
@@ -65,10 +65,10 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
 
   /**
    * A shell on the machine: in the workspace on its home, or else in the first
-   * workspace it has, or in a new one on its home.
+   * workspace it has, or in a new one on its home. `input` is typed into it once it is up.
    */
   const openTerminalOn = useCallback(
-    async (envId: string) => {
+    async (envId: string, input?: string) => {
       const link = linkOf(envId);
       const home = link?.home;
       if (!link || link.status !== "online" || !home) throw new Error(`${link?.name ?? "That machine"} is not connected`);
@@ -76,7 +76,7 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
       const existing = here.find((item) => item.path === home) ?? here[0];
       const workspace = existing ?? (await api.createWorkspace(link.name, home, envId));
       closePage();
-      openTerminalIn(workspace.id);
+      openTerminalIn(workspace.id, input);
       if (existing) activate(existing.id);
       else adopt(workspace);
     },

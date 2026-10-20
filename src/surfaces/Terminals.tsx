@@ -68,6 +68,7 @@ export function Terminals({ panes, onOpenFile }: Props) {
             id={pane.id}
             cwd={cwd}
             command={signIn?.command ?? []}
+            {...(tab.input !== undefined && { initialInput: tab.input })}
             active={visible}
             // A login leaves the shell behind to read what it said, and its end has the session connect the server.
             shellOnExit={signIn !== undefined}

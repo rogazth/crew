@@ -32,6 +32,8 @@ type Props = {
   cwd: string;
   /** Empty spawns the login shell. */
   command: string[];
+  /** Typed into the process once it has started, with Enter; only the first spawn. */
+  initialInput?: string | undefined;
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
@@ -49,6 +51,7 @@ export function TerminalView({
   id,
   cwd,
   command,
+  initialInput,
   active,
   shellOnExit,
   onExit,
@@ -64,10 +67,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onOpenPath, command, shellOnExit });
+  const latest = useRef({ onExit, onOpenPath, command, shellOnExit, initialInput });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onOpenPath, command, shellOnExit };
+    latest.current = { onExit, onOpenPath, command, shellOnExit, initialInput };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -262,10 +265,18 @@ export function TerminalView({
     // a window opening again (a reload, an update) finds the terminal it left.
     const spawn = (command: string[], reuse = false) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows, { reuse, dark: isDark() }).catch((error: unknown) => {
-        spawned = false;
-        term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
-      });
+      const typed = latest.current.initialInput;
+      latest.current.initialInput = undefined;
+      void api
+        .spawnPty(id, cwd, command, term.cols, term.rows, { reuse, dark: isDark() })
+        .then(() => {
+          // The shell reads its input once it is up; what is typed before its prompt waits in the tty.
+          if (typed && !closed) void api.writePty(id, `${typed}\r`);
+        })
+        .catch((error: unknown) => {
+          spawned = false;
+          term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
+        });
     };
 
     const measurable = () => host.clientWidth >= 8 && host.clientHeight >= 8;
