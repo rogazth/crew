@@ -51,8 +51,9 @@ export function resetOverride(overrides: KeyOverrides, id: string): KeyOverrides
   return next;
 }
 
-/** Gives `chord` to `id` and takes it from `other`, which keeps whatever else it ran on. */
+/** Gives `chord` to `id` and takes it from `other`, which keeps whatever else it ran on. A fixed command is never unbound. */
 export function replaceClash(overrides: KeyOverrides, id: CommandId, chord: string, other: CommandId, isMac: boolean): KeyOverrides {
+  if (!isEditable(other)) return overrides;
   const key = sameKeyOf(chord, isMac);
   const left = effectiveKeys(other, overrides, isMac).filter((k) => k !== key);
   const kept = left[0] ?? null;

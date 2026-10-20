@@ -94,6 +94,11 @@ describe("clash detection", () => {
     expect(clashes(next, true)).toEqual([]);
   });
 
+  it("refuses to unbind a fixed command", () => {
+    const overrides = { close: "Mod+W" };
+    expect(replaceClash(overrides, "close", "Mod+3", "workspace-3", true)).toBe(overrides);
+  });
+
   it("keeps what the other command still ran on", () => {
     const next = replaceClash({}, "close", "Mod+=", "zoom-in", true);
     expect(next["close"]).toBe("Mod+=");

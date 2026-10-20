@@ -11,7 +11,7 @@ import { COMMANDS, isCommandId, storedChordLabel, type CommandId } from "../../l
 import { bindingGroups } from "../../lib/commandGroups";
 import { IS_MAC } from "../../lib/hotkey";
 import { keybindingsHost } from "../../lib/host";
-import { exportOverrides, findClash, parseImport, replaceClash, resetOverride, setOverride } from "../../lib/keybindings";
+import { exportOverrides, findClash, isEditable, parseImport, replaceClash, resetOverride, setOverride } from "../../lib/keybindings";
 import { PAGES } from "./pages";
 import { Group, SettingsPage, toast } from "./ui";
 
@@ -265,16 +265,19 @@ export function KeybindingsPage() {
                     <p className="min-w-0 flex-1 text-[12px]">
                       <Chord chord={storedChordLabel(rowClash.chord)} small /> is used by{" "}
                       <span className="font-medium">{labelOf(rowClash.other)}</span>
+                      {!isEditable(rowClash.other) && ", which is reserved and cannot be changed"}
                     </p>
                     <Button variant="ghost" className="h-7 text-[12px]" onClick={() => setClash(null)}>
                       Cancel
                     </Button>
-                    <Button
-                      className="h-7 text-[12px]"
-                      onClick={() => commit(rowClash.id, rowClash.chord, rowClash.other)}
-                    >
-                      Replace
-                    </Button>
+                    {isEditable(rowClash.other) && (
+                      <Button
+                        className="h-7 text-[12px]"
+                        onClick={() => commit(rowClash.id, rowClash.chord, rowClash.other)}
+                      >
+                        Replace
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
