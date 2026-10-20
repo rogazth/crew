@@ -653,8 +653,8 @@ html[data-sidebar-resize="active"] * {
   --fade-bottom: var(--fade-size);
 }
 .crew-prose {
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--chat-text);
+  line-height: calc(var(--chat-text) * 1.43);
   letter-spacing: -0.1px;
 }
 /* The user's turn: a soft grey bubble on the right, the one shape on the page

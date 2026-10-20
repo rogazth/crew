@@ -177,7 +177,7 @@ export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: stri
   return (
     <div className="flex flex-col">
       <div
-        className={`relative text-[14px] leading-[21px] ${folds && !open ? "overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]" : ""}`}
+        className={`relative text-[length:var(--chat-text)] leading-[21px] ${folds && !open ? "overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]" : ""}`}
         style={folds && !open ? { maxHeight: `${lines * 21}px` } : undefined}
       >
         <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>

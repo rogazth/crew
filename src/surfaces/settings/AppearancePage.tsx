@@ -1,18 +1,18 @@
 // Appearance: theme as three little windows, the style (the palette) as
 // swatches, the chat text size and bot faces, with a live preview that wears
 // every choice. Motion follows the OS (prefers-reduced-motion), so it has no control.
-import { ArrowUpIcon, CheckIcon, MinusIcon, PlusIcon } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
-import { BotAvatar } from '../../chrome/BotAvatar';
-import { useBotAvatar } from '../../hooks/useBotAvatar';
-import { useAccent } from '../../hooks/useAccent';
-import { useChatText } from '../../hooks/useChatText';
-import { useColorMode } from '../../hooks/useColorMode';
-import { ACCENTS, type AccentId } from '../../lib/accent';
-import { BOT_AVATARS } from '../../lib/botAvatar';
-import { CHAT_TEXT_MAX, CHAT_TEXT_MIN, DEFAULT_CHAT_TEXT } from '../../lib/chatText';
-import { COLOR_MODES } from '../../lib/colorMode';
-import { Heading, RAISED, SettingsPage } from './ui';
+import { ArrowUpIcon, CheckIcon, MinusIcon, PlusIcon } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
+import { BotAvatar } from "../../chrome/BotAvatar";
+import { useBotAvatar } from "../../hooks/useBotAvatar";
+import { useAccent } from "../../hooks/useAccent";
+import { useChatText } from "../../hooks/useChatText";
+import { useColorMode } from "../../hooks/useColorMode";
+import { ACCENTS, type AccentId } from "../../lib/accent";
+import { BOT_AVATARS } from "../../lib/botAvatar";
+import { CHAT_TEXT_MAX, CHAT_TEXT_MIN, DEFAULT_CHAT_TEXT } from "../../lib/chatText";
+import { COLOR_MODES } from "../../lib/colorMode";
+import { Heading, RAISED, SettingsPage } from "./ui";
 
 export function AppearancePage() {
   return (
@@ -43,7 +43,7 @@ function ThemePicker() {
         {COLOR_MODES.map((t) => (
           <PickCard key={t.id} on={color.mode === t.id} onClick={() => color.update(t.id)} label={t.label}>
             <div className="relative aspect-[16/10] overflow-hidden rounded-[8px]">
-              {t.id === 'system' ? (
+              {t.id === "system" ? (
                 <>
                   <MiniApp scheme="light" />
                   <div className="absolute inset-0 [clip-path:polygon(100%_0,100%_100%,0_100%)]">
@@ -65,12 +65,12 @@ function ThemePicker() {
  * A tiny window drawn with the live tokens under a forced colour scheme, so it
  * wears the style picked below in its own light or dark.
  */
-function MiniApp({ scheme }: { scheme: 'light' | 'dark' }) {
+function MiniApp({ scheme }: { scheme: "light" | "dark" }) {
   return (
     <div style={{ colorScheme: scheme }} className="absolute inset-0 flex gap-1.5 bg-sidebar p-1.5 pl-0">
       <div className="flex w-[30%] flex-col gap-1 pt-2 pl-1.5">
         <span className="flex gap-0.5 pb-1">
-          {['#ff5f57', '#febc2e', '#28c840'].map((c) => (
+          {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
             <span key={c} className="size-1 rounded-full" style={{ background: c }} />
           ))}
         </span>
@@ -111,14 +111,14 @@ function PickCard({
       onClick={onClick}
       className={`flex flex-col gap-2 rounded-[14px] p-1.5 pb-2 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
         on
-          ? 'bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]'
-          : 'bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover'
+          ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+          : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
       }`}
     >
       {children}
       <span className="flex items-center gap-2 px-1">
         <Radio on={on} />
-        <span className={on ? 'font-medium' : ''}>{label}</span>
+        <span className={on ? "font-medium" : ""}>{label}</span>
       </span>
     </button>
   );
@@ -128,7 +128,7 @@ function Radio({ on }: { on: boolean }) {
   return (
     <span
       className={`grid size-4 shrink-0 place-items-center rounded-full transition-colors ${
-        on ? 'bg-text text-inverse' : 'ring-1 ring-border-strong'
+        on ? "bg-text text-inverse" : "ring-1 ring-border-strong"
       }`}
     >
       {on && <CheckIcon className="size-2.5" strokeWidth={3} />}
@@ -139,9 +139,9 @@ function Radio({ on }: { on: boolean }) {
 /* ── Style: one shape, three colourways ─────────────────────────────── */
 
 const STYLES: Record<AccentId, { line: string; light: string; dark: string }> = {
-  ink: { line: 'Monochrome', light: 'oklch(22% 0.005 285)', dark: 'oklch(94% 0 0)' },
-  teal: { line: 'Warm greys', light: 'oklch(50% 0.1 200)', dark: 'oklch(80% 0.11 188)' },
-  cobalt: { line: 'Blue', light: 'oklch(57% 0.2 258)', dark: 'oklch(68% 0.17 255)' },
+  ink: { line: "Monochrome", light: "oklch(22% 0.005 285)", dark: "oklch(94% 0 0)" },
+  teal: { line: "Warm greys", light: "oklch(50% 0.1 200)", dark: "oklch(80% 0.11 188)" },
+  cobalt: { line: "Blue", light: "oklch(57% 0.2 258)", dark: "oklch(68% 0.17 255)" },
 };
 
 function StylePicker() {
@@ -162,8 +162,8 @@ function StylePicker() {
               onClick={() => update(item.id)}
               className={`flex items-center gap-3 rounded-[14px] p-2.5 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
                 on
-                  ? 'bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]'
-                  : 'bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover'
+                  ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+                  : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
               }`}
             >
               <Swatch light={s.light} dark={s.dark} />
@@ -194,7 +194,7 @@ function TextSize() {
   const { size, update } = useChatText();
   const fill = ((size - CHAT_TEXT_MIN) / (CHAT_TEXT_MAX - CHAT_TEXT_MIN)) * 100;
   const step =
-    'grid size-7 place-items-center rounded-lg text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 disabled:pointer-events-none disabled:opacity-40';
+    "grid size-7 place-items-center rounded-lg text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 disabled:pointer-events-none disabled:opacity-40";
   return (
     <section className="flex flex-col gap-2" data-setting="text-size">
       <Heading title="Chat text size" description="The conversation and the composer." />
@@ -211,7 +211,7 @@ function TextSize() {
           step={1}
           value={size}
           onChange={(event) => update(Number(event.target.value))}
-          style={{ '--fill': `${fill}%` } as CSSProperties}
+          style={{ "--fill": `${fill}%` } as CSSProperties}
           className="crew-range min-w-0 flex-1"
         />
         <span aria-hidden className="text-[18px] leading-none text-text-muted">
@@ -253,7 +253,7 @@ function TextSize() {
 
 /* ── Bots ───────────────────────────────────────────────────────────── */
 
-const FACES = ['crew', 'scout', 'atlas'];
+const FACES = ["crew", "scout", "atlas"];
 
 function AvatarPicker() {
   const { avatar, update } = useBotAvatar();
@@ -293,18 +293,18 @@ function Preview() {
         <div className={`flex w-[104px] shrink-0 flex-col p-1.5 gap-0.5`}>
           <p className="px-1.5 pt-1 pb-1 text-[10px] text-text-muted">Sessions</p>
           {[
-            { seed: 'atlas', name: 'Atlas', on: true, dot: 'working' },
-            { seed: 'scout', name: 'Scout', on: false, dot: 'wants' },
-            { seed: 'crew', name: 'Pilot', on: false, dot: '' },
+            { seed: "atlas", name: "Atlas", on: true, dot: "working" },
+            { seed: "scout", name: "Scout", on: false, dot: "wants" },
+            { seed: "crew", name: "Pilot", on: false, dot: "" },
           ].map((s) => (
             <span
               key={s.seed}
-              className={`flex h-8 items-center gap-1.5 rounded-chrome px-1.5 text-[12px] ${s.on ? 'bg-selected font-medium' : ''}`}
+              className={`flex h-8 items-center gap-1.5 rounded-chrome px-1.5 text-[12px] ${s.on ? "bg-selected font-medium" : ""}`}
             >
-              <BotAvatar seed={s.seed} className="size-4" animated={s.dot === 'working'} />
+              <BotAvatar seed={s.seed} className="size-4" animated={s.dot === "working"} />
               <span className="min-w-0 flex-1 truncate">{s.name}</span>
-              {s.dot === 'wants' && <span className="size-1.5 rounded-full bg-warning" />}
-              {s.dot === 'working' && (
+              {s.dot === "wants" && <span className="size-1.5 rounded-full bg-warning" />}
+              {s.dot === "working" && (
                 <span className={`size-2 rounded-full border-[1.5px] border-accent/25 border-t-accent animate-spin`} />
               )}
             </span>
