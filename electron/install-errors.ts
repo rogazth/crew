@@ -1,15 +1,19 @@
 // What an install failure means to the person adding the machine. ssh, the
 // socket check and the daemon each say it their own way; the common three get a
 // hint and, where one exists, a command to fix it. Anything else keeps its words.
-import type { InstallFailure } from "../src/lib/remotes.ts";
+import type { InstallFailure, InstallStepId } from "../src/lib/remotes.ts";
 
 /** What the person asked for, so the fix can name it. */
 export type FailureContext = { destination: string; user?: string; sshPort?: number; port: number };
 
-export function classifyInstallFailure(message: string, context: FailureContext): InstallFailure {
+/** Steps that dial the machine over ssh; a failure elsewhere (upload, service, pair) is not the key or the address. */
+const DIALS: readonly InstallStepId[] = ["reach", "ssh", "existing"];
+
+export function classifyInstallFailure(message: string, context: FailureContext, step: InstallStepId): InstallFailure {
+  const dials = DIALS.includes(step);
   const who = `${context.user ? `${context.user}@` : ""}${context.destination}`;
   const dial = context.sshPort ? ` -p ${context.sshPort}` : "";
-  if (/Permission denied|Too many authentication failures|Host key verification failed|no mutual signature/i.test(message)) {
+  if (dials && /Permission denied \(|Too many authentication failures|Host key verification failed|no mutual signature/i.test(message)) {
     return {
       code: "auth",
       message,
@@ -26,6 +30,7 @@ export function classifyInstallFailure(message: string, context: FailureContext)
     };
   }
   if (
+    dials &&
     /Could not reach \S+ on port|Could not resolve hostname|Connection (timed out|refused|closed|reset)|No route to host|Network is unreachable|Operation timed out|unknown host|ENOTFOUND|ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT/i.test(
       message,
     )

@@ -180,7 +180,7 @@ export async function installDaemon(opts: {
       ...(target.user ? { user: target.user } : {}),
       ...(target.port ? { sshPort: target.port } : {}),
     };
-    emit(update.state === "error" ? { ...update, failure: classifyInstallFailure(update.detail ?? "", context) } : update);
+    emit(update.state === "error" ? { ...update, failure: classifyInstallFailure(update.detail ?? "", context, update.id) } : update);
   };
   try {
     let route: Route = { hostname: target.destination, port: target.port ?? 22, proxied: false };

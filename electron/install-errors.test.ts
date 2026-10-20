@@ -12,7 +12,7 @@ describe("install failures", () => {
       "ssh: Could not resolve hostname falcon: nodename nor servname provided",
       "ssh: connect to host 10.0.0.4 port 22: Operation timed out",
     ]) {
-      const failure = classifyInstallFailure(message, context);
+      const failure = classifyInstallFailure(message, context, "reach");
       expect(failure.code).toBe("unreachable");
       expect(failure.message).toBe(message);
       expect(failure.fix).toBe("ssh falcon");
@@ -25,18 +25,18 @@ describe("install failures", () => {
       user: "deploy",
       sshPort: 2222,
       port: 17877,
-    });
+    }, "reach");
     expect(failure.fix).toBe("ssh -p 2222 deploy@falcon");
   });
 
   it("offers ssh-copy-id when the key is refused", () => {
-    const failure = classifyInstallFailure("deploy@falcon: Permission denied (publickey).", { ...context, user: "deploy" });
+    const failure = classifyInstallFailure("deploy@falcon: Permission denied (publickey).", { ...context, user: "deploy" }, "ssh");
     expect(failure.code).toBe("auth");
     expect(failure.fix).toBe("ssh-copy-id deploy@falcon");
   });
 
   it("points at the advanced options when the port is taken", () => {
-    const failure = classifyInstallFailure("Port 17877 is already in use on that machine", context);
+    const failure = classifyInstallFailure("Port 17877 is already in use on that machine", context, "service");
     expect(failure.code).toBe("port");
     expect(failure.hint).toContain("17877");
     expect(failure.hint).toContain("Advanced options");
@@ -45,7 +45,20 @@ describe("install failures", () => {
 
   it("keeps the raw message for anything else, and for a daemon that cannot be reached", () => {
     for (const message of ["Could not reach ws://100.64.0.1:17877", "x86_64 is fine, riscv64 is not a Linux architecture Crew ships"]) {
-      expect(classifyInstallFailure(message, context)).toEqual({ code: "other", message, hint: "" });
+      expect(classifyInstallFailure(message, context, "reach")).toEqual({ code: "other", message, hint: "" });
     }
+  });
+
+  it("does not read an auth or network word in a later step as a connection problem", () => {
+    for (const step of ["upload", "service", "pair", "clis"] as const) {
+      for (const message of ["Permission denied (writing /usr/local)", "ECONNREFUSED 127.0.0.1:17877"]) {
+        expect(classifyInstallFailure(message, context, step).code).toBe("other");
+      }
+    }
+  });
+
+  it("needs the ssh phrasing for auth, not any Permission denied", () => {
+    expect(classifyInstallFailure("mkdir: Permission denied", context, "existing").code).toBe("other");
+    expect(classifyInstallFailure("me@falcon: Permission denied (publickey).", context, "existing").code).toBe("auth");
   });
 });
