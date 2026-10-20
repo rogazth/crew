@@ -759,6 +759,28 @@ export type PathBytes = { path: string, base64Contents: string, };
 export type PathContents = { path: string, contents: string, };
 
 /**
+ * What one provider account has spent of its plan, as last read.
+ */
+export type PlanUsage = { provider: string, 
+/**
+ * The account's email (or id), so a client can tell that two machines
+ * read the same account.
+ */
+account?: string, plan?: string, windows: Array<UsageWindow>, 
+/**
+ * Tokens spent over the last seven days, for a provider with no plan windows (opencode).
+ */
+tokens?: number, cost?: number, 
+/**
+ * When it was read, in milliseconds since the epoch.
+ */
+updatedAt: number, 
+/**
+ * Where it came from: `stream`, `app-server`, `api` or `cli`.
+ */
+source: string, };
+
+/**
  * A command of the workspace's inventory, with the runs it has in its worktrees.
  */
 export type Process = { id: string, workspaceId: string, 
@@ -1416,6 +1438,46 @@ export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?:
 export type UploadChunk = { id: string, extension: string, offset: number, base64Contents: string, };
 
 export type UrlKey = { urlKey: string, };
+
+/**
+ * The most an account's longest window stood at on a day (UTC, `YYYY-MM-DD`).
+ */
+export type UsageDay = { provider: string, account?: string, day: string, percent: number, };
+
+/**
+ * `usage_read`. With `refresh`, the CLIs are asked again first.
+ */
+export type UsageRead = { refresh?: boolean, };
+
+/**
+ * Every reading this machine holds, and seven days of history.
+ */
+export type UsageSnapshot = { readings: Array<PlanUsage>, history: Array<UsageDay>, };
+
+/**
+ * One limit of a plan: a share of a rolling window, spent so far.
+ */
+export type UsageWindow = { 
+/**
+ * Stable within a provider: `five_hour`, `seven_day`, `primary`, `cycle`.
+ */
+id: string, 
+/**
+ * What the window is called on screen: "5 hours", "Weekly", "Monthly".
+ */
+label: string, 
+/**
+ * Share used, 0 to 100.
+ */
+usedPercent: number, 
+/**
+ * The window's whole length, when the provider says.
+ */
+windowMinutes?: number, 
+/**
+ * When it resets, in milliseconds since the epoch.
+ */
+resetsAt?: number, };
 
 export type Workspace = { id: string, name: string, path: string, createdAt: number, 
 /**

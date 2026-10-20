@@ -12,6 +12,7 @@ mod messages;
 mod processes;
 mod sessions;
 mod turns;
+mod usage;
 pub use background::*;
 pub use blocks::*;
 pub use commands::*;
@@ -22,6 +23,7 @@ pub use messages::*;
 pub use processes::*;
 pub use sessions::*;
 pub use turns::*;
+pub use usage::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
