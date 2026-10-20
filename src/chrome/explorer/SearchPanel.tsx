@@ -176,7 +176,7 @@ export function SearchPanel({ root, focus, onOpenFile, visible, onClose, childre
             <input
               ref={input}
               aria-label="Search in files"
-              placeholder="Search files and text"
+              placeholder="Search text in files"
               spellCheck={false}
               value={query}
               onChange={(event) => setQuery(event.target.value)}

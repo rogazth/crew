@@ -89,7 +89,7 @@ test("W8b: a workspace that is not a repo has one branchless line, and a worktre
   const [only, ...rest] = await crew.request<Worktree[]>("worktree_list", { path: notes.path });
   assert.ok(only && rest.length === 0 && only.branch === null);
   const lines = crew.window.locator("[data-sidebar-panel] button[data-nav][aria-expanded]");
-  await worktreeHeader(crew, "No branch").waitFor();
+  await worktreeHeader(crew, "notes").waitFor();
   assert.equal(await lines.count(), 1);
 
   const { input, errors } = await tryWorktree("feat/x");

@@ -1,10 +1,9 @@
 // The Commands page with nothing on it: a soft card that says what goes here
-// and gives three examples. Still, on purpose: an empty page has nothing to animate.
-import { LayersIcon } from "lucide-react";
+// and offers to add the first one. Still, on purpose: an empty page has nothing to animate.
+import { LayersIcon, PlusIcon } from "lucide-react";
+import { Button } from "../chrome/kit";
 
-const EXAMPLES = ["npm run dev", "cargo watch -x test", "docker compose up"];
-
-export function EmptyCommands() {
+export function EmptyCommands({ onNew }: { onNew: () => void }) {
   return (
     <div className="ds-empty">
       <span className="ds-empty-mark">
@@ -16,14 +15,9 @@ export function EmptyCommands() {
           Dev servers and watchers, run in any worktree.
         </span>
       </div>
-      <div className="flex flex-wrap justify-center gap-1.5">
-        {EXAMPLES.map((example) => (
-          <code key={example} className="ds-empty-example">
-            <span className="mr-1.5 text-placeholder select-none">$</span>
-            {example}
-          </code>
-        ))}
-      </div>
+      <Button variant="primary" icon={PlusIcon} onClick={onNew}>
+        New command
+      </Button>
     </div>
   );
 }

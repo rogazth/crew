@@ -110,7 +110,7 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
       ))}
 
       {list !== null && list.length === 0 ? (
-        <EmptyCommands />
+        <EmptyCommands onNew={() => setEditing({})} />
       ) : (
         <div className="flex flex-col gap-2">
           {list?.map((process) => (
