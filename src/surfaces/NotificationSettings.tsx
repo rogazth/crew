@@ -92,7 +92,7 @@ export function NotificationSettings() {
         </SettingsSection>
 
         <SettingsSection title="Sound">
-          <SettingsRow label="Volume" description="Crew's sounds. System uses the Mac's alert volume.">
+          <SettingsRow id="notif-sound" label="Volume" description="Crew's sounds. System uses the Mac's alert volume.">
             <Volume value={prefs.volume} onCommit={(volume) => set("volume", volume)} preview={prefs.kinds["needs-input"].sound} prefs={prefs} />
           </SettingsRow>
           <CustomSound path={prefs.customSound} onChange={(path) => set("customSound", path)} volume={prefs.volume} />
@@ -118,12 +118,14 @@ export function NotificationSettings() {
         </SettingsSection>
 
         <SettingsSection title="Dock">
-          <Toggle
-            label="Badge"
-            description="Sessions that finished or asked while you were away."
-            checked={prefs.badge}
-            onChange={(checked) => set("badge", checked)}
-          />
+          <div data-setting="notify-needs-you">
+            <Toggle
+              label="Badge"
+              description="Sessions that finished or asked while you were away."
+              checked={prefs.badge}
+              onChange={(checked) => set("badge", checked)}
+            />
+          </div>
           <Toggle
             label="Bounce"
             description="Bounce once when the badge goes up."

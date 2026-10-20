@@ -14,6 +14,7 @@ import {
 import { FILE_CHANNELS } from "../src/lib/browser/files";
 import { NOTIFY_CHANNELS, type Banner, type DockBadge, type NotificationTarget } from "../src/lib/notify";
 import { CLI_CHANNELS } from "../src/lib/cli";
+import { LOGIN_ITEM_CHANNELS } from "../src/lib/loginItem";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
@@ -67,6 +68,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     status: () => ipcRenderer.invoke(CLI_CHANNELS.status),
     install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
     uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
+  },
+  loginItem: {
+    get: () => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.get),
+    set: (enabled: boolean) => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.set, enabled),
   },
   keybindings: {
     importFile: () => ipcRenderer.invoke("keybindings-import"),

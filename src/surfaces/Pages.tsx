@@ -45,7 +45,6 @@ export function Pages({
       <SettingsView
         section={page.section}
         workspaces={workspaces}
-        onConfirm={onConfirm}
         onOpenTerminal={onOpenTerminal}
       />,
     );

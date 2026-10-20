@@ -13,6 +13,7 @@ import type {
 import type { MachineRoute } from "./browser/machines";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
+import type { LoginItemState } from "./loginItem";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { Banner, BannerResult, BannerState, DockBadge, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
@@ -41,6 +42,7 @@ type CrewHost = {
   colorMode: ColorModeHost;
   keybindings?: KeybindingsHost;
   cli?: CliHost;
+  loginItem?: LoginItemHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
@@ -113,6 +115,12 @@ export type CliHost = {
   status(): Promise<CliStatus>;
   install(): Promise<CliResult>;
   uninstall(): Promise<CliResult>;
+};
+
+/** Whether Crew opens at login. Absent outside Electron. */
+export type LoginItemHost = {
+  get(): Promise<LoginItemState>;
+  set(enabled: boolean): Promise<LoginItemState>;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -217,6 +225,10 @@ export function keybindingsHost(): KeybindingsHost | null {
 
 export function cliHost(): CliHost | null {
   return crewHost()?.cli ?? null;
+}
+
+export function loginItemHost(): LoginItemHost | null {
+  return crewHost()?.loginItem ?? null;
 }
 
 export function updateHost(): UpdateHost | null {

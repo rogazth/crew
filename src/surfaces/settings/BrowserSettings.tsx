@@ -11,19 +11,21 @@ export function BrowserSettings() {
   return (
     <>
       <SettingsSection title="Links">
-        <Toggle
-          label="Open links in Crew"
-          description={
-            prefs.openLinksInCrew
-              ? `Chat and terminal links open here. ${BROWSER_CLICK}-click for your browser.`
-              : "Chat and terminal links open in your browser."
-          }
-          checked={prefs.openLinksInCrew}
-          onChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
-        />
+        <div data-setting="links-in-crew">
+          <Toggle
+            label="Open links in Crew"
+            description={
+              prefs.openLinksInCrew
+                ? `Chat and terminal links open here. ${BROWSER_CLICK}-click for your browser.`
+                : "Chat and terminal links open in your browser."
+            }
+            checked={prefs.openLinksInCrew}
+            onChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
+          />
+        </div>
       </SettingsSection>
       <SettingsSection title="Pages">
-        <SettingsRow label="Search engine" description="For address bar searches.">
+        <SettingsRow id="search-engine" label="Search engine" description="For address bar searches.">
           <Select
             label="Search engine"
             className="w-40"
@@ -67,7 +69,7 @@ function SitePermissionsSettings() {
   const decisions = useSitePermissions();
   const sites = Object.keys(decisions).sort((a, b) => a.localeCompare(b));
   return (
-    <SettingsSection title="Site permissions">
+    <SettingsSection id="site-permissions" title="Site permissions">
       {sites.length === 0 ? (
         <p className="py-3 text-[12px] text-text-muted">
           No site permissions saved.
