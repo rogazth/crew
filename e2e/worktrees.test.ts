@@ -9,11 +9,10 @@ import type { Session } from "../src/lib/types.ts";
 import {
   gitWorktrees as listWorktrees,
   launchCrew,
-  MOD,
   WORKTREE_MOD,
   returnToWindow,
   sessions,
-  sendInChat,
+  startChat,
   waitFor,
   worktreeHeader as header,
   type Crew,
@@ -57,13 +56,8 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   await header.waitFor();
 
   // ⌘N: a session in the worktree; a message makes its CLI run a command there.
-  await page.keyboard.press(`${MOD}+n`);
-  const session = await waitFor(
-    async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal"),
-    { message: "the new session reaches crewd" },
-  );
+  const session = await startChat(crew, "!pwd > here.txt", () => sessions(crew, workspace.id));
   assert.equal(session.worktree, tree);
-  await sendInChat(crew, "!pwd > here.txt");
   const written = path.join(tree, "here.txt");
   const pwd = await waitFor(async () => (await readFile(written, "utf8")).trim(), {
     message: "the session's pwd lands in the worktree",

@@ -52,8 +52,8 @@ test("a session a session started is in the status line and the Work sheet, and 
   // One line under the composer says so; there is no chip, no bar, no sidebar row.
   const work = crew.window.getByRole("button", { name: /^1 agent/ });
   await work.waitFor({ timeout: 10_000 });
-  assert.equal(await crew.window.getByText("Sessions", { exact: true }).count(), 0, "no Sessions strip");
-  assert.equal(await crew.window.getByText("Conversations", { exact: true }).count(), 0, "no Conversations in a bar");
+  assert.equal(await crew.window.locator('[data-sheet="workspace"]').getByText("Sessions", { exact: true }).count(), 0, "no Sessions strip");
+  assert.equal(await crew.window.locator('[data-sheet="workspace"]').getByText("Conversations", { exact: true }).count(), 0, "no Conversations in a bar");
   const rows = await crew.window.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("[data-session]")].map((row) => row.textContent ?? ""),
   );

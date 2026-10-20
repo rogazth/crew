@@ -287,7 +287,7 @@ test("Open terminal on machine shows a shell's first bytes quickly", async () =>
     const window = crew.window;
     await pressChord(crew, `${MOD}+,`);
     await window.getByText("Environments", { exact: true }).first().click();
-    await window.getByRole("button", { name: "devbox actions" }).click();
+    await window.getByRole("button", { name: "More for devbox" }).click();
     await trace(window);
     await takeTrace(window);
     const start = await now(window);

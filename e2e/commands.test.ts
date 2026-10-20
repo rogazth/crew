@@ -32,7 +32,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   // A session in a worktree starts it, on a port of its own, as an agent would.
   await newWorktree(crew, "feat/web");
   await worktreeHeader(crew, "feat/web").and(currentWorktree(crew)).waitFor();
-  const shell = await newSession(crew, workspace.id);
+  const shell = await newSession(crew, workspace.id, tree);
   assert.equal(shell.worktree, tree);
   const script = path.join(tree, ".crew-start.sh");
   const out = path.join(tree, ".crew-start.out");

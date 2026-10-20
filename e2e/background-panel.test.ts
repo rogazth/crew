@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
-import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -34,11 +34,7 @@ before(async () => {
   await installFakeOpencode(crew);
   await crew.request("process_create", { workspaceId: workspace.id, name: "web", command: "echo up; sleep 300" });
 
-  const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
-  chat = await waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "the new chat reaches crewd",
-  });
+  chat = await newSession(crew, workspace.id);
   await composer().waitFor();
   await send("hello");
   await said("Reply 1: hello").waitFor();
@@ -51,6 +47,8 @@ after(async () => {
 
 const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
 const said = (text: string | RegExp) => crew.window.getByText(text, typeof text === "string" ? { exact: true } : {});
+/** The panes, without the sidebar: its rows carry session ids and names too. */
+const inChat = () => crew.window.locator('[data-sheet="workspace"]');
 const sheet = () => crew.window.locator("[data-work-sheet]");
 const rows = () => sheet().getByRole("option");
 
@@ -99,8 +97,9 @@ test("what the session started is one line under the composer, and its sheet lis
   await sheet().waitFor();
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 2, texts.join("\n"));
-  assert.match(texts[0]!, /web.*Process · \d+s/, "running work comes first");
-  assert.match(texts[1]!, /Lint pass.*Subagent · Ling 3\.0 Flash · done after/, "then what ended");
+  // The agents lead the sheet (the clip that opens it is about them); the rest of the work follows.
+  assert.match(texts[0]!, /Lint pass.*Subagent · Ling 3\.0 Flash · done after/, "agents lead");
+  assert.match(texts[1]!, /web.*Process · \d+s/, "then the rest of the work");
   assert.equal(await sheet().getByRole("button", { name: "Clear finished" }).count(), 1);
   await rows().nth(0).waitFor();
   assert.equal(await rows().nth(0).getAttribute("aria-selected"), "true");
@@ -115,9 +114,9 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
   const before = await interrupts();
   // The key hints show only while the turn runs.
+  // Idle, ⇧Tab's effort stepping is always named: wait for the turn's own hint.
   const hints = visible("[data-status-line] [data-key-hints]");
-  await hints.waitFor();
-  assert.match(await hints.innerText(), /esc\s*stop/);
+  await waitFor(async () => /esc\s*stop/.test(await hints.innerText().catch(() => "")), { message: "the hints name Esc while the turn runs" });
   await shoot("composer-working");
 
   await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
@@ -131,7 +130,7 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   await composer().press("Escape");
   await stop.waitFor({ state: "detached" });
   await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
-  await hints.waitFor({ state: "detached" });
+  await waitFor(async () => !/esc/.test(await hints.innerText().catch(() => "")), { message: "the hints drop Esc once the turn is over" });
   assert.doesNotMatch(await visible("[data-status-line]").innerText(), /send|new line/, "an idle composer shows no key hints");
   await shoot("composer-idle");
 });
@@ -156,8 +155,9 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   await composer().fill("half a thought");
   await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
   await sheet().waitFor();
-  await crew.window.keyboard.press("ArrowDown");
-  await waitFor(async () => (await rows().nth(1).getAttribute("aria-selected")) === "true", { message: "↓ selects the second row" });
+  // The agents lead the list, so the child is the row the sheet opens on.
+  await waitFor(async () => (await rows().nth(0).getAttribute("aria-selected")) === "true", { message: "the first row is selected" });
+  await rows().nth(0).filter({ hasText: "Lint pass" }).waitFor();
   await crew.window.keyboard.press("Enter");
   await sheet().waitFor({ state: "hidden" });
 
@@ -181,7 +181,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   const line = visible("[data-status-line]");
   assert.equal(await line.count(), 1, "one status line on screen");
   assert.equal(await line.getAttribute("data-session"), child.id);
-  assert.equal(await visible(`[data-session="${chat.id}"]`).count(), 0, "nothing of the parent's meter or line shows");
+  assert.equal(await visible(`[data-sheet="workspace"] [data-session="${chat.id}"]`).count(), 0, "nothing of the parent's meter or line shows");
   await shoot("thread-crew");
 
   // Its composer writes to the child, which answers and reports again.
@@ -207,7 +207,9 @@ test("x stops a command, and opening a command opens its tab", async () => {
   assert.ok(workspace);
   await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
   await sheet().waitFor();
-  // The first row is the running command; x stops it.
+  // The agents lead, so the running command is the second row; x stops it.
+  await crew.window.keyboard.press("ArrowDown");
+  await waitFor(async () => (await rows().nth(1).getAttribute("aria-selected")) === "true", { message: "↓ selects the command" });
   await crew.window.keyboard.press("x");
   await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
     message: "crewd stops the run",
@@ -224,10 +226,10 @@ test("x stops a command, and opening a command opens its tab", async () => {
 });
 
 test("Clear finished empties the panel, and the line goes with it", async () => {
-  await crew.window.locator("[data-agent-strip] .ds-strip-head").click();
+  await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
   await sheet().getByRole("button", { name: "Clear finished" }).click();
   await sheet().waitFor({ state: "hidden" });
-  await crew.window.getByRole("button", { name: /finished$|process|agent|shell/ }).waitFor({ state: "detached" });
+  await inChat().getByRole("button", { name: /finished$|process|agent|shell/ }).waitFor({ state: "detached" });
   // The child is still a session of the workspace: only the panel forgot it.
   assert.ok((await sessions(crew, chat.workspaceId)).some((row) => row.parentId === chat.id));
 });
@@ -245,7 +247,7 @@ test("what Clear finished hid stays hidden after a reload, and a process that st
   await said("Reply 1: hello").waitFor();
   // The line would be there by now were the child and the stopped run listed.
   await crew.window.waitForTimeout(500);
-  assert.equal(await crew.window.getByRole("button", { name: line }).count(), 0, "the cleared entries came back");
+  assert.equal(await inChat().getByRole("button", { name: line }).count(), 0, "the cleared entries came back");
 
   // The run starts again: another run, so another entry.
   await run(CREW, ["processes", "start", "web"], { env: await sessionEnv() });
@@ -264,7 +266,7 @@ test("what Clear finished hid stays hidden after a reload, and a process that st
   });
   await sheet().getByRole("button", { name: "Clear finished" }).click();
   await sheet().waitFor({ state: "hidden" });
-  await crew.window.getByRole("button", { name: line }).waitFor({ state: "detached" });
+  await inChat().getByRole("button", { name: line }).waitFor({ state: "detached" });
 });
 
 test("a subagent the chat's CLI runs shows its tokens and its step, and x stops it through the CLI", async () => {
@@ -274,7 +276,7 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
 
   // The turn is over and the subagent is not: it is the line under the composer.
-  const line = crew.window.getByRole("button", { name: /^1 agent/ });
+  const line = inChat().getByRole("button", { name: /^1 agent/ });
   await line.waitFor();
   await line.click();
   await sheet().waitFor();
@@ -306,7 +308,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   await send("shell");
   await idle();
 
-  const work = crew.window.getByRole("button", { name: /shell/ });
+  const work = inChat().getByRole("button", { name: /shell/ });
   await work.waitFor();
   await work.click();
   await sheet().waitFor();
@@ -320,7 +322,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
 
 /** The sheet is open already when the test before left it so. */
 async function openWorkSheet(): Promise<void> {
-  if (!(await sheet().isVisible())) await crew.window.getByRole("button", { name: /finished$|agent|session|shell|process/ }).click();
+  if (!(await sheet().isVisible())) await inChat().getByRole("button", { name: /finished$|agent|session|shell|process/ }).click();
   await sheet().waitFor();
 }
 

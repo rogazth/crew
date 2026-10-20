@@ -18,11 +18,10 @@ import {
   holdsFor,
   launchCrew,
   lightIn,
-  MOD,
   newSession,
-  pressChord,
   remoteRequest,
   sendInChat,
+  startChat,
   sessionRow,
   sessionTab,
   storedStatus,
@@ -208,16 +207,11 @@ test("a session whose machine's crewd restarted mid-turn resumes its CLI there, 
     await window.locator("[data-sidebar-panel]").getByText("api", { exact: true }).first().waitFor();
 
     const list = () => remoteRequest<Session[]>(remote!, "session_list", { workspaceId: workspace.id });
-    const known = new Set((await list()).map((row) => row.id));
-    await pressChord(crew, `${MOD}+n`);
-    const session = await waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-      message: "the session is created on the machine",
-    });
+    const session = await startChat(crew, "work 6", list);
     const status = async () => (await remoteRequest<Session | null>(remote!, "session_get", { id: session.id }))?.status ?? null;
     const launches = async () =>
       (await crew.claudeLaunches()).filter((launch) => launch.argv.includes(session.id) && !launch.argv.includes("--strict-mcp-config"));
 
-    await sendInChat(crew, "work 6");
     await waitFor(async () => (await launches()).length === 1, { message: "the machine starts the CLI", timeout: 15_000 });
     await waitFor(async () => (await lightIn(sessionRow(crew, session))) === "Working", { message: "the turn runs" });
     await waitFor(async () => (await heard(crew, api, session)).includes("work 6"), { message: "the CLI took the message in" });

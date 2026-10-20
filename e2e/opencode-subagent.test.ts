@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 let chat: Session;
@@ -25,11 +25,7 @@ before(async () => {
   });
   await installFakeOpencode(crew);
   await crew.reload();
-  const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
-  chat = await waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "the new chat reaches crewd",
-  });
+  chat = await newSession(crew, workspace.id);
   await composer().waitFor();
 });
 

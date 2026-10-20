@@ -7,7 +7,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { holdsFor, launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { holdsFor, launchCrew, MOD, newSession, sessions, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -25,16 +25,9 @@ after(async () => {
   await crew?.close();
 });
 
-/** ⌘N: the session crewd made, once its chat is on screen. */
+/** A session with no message yet, once its chat is on screen. */
 async function newChat(workspaceId: string): Promise<Session> {
-  const known = new Set((await sessions(crew, workspaceId)).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
-  const session = await waitFor(
-    async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
-    { message: "the new session reaches crewd" },
-  );
-  await composer(session).waitFor();
-  return session;
+  return newSession(crew, workspaceId);
 }
 
 /**

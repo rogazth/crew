@@ -43,7 +43,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
   });
   const header = worktreeHeader(crew, "feat/late");
   await header.waitFor();
-  const session = await newSession(crew, workspace.id);
+  const session = await newSession(crew, workspace.id, tree);
   assert.equal(session.worktree, tree);
   const tabId = await tabOf(crew, session);
 
@@ -94,7 +94,7 @@ async function strand(t: TestContext) {
 
   await newWorktree(crew, "feat/gone");
   await worktreeHeader(crew, "feat/gone").and(currentWorktree(crew)).waitFor();
-  const session = await newSession(crew, workspace.id);
+  const session = await newSession(crew, workspace.id, tree);
   assert.equal(session.worktree, tree);
   await sendInChat(crew, "hello");
   const first = await waitFor(async () => (await crew.claudeLaunches()).find((run) => run.argv.includes(session.id)), {

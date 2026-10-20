@@ -767,16 +767,68 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   await input.waitFor({ state: "detached" });
 }
 
-/** ⌘N: a session where the window is, once crewd has it and its chat is on screen. */
-export async function newSession(crew: Crew, workspaceId: string): Promise<Session> {
-  const known = new Set((await sessions(crew, workspaceId)).map((session) => session.id));
-  await pressChord(crew, `${MOD}+n`);
-  const session = await waitFor(
-    async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
-    { message: "the new session reaches crewd" },
+/**
+ * A session with no message yet, opened in the window. ⌘N and the sidebar "+"
+ * open a start screen and make the session on its first send, so a blank one
+ * is made in crewd, as the app would, then read and opened from its row.
+ * `worktree` is the folder it works in; null, the main checkout.
+ */
+export async function newSession(crew: Crew, workspaceId: string, worktree: string | null = null): Promise<Session> {
+  // What the start screen would pick: the default agent saved in Settings, else Claude with full access.
+  const raw = await crew.request<string | null>("state_get", { key: "providers:default" });
+  const saved = { provider: "claude", model: "", effort: "", access: "full", ...(JSON.parse(raw ?? "{}") as object) };
+  const made = await crew.request<Session>("session_create", {
+    workspaceId,
+    kind: "terminal",
+    name: "New session",
+    provider: saved.provider,
+    model: saved.model,
+    ...(saved.effort ? { effort: saved.effort } : {}),
+    description: "",
+    autonomy: saved.access,
+    worktree,
+  });
+  const row = sessionRow(crew, made);
+  await waitFor(
+    async () => {
+      if ((await row.count()) === 0) {
+        await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Refresh", exact: true }).click();
+      }
+      return (await row.count()) > 0;
+    },
+    { message: "the new session reaches the sidebar" },
   );
-  await composerOf(crew, session).waitFor();
-  return session;
+  // Its sortable wrapper reads aria-disabled when the list is not draggable, which Playwright takes for a disabled button.
+  await row.first().click({ force: true });
+  await composerOf(crew, made).waitFor();
+  return made;
+}
+
+/**
+ * ⌘N, `text` typed on the start screen and sent: the session is made by that
+ * first send, in the folder on screen. Returns the session `find` reads from crewd
+ * (default: the workspace's one not in `known`).
+ */
+export async function startChat(
+  crew: Crew,
+  text: string,
+  list: () => Promise<Session[]>,
+): Promise<Session> {
+  const known = new Set((await list()).map((row) => row.id));
+  const field = await startScreen(crew);
+  await field.fill(text);
+  await field.press("Enter");
+  return waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
+    message: "the first send makes the session",
+  });
+}
+
+/** ⌘N: the start screen, not a session. */
+export async function startScreen(crew: Crew): Promise<Locator> {
+  await pressChord(crew, `${MOD}+n`);
+  const field = crew.window.locator("[data-workspace-start] textarea");
+  await field.waitFor();
+  return field;
 }
 
 /**

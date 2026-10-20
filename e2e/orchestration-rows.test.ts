@@ -12,7 +12,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Session } from "../src/lib/types.ts";
-import { MOD, installFakeOpencode, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -30,11 +30,7 @@ before(async () => {
   });
   await crew.reload();
   await installFakeOpencode(crew);
-  const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
-  chat = await waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "the new chat reaches crewd",
-  });
+  chat = await newSession(crew, workspace.id);
   await composer().waitFor();
 });
 
