@@ -65,6 +65,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
     uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
   },
+  keybindings: {
+    importFile: () => ipcRenderer.invoke("keybindings-import"),
+    exportFile: (text: string) => ipcRenderer.invoke("keybindings-export", text),
+  },
   colorMode: {
     get: () => ipcRenderer.invoke("color-mode-get"),
     set: (mode: string) => ipcRenderer.invoke("color-mode-set", mode),

@@ -1,10 +1,19 @@
-import { COMMANDS, commandChords, type CommandId } from "./commands";
+import { COMMANDS, commandChords, defaultChords, type CommandId } from "./commands";
 
 /**
  * The keybindings page's sections. A numbered run (⌘1‥9) is one row: nine rows
  * saying the same thing with a different digit is a list nobody reads.
  */
-export type BindingRow = { id: string; label: string; chords: string[] };
+export type BindingRow = {
+  id: string;
+  label: string;
+  /** What runs the command now. */
+  chords: string[];
+  /** What it ships with. */
+  defaults: string[];
+  /** A numbered run follows one pattern; it is shown, not edited. */
+  fixed: boolean;
+};
 export type BindingGroup = { title: string; rows: BindingRow[] };
 
 type Entry = CommandId | { run: "workspace" | "worktree"; label: string };
@@ -69,10 +78,13 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
 ];
 
 function rowOf(entry: Entry): BindingRow {
-  if (typeof entry === "string") return { id: entry, label: COMMANDS[entry].label, chords: commandChords(entry) };
+  if (typeof entry === "string") {
+    return { id: entry, label: COMMANDS[entry].label, chords: commandChords(entry), defaults: defaultChords(entry), fixed: false };
+  }
   const first = commandChords(`${entry.run}-1` as CommandId)[0] ?? "";
   const last = commandChords(`${entry.run}-9` as CommandId)[0] ?? "";
-  return { id: `${entry.run}-n`, label: entry.label, chords: [`${first}–${last.slice(-1)}`] };
+  const chords = [`${first}–${last.slice(-1)}`];
+  return { id: `${entry.run}-n`, label: entry.label, chords, defaults: chords, fixed: true };
 }
 
 export function bindingGroups(): BindingGroup[] {

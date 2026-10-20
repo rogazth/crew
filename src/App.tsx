@@ -17,6 +17,7 @@ import { useAppCommands } from "./hooks/useAppCommands";
 import { useBlankSessions } from "./hooks/useBlankSessions";
 import { showFolder } from "./hooks/useFileTree";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
+import { useKeyOverrides, useLoadKeybindings } from "./hooks/useKeybindings";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
@@ -73,6 +74,9 @@ export function App() {
   useEffect(unlockNotificationAudio, []);
   useSelectAllScope();
   useBrowserBridge();
+  useLoadKeybindings();
+  // Hints that print a chord read it as they render; a rebind redraws them.
+  useKeyOverrides();
 
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
