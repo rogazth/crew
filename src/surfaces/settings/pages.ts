@@ -84,10 +84,10 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
 
 /**
  * Pages whose redesigned version still runs on fake data. They are neither in
- * the nav nor in the search until their stream lands (S2 Usage), and
- * a request for one opens General instead.
+ * the nav nor in the search until their stream lands, and a request for one
+ * opens General instead. None are pending now that Usage reads real data.
  */
-export const PENDING: readonly SettingsSectionId[] = ["usage"];
+export const PENDING: readonly SettingsSectionId[] = [];
 
 type NavGroup = { title: string | null; pages: SettingsSectionId[] };
 
