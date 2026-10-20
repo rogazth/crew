@@ -7,10 +7,10 @@ import { AboutPage } from "./settings/AboutPage";
 import { AppearancePage } from "./settings/AppearancePage";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { CommandLineSettings } from "./settings/CommandLineSettings";
+import { EnvironmentsPage } from "./settings/EnvironmentsPage";
 import { InstalledProviders } from "./settings/InstalledProviders";
 import { KeybindingsPage } from "./settings/KeybindingsPage";
 import { SettingsPage, Toasts } from "./settings/ui";
-import { EnvironmentSettings } from "./EnvironmentSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { SessionSettings } from "./SessionSettings";
 import { TerminalSettings } from "./TerminalSettings";
@@ -72,11 +72,7 @@ function Page({ section, workspaces, onConfirm, onOpenTerminal }: Props) {
         </Framed>
       );
     case "environments":
-      return (
-        <Framed section={section}>
-          <EnvironmentSettings workspaces={workspaces} onOpenTerminal={onOpenTerminal} />
-        </Framed>
-      );
+      return <EnvironmentsPage workspaces={workspaces} onOpenTerminal={onOpenTerminal} />;
     case "providers":
       return (
         <Framed section={section}>
