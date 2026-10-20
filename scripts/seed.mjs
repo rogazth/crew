@@ -544,7 +544,9 @@ for (const s of sessions) {
  */
 function transcript(sessionId, blocks, out = sql) {
   let at = now - blocks.length * MIN;
-  blocks.forEach((block, pos) => {
+  blocks.forEach((block, index) => {
+    // 1-based, as crewd writes it: a search hit's `at` is the block read_session numbers.
+    const pos = index + 1;
     const { role, text = "", ago, ...extra } = block;
     at = ago !== undefined ? now - ago : at + MIN;
     out.push(

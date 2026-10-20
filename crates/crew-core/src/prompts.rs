@@ -99,9 +99,20 @@ You are {name}, a bot in Crew, a desktop app that runs coding agents side by sid
 ### Your memory
 
 Every turn starts fresh. You know only what Crew hands you here: these instructions, the latest part of this \
-conversation, and the message that started this turn. You see only the latest part of this conversation; find older \
-messages with `search_messages`. To keep something for later turns, rewrite your instructions with \
-`update_description`. What other bots know, ask them.
+conversation, and the message that started this turn. That part is your recent memory; the rest of the conversation \
+is still there. Before asking the user something they may already have said, look it up: `read_session` \
+`{\"query\": \"…\"}` searches this conversation, and each hit has its block number `at`; `read_session` \
+`{\"around\": <at>}` reads the conversation there. What other bots know, ask them.
+
+### Your notes {usage}
+
+What you keep for later turns, written with `memory`: facts the conversation will not hold for long, such as ids, \
+prices, what you were allowed, decisions and what is pending. Add an entry when you learn something you will need \
+again; patch or remove it when it changes or is done. They hold {cap} characters: when they fill up, merge and drop \
+entries. Your instructions above are who you are and your standing rules; rewrite them with `update_description` \
+only when those change.
+
+{notes}
 
 ### Who wrote this turn
 
@@ -343,6 +354,8 @@ pub struct Bot<'a> {
     /// What `tools/list` answers it with; empty when Crew's server is not
     /// there, and then nothing about tools is said.
     pub tools: &'a [&'a str],
+    /// Its notes, oldest first (`crate::notes`).
+    pub notes: &'a [String],
 }
 
 pub fn bot(bot: &Bot) -> String {
@@ -355,16 +368,23 @@ pub fn bot(bot: &Bot) -> String {
         job => format!("\n{job}\n"),
     };
     let harness_deferred = with_space(bot.harness.deferred());
+    let notes = match bot.notes.is_empty() {
+        true => "None yet.".to_string(),
+        false => bot.notes.join(crate::notes::SEPARATOR),
+    };
     let mut text = fill(
         BOT,
         &[
+            ("usage", &crate::notes::usage(bot.notes)),
+            ("cap", &crate::notes::thousands(crate::notes::CAP)),
             ("name", name),
             ("id", bot.id),
             ("place", &bot.place.line()),
             ("source", bot.harness.source()),
             ("deferred", &harness_deferred),
             ("tools", &format!("Yours, besides the process and browser tools below: {}.", listed(&others(bot.tools)))),
-            // Last: it is the user's text, and may hold anything.
+            // Last: they are the user's and the bot's text, and may hold anything.
+            ("notes", &notes),
             ("description", &description),
         ],
     );
@@ -474,7 +494,7 @@ mod tests {
     }
 
     fn render_bot(harness: Harness, tools: &[&str]) -> String {
-        bot(&Bot { name: "Lead", id: "b0b", description: "You keep the roadmap.", place: PLACE, harness, tools })
+        bot(&Bot { name: "Lead", id: "b0b", description: "You keep the roadmap.", place: PLACE, harness, tools, notes: &[] })
     }
 
     fn render_session(harness: Harness, parent: Parent, question_tool: bool, tools: &[&str]) -> String {
@@ -540,12 +560,10 @@ mod tests {
             assert!(text.contains(&format!("`{header}")), "{header}:\n{text}");
         }
         assert!(text.contains("`mcp__crew__send_message` `{\"to\": \"<id>\", \"decision\": \"allow\"}`"), "{text}");
-        assert!(
-            text.contains(
-                "You see only the latest part of this conversation; find older messages with `mcp__crew__search_messages`."
-            ),
-            "{text}"
-        );
+        assert!(text.contains("`mcp__crew__read_session` `{\"query\": \"…\"}` searches this conversation"), "{text}");
+        assert!(text.contains("`mcp__crew__read_session` `{\"around\": <at>}` reads the conversation there"), "{text}");
+        let memory = text.split("### Your memory").nth(1).and_then(|rest| rest.split("###").next()).unwrap_or_default();
+        assert!(!memory.contains("update_description"), "the description is not a notebook:\n{memory}");
         assert!(text.contains("and whether it may commit."), "{text}");
         assert!(text.contains("Commands you leave running in the background end with your turn"), "{text}");
         assert!(text.contains("If a call says Crew is not open, say so."), "{text}");
@@ -565,12 +583,40 @@ mod tests {
         }
     }
 
+    /// The notes are in every turn, with how full they are; the description
+    /// is offered for who the bot is, not as a notebook.
+    #[test]
+    fn the_bot_is_handed_its_notes_and_how_full_they_are() {
+        let notes = vec!["el item es 7731942".to_string(), "puede gastar 50 USD".to_string()];
+        let tools = every(CallerKind::Bot);
+        let text = bot(&Bot {
+            name: "Home",
+            id: "b0b",
+            description: "You run the house.",
+            place: PLACE,
+            harness: Harness::Mcp,
+            tools: &tools,
+            notes: &notes,
+        });
+        let used = crate::notes::usage(&notes);
+        assert!(
+            text.contains(&format!("### Your notes {used}\n\nWhat you keep for later turns, written with `mcp__crew__memory`")),
+            "{text}"
+        );
+        assert!(text.contains("el item es 7731942\n§\npuede gastar 50 USD\n\n### Who wrote this turn"), "{text}");
+        assert!(text.contains("They hold 4,000 characters"), "{text}");
+        assert!(render_bot(Harness::Mcp, &tools).contains("### Your notes [0% - 0/4,000]"), "{text}");
+        assert!(render_bot(Harness::Mcp, &tools).contains("None yet."), "{text}");
+    }
+
     /// A bot with no job is still somebody, and says no empty paragraph.
     #[test]
     fn a_bot_with_no_job_is_still_somebody() {
-        let text = bot(&Bot { name: " ", id: "b0b", description: "  ", place: PLACE, harness: Harness::Mcp, tools: &[] });
+        let text =
+            bot(&Bot { name: " ", id: "b0b", description: "  ", place: PLACE, harness: Harness::Mcp, tools: &[], notes: &[] });
         assert!(text.contains("You are the user's bot, a bot in Crew"), "{text}");
         assert!(text.contains("on branch main.\n\n### Your memory"), "{text}");
+        assert!(text.contains("### Your notes [0% - 0/4,000]"), "{text}");
         assert!(!text.contains("### Crew tools") && !text.contains("### Browser"), "no server, no tools:\n{text}");
     }
 

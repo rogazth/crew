@@ -163,6 +163,23 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
 /**
+ * A bot's notes, as the bot sheet shows them: its entries, oldest first,
+ * and the characters they take of the most they may.
+ */
+export type BotNotes = { entries: Array<string>, used: number, cap: number, };
+
+/**
+ * `bot_notes_set`: the user's edit of a bot's notes, every entry.
+ */
+export type BotNotesSet = { id: string, entries: Array<string>, 
+/**
+ * The entries the edit was made from. Given, the edit is laid over the
+ * notes as they are now, so what the bot wrote meanwhile stays; left
+ * out, `entries` replaces them.
+ */
+base?: Array<string>, };
+
+/**
  * Who wrote a message, when it was not the user. Bots address each other by
  * name; the id is what the UI opens when you click it.
  */

@@ -471,7 +471,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "update_description",
-            description: "Rewrite your own description: the standing instructions you are handed at the top of every turn. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
+            description: "Rewrite your own description: who you are and the standing rules you work by, handed to you at the top of every turn. Not for facts, progress or anything that changes; those go in your notes, with memory. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -483,19 +483,18 @@ pub(crate) fn catalog() -> Vec<Tool> {
             cli: vec![cli("bots", "set-description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\"")],
         },
         Tool {
-            name: "search_messages",
-            description: "Search your own conversation: everything you, the user and whoever wrote to you have said in it. Use it before asking the user something they may already have said. What another bot knows is not in here; that you ask it for.",
+            name: "memory",
+            description: "Your notes: what you keep for later turns, shown to you at the top of every turn. For facts the conversation will not hold for long: ids, prices, what you were allowed, decisions, what is pending. add an entry; patch the one entry that holds old_text into content; remove the one that holds old_text; show them. An exact repeat is not added twice. They hold at most 4,000 characters: a write over that is refused with your notes as they are, so merge, shorten or remove entries first.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Words to look for." },
-                    "days": { "type": "integer", "minimum": 1, "description": "Only the last N days. Omit for all of time." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
-                },
-                "required": ["query"]
+                    "action": { "type": "string", "enum": ["add", "patch", "remove", "show"], "description": "show by default." },
+                    "content": { "type": "string", "description": "add: the new entry. patch: what the entry becomes." },
+                    "old_text": { "type": "string", "description": "patch, remove: a piece of the entry, enough to tell it from the others." }
+                }
             }),
-            audience: Audience::BOTS_AND_USER,
-            cli: vec![cli("messages", "search").rest(&["query"]).eg("crew messages search deploy key --days 7")],
+            audience: Audience::BOTS,
+            cli: vec![cli("bots", "notes").rest(&["action", "content"]).eg("crew bots notes\n  crew bots notes add the staging password is in 1Password\n  crew bots notes patch --old-text staging the staging password moved to Vault\n  crew bots notes remove --old-text staging")],
         },
         Tool {
             name: "list_routines",
@@ -582,8 +581,8 @@ pub fn on_demand(name: &str) -> bool {
         "start_session",
         "read_session",
         "stop_session",
-        "search_messages",
         "update_description",
+        "memory",
     ];
     !LOADED.contains(&name)
 }
@@ -618,6 +617,7 @@ impl ToolFamily for CatalogOnly {
 #[cfg(test)]
 pub(crate) const REMOVED_TOOLS: &[&str] = &[
     "message_agent",
+    "search_messages",
     "send_to_session",
     "wait_for_session",
     "respond_to_session",
@@ -824,7 +824,7 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
     match name {
         "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
-        "search_messages" => search_messages(store, caller, args),
+        "memory" => memory(store, bot(caller, name)?, args),
         "list_routines" => list_routines(store, caller, args),
         "save_routine" => save_routine(store, host.transcripts, host.on_routines, caller, args),
         "delete_routine" => delete_routine(store, host.transcripts, host.on_routines, caller, args),
@@ -865,45 +865,41 @@ fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Sessi
     }))
 }
 
-fn search_messages(store: &Store, caller: &Caller, args: &Value) -> Result<Value, String> {
-    let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 50) as u32;
-    let days = args.get("days").and_then(Value::as_u64);
-    // A bot searches one conversation, its own. The transcript is the only
-    // memory a bot has, and the mailbox is the only way into somebody
-    // else's: a search across the workspace would be a second channel that
-    // shows up in no chat. The user already reads every chat in the window, so
-    // for them the workspace is the one conversation.
-    let session_ids = match caller {
-        Caller::User { .. } => Vec::new(),
-        _ => vec![caller.session_id().unwrap_or_default().to_string()],
+/// `memory`: a bot's notes, read or written an entry at a time.
+fn memory(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
+    use crate::notes::{self, Edit, Refused};
+    let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+    let old = args.get("old_text").and_then(Value::as_str).unwrap_or("");
+    let edit = match text(args.get("action")).as_deref().unwrap_or("show") {
+        "show" => return Ok(listing(&notes::get(store, &caller.id)?, None)),
+        "add" => Edit::Add(content),
+        "patch" => Edit::Patch { old, new: content },
+        "remove" => Edit::Remove(old),
+        other => return Err(format!("Unknown action \"{other}\". One of: add, patch, remove, show")),
     };
-    let hits = crate::messages::search(
-        store,
-        crew_protocol::SearchQuery {
-            query,
-            workspace_id: Some(caller.workspace_id()?.to_string()),
-            session_ids,
-            from: days.map(|days| now_millis() - (days as i64) * 86_400_000),
-            to: None,
-            limit: Some(limit),
-            offset: None,
-            sort: None,
-        },
-    )?;
-    let rows: Vec<Value> = hits
-        .into_iter()
-        .map(|hit| {
-            json!({
-                "session": hit.session_name,
-                "when": when(hit.at),
-                "role": format!("{:?}", hit.role).to_lowercase(),
-                // The marks are for painting a UI; a model reads the words.
-                "text": hit.snippet.replace([crate::messages::MARK_OPEN, crate::messages::MARK_CLOSE], "")
-            })
-        })
-        .collect();
-    Ok(Value::Array(rows))
+    // Read, edited and written under one hold, so two writes at once both land.
+    match notes::update(store, &caller.id, |entries| notes::apply(entries, edit).map_err(|refused| (refused, entries.to_vec())))?
+    {
+        Ok((before, next)) if next == before => Ok(listing(&next, Some("Nothing changed: that entry is already there."))),
+        Ok((_, next)) => Ok(listing(&next, Some("Saved. You will see these at the top of your next turn."))),
+        Err((Refused::Asked(why), _)) => Err(why),
+        // The notes come back with the refusal: the bot cannot make room
+        // without seeing what takes it.
+        Err((Refused::Full { needed }, entries)) => Err(format!(
+            "Your notes are full: that needs {needed} more characters than they hold. Make room first (merge entries \
+             that overlap, shorten them, remove what is done), then try again.\nYour notes {}:\n{}",
+            notes::usage(&entries),
+            entries.join(notes::SEPARATOR)
+        )),
+    }
+}
+
+fn listing(entries: &[String], note: Option<&str>) -> Value {
+    let mut out = json!({ "usage": crate::notes::usage(entries), "entries": entries });
+    if let Some(note) = note {
+        out["note"] = json!(note);
+    }
+    out
 }
 
 fn create_bot(
@@ -1283,7 +1279,7 @@ mod tests {
         let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
         assert_eq!(names, visible_names(CallerKind::Bot), "the sheet and the listing are one list");
-        for name in ["create_bot", "update_description", "search_messages", "save_routine"] {
+        for name in ["create_bot", "update_description", "save_routine"] {
             assert!(names.iter().any(|listed| listed == name), "{name}: {names:?}");
         }
         for gone in ["find_tool", "call_tool"].iter().chain(REMOVED_TOOLS) {
@@ -1321,39 +1317,44 @@ mod tests {
         assert_eq!(crate::mailbox::waiting_count(&store, &cuddles.id).unwrap(), 0, "the gateway still delivers");
     }
 
+    /// A bot writes its notes an entry at a time; a write that needs a choice
+    /// it did not make, or more room than there is, is refused with what to do.
     #[test]
-    fn a_bot_can_search_what_was_said() {
+    fn a_bot_keeps_notes_an_entry_at_a_time() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        transcripts.append_user(&coder.id, "the staging password is in 1password", false, None, None);
-        transcripts.flush(&coder.id);
-
-        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "staging password" })).expect("call");
+        let home = bot(&store, &ws, "Home");
+        let run = |args: Value| call(&store, &transcripts, &home, "memory", args).expect("call");
+        let out = run(json!({ "action": "add", "content": "silla: id 7731942" }));
         assert!(!is_error(&out), "{}", body(&out));
-        let text = body(&out);
-        assert!(text.contains("1password"), "{text}");
-        // The UI's hit markers never reach a model.
-        assert!(!text.contains(crate::messages::MARK_OPEN));
+        run(json!({ "action": "add", "content": "mesa: id 5512" }));
+        let again = run(json!({ "action": "add", "content": "mesa: id 5512" }));
+        assert!(body(&again).contains("Nothing changed"), "{}", body(&again));
+        let both = run(json!({ "action": "remove", "old_text": "id" }));
+        assert!(is_error(&both) && body(&both).contains("2 entries"), "{}", body(&both));
+        run(json!({ "action": "patch", "old_text": "silla", "content": "silla: comprada" }));
+        assert_eq!(crate::notes::get(&store, &home.id).unwrap(), vec!["silla: comprada", "mesa: id 5512"]);
+        let shown = run(json!({}));
+        assert!(body(&shown).contains("silla: comprada") && body(&shown).contains("/4,000]"), "{}", body(&shown));
+
+        let full = run(json!({ "action": "add", "content": "x".repeat(crate::notes::CAP) }));
+        assert!(is_error(&full), "{}", body(&full));
+        assert!(body(&full).contains("Your notes are full") && body(&full).contains("silla: comprada"), "{}", body(&full));
+        assert_eq!(crate::notes::get(&store, &home.id).unwrap().len(), 2, "a refused write changes nothing");
     }
 
-    /// The mailbox is the only way into another bot's conversation. A search
-    /// that reached it would be a second channel, read-only and silent, that
-    /// shows up in no chat.
+    /// Notes are a bot's: a terminal is not listed the tool, and the user
+    /// edits them in the bot sheet.
     #[test]
-    fn a_search_stops_at_the_edge_of_its_own_conversation() {
+    fn notes_are_for_bots() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        transcripts.append_user(&cuddles.id, "the client is Acme", false, None, None);
-        transcripts.flush(&cuddles.id);
-
-        let out = call(&store, &transcripts, &coder, "search_messages", json!({ "query": "Acme" })).expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        assert!(!body(&out).contains("Acme"), "{}", body(&out));
+        let shell = terminal(&store, &ws, "Shell");
+        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "memory"));
+        assert!(!visible_names(CallerKind::User).contains(&"memory"));
+        assert!(visible_names(CallerKind::Bot).contains(&"memory"));
     }
 
     /// A description written by another model is fine; one the bot cannot
@@ -1623,7 +1624,7 @@ mod tests {
     }
 
     /// A terminal session has no turns: nothing that leaves a note for the
-    /// next one, and no Crew transcript to search.
+    /// next one.
     #[test]
     fn a_terminal_is_listed_what_it_can_use() {
         let store = store();
@@ -1633,9 +1634,7 @@ mod tests {
         let names = listed(&store, &transcripts, &shell);
         assert_eq!(names, visible_names(CallerKind::Terminal));
         assert!(names.iter().any(|name| name == "create_bot"), "{names:?}");
-        for none in ["update_description", "search_messages"] {
-            assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
-        }
+        assert!(!names.iter().any(|name| name == "update_description"), "{names:?}");
     }
 
     #[test]
@@ -1645,7 +1644,7 @@ mod tests {
         let ws = workspace(&store);
         let names = listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws)));
         assert_eq!(names, visible_names(CallerKind::User));
-        assert!(names.iter().any(|name| name == "search_messages"), "{names:?}");
+        assert!(names.iter().any(|name| name == "list_routines"), "{names:?}");
         for none in ["create_bot", "update_description"] {
             assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
         }
@@ -1669,7 +1668,7 @@ mod tests {
     fn the_user_without_a_workspace_is_told_how_to_name_one() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
-        let out = call_as(&store, &transcripts, &user(None), "search_messages", json!({ "query": "x" })).expect("call");
+        let out = call_as(&store, &transcripts, &user(None), "list_routines", json!({ "bot_id": "x" })).expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("--workspace"), "{}", body(&out));
     }
@@ -1900,7 +1899,7 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
         let tools = out["tools"].as_array().expect("tools");
         let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
-        assert!(named("list_routines").is_some() && named("search_messages").is_some());
+        assert!(named("list_routines").is_some() && named("save_routine").is_some());
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");
         assert!(named("create_bot").is_none(), "not the user's");
@@ -1939,7 +1938,7 @@ mod tests {
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let out = handle(&host, &coder, "tools/list", json!({})).expect("list");
         let tool = |name: &str| out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).cloned().expect(name);
-        for loaded in ["delegate", "send_message", "list_peers", "start_session", "search_messages"] {
+        for loaded in ["delegate", "send_message", "list_peers", "start_session", "read_session"] {
             assert!(tool(loaded).get("_meta").is_none(), "{loaded}");
         }
         for deferred in ["browser_act", "save_routine", "create_bot", "start_sessions"] {

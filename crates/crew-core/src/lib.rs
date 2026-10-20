@@ -26,6 +26,7 @@ pub mod mcp;
 pub mod mcp_status;
 pub mod media;
 pub mod messages;
+pub mod notes;
 pub mod paths;
 pub mod process;
 pub mod process_tools;

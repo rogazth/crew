@@ -349,6 +349,16 @@ function threadMessages({ a, b, before, limit }: Row): Row {
   return { letters: all.slice(start, stop), more: start > 0 };
 }
 
+/** Each bot's notes, as `crew_core::notes` keeps them. */
+const botNotes = new Map<string, string[]>([
+  ["s1", ["The release branch is cut on Thursdays.", "Staging password: in 1Password, vault Crew."]],
+]);
+function notesOf(id: string) {
+  const entries = botNotes.get(id) ?? [];
+  const used = entries.reduce((sum, entry) => sum + [...entry].length, 0) + 3 * Math.max(0, entries.length - 1);
+  return { entries, used, cap: 4000 };
+}
+
 const commands: Record<string, (args: Row) => unknown> = {
   workspace_list: () => workspaces,
   workspace_home: () => {
@@ -395,6 +405,11 @@ const commands: Record<string, (args: Row) => unknown> = {
   },
   session_get: ({ id }) => sessions.find((s) => s.id === id) ?? null,
   session_update: ({ id, ...rest }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, rest),
+  bot_notes_get: ({ id }) => notesOf(String(id)),
+  bot_notes_set: ({ id, entries }) => {
+    botNotes.set(String(id), (entries as string[]).map((entry) => entry.trim()).filter(Boolean));
+    return notesOf(String(id));
+  },
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),
