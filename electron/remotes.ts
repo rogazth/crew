@@ -14,7 +14,7 @@ import type { Upstream } from "./browser/remote-proxy";
 import type { Machine } from "./browser/remote-hosts";
 import { release } from "./build-info";
 import { channelOf } from "./channel";
-import { daemonLogs, installDaemon, remoteLayout, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
+import { daemonLogs, installDaemon, InstallCancelled, remoteLayout, removeDaemon, restartDaemon, rpc, sshDestination, type SshTarget } from "./remote-ssh";
 import { dropToken, getToken, putToken } from "./remote-tokens";
 import { sshHosts } from "./ssh-config";
 import { tailnetFrom } from "./tailscale";
@@ -93,40 +93,59 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
 
   ipcMain.handle("remotes:ssh-hosts", () => sshHosts().catch(() => []));
 
+  /** The install running now, if any: cancelling aborts it. */
+  let installing: AbortController | null = null;
+
+  ipcMain.handle("remotes:cancel-install", () => {
+    installing?.abort();
+  });
+
   ipcMain.handle("remotes:install", async (event, input: InstallInput) => {
     const target = sshOf(input);
-    // The form offers the release's port; a dev or local build keeps off it, so it never meets the release's crewd.
-    const port = input.port === undefined || input.port === DEFAULT_PORT ? layout().port : input.port;
-    const paired = await installDaemon({
-      target,
-      port,
-      layout: layout(),
-      binaryFor: linuxBinary,
-      // The same machine under another name (a public alias, its tailnet IP) is refused before anything changes there.
-      check: async (ip) => {
-        const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {});
-        const same = rows.find((row) => row.host === ip && row.port === port);
-        if (same) {
-          throw new Error(
-            `That machine is already in Crew as ${same.name} (${ip}). To reach it through ${target.destination}, use Edit… in ${same.name}'s menu.`,
-          );
-        }
-      },
-      onStep: (step) => {
-        if (!event.sender.isDestroyed()) event.sender.send("remotes:progress", { ...step, job: INSTALL_JOB });
-      },
-    });
-    const row = await localRpc<RemoteEnv>(getDaemon, "remote_upsert", {
-      id: "",
-      name: input.name.trim() || target.destination,
-      host: paired.ip,
-      port,
-      user: target.user ?? "",
-      ssh: target.destination,
-    });
-    await putToken(row.id, paired.token);
-    machinesChanged();
-    return row;
+    if (installing) throw new Error("Another machine is being set up");
+    const controller = new AbortController();
+    installing = controller;
+    try {
+      // The form offers the release's port; a dev or local build keeps off it, so it never meets the release's crewd.
+      const port = input.port === undefined || input.port === DEFAULT_PORT ? layout().port : input.port;
+      // A crewd already running there at this app's protocol is paired with as it is.
+      const local = await localRpc<{ protocol?: number }>(getDaemon, "daemon_info", {}).catch(() => null);
+      const paired = await installDaemon({
+        target,
+        port,
+        layout: layout(),
+        signal: controller.signal,
+        ...(typeof local?.protocol === "number" ? { reuseProtocol: local.protocol } : {}),
+        binaryFor: linuxBinary,
+        // The same machine under another name (a public alias, its tailnet IP) is refused before anything changes there.
+        check: async (ip) => {
+          const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {});
+          const same = rows.find((row) => row.host === ip && row.port === port);
+          if (same) {
+            throw new Error(
+              `That machine is already in Crew as ${same.name} (${ip}). To reach it through ${target.destination}, use Edit… in ${same.name}'s menu.`,
+            );
+          }
+        },
+        onStep: (step) => {
+          if (!event.sender.isDestroyed()) event.sender.send("remotes:progress", { ...step, job: INSTALL_JOB });
+        },
+      });
+      if (controller.signal.aborted) throw new InstallCancelled();
+      const row = await localRpc<RemoteEnv>(getDaemon, "remote_upsert", {
+        id: "",
+        name: input.name.trim() || target.destination,
+        host: paired.ip,
+        port,
+        user: target.user ?? "",
+        ssh: sshDestination(target),
+      });
+      await putToken(row.id, paired.token);
+      machinesChanged();
+      return row;
+    } finally {
+      installing = null;
+    }
   });
 
   ipcMain.handle("remotes:update", async (event, id: unknown) => {
@@ -219,7 +238,11 @@ function sshOf(input: InstallInput): SshTarget {
   const user = input.user.trim();
   if (!destination) throw new Error("Which machine? Pick one or type its address");
   if (destination.startsWith("-") || /\s/.test(destination)) throw new Error(`"${destination}" is not a host ssh can use`);
-  return user ? { destination, user } : { destination };
+  const sshPort = input.sshPort;
+  if (sshPort !== undefined && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) {
+    throw new Error(`${String(sshPort)} is not an SSH port`);
+  }
+  return { destination, ...(user ? { user } : {}), ...(sshPort ? { port: sshPort } : {}) };
 }
 
 /** A machine added before `ssh` was kept is reached at its tailnet address, as it was installed. */

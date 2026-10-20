@@ -1,24 +1,43 @@
 // Installing crewd on a Linux machine over the system ssh. No Electron here, so
 // a script can run the same steps the window does.
 import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { connect } from "node:net";
 import path from "node:path";
+import type { InstallFailure } from "../src/lib/remotes.ts";
+import { classifyInstallFailure } from "./install-errors.ts";
 import { resolveSsh } from "./ssh-config.ts";
 
-export type StepId = "reach" | "ssh" | "upload" | "service" | "pair" | "clis";
+export type StepId = "reach" | "ssh" | "existing" | "upload" | "service" | "pair" | "clis";
 
 export type StepUpdate = {
   id: StepId;
-  state: "running" | "done" | "error";
+  state: "running" | "done" | "error" | "skipped";
   detail?: string;
+  /** Bytes sent and in all, while the upload runs. */
+  received?: number;
+  total?: number;
+  /** On an error, what it means and what to do. */
+  failure?: InstallFailure;
 };
 
 /**
- * What `ssh` is given: a Host from ~/.ssh/config or an address, and a user
- * only when the one the config (or the Mac's login) would pick is not it.
+ * What `ssh` is given: a Host from ~/.ssh/config or an address, a user only
+ * when the one the config (or the Mac's login) would pick is not it, and a
+ * port only when ssh should not use the one the config (or 22) gives.
  */
-export type SshTarget = { destination: string; user?: string };
+export type SshTarget = { destination: string; user?: string; port?: number };
+
+/** A target an install can abort: ending it kills the ssh runs under it. */
+type Link = SshTarget & { signal?: AbortSignal };
+
+/** The install was cancelled by the person; nothing is wrong. */
+export class InstallCancelled extends Error {
+  constructor() {
+    super("Cancelled");
+    this.name = "InstallCancelled";
+  }
+}
 
 export type Paired = {
   token: string;
@@ -132,6 +151,13 @@ export function lingerWarning(output: string, user: string): string | null {
 export async function installDaemon(opts: {
   target: SshTarget;
   port?: number;
+  /** Aborting it stops the install: the ssh runs end and the half-uploaded file goes. */
+  signal?: AbortSignal;
+  /**
+   * The protocol this app speaks. A crewd already running on the machine at
+   * this protocol is paired with as it is: no upload, no service change.
+   */
+  reuseProtocol?: number;
   binaryFor: (arch: "x64" | "arm64") => string | null;
   onStep?: (step: StepUpdate) => void;
   /** Before anything is written: may refuse the machine by its tailnet address, as one already added. */
@@ -141,34 +167,77 @@ export async function installDaemon(opts: {
   const layout = opts.layout ?? RELEASE;
   const port = opts.port ?? layout.port;
   const { unit, home } = layout;
-  const control = controlPath(opts.target.destination);
-  const report = opts.onStep ?? (() => {});
+  const signal = opts.signal;
+  const target: Link = { ...opts.target, ...(signal ? { signal } : {}) };
+  const control = controlPath(target.destination);
+  const emit = opts.onStep ?? (() => {});
+  // A step that fails says what it means; one cancelled says nothing.
+  const report = (update: StepUpdate) => {
+    if (signal?.aborted) return;
+    const context = {
+      destination: target.destination,
+      port,
+      ...(target.user ? { user: target.user } : {}),
+      ...(target.port ? { sshPort: target.port } : {}),
+    };
+    emit(update.state === "error" ? { ...update, failure: classifyInstallFailure(update.detail ?? "", context) } : update);
+  };
   try {
-    let route: Route = { hostname: opts.target.destination, port: 22, proxied: false };
+    let route: Route = { hostname: target.destination, port: target.port ?? 22, proxied: false };
     await step(report, "reach", async () => {
-      route = await reach(opts.target);
+      route = await reach(target);
       return `${route.hostname}:${route.port}${route.proxied ? " through a proxy" : ""}`;
     });
     let who = "";
     await step(report, "ssh", async () => {
-      who = (await ssh(opts.target, "id -un", control)).trim();
+      who = (await ssh(target, "id -un", control)).trim();
       return `${who}@${route.hostname}`;
     });
-    const ip = await tailnetIp(opts.target, control, route.hostname);
-    await opts.check?.(ip);
-    const uname = (await ssh(opts.target, "uname -m", control)).trim();
+    let ip = "";
+    let running: Paired | null = null;
+    await step(report, "existing", async () => {
+      ip = await tailnetIp(target, control, route.hostname);
+      await opts.check?.(ip);
+      if (opts.reuseProtocol === undefined) return ip;
+      // A crewd already listening here, at a protocol this app speaks, only needs pairing.
+      const token = (await ssh(target, `cat "$HOME/${home}/data/token"`, control).catch(() => "")).trim();
+      if (token) {
+        const found = await pair(ip, port, token, 5_000).catch(() => null);
+        if (found && found.protocol === opts.reuseProtocol) running = found;
+      }
+      return running ? `crewd ${(running as Paired).version} already runs` : "Not installed yet";
+    });
+    if (running) {
+      report({ id: "upload", state: "skipped", detail: "Not needed" });
+      report({ id: "service", state: "skipped", detail: "Already running" });
+      const paired = running as Paired;
+      await step(report, "pair", async () => paired, pairedDetail);
+      await step(report, "clis", async () => (paired.installed.length > 0 ? paired.installed.join(", ") : "none found"));
+      return { ...paired, ip, warning: null };
+    }
+    const uname = (await ssh(target, "uname -m", control)).trim();
     const arch = linuxArch(uname);
     if (!arch) throw new Error(`${uname || "unknown"} is not a Linux architecture Crew ships`);
     const binary = opts.binaryFor(arch);
     if (!binary) throw new Error(`Crew has no Linux build for ${arch}`);
     await step(report, "upload", async () => {
-      await ssh(opts.target, `mkdir -p "$HOME/${home}/bin" "$HOME/${home}/data" "$HOME/.config/systemd/user"`, control);
-      await ssh(opts.target, writeLayoutCommand(layout), control);
+      await ssh(target, `mkdir -p "$HOME/${home}/bin" "$HOME/${home}/data" "$HOME/.config/systemd/user"`, control);
+      await ssh(target, writeLayoutCommand(layout), control);
+      const total = statSync(binary).size;
+      let last = 0;
+      report({ id: "upload", state: "running", received: 0, total });
       await sshStream(
-        opts.target,
+        target,
         `cat > "$HOME/${home}/bin/crewd.new" && chmod 755 "$HOME/${home}/bin/crewd.new"`,
         control,
         binary,
+        (received) => {
+          // Often enough to move a bar, not so often it floods the window.
+          const now = Date.now();
+          if (received < total && now - last < 100) return;
+          last = now;
+          report({ id: "upload", state: "running", received, total });
+        },
       );
     });
     // Not fatal: crewd runs either way, and the warning says what is missing.
@@ -176,44 +245,64 @@ export async function installDaemon(opts: {
     await step(report, "service", async () => {
       // First, as it always was: lingering also starts the user's systemd
       // manager, which `systemctl --user` below needs.
-      const linger = await ssh(opts.target, LINGER_COMMAND, control).catch((error: unknown) =>
+      const linger = await ssh(target, LINGER_COMMAND, control).catch((error: unknown) =>
         error instanceof Error ? error.message : String(error),
       );
       warning = lingerWarning(linger, who || "<user>");
-      if (warning) console.warn(`crewd on ${opts.target.destination}: ${warning}`);
-      await ssh(
-        opts.target,
-        userctl(swapBinary(layout)),
-        control,
-      );
-      await sshStdin(opts.target, `cat > "$HOME/.config/systemd/user/${unit}.service"`, control, serviceUnit(ip, port, layout));
-      await ssh(opts.target, userctl(`systemctl --user daemon-reload && systemctl --user enable --now ${unit}`), control);
+      if (warning) console.warn(`crewd on ${target.destination}: ${warning}`);
+      await ssh(target, userctl(swapBinary(layout)), control);
+      await sshStdin(target, `cat > "$HOME/.config/systemd/user/${unit}.service"`, control, serviceUnit(ip, port, layout));
+      await ssh(target, userctl(`systemctl --user daemon-reload && systemctl --user enable --now ${unit}`), control);
       return warning ?? undefined;
     });
-    const token = await readToken(opts.target, control, layout);
-    const paired = await step(report, "pair", async () => {
-      try {
-        return await pair(ip, port, token);
-      } catch (error) {
-        const logs = await ssh(opts.target, userctl(`journalctl --user -u ${unit} -n 40 --no-pager`), control).catch(() => "");
-        await ssh(opts.target, userctl(`systemctl --user stop ${unit} 2>/dev/null || true`), control).catch(() => {});
-        if (logs.includes("Address already in use")) {
-          throw new Error(`Port ${port} is already in use on that machine`);
+    const token = await readToken(target, control, layout);
+    const paired = await step(
+      report,
+      "pair",
+      async () => {
+        try {
+          return await pair(ip, port, token);
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          const logs = await ssh(target, userctl(`journalctl --user -u ${unit} -n 40 --no-pager`), control).catch(() => "");
+          await ssh(target, userctl(`systemctl --user stop ${unit} 2>/dev/null || true`), control).catch(() => {});
+          if (logs.includes("Address already in use")) {
+            throw new Error(`Port ${port} is already in use on that machine`);
+          }
+          const reason = error instanceof Error ? error.message : String(error);
+          const tail = logs
+            .trim()
+            .split("\n")
+            .filter((line) => line.includes("[crewd]"))
+            .slice(-1)[0];
+          throw new Error(tail ? `${reason}. ${tail}` : reason);
         }
-        const reason = error instanceof Error ? error.message : String(error);
-        const tail = logs
-          .trim()
-          .split("\n")
-          .filter((line) => line.includes("[crewd]"))
-          .slice(-1)[0];
-        throw new Error(tail ? `${reason}. ${tail}` : reason);
-      }
-    });
+      },
+      pairedDetail,
+    );
     await step(report, "clis", async () => (paired.installed.length > 0 ? paired.installed.join(", ") : "none found"));
     return { ...paired, ip, warning };
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+    // Best effort: the half-uploaded binary goes; a service already started is left as it is.
+    await ssh({ ...opts.target }, `rm -f "$HOME/${home}/bin/crewd.new"`, control).catch(() => {});
+    throw new InstallCancelled();
   } finally {
     await closeControl(opts.target, control);
   }
+}
+
+function pairedDetail(paired: Paired): string {
+  return `crewd ${paired.version || "?"}${paired.os ? ` · ${paired.os}` : ""}`;
+}
+
+/**
+ * What a machine keeps as its ssh destination. A port other than the config's
+ * rides in an ssh:// address, which ssh takes anywhere a host goes, so
+ * updating, restarting and removing dial the same port the install did.
+ */
+export function sshDestination(target: SshTarget): string {
+  return target.port && !target.destination.includes("://") ? `ssh://${target.destination}:${target.port}` : target.destination;
 }
 
 export async function restartDaemon(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<void> {
@@ -266,11 +355,16 @@ function userctl(command: string): string {
   return `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ${command}`;
 }
 
-async function step<T>(report: (step: StepUpdate) => void, id: StepId, run: () => Promise<T>): Promise<T> {
+async function step<T>(
+  report: (step: StepUpdate) => void,
+  id: StepId,
+  run: () => Promise<T>,
+  describe?: (result: T) => string | undefined,
+): Promise<T> {
   report({ id, state: "running" });
   try {
     const result = await run();
-    const detail = typeof result === "string" ? result : undefined;
+    const detail = describe ? describe(result) : typeof result === "string" ? result : undefined;
     report(detail ? { id, state: "done", detail } : { id, state: "done" });
     return result;
   } catch (error) {
@@ -286,12 +380,14 @@ type Route = { hostname: string; port: number; proxied: boolean };
  * Where ssh will go for this target, as ~/.ssh/config says, and that it
  * answers there. Through a ProxyJump or ProxyCommand only ssh itself can tell.
  */
-async function reach(target: SshTarget): Promise<Route> {
-  const resolved = await resolveSsh(target.destination, target.user).catch(() => null);
-  const route = { hostname: resolved?.hostname || target.destination, port: resolved?.port ?? 22, proxied: resolved?.proxied ?? false };
+async function reach(target: Link): Promise<Route> {
+  target.signal?.throwIfAborted();
+  const resolved = await resolveSsh(target.destination, target.user, target.port).catch(() => null);
+  const route = { hostname: resolved?.hostname || target.destination, port: resolved?.port ?? target.port ?? 22, proxied: resolved?.proxied ?? false };
   if (route.proxied) return route;
   await new Promise<void>((resolve, reject) => {
     const socket = connect({ host: route.hostname, port: route.port, timeout: 6_000 });
+    target.signal?.addEventListener("abort", () => socket.destroy(new Error("Cancelled")), { once: true });
     const fail = (why: string) => {
       socket.destroy();
       reject(new Error(`Could not reach ${route.hostname} on port ${route.port}: ${why}`));
@@ -318,7 +414,7 @@ export function isTailnetIp(ip: string): boolean {
  * The address crewd listens on. Never a public one: crewd speaks plain
  * WebSocket, and only the tailnet's WireGuard keeps that private.
  */
-async function tailnetIp(target: SshTarget, control: string, hostname: string): Promise<string> {
+async function tailnetIp(target: Link, control: string, hostname: string): Promise<string> {
   try {
     const text = await ssh(target, "tailscale ip -4", control);
     const ip = text
@@ -333,7 +429,7 @@ async function tailnetIp(target: SshTarget, control: string, hostname: string): 
   throw new Error("The machine is not on your tailnet. Crew reaches crewd over Tailscale: install it there and sign in");
 }
 
-async function readToken(target: SshTarget, control: string, layout: RemoteLayout): Promise<string> {
+async function readToken(target: Link, control: string, layout: RemoteLayout): Promise<string> {
   let last = "The daemon did not write its token";
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
@@ -342,13 +438,14 @@ async function readToken(target: SshTarget, control: string, layout: RemoteLayou
     } catch (error) {
       last = error instanceof Error ? error.message : String(error);
     }
+    target.signal?.throwIfAborted();
     await delay(250);
   }
   throw new Error(last);
 }
 
-export function pair(ip: string, port: number, token: string): Promise<Paired> {
-  return rpc<DaemonPayload>(ip, port, token, "daemon_info", {}, 20_000).then((result) => ({
+export function pair(ip: string, port: number, token: string, timeout = 20_000): Promise<Paired> {
+  return rpc<DaemonPayload>(ip, port, token, "daemon_info", {}, timeout).then((result) => ({
     token,
     version: result.version ?? "",
     protocol: result.protocol ?? 0,
@@ -409,7 +506,7 @@ function controlPath(host: string): string {
   return path.join("/tmp", `crewssh-${safe}-${process.pid}`);
 }
 
-function sshArgs(target: SshTarget, control: string): string[] {
+export function sshArgs(target: SshTarget, control: string): string[] {
   return [
     "-o",
     "BatchMode=yes",
@@ -424,32 +521,45 @@ function sshArgs(target: SshTarget, control: string): string[] {
     "-o",
     "ControlPersist=30",
     ...(target.user ? ["-l", target.user] : []),
+    ...(target.port ? ["-p", String(target.port)] : []),
     "--",
     target.destination,
   ];
 }
 
-function ssh(target: SshTarget, remote: string, control: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ssh", [...sshArgs(target, control), remote], { stdio: ["ignore", "pipe", "pipe"] });
-    collect(child, resolve, reject);
+function spawnSsh(target: Link, remote: string, control: string, stdin: "ignore" | "pipe") {
+  return spawn("ssh", [...sshArgs(target, control), remote], {
+    stdio: [stdin, "pipe", "pipe"],
+    ...(target.signal ? { signal: target.signal } : {}),
   });
 }
 
-function sshStdin(target: SshTarget, remote: string, control: string, body: string): Promise<void> {
+function ssh(target: Link, remote: string, control: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ssh", [...sshArgs(target, control), remote], { stdio: ["pipe", "pipe", "pipe"] });
-    child.stdin.end(body);
+    collect(spawnSsh(target, remote, control, "ignore"), resolve, reject);
+  });
+}
+
+function sshStdin(target: Link, remote: string, control: string, body: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawnSsh(target, remote, control, "pipe");
+    child.stdin?.end(body);
     collect(child, () => resolve(), reject);
   });
 }
 
-function sshStream(target: SshTarget, remote: string, control: string, file: string): Promise<void> {
+/** Pipes a file to a remote command, saying how many bytes have gone as they do. */
+function sshStream(target: Link, remote: string, control: string, file: string, onProgress?: (received: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ssh", [...sshArgs(target, control), remote], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawnSsh(target, remote, control, "pipe");
     const input = createReadStream(file);
+    let received = 0;
+    input.on("data", (chunk) => {
+      received += chunk.length;
+      onProgress?.(received);
+    });
     input.on("error", reject);
-    input.pipe(child.stdin);
+    if (child.stdin) input.pipe(child.stdin);
     collect(child, () => resolve(), reject);
   });
 }
@@ -474,7 +584,7 @@ function collect(child: ReturnType<typeof spawn>, resolve: (stdout: string) => v
 
 async function closeControl(target: SshTarget, control: string) {
   await new Promise<void>((resolve) => {
-    const child = spawn("ssh", ["-o", `ControlPath=${control}`, "-O", "exit", ...(target.user ? ["-l", target.user] : []), "--", target.destination], {
+    const child = spawn("ssh", ["-o", `ControlPath=${control}`, "-O", "exit", ...(target.user ? ["-l", target.user] : []), ...(target.port ? ["-p", String(target.port)] : []), "--", target.destination], {
       stdio: "ignore",
     });
     child.on("error", () => resolve());

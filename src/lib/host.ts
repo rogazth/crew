@@ -84,6 +84,8 @@ export type RemotesHost = {
   /** The Hosts in ~/.ssh/config. */
   sshHosts(): Promise<SshHost[]>;
   install(input: InstallInput): Promise<RemoteEnv>;
+  /** Stops the install running now: its ssh runs end and the half-uploaded file is removed. */
+  cancelInstall(): Promise<void>;
   onProgress(cb: (step: InstallStep) => void): () => void;
   /** `warning`: crewd was updated and runs, but lingering is off, so it may stop at logout. */
   update(id: string): Promise<{ warning: string | null }>;
