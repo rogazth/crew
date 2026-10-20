@@ -62,7 +62,16 @@ export function clipOf(work: PanelScope | undefined): { state: ClipState; label:
         </>
       ),
     };
-  return { state: "quiet", label: `${agents(all.length)} finished` };
+  // One that failed did not finish: it is counted on its own, and one that was stopped likewise.
+  const failed = all.filter((entry) => entry.state === "failed").length;
+  const stopped = all.filter((entry) => entry.state === "stopped").length;
+  const finished = all.length - failed - stopped;
+  const parts = [
+    ...(finished > 0 ? [`${agents(finished)} finished`] : []),
+    ...(failed > 0 ? [`${failed} failed`] : []),
+    ...(stopped > 0 ? [`${stopped} stopped`] : []),
+  ];
+  return { state: "quiet", label: parts.join(" · ") };
 }
 
 /**
