@@ -23,6 +23,8 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         cost,
         updated_at: crate::store::now_millis(),
         source: "cli".into(),
+        status: None,
+        overage_status: None,
     })
 }
 

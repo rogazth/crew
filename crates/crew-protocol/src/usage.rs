@@ -49,6 +49,14 @@ pub struct PlanUsage {
     pub updated_at: i64,
     /// Where it came from: `stream`, `app-server`, `api` or `cli`.
     pub source: String,
+    /// Claude's own verdict on the plan limit (`allowed`, `allowed_warning`, `rejected`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    /// The same for the overage (extra usage) allowance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub overage_status: Option<String>,
 }
 
 /// The most an account's longest window stood at on a day (UTC, `YYYY-MM-DD`).

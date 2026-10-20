@@ -104,6 +104,8 @@ pub fn reading(limits: &Value, account: Option<&Value>, now: i64) -> Option<Plan
         cost: None,
         updated_at: now,
         source: "app-server".into(),
+        status: None,
+        overage_status: None,
     })
 }
 

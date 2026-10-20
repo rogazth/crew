@@ -10,6 +10,7 @@ mod cursor;
 mod opencode;
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -136,6 +137,17 @@ impl UsageHost {
                     reading.plan = held.plan.clone();
                 }
                 if merge {
+                    if reading.status.is_none() {
+                        reading.status = held.status.clone();
+                    }
+                    if reading.overage_status.is_none() {
+                        reading.overage_status = held.overage_status.clone();
+                    }
+                    if reading.windows.is_empty() {
+                        // Nothing new was heard: the held windows are no fresher than they were.
+                        reading.updated_at = held.updated_at;
+                        reading.source = held.source.clone();
+                    }
                     for window in &held.windows {
                         if !reading.windows.iter().any(|new| new.id == window.id) {
                             reading.windows.push(window.clone());
@@ -178,6 +190,7 @@ impl UsageHost {
         if windows.is_empty() {
             return;
         }
+        let (status, overage_status) = claude::parse_status(rec);
         let host = self.clone();
         std::thread::spawn(move || {
             let (account, plan) = host.claude_signed_in().unwrap_or((String::new(), None));
@@ -191,6 +204,8 @@ impl UsageHost {
                     cost: None,
                     updated_at: now,
                     source: "stream".into(),
+                    status,
+                    overage_status,
                 },
                 true,
             );
@@ -213,6 +228,8 @@ impl UsageHost {
                 cost: None,
                 updated_at: now_millis(),
                 source: "app-server".into(),
+                status: None,
+                overage_status: None,
             },
             false,
         );
@@ -271,6 +288,8 @@ impl UsageHost {
                 cost: None,
                 updated_at: now_millis(),
                 source: "cli".into(),
+                status: None,
+                overage_status: None,
             },
             true,
         );
@@ -348,7 +367,7 @@ pub(crate) fn parse_iso_ms(text: &str) -> Option<i64> {
 /// Runs a CLI to its end and returns what it printed, or nothing if it fails
 /// or outlasts `timeout`.
 pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(path).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = Command::new(path).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut text = String::new();
@@ -361,14 +380,17 @@ pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
-                let _ = child.kill();
+                // Kill the whole group: a grandchild may hold the pipe open.
+                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
                 let _ = child.wait();
                 break false;
             }
         }
     };
-    let text = reader.join().ok()?;
-    ok.then_some(text)
+    if !ok {
+        return None;
+    }
+    reader.join().ok()
 }
 
 
@@ -390,6 +412,8 @@ mod tests {
             cost: None,
             updated_at: at,
             source: "stream".into(),
+            status: None,
+            overage_status: None,
         }
     }
 

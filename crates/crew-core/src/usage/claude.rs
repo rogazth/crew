@@ -43,6 +43,14 @@ pub fn parse_rate_limit(rec: &Map<String, Value>, _now_ms: i64) -> Vec<UsageWind
     out
 }
 
+/// The plan limit's and the overage's verdicts of a `rate_limit_event`
+/// (`rate_limit_info.status` and `.overageStatus`).
+pub fn parse_status(rec: &Map<String, Value>) -> (Option<String>, Option<String>) {
+    let info = rec.get("rate_limit_info");
+    let get = |key: &str| info.and_then(|i| i.get(key)).and_then(Value::as_str).map(str::to_string);
+    (get("status"), get("overageStatus"))
+}
+
 fn capitalized(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()

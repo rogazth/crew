@@ -18,7 +18,7 @@ use super::{parse_iso_ms, run};
 const SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
 
 pub fn read(bin: &str) -> Option<PlanUsage> {
-    let about = run(bin, &["about", "--format", "json"], Duration::from_secs(15)).and_then(|text| parse_about(&text));
+    let about = run(bin, &["about", "--format", "json"], Duration::from_secs(30)).and_then(|text| parse_about(&text));
     let summary = access_token().and_then(|token| fetch_summary(&token)).and_then(|text| parse_summary(&text));
     if about.is_none() && summary.is_none() {
         return None;
@@ -30,6 +30,8 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         account: email,
         plan: tier.or(plan),
         source: if windows.is_empty() { "cli" } else { "api" }.into(),
+        status: None,
+        overage_status: None,
         windows,
         tokens: None,
         cost: None,
@@ -67,7 +69,8 @@ pub fn parse_summary(text: &str) -> Option<(Option<String>, Vec<UsageWindow>)> {
 
 /// The token `cursor-agent login` stored, if it can be found cheaply.
 fn access_token() -> Option<String> {
-    keychain_token().or_else(file_token)
+    // The token goes into a curl config: anything but a JWT's characters is refused.
+    keychain_token().or_else(file_token).filter(|token| !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
 }
 
 #[cfg(target_os = "macos")]

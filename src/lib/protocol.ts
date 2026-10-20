@@ -778,7 +778,15 @@ updatedAt: number,
 /**
  * Where it came from: `stream`, `app-server`, `api` or `cli`.
  */
-source: string, };
+source: string, 
+/**
+ * Claude's own verdict on the plan limit (`allowed`, `allowed_warning`, `rejected`).
+ */
+status?: string, 
+/**
+ * The same for the overage (extra usage) allowance.
+ */
+overageStatus?: string, };
 
 /**
  * A command of the workspace's inventory, with the runs it has in its worktrees.

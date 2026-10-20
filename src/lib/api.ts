@@ -505,5 +505,5 @@ export const usageRead = (refresh = false, envId?: string): Promise<UsageSnapsho
   client.request("usage_read", { refresh }, envId);
 
 /** Told with a machine's whole snapshot each time one of its readings changes (`usage-changed`). */
-export const onUsageChanged = (listener: (snapshot: UsageSnapshot) => void): (() => void) =>
-  client.on("usage-changed", (payload) => listener(payload as UsageSnapshot));
+export const onUsageChanged = (listener: (snapshot: UsageSnapshot, envId: string) => void): (() => void) =>
+  client.on("usage-changed", (payload, env) => listener(payload as UsageSnapshot, env));
