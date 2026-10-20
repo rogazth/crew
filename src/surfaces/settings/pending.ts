@@ -1,13 +1,12 @@
-// Replaced by streams S2–S5 of docs/plans/2026-10-19-design-system-finish.md
+// Replaced by streams S2–S4 of docs/plans/2026-10-19-design-system-finish.md
 //
 // Fake data and simulated jobs for what the backend does not do yet, behind
 // the redesigned pages that are not reachable in the app until their stream
-// lands (Providers, Environments, Add machine, About):
+// lands (Providers, Environments, Add machine):
 //   machines   this Mac and a few remotes in every connection state, the
 //              ~/.ssh/config hosts and tailnet devices the add flow offers, and
 //              the simulated walk that sets a new machine up
 //   providers  each CLI's version, account and install on every machine
-//   build      Crew's build and changelog
 // Module stores, so a page switch keeps a running simulated job going.
 import { useSyncExternalStore } from "react";
 import { defaultEffortOf, defaultModelOf, type Effort, type ProviderId } from "../../lib/providers";
@@ -881,124 +880,5 @@ export function syncInstalled(found: ProviderId[]) {
   emit();
 }
 
-/* ── Crew itself ────────────────────────────────────────────────────── */
-
-export const BUILD: [string, string][] = [
-  ["Version", "0.3.15 (arm64)"],
-  ["Commit", "1b41045"],
-  ["Built", "October 17, 2026"],
-  ["Electron", "44.2.0"],
-  ["Chromium", "150.0.7811.42"],
-  ["Node", "24.11.0"],
-  ["Daemon", "crewd 0.3.15"],
-  ["macOS", "14.6 (23G80)"],
-];
-
-export type ChangeKind = "new" | "improved" | "fixed";
-
-export const CHANGELOG: { version: string; date: string; notes: { kind: ChangeKind; text: string }[] }[] = [
-  {
-    version: "0.3.15",
-    date: "October 17, 2026",
-    notes: [
-      { kind: "improved", text: "The composer shows its key hints only while a turn runs." },
-      { kind: "fixed", text: "crewd keeps installing on a remote machine when lingering is refused, and warns it may stop at logout." },
-    ],
-  },
-  {
-    version: "0.3.14",
-    date: "October 15, 2026",
-    notes: [
-      { kind: "new", text: "Agents on remote machines drive their workspace's tabs in Crew's browser." },
-      { kind: "improved", text: "Pages see Google Chrome, so bot checks stop challenging Crew's browser." },
-      { kind: "fixed", text: "After /clear, a relaunch follows claude to its new conversation." },
-    ],
-  },
-  {
-    version: "0.3.13",
-    date: "October 13, 2026",
-    notes: [
-      { kind: "new", text: "Big attachments upload to remote machines in pieces, with progress." },
-      { kind: "new", text: "Files picked in the dialog are sent to the remote machine too." },
-      { kind: "improved", text: "A shell with no description is just called Shell, its command in the tooltip." },
-      { kind: "fixed", text: "Tasks that ran in the foreground no longer leave a wake note." },
-    ],
-  },
-  {
-    version: "0.3.12",
-    date: "October 9, 2026",
-    notes: [
-      { kind: "new", text: "File chips appear only when the file is really there." },
-      { kind: "new", text: "@ mentions offer folders, which open in the explorer." },
-      { kind: "improved", text: "A shell's header names it by a short label and shows its whole command." },
-    ],
-  },
-  {
-    version: "0.3.11",
-    date: "October 6, 2026",
-    notes: [{ kind: "new", text: "A steer shows as a bubble pinned at the foot of the transcript until the turn reads it." }],
-  },
-  {
-    version: "0.3.10",
-    date: "October 2, 2026",
-    notes: [
-      { kind: "new", text: "New sessions start on the last model, effort and access you picked." },
-      { kind: "fixed", text: "Sessions get their titles again on every provider." },
-      { kind: "fixed", text: "Fast mode is hidden where the account can't use it." },
-    ],
-  },
-];
-
 /** A fake async step: resolves after `ms`, for the simulated work above. */
 export const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-
-/* ── A simulated app update, for the About page ─────────────────────────── */
-
-export type UpdatePhase = "none" | "available" | "downloading" | "ready";
-
-let sim: { update: UpdatePhase; progress: number } = { update: "none", progress: 0 };
-const simListeners = new Set<() => void>();
-let ticker: number | undefined;
-
-function setSim(next: Partial<typeof sim>) {
-  sim = { ...sim, ...next };
-  for (const listener of simListeners) listener();
-}
-
-/** Walks the simulated update: available → downloading (ticks to 100%) → ready. */
-export function setUpdate(update: UpdatePhase) {
-  window.clearInterval(ticker);
-  setSim({ update, progress: update === "ready" ? 1 : 0 });
-  if (update !== "downloading") return;
-  ticker = window.setInterval(() => {
-    const progress = Math.min(1, sim.progress + 0.04 + Math.random() * 0.05);
-    if (progress >= 1) {
-      window.clearInterval(ticker);
-      setSim({ update: "ready", progress: 1 });
-    } else setSim({ progress });
-  }, 220);
-}
-
-export function useUpdateSim() {
-  return useSyncExternalStore(
-    (listener) => {
-      simListeners.add(listener);
-      return () => simListeners.delete(listener);
-    },
-    () => sim,
-  );
-}
-
-/** The release a simulated update offers. */
-export const RELEASE = {
-  version: "0.3.16",
-  current: "0.3.15",
-  size: "48.6 MB",
-  date: "October 20, 2026",
-  notes: [
-    { kind: "new", text: "Agents on remote machines drive their workspace's tabs in Crew's browser." },
-    { kind: "improved", text: "Pages see Google Chrome, so bot checks stop challenging Crew's browser." },
-    { kind: "improved", text: "The composer shows its key hints only while a turn runs." },
-    { kind: "fixed", text: "crewd keeps installing on a remote machine when lingering is refused." },
-  ],
-} as const;

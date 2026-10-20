@@ -1,7 +1,8 @@
 // The settings nav: a search that finds pages and single settings (Enter lands
 // on the row and lights it), and the pages grouped by what they govern.
-import { ArrowLeftIcon, CornerDownLeftIcon, SearchIcon, XIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowLeftIcon, CornerDownLeftIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useUpdateActions, useUpdateState } from "../hooks/useUpdate";
 import type { SettingsSectionId } from "../lib/settings";
 import { NAV_GROUPS, PAGES, PENDING, settingsIndex, type IndexEntry } from "../surfaces/settings/pages";
 import { useSectionRequests } from "../surfaces/settings/route";
@@ -103,6 +104,63 @@ export function SettingsSidebar({ section, onSelect, onClose }: Props) {
           <Groups section={section} onSelect={onSelect} />
         )}
       </nav>
+      <UpdatePill onOpen={() => onSelect("about")} />
+    </div>
+  );
+}
+
+/** A release waiting to be taken, at the foot of the nav: what it is doing, and the one thing to do next. */
+function UpdatePill({ onOpen }: { onOpen: () => void }) {
+  const state = useUpdateState();
+  const { download, restart, cancel } = useUpdateActions();
+  let label: string;
+  let glyph = <ArrowDownToLineIcon className="size-4 shrink-0 text-accent" />;
+  let action: { label: string; run: () => void } | null = null;
+  switch (state.phase) {
+    case "available":
+      label = `Crew ${state.offer.version} available`;
+      action = { label: "Download", run: download };
+      break;
+    case "downloading": {
+      const percent = state.total ? Math.round((state.received / state.total) * 100) : null;
+      label = percent === null ? `Downloading ${state.offer.version}` : `Downloading ${state.offer.version} · ${percent}%`;
+      action = { label: "Cancel", run: cancel };
+      break;
+    }
+    case "staging":
+      label = `Preparing ${state.offer.version}`;
+      break;
+    case "ready":
+      label = `Crew ${state.offer.version} is ready`;
+      glyph = <RotateCwIcon className="size-4 shrink-0 text-accent" />;
+      action = { label: "Restart", run: restart };
+      break;
+    default:
+      return null;
+  }
+  return (
+    <div className="shrink-0 px-[11px] pb-3">
+      <div className="flex h-9 items-center gap-2 rounded-chrome bg-accent/12 pr-1 pl-2">
+        <button
+          type="button"
+          data-tauri-drag-region="false"
+          onClick={onOpen}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
+        >
+          {glyph}
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{label}</span>
+        </button>
+        {action && (
+          <button
+            type="button"
+            data-tauri-drag-region="false"
+            onClick={action.run}
+            className="h-7 shrink-0 rounded-md px-2 text-[12px] font-medium text-accent outline-none hover:bg-accent/12 focus-visible:ring-2 focus-visible:ring-focus/50"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

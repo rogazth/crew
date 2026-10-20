@@ -15,6 +15,7 @@ import { FILE_CHANNELS } from "../src/lib/browser/files";
 import { NOTIFY_CHANNELS, type Banner, type DockBadge, type NotificationTarget } from "../src/lib/notify";
 import { CLI_CHANNELS } from "../src/lib/cli";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
+import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
@@ -27,6 +28,8 @@ function listen<T>(channel: string, cb: (value: T) => void): () => void {
 
 contextBridge.exposeInMainWorld("crewHost", {
   daemonInfo: () => ipcRenderer.invoke("daemon-info"),
+  appInfo: () => ipcRenderer.invoke(APP_INFO_CHANNEL),
+  openLicenses: () => ipcRenderer.invoke(LICENSES_CHANNEL),
   open: (opts: { multiple?: boolean; directory?: boolean }) => ipcRenderer.invoke("dialog-open", opts),
   homeDir: () => ipcRenderer.invoke("home-dir"),
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
@@ -72,7 +75,12 @@ contextBridge.exposeInMainWorld("crewHost", {
   update: {
     current: () => ipcRenderer.invoke(UPDATE_CHANNELS.current),
     onState: (cb: (state: UpdateState) => void) => listen(UPDATE_CHANNELS.state, cb),
-    install: () => ipcRenderer.invoke(UPDATE_CHANNELS.install),
+    onShow: (cb: () => void) => listen(UPDATE_CHANNELS.show, cb),
+    check: () => ipcRenderer.invoke(UPDATE_CHANNELS.check),
+    download: () => ipcRenderer.invoke(UPDATE_CHANNELS.download),
+    restart: () => ipcRenderer.invoke(UPDATE_CHANNELS.restart),
+    setAutoDownload: (on: boolean) => ipcRenderer.invoke(UPDATE_CHANNELS.auto, on),
+    releases: () => ipcRenderer.invoke(UPDATE_CHANNELS.releases),
     dismiss: () => ipcRenderer.invoke(UPDATE_CHANNELS.dismiss),
     cancel: () => ipcRenderer.invoke(UPDATE_CHANNELS.cancel),
   },

@@ -84,10 +84,10 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
 
 /**
  * Pages whose redesigned version still runs on fake data. They are neither in
- * the nav nor in the search until their stream lands (S2 Usage, S5 About), and
+ * the nav nor in the search until their stream lands (S2 Usage), and
  * a request for one opens General instead.
  */
-export const PENDING: readonly SettingsSectionId[] = ["usage", "about"];
+export const PENDING: readonly SettingsSectionId[] = ["usage"];
 
 type NavGroup = { title: string | null; pages: SettingsSectionId[] };
 
@@ -119,9 +119,10 @@ const SETTINGS: IndexEntry[] = [
   { id: "provider-opencode", label: "OpenCode", page: "providers", keywords: "sst install" },
   { id: "provider-cursor", label: "Cursor", page: "providers", keywords: "cursor-agent" },
   { id: "updates", label: "Check for updates", page: "about", keywords: "version upgrade release" },
-  { id: "channel", label: "Update channel", page: "about", keywords: "beta stable" },
+  { id: "auto-download", label: "Download updates automatically", page: "about", keywords: "update upgrade background" },
   { id: "build", label: "Build", page: "about", keywords: "commit electron node version" },
   { id: "changelog", label: "What's new", page: "about", keywords: "changelog release notes" },
+  { id: "licenses", label: "Licenses", page: "about", keywords: "open source third party notices acknowledgements" },
   { id: "notif-sound", label: "Notification sound", page: "notifications", keywords: "alert banner" },
   { id: "terminal-font", label: "Terminal font", page: "terminal", keywords: "mono ligatures size" },
   { id: "links-in-crew", label: "Open links in Crew", page: "browser", keywords: "default browser" },

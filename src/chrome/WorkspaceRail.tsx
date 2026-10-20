@@ -6,6 +6,7 @@ import { ActionMenu } from "./ActionMenu";
 import { CrewGlyph } from "./CrewGlyph";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
+import { RailUpdate } from "./UpdateButton";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
@@ -140,6 +141,8 @@ export function WorkspaceRail(props: Props) {
       />
 
       <div className="flex-1" />
+
+      <RailUpdate />
 
       {/* The foot sits under a short rule, apart from the marks. */}
       <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />

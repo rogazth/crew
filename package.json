@@ -15,6 +15,7 @@
     "seed": "node scripts/seed.mjs",
     "app:build": "node scripts/app-build.mjs",
     "icon": "node scripts/icon.mjs",
+    "licenses": "node scripts/licenses.mjs",
     "sounds": "node scripts/sounds.mjs",
     "file-icons": "node scripts/file-icons.mjs",
     "prepare": "husky",
@@ -114,6 +115,10 @@
       {
         "from": "target/release/crew",
         "to": "crew"
+      },
+      {
+        "from": "target/licenses.txt",
+        "to": "licenses.txt"
       },
       {
         "from": "target/linux/crewd-linux-x64",

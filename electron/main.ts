@@ -36,7 +36,8 @@ import { buildMenu } from "./menu";
 import { registerNotifyIpc } from "./notifications";
 import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
-import { watchForUpdates } from "./update";
+import { registerAppInfoIpc } from "./app-info";
+import { installStagedOnQuit, watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
 type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -478,6 +479,7 @@ function registerIpc(): void {
   registerFileIpc();
   registerRemoteIpc(daemonInfo, { restart: restartLocalDaemon, logs: localDaemonLogs });
   registerCliIpc();
+  registerAppInfoIpc();
 }
 
 registerFileScheme();
@@ -583,6 +585,9 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// A release the user downloaded but did not restart into goes in as Crew closes.
+app.on("will-quit", installStagedOnQuit);
 
 app.on("before-quit", (event) => {
   // Packaged: crewd and everything it runs stay up; the app only lets go.
