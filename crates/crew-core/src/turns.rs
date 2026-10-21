@@ -2367,7 +2367,10 @@ impl TurnHost {
 
     fn mcp(&self) -> Option<(String, Vec<String>)> {
         let info = self.bridge.info().ok()?;
+        #[cfg(test)]
         let exe = self.mcp_exe.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or(info.exe);
+        #[cfg(not(test))]
+        let exe = info.exe;
         Some((exe, vec!["--mcp".into()]))
     }
 
