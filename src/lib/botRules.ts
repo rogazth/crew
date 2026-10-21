@@ -1,10 +1,10 @@
 import type { BotRule, BotRulesSave, CitedMessage } from "./protocol";
 
 /**
- * One rule being edited in the bot sheet: `id` is the stored rule's, null for
- * one being added; `key` keeps its row while the text changes.
+ * One rule being edited in the bot sheet: `id` is the stored rule's (`r3`),
+ * null for one being added; `key` keeps its row while the text changes.
  */
-export type RuleRow = { key: number; id: number | null; text: string; cited?: CitedMessage };
+export type RuleRow = { key: number; id: string | null; text: string; cited?: CitedMessage };
 
 let nextKey = 0;
 
@@ -31,7 +31,7 @@ export function rulesUsed(rows: RuleRow[]): number {
  * changed, and the new ones, by id. Null when nothing changed.
  */
 export function ruleChanges(saved: BotRule[], rows: RuleRow[]): Omit<BotRulesSave, "id"> | null {
-  const remove: number[] = [];
+  const remove: string[] = [];
   const edit: BotRulesSave["edit"] = [];
   const byId = new Map(rows.flatMap((row) => (row.id === null ? [] : [[row.id, row] as const])));
   for (const rule of saved) {
@@ -42,9 +42,4 @@ export function ruleChanges(saved: BotRule[], rows: RuleRow[]): Omit<BotRulesSav
   }
   const add = rows.flatMap((row) => (row.id === null && tidyRule(row.text) ? [tidyRule(row.text)] : []));
   return remove.length || edit.length || add.length ? { add, edit, remove } : null;
-}
-
-/** `r3`: how the bot names a rule. */
-export function ruleLabel(id: number): string {
-  return `r${id}`;
 }

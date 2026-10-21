@@ -179,9 +179,9 @@ kind?: string, };
  */
 export type BotRule = { 
 /**
- * What the bot names it by, after an `r`: 3 is `r3`.
+ * Its id within the bot, as the bot names it: `r3`.
  */
-id: number, body: string, 
+id: string, body: string, 
 /**
  * The user's message that set it, while the transcript has it.
  */
@@ -190,7 +190,7 @@ cited?: CitedMessage, };
 /**
  * A rule's new text.
  */
-export type BotRuleEdit = { id: number, body: string, };
+export type BotRuleEdit = { id: string, body: string, };
 
 /**
  * A bot's rules, as the bot sheet shows them: each by its id, oldest
@@ -200,10 +200,10 @@ export type BotRules = { rules: Array<BotRule>, used: number, cap: number, };
 
 /**
  * `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
- * id, applied whole or not at all. An edit or a removal of a rule the bot
- * removed meanwhile is dropped.
+ * id (`r3`), applied whole or not at all. An edit or a removal of a rule the
+ * bot removed meanwhile is dropped.
  */
-export type BotRulesSave = { id: string, add: Array<string>, edit: Array<BotRuleEdit>, remove: Array<number>, };
+export type BotRulesSave = { id: string, add: Array<string>, edit: Array<BotRuleEdit>, remove: Array<string>, };
 
 /**
  * The host has a `browser-call` and is working on it.

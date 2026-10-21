@@ -485,9 +485,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if current < 41 {
         let tx = conn.unchecked_transaction()?;
-        // The notes become rules, a row each, and the notes table goes.
-        tx.execute_batch(crate::rules::MIGRATION_V41)?;
-        crate::rules::migrate_notes(&tx)?;
+        // The notes become rules, a row each numbered within its bot, and the
+        // notes table goes.
+        crate::rules::migrate_v41(&tx)?;
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (41, ?1)", params![now_millis()])?;
         tx.commit()?;
     }

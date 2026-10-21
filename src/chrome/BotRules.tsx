@@ -2,7 +2,7 @@ import { PlusIcon, XIcon } from "lucide-react";
 import { useRef } from "react";
 import { Button, IconButton, TextArea } from "./kit";
 import type { useBotRules } from "../hooks/useBotRules";
-import { newRuleRow, ruleLabel, rulesUsed } from "../lib/botRules";
+import { newRuleRow, rulesUsed } from "../lib/botRules";
 import { dayName } from "../lib/time";
 
 const count = (n: number) => n.toLocaleString("en-US");
@@ -38,7 +38,7 @@ export function BotRules({ rules }: { rules: ReturnType<typeof useBotRules> }) {
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <TextArea
                   rows={2}
-                  aria-label={row.id === null ? "New rule" : `Rule ${ruleLabel(row.id)}`}
+                  aria-label={row.id === null ? "New rule" : `Rule ${row.id}`}
                   value={row.text}
                   className="min-h-0"
                   onChange={(event) =>

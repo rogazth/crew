@@ -3,8 +3,8 @@ import type { BotRule } from "./protocol";
 import { newRuleRow, ruleChanges, ruleRows, rulesUsed } from "./botRules";
 
 const saved: BotRule[] = [
-  { id: 1, body: "Never push to master", cited: { excerpt: "nunca hagas push a master", at: 0 } },
-  { id: 4, body: "Run the tests before pushing" },
+  { id: "r1", body: "Never push to master", cited: { excerpt: "nunca hagas push a master", at: 0 } },
+  { id: "r4", body: "Run the tests before pushing" },
 ];
 
 describe("bot rules", () => {
@@ -20,14 +20,14 @@ describe("bot rules", () => {
     const added = { ...newRuleRow(), text: "Ask before deleting a branch" };
     expect(ruleChanges(saved, [rows[0]!, added])).toEqual({
       add: ["Ask before deleting a branch"],
-      edit: [{ id: 1, body: "Never push to main" }],
-      remove: [4],
+      edit: [{ id: "r1", body: "Never push to main" }],
+      remove: ["r4"],
     });
   });
 
   it("removes a rule the user emptied", () => {
-    const rows = ruleRows(saved).map((row) => (row.id === 4 ? { ...row, text: "   " } : row));
-    expect(ruleChanges(saved, rows)).toEqual({ add: [], edit: [], remove: [4] });
+    const rows = ruleRows(saved).map((row) => (row.id === "r4" ? { ...row, text: "   " } : row));
+    expect(ruleChanges(saved, rows)).toEqual({ add: [], edit: [], remove: ["r4"] });
   });
 
   it("counts characters the way the daemon caps them", () => {

@@ -351,13 +351,13 @@ function threadMessages({ a, b, before, limit }: Row): Row {
 }
 
 /** Each bot's rules, as `crew_core::rules` keeps them. */
-type MockRule = { id: number; body: string; cited?: { excerpt: string; at: number } };
+type MockRule = { id: string; body: string; cited?: { excerpt: string; at: number } };
 const botRules = new Map<string, MockRule[]>([
   [
     "s1",
     [
-      { id: 1, body: "Never push to master.", cited: { excerpt: "nunca hagas push directo a master, abre un PR", at: now - 2 * 86_400_000 } },
-      { id: 2, body: "Run the tests before pushing." },
+      { id: "r1", body: "Never push to master.", cited: { excerpt: "nunca hagas push directo a master, abre un PR", at: now - 2 * 86_400_000 } },
+      { id: "r2", body: "Run the tests before pushing." },
     ],
   ],
 ]);
@@ -369,12 +369,12 @@ function rulesOf(id: string) {
 function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
   const tidy = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
   const rules = (botRules.get(String(id)) ?? [])
-    .filter((rule) => !(remove as number[]).includes(rule.id))
+    .filter((rule) => !(remove as string[]).includes(rule.id))
     .map((rule) => {
-      const changed = (edit as { id: number; body: string }[]).find((e) => e.id === rule.id);
+      const changed = (edit as { id: string; body: string }[]).find((e) => e.id === rule.id);
       return changed ? { ...rule, body: tidy(changed.body) } : rule;
     });
-  for (const body of add as string[]) if (tidy(body)) rules.push({ id: nextRule++, body: tidy(body) });
+  for (const body of add as string[]) if (tidy(body)) rules.push({ id: `r${nextRule++}`, body: tidy(body) });
   botRules.set(String(id), rules);
   return rulesOf(String(id));
 }

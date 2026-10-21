@@ -462,17 +462,14 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
     if let Some(BotRulesSave { add, edit, remove, .. }) = save {
         // A rule the bot removed while the sheet was open is not the user's
-        // to edit or remove any more.
+        // to edit or remove any more; nor is an id that names no rule.
         let there: Vec<i64> = rules::list(store, &row.id)?.into_iter().map(|rule| rule.id).collect();
+        let known = |label: &str| rules::parse_label(label).filter(|id| there.contains(id));
         let changes: Vec<Change> = remove
-            .into_iter()
-            .filter(|id| there.contains(id))
+            .iter()
+            .filter_map(|label| known(label))
             .map(Change::Remove)
-            .chain(
-                edit.into_iter()
-                    .filter(|edit| there.contains(&edit.id))
-                    .map(|edit| Change::Edit { id: edit.id, body: edit.body }),
-            )
+            .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
             .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add {
                 body,
                 message_id: None,
@@ -493,7 +490,7 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
         rules: listed
             .into_iter()
             .map(|rule| proto::BotRule {
-                id: rule.id,
+                id: rules::label(rule.id),
                 body: rule.body,
                 cited: rule.cited.map(|cited| proto::CitedMessage { excerpt: excerpt(&cited.text, 160), at: cited.at }),
             })
@@ -2624,7 +2621,7 @@ mod tests {
         let rules: BotRules = serde_json::from_value(read.result.expect("rules")).expect("rules");
         assert_eq!((rules.used, rules.cap, rules.rules.len()), (20, 1_500, 1));
         let first = rules.rules[0].clone();
-        assert_eq!(first.body, "Never push to master");
+        assert_eq!((first.id.as_str(), first.body.as_str()), ("r1", "Never push to master"));
         assert_eq!(first.cited.as_ref().map(|cited| cited.excerpt.as_str()), Some("nunca hagas push a master"));
 
         // The bot writes another while the sheet is open; the sheet's save
@@ -2632,7 +2629,7 @@ mod tests {
         unix_call(&info.socket_path, &add("Run the tests before pushing"));
         let save = serde_json::json!({
             "id": session_id,
-            "edit": [{ "id": first.id, "body": "Never push to main" }],
+            "edit": [{ "id": "r1", "body": "Never push to main" }],
             "add": ["Ask before deleting a branch", " "]
         });
         let saved: BotRules =
@@ -2640,10 +2637,12 @@ mod tests {
         let bodies: Vec<&str> = saved.rules.iter().map(|rule| rule.body.as_str()).collect();
         assert_eq!(bodies, ["Never push to main", "Run the tests before pushing", "Ask before deleting a branch"]);
         assert!(saved.rules[0].cited.is_some() && saved.rules[2].cited.is_none());
+        let ids: Vec<&str> = saved.rules.iter().map(|rule| rule.id.as_str()).collect();
+        assert_eq!(ids, ["r1", "r2", "r3"]);
         let again = rpc(&mut ws, 52, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
         assert_eq!(serde_json::from_value::<BotRules>(again.result.expect("rules")).unwrap(), saved);
 
-        let removed = serde_json::json!({ "id": session_id, "remove": [first.id, first.id + 100] });
+        let removed = serde_json::json!({ "id": session_id, "remove": ["r1", "r100", "nope"] });
         let left: BotRules =
             serde_json::from_value(rpc(&mut ws, 53, "bot_rules_save", removed).await.result.expect("removed")).unwrap();
         assert_eq!(left.rules.len(), 2);

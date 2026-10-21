@@ -5,9 +5,10 @@
 //! They replace the notes, one text split by `§` that the bot could not
 //! address: a patch replaced the whole entry that held a phrase, a remove
 //! matched by substring, and the bot kept ids, prices and pending work there.
-//! A rule is a row with an id the bot edits or removes it by, and one the bot
-//! adds cites the user's message that set it: what is not the user's decision
-//! has no message to cite.
+//! A rule is a row with an id the bot edits or removes it by (`r3`, numbered
+//! within the bot and never given twice), and one the bot adds cites the
+//! user's message that set it: what is not the user's decision has no message
+//! to cite.
 //!
 //! The description is still who the bot is, its job and where it works.
 
@@ -29,26 +30,34 @@ CREATE TABLE IF NOT EXISTS bot_notes (
 );
 ";
 
-/// One row per rule. `message_id` is the `messages.id` of the user's message
-/// that set it; `source` says who wrote it (see [`Source`]).
-pub const MIGRATION_V41: &str = "
+/// One row per rule. `number` is the rule's id within its bot (`r3`);
+/// `message_id` is the `messages.id` of the user's message that set it; `source` says who wrote it (see [`Source`]).
+const RULES_TABLE: &str = "
 CREATE TABLE IF NOT EXISTS bot_rules (
   id          INTEGER PRIMARY KEY,
   bot_id      TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  number      INTEGER NOT NULL,
   body        TEXT NOT NULL,
   message_id  TEXT,
   source      TEXT NOT NULL DEFAULT 'bot',
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  UNIQUE (bot_id, number)
 );
-CREATE INDEX IF NOT EXISTS bot_rules_bot_idx ON bot_rules (bot_id);
 ";
 
-/// Every bot's notes become its rules, an entry a rule, and the notes go.
-/// An entry keeps its text and the time the notes were last written; it cites
-/// no message, and says so by its source. Notes of a session that is not a
-/// bot (none should exist) go with the table.
-pub(crate) fn migrate_notes(conn: &Connection) -> rusqlite::Result<()> {
+/// v41: the rules table, and on each bot how many rules it has had
+/// (`rules_made`), so a number is never given twice even after the newest
+/// rule is removed. Every bot's notes become its rules, an entry a rule,
+/// numbered in order, and the notes go. An entry keeps its text and the time
+/// the notes were last written; it cites no message, and says so by its
+/// source. Notes of a session that is not a bot (none should exist) go with
+/// the table.
+pub(crate) fn migrate_v41(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(RULES_TABLE)?;
+    if !crate::store::has_column(conn, "bots", "rules_made")? {
+        conn.execute_batch("ALTER TABLE bots ADD COLUMN rules_made INTEGER NOT NULL DEFAULT 0;")?;
+    }
     if crate::store::has_table(conn, "bot_notes")? {
         let notes: Vec<(String, String, i64)> = conn
             .prepare(
@@ -58,16 +67,19 @@ pub(crate) fn migrate_notes(conn: &Connection) -> rusqlite::Result<()> {
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<rusqlite::Result<_>>()?;
         for (bot, body, at) in notes {
-            for entry in split_notes(&body) {
+            for (index, entry) in split_notes(&body).into_iter().enumerate() {
                 conn.execute(
-                    "INSERT INTO bot_rules (bot_id, body, message_id, source, created_at, updated_at)
-                     VALUES (?1, ?2, NULL, 'notes', ?3, ?3)",
-                    params![bot, tidy(&entry), at],
+                    "INSERT INTO bot_rules (bot_id, number, body, message_id, source, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, NULL, 'notes', ?4, ?4)",
+                    params![bot, index as i64 + 1, tidy(&entry), at],
                 )?;
             }
         }
     }
-    conn.execute_batch("DROP TABLE IF EXISTS bot_notes;")
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS bot_notes;
+         UPDATE bots SET rules_made = (SELECT COALESCE(MAX(number), 0) FROM bot_rules WHERE bot_id = bots.id);",
+    )
 }
 
 /// The notes' entries: separated by a line holding only `§`.
@@ -118,6 +130,7 @@ pub struct Cited {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
+    /// Its number within the bot: what [`label`] names it by.
     pub id: i64,
     pub body: String,
     pub message_id: Option<String>,
@@ -128,7 +141,8 @@ pub struct Rule {
     pub cited: Option<Cited>,
 }
 
-/// `r3`: how the bot and its prompt name a rule.
+/// `r3`: how a rule is named wherever it is shown or taken: the prompt, the
+/// tool, the CLI, the bot sheet.
 pub fn label(id: i64) -> String {
     format!("r{id}")
 }
@@ -147,11 +161,11 @@ pub fn list(store: &Store, bot_id: &str) -> Result<Vec<Rule>, String> {
 
 fn read(conn: &Connection, bot_id: &str) -> rusqlite::Result<Vec<Rule>> {
     conn.prepare_cached(
-        "SELECT r.id, r.body, r.message_id, r.source, r.created_at, r.updated_at, m.text, m.at
+        "SELECT r.number, r.body, r.message_id, r.source, r.created_at, r.updated_at, m.text, m.at
            FROM bot_rules r
            LEFT JOIN messages m ON m.session_id = r.bot_id AND m.id = r.message_id
           WHERE r.bot_id = ?1
-          ORDER BY r.id",
+          ORDER BY r.number",
     )?
     .query_map(params![bot_id], |row| {
         let text: Option<String> = row.get(6)?;
@@ -268,12 +282,17 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             if let Some(same) = rules.iter().find(|rule| rule.body == body) {
                 return Ok(Ok(Done::Repeated(same.clone())));
             }
-            conn.execute(
-                "INSERT INTO bot_rules (bot_id, body, message_id, source, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                params![bot_id, body, message_id, source.as_str(), now],
+            // The next number this bot has never had.
+            let id: i64 = conn.query_row(
+                "UPDATE bots SET rules_made = rules_made + 1 WHERE id = ?1 RETURNING rules_made",
+                params![bot_id],
+                |row| row.get(0),
             )?;
-            let id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO bot_rules (bot_id, number, body, message_id, source, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![bot_id, id, body, message_id, source.as_str(), now],
+            )?;
             Ok(Done::Added(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just added")))
         }
         Change::Edit { id, body } => {
@@ -281,19 +300,21 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             if body.is_empty() {
                 return Ok(Err(Refused::Asked("content is required: what the rule becomes. To drop it, remove it.".into())));
             }
-            let rule = match find(id) {
-                Ok(rule) => rule,
-                Err(refused) => return Ok(Err(refused)),
-            };
-            conn.execute("UPDATE bot_rules SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now])?;
-            Ok(Done::Edited(Rule { body, updated_at: now, ..rule }))
+            if let Err(refused) = find(id) {
+                return Ok(Err(refused));
+            }
+            conn.execute(
+                "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
+                params![bot_id, id, body, now],
+            )?;
+            Ok(Done::Edited(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just edited")))
         }
         Change::Remove(id) => {
             let rule = match find(id) {
                 Ok(rule) => rule,
                 Err(refused) => return Ok(Err(refused)),
             };
-            conn.execute("DELETE FROM bot_rules WHERE id = ?1", params![id])?;
+            conn.execute("DELETE FROM bot_rules WHERE bot_id = ?1 AND number = ?2", params![bot_id, id])?;
             Ok(Done::Removed(rule))
         }
     })
@@ -439,6 +460,37 @@ mod tests {
         assert!(matches!(apply(&store, &bot, vec![add("  ")]).unwrap(), Err(Refused::Asked(_))));
     }
 
+    /// A bot's rules are numbered within it, from r1, and a number is never
+    /// given twice: not after the newest is removed, not to another bot.
+    #[test]
+    fn a_bots_rules_are_numbered_within_it_and_never_twice() {
+        let (store, bot, dir) = store();
+        let first = added(apply(&store, &bot, vec![add("Never push to master")]));
+        let second = added(apply(&store, &bot, vec![add("Run the tests before pushing")]));
+        assert_eq!((first.id, second.id), (1, 2));
+        apply(&store, &bot, vec![Change::Remove(2)]).unwrap().unwrap();
+        assert_eq!(added(apply(&store, &bot, vec![add("Ask before deleting a branch")])).id, 3);
+
+        std::fs::create_dir_all(dir.join("x")).unwrap();
+        let workspace = crate::workspace::create(&store, "x".into(), dir.join("x").to_string_lossy().into()).unwrap();
+        let other = crate::session::create(
+            &store,
+            workspace.id,
+            "bot".into(),
+            "Other".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .unwrap()
+        .id;
+        assert_eq!(added(apply(&store, &other, vec![add("Never push to master")])).id, 1);
+        // Each bot's r1 is its own.
+        apply(&store, &other, vec![Change::Remove(1)]).unwrap().unwrap();
+        assert_eq!(bodies(&store, &bot), ["Never push to master", "Ask before deleting a branch"]);
+    }
+
     /// Over the cap the whole write is refused, and nothing of it is kept.
     #[test]
     fn a_write_over_the_cap_is_refused_whole() {
@@ -455,17 +507,17 @@ mod tests {
     #[test]
     fn rules_over_the_cap_may_still_shrink() {
         let (store, bot, _) = store();
-        let big = store
+        store
             .with(|conn| {
                 conn.execute(
-                    "INSERT INTO bot_rules (bot_id, body, source, created_at, updated_at) VALUES (?1, ?2, 'notes', 1, 1)",
+                    "INSERT INTO bot_rules (bot_id, number, body, source, created_at, updated_at) VALUES (?1, 1, ?2, 'notes', 1, 1)",
                     params![bot, "x".repeat(CAP + 100)],
                 )?;
-                Ok(conn.last_insert_rowid())
+                conn.execute("UPDATE bots SET rules_made = 1 WHERE id = ?1", params![bot])
             })
             .unwrap();
         assert!(apply(&store, &bot, vec![add("one more")]).unwrap().is_err());
-        let shorter = Change::Edit { id: big, body: "x".repeat(CAP + 50) };
+        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50) };
         assert!(apply(&store, &bot, vec![shorter]).unwrap().is_ok());
     }
 
@@ -530,27 +582,26 @@ mod tests {
         store
             .with(|conn| {
                 conn.execute(
-                    "INSERT INTO bot_rules (bot_id, body, source, created_at, updated_at) VALUES (?1, 'Old note', 'notes', 1, 1)",
+                    "INSERT INTO bot_rules (bot_id, number, body, source, created_at, updated_at) VALUES (?1, 9, 'Old note', 'notes', 1, 1)",
                     params![bot],
                 )
             })
             .unwrap();
         let rules = list(&store, &bot).unwrap();
         assert_eq!(rules[0].cited, Some(Cited { text: "never push".into(), at }));
-        let ids: Vec<String> = rules.iter().map(|rule| label(rule.id)).collect();
         let today = day(at);
         assert_eq!(
             lines(&rules),
             format!(
-                "[{}] Never push to master. (user, {today})\n[{}] Ask first. (user)\n[{}] Run the tests. (user, {today})\n[{}] Old note",
-                ids[0], ids[1], ids[2], ids[3]
+                "[r1] Never push to master. (user, {today})\n[r2] Ask first. (user)\n[r3] Run the tests. (user, {today})\n[r9] Old note"
             )
         );
         assert_eq!(lines(&[]), "None yet.");
     }
 
-    /// A v40 database: every bot's notes become its rules, an entry a rule,
-    /// with the time the notes were written, and the notes table goes.
+    /// A v40 database: every bot's notes become its rules, an entry a rule
+    /// numbered in order, with the time the notes were written, and the notes
+    /// table goes; the next rule the bot adds takes the next number.
     #[test]
     fn a_v40_database_turns_each_note_into_a_rule() {
         let (store, bot, dir) = store();
@@ -573,8 +624,8 @@ mod tests {
         let store = Store::open(path).expect("reopen");
         let rules = list(&store, &bot).unwrap();
         assert_eq!(
-            rules.iter().map(|rule| rule.body.as_str()).collect::<Vec<_>>(),
-            ["Never push to master", "The staging password is in 1Password"]
+            rules.iter().map(|rule| (rule.id, rule.body.as_str())).collect::<Vec<_>>(),
+            [(1, "Never push to master"), (2, "The staging password is in 1Password")]
         );
         for rule in &rules {
             assert_eq!((rule.message_id.as_deref(), rule.source), (None, Source::Notes));
@@ -582,5 +633,6 @@ mod tests {
         }
         assert!(!lines(&rules).contains("(user"), "{}", lines(&rules));
         assert!(!store.with(|conn| crate::store::has_table(conn, "bot_notes")).unwrap());
+        assert_eq!(added(apply(&store, &bot, vec![add("Ask first")])).id, 3);
     }
 }
