@@ -764,6 +764,7 @@ mod tests {
             mcp_config: None,
             user_settings: false,
             fast: false,
+            add_dirs: Vec::new(),
         });
         assert!(args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona), "{args:?}");
         let message = claude::build_claude_user_message("sid", Some(TAIL), "y ahora?", &[], &[]);
@@ -789,6 +790,7 @@ mod tests {
                 mcp_config: None,
                 user_settings: false,
                 fast: false,
+                add_dirs: Vec::new(),
             })
         };
         let pair = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
@@ -811,6 +813,7 @@ mod tests {
             autonomy: Autonomy::Ask,
             mcp: None,
             mcp_env: Vec::new(),
+            writable_roots: Vec::new(),
         }
     }
 
@@ -831,8 +834,9 @@ mod tests {
                 mcp_config: None,
                 user_settings: false,
                 fast: false,
+                add_dirs: Vec::new(),
             }),
-            cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
+            cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask, add_dirs: Vec::new() }),
             grok::build_grok_spawn_args(&Autonomy::Ask),
         ];
         for args in runs {
@@ -866,6 +870,7 @@ mod tests {
             mcp_config: None,
             user_settings: false,
             fast: false,
+            add_dirs: Vec::new(),
         });
         assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");

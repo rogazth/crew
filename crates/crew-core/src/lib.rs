@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_groups;
 pub mod background;
 pub mod blocks;
+pub mod bot_folder;
 pub mod bridge;
 pub mod browser;
 pub mod browser_leases;

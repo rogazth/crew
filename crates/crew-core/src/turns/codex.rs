@@ -427,6 +427,7 @@ impl TurnHost {
             autonomy: self.autonomy(session),
             mcp,
             mcp_env: env.clone().into_iter().collect(),
+            writable_roots: self.bot_folder(session).into_iter().collect(),
         };
         self.agents
             .spawn(session_id.to_string(), path, vec!["app-server".into()], params.cwd.clone(), Some(env))

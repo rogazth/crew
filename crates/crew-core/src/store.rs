@@ -491,6 +491,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (41, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 42 {
+        let tx = conn.unchecked_transaction()?;
+        // A bot's folder, set the first time a turn needs it (see `bot_folder`).
+        if !has_column(&tx, "bots", "folder")? {
+            tx.execute_batch(crate::bot_folder::MIGRATION_V42)?;
+        }
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

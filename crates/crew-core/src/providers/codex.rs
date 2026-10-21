@@ -41,6 +41,9 @@ pub struct CodexThread {
     pub mcp: Option<(String, Vec<String>)>,
     /// What `crew --mcp` needs in its own environment to reach the bridge.
     pub mcp_env: Vec<(String, String)>,
+    /// Folders it may write in besides its own under `workspace-write`: a
+    /// bot's folder.
+    pub writable_roots: Vec<String>,
 }
 
 /// The handshake: Crew's name, and the experimental API that carries
@@ -128,6 +131,10 @@ pub fn thread_request(input: &CodexThread) -> (&'static str, Value) {
     }
     // Without it `request_user_input` only exists in plan mode.
     config.insert("features.default_mode_request_user_input".into(), json!(true));
+    // The sandbox's own folder is the thread's cwd; a bot's folder is one more.
+    if sandbox == "workspace-write" && !input.writable_roots.is_empty() {
+        config.insert("sandbox_workspace_write.writable_roots".into(), json!(input.writable_roots));
+    }
     if let Some((command, args)) = &input.mcp {
         let env: Map<String, Value> = input.mcp_env.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
         config.insert(
@@ -1100,7 +1107,25 @@ mod protocol_tests {
             autonomy,
             mcp: mcp.then(|| ("/bin/crewd".into(), vec!["--mcp".into()])),
             mcp_env: vec![("CREW_SOCKET".into(), "/tmp/crew.sock".into()), ("CREW_TOKEN".into(), "t-1".into())],
+            writable_roots: Vec::new(),
         }
+    }
+
+    /// A bot's folder is one more place its sandbox lets it write; a run with
+    /// no sandbox needs no say.
+    #[test]
+    fn a_bots_folder_is_writable_under_the_sandbox() {
+        let roots = |autonomy| {
+            let mut input = thread(None, autonomy, false);
+            input.writable_roots = vec!["/w/workspaces/w/bots/brisa".into()];
+            thread_request(&input).1["config"]["sandbox_workspace_write.writable_roots"].clone()
+        };
+        assert_eq!(roots(Autonomy::Ask), json!(["/w/workspaces/w/bots/brisa"]));
+        assert_eq!(roots(Autonomy::Full), Value::Null);
+        assert_eq!(
+            thread_request(&thread(None, Autonomy::Ask, false)).1["config"]["sandbox_workspace_write.writable_roots"],
+            Value::Null
+        );
     }
 
     /// The server codex starts does not inherit the agent's environment, so

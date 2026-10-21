@@ -103,7 +103,7 @@ impl Place<'_> {
 
 const BOT: &str = "## Crew bot
 
-You are {name}, a bot in Crew, a desktop app that runs coding agents side by side. Your id is {id}. {place}
+You are {name}, a bot in Crew, a desktop app that runs coding agents side by side. Your id is {id}. {place}{folder}
 {description}
 ### Your memory
 
@@ -365,6 +365,8 @@ pub struct Bot<'a> {
     pub tools: &'a [&'a str],
     /// Its rules, oldest first (`crate::rules`).
     pub rules: &'a [crate::rules::Rule],
+    /// Its folder, for anything it wants to keep (`crate::bot_folder`).
+    pub folder: Option<&'a str>,
 }
 
 pub fn bot(bot: &Bot) -> String {
@@ -377,10 +379,15 @@ pub fn bot(bot: &Bot) -> String {
         job => format!("\n{job}\n"),
     };
     let harness_deferred = with_space(bot.harness.deferred());
+    let folder = match bot.folder {
+        Some(folder) => format!("\nYour folder, for anything you want to keep: {folder}"),
+        None => String::new(),
+    };
     let mut text = fill(
         BOT,
         &[
             ("usage", &crate::rules::usage(bot.rules)),
+            ("folder", &folder),
             ("name", name),
             ("id", bot.id),
             ("place", &bot.place.line()),
@@ -498,7 +505,16 @@ mod tests {
     }
 
     fn render_bot(harness: Harness, tools: &[&str]) -> String {
-        bot(&Bot { name: "Lead", id: "b0b", description: "You keep the roadmap.", place: PLACE, harness, tools, rules: &[] })
+        bot(&Bot {
+            name: "Lead",
+            id: "b0b",
+            description: "You keep the roadmap.",
+            place: PLACE,
+            harness,
+            tools,
+            rules: &[],
+            folder: None,
+        })
     }
 
     fn render_session(harness: Harness, parent: Parent, question_tool: bool, tools: &[&str]) -> String {
@@ -619,6 +635,7 @@ mod tests {
             harness: Harness::Mcp,
             tools: &tools,
             rules: &rules,
+            folder: None,
         });
         let usage = crate::rules::usage(&rules);
         assert_eq!(usage, "[3% - 50/1,500]");
@@ -644,11 +661,43 @@ mod tests {
         assert!(empty.contains("### Your rules [0% - 0/1,500]\n\n") && empty.contains("\n\nNone yet.\n\n"), "{empty}");
     }
 
+    /// The bot's folder is one line under where it works, and nothing more.
+    #[test]
+    fn the_bot_is_told_where_its_folder_is() {
+        let text = bot(&Bot {
+            name: "Home",
+            id: "b0b",
+            description: "You run the house.",
+            place: PLACE,
+            harness: Harness::Mcp,
+            tools: &[],
+            rules: &[],
+            folder: Some("/w/workspaces/home/bots/home"),
+        });
+        assert!(
+            text.contains(
+                "You work in /work/app, on branch main.\nYour folder, for anything you want to keep: \
+                 /w/workspaces/home/bots/home\n\nYou run the house.\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(text.matches("/w/workspaces/home/bots/home").count(), 1, "{text}");
+        assert!(!render_bot(Harness::Mcp, &[]).contains("Your folder"));
+    }
+
     /// A bot with no job is still somebody, and says no empty paragraph.
     #[test]
     fn a_bot_with_no_job_is_still_somebody() {
-        let text =
-            bot(&Bot { name: " ", id: "b0b", description: "  ", place: PLACE, harness: Harness::Mcp, tools: &[], rules: &[] });
+        let text = bot(&Bot {
+            name: " ",
+            id: "b0b",
+            description: "  ",
+            place: PLACE,
+            harness: Harness::Mcp,
+            tools: &[],
+            rules: &[],
+            folder: None,
+        });
         assert!(text.contains("You are the user's bot, a bot in Crew"), "{text}");
         assert!(text.contains("on branch main.\n\n### Your memory"), "{text}");
         assert!(text.contains("### Your rules [0% - 0/1,500]"), "{text}");

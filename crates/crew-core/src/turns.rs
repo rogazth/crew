@@ -898,6 +898,7 @@ impl TurnHost {
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
             let rules = crate::rules::list(&self.store, &session.id).unwrap_or_default();
+            let folder = self.bot_folder(session);
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
                 id: &session.id,
@@ -906,6 +907,7 @@ impl TurnHost {
                 harness,
                 tools: &tools,
                 rules: &rules,
+                folder: folder.as_deref(),
             }));
         }
         let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
@@ -2350,19 +2352,32 @@ impl TurnHost {
     }
 
     fn agent_env(&self, session_id: &str) -> HashMap<String, String> {
-        let Ok(info) = self.bridge.info() else {
-            return HashMap::new();
+        let mut env = match self.bridge.info() {
+            Ok(info) => HashMap::from([
+                ("CREW_SOCKET".into(), info.socket_path),
+                // Minted for this session, here, once per process: a driver that
+                // keeps its process across turns calls this once, since a later
+                // mint would retire the token the live CLI's MCP server holds. It
+                // is what says who is calling: the id no longer travels on the
+                // wire, so a shell that inherited this cannot speak as another
+                // agent.
+                ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
+            ]),
+            Err(_) => HashMap::new(),
         };
-        HashMap::from([
-            ("CREW_SOCKET".into(), info.socket_path),
-            // Minted for this session, here, once per process: a driver that
-            // keeps its process across turns calls this once, since a later
-            // mint would retire the token the live CLI's MCP server holds. It
-            // is what says who is calling: the id no longer travels on the
-            // wire, so a shell that inherited this cannot speak as another
-            // agent.
-            ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
-        ])
+        // A bot's own folder, for its shell as for its prompt.
+        if let Some(folder) = crate::bot_folder::ensure(&self.store, session_id) {
+            env.insert(crate::bot_folder::ENV.into(), folder.to_string_lossy().into_owned());
+        }
+        env
+    }
+
+    /// A bot's folder, made on its first turn; none for any other session.
+    pub(crate) fn bot_folder(&self, session: &crate::session::Session) -> Option<String> {
+        (session.kind == "bot")
+            .then(|| crate::bot_folder::ensure(&self.store, &session.id))
+            .flatten()
+            .map(|folder| folder.to_string_lossy().into_owned())
     }
 
     fn mcp(&self) -> Option<(String, Vec<String>)> {
@@ -3599,6 +3614,7 @@ impl TurnHost {
             // account that cannot use fast mode for it.
             fast: session.service_tier == "fast"
                 && crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden,
+            add_dirs: self.bot_folder(session).into_iter().collect(),
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
@@ -4889,6 +4905,24 @@ mod mailbox_tests {
         let rules = second["permissions"].as_array().unwrap();
         assert!(rules.contains(&json!({ "action": "question", "resource": "*", "effect": "deny" })), "{rules:?}");
         assert_eq!(rules.last(), Some(&json!({ "action": "crew_*", "resource": "*", "effect": "allow" })));
+    }
+
+    /// A bot has a folder of its own from its first turn: its prompt says
+    /// where in one line, and its shell finds it in `CREW_SCRATCH_SELF`.
+    #[test]
+    fn a_bot_is_handed_its_folder() {
+        let world = world();
+        let ws = workspace(&world);
+        let keeper = bot(&world, &ws, "Keeper");
+        turn(&world, &keeper, "hola");
+        settle(&world, &keeper.id);
+        let launch = launches(&world)[0].clone();
+        let folder = crate::bot_folder::get(world.host.test_store(), &keeper.id).unwrap().expect("a folder");
+        assert!(folder.is_dir(), "{}", folder.display());
+        assert!(folder.ends_with("workspaces/w/bots/keeper"), "{}", folder.display());
+        let system = launch["system"].as_str().unwrap();
+        assert!(system.contains(&format!("\nYour folder, for anything you want to keep: {}\n", folder.display())), "{system}");
+        assert_eq!(launch["env"][crate::bot_folder::ENV], json!(folder.to_string_lossy()), "{launch}");
     }
 
     /// The setting overrides a bot that asks: its next session is made the

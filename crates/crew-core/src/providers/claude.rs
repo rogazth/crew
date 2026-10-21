@@ -43,6 +43,8 @@ pub struct ClaudeSpawn {
     /// Run on fast mode. Headless Claude takes it only as the `fastMode` setting,
     /// which the account must also be able to use.
     pub fast: bool,
+    /// `--add-dir`: folders it may work in besides its own, a bot's folder.
+    pub add_dirs: Vec<String>,
 }
 
 /// How long Claude Code lets one call to Crew's server run, in milliseconds:
@@ -137,6 +139,10 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     }
     if input.replay_user_messages {
         args.push("--replay-user-messages".into());
+    }
+    for dir in &input.add_dirs {
+        args.push("--add-dir".into());
+        args.push(dir.clone());
     }
     if let Some(mcp) = input.mcp_config.as_deref().filter(|c| !c.is_empty()) {
         args.push("--mcp-config".into());
@@ -1442,6 +1448,26 @@ mod tests {
     const CURL: &str = "curl -s -o /dev/null -w '%{http_code}' https://example.com";
     const CALL: &str = "toolu_01NXryc1w4bSyP5MGzDE8Hbe";
 
+    /// A bot's folder is one more place it may work in, whatever its autonomy.
+    #[test]
+    fn a_bots_folder_is_added_as_a_directory() {
+        let args = build_claude_spawn_args(&ClaudeSpawn {
+            model: None,
+            effort: None,
+            session_id: None,
+            resume: None,
+            replay_user_messages: false,
+            asks_questions: false,
+            system_prompt: None,
+            autonomy: Autonomy::Ask,
+            mcp_config: None,
+            user_settings: false,
+            fast: false,
+            add_dirs: vec!["/w/workspaces/w/bots/brisa".into()],
+        });
+        assert!(args.windows(2).any(|pair| pair == ["--add-dir", "/w/workspaces/w/bots/brisa"]), "{args:?}");
+    }
+
     /// Crew's tools are pre-approved for the sessions Crew drives (plan
     /// §7e.5), and a call may run as long as a wait (§7e.2).
     #[test]
@@ -1458,6 +1484,7 @@ mod tests {
             mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()])),
             user_settings: false,
             fast: false,
+            add_dirs: Vec::new(),
         });
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1486,6 +1513,7 @@ mod tests {
                 mcp_config: None,
                 user_settings,
                 fast: false,
+                add_dirs: Vec::new(),
             })
         };
         let bot = spawn(false);
@@ -1516,6 +1544,7 @@ mod tests {
                 mcp_config: None,
                 user_settings: true,
                 fast,
+                add_dirs: Vec::new(),
             });
             let at = args.iter().position(|arg| arg == "--settings").expect("settings");
             let parsed: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1542,6 +1571,7 @@ mod tests {
                 mcp_config: None,
                 user_settings: false,
                 fast: false,
+                add_dirs: Vec::new(),
             })
         };
         let child = spawn(true);

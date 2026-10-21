@@ -107,6 +107,8 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     if store.with(|conn| read_state(conn, HOME_WORKSPACE_KEY))?.as_deref() == Some(id.as_str()) {
         return Err("Home cannot be removed".into());
     }
+    // Its bots go with it, and their folders with them.
+    let folders = crate::bot_folder::of_workspace(store, &id)?;
     store.with(|conn| {
         conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         conn.execute(
@@ -114,6 +116,9 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
             params![format!("tabs:{id}"), format!("worktree:{id}"), format!("tabs:{id}@")],
         )
     })?;
+    for folder in folders {
+        crate::bot_folder::remove(&folder);
+    }
     Ok(())
 }
 
