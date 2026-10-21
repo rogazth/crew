@@ -367,6 +367,7 @@ export function Composer({
         <div className="ds-composer-text">
           <PromptEditor
             ref={field}
+            roomy={centered}
             value={draft}
             placeholder={placeholder}
             label={`Message ${session.name}`}

@@ -46,6 +46,8 @@ type Props = {
   /** Runs before the editor's own keys; preventing the event's default keeps them from running. */
   onKeyDown: (event: KeyboardEvent) => void;
   onPasteFiles: (files: File[]) => void;
+  /** The centred field is two lines tall. It changes in the commit that reveals a tab. */
+  roomy?: boolean;
 };
 
 /** A change the composer made to the draft, not the user typing: it is not reported back. */
@@ -232,10 +234,12 @@ const markdown = ViewPlugin.fromClass(
  * The composer's field: a CodeMirror editor over the plain-markdown draft. Mentions, commands and skills
  * show as chips and list items as real list lines, while the text underneath stays exactly what is sent.
  */
-export function PromptEditor({ ref, value, placeholder, label, known, entries, onChange, onCaret, onKeyDown, onPasteFiles }: Props) {
+export function PromptEditor({ ref, value, placeholder, label, known, entries, onChange, onCaret, onKeyDown, onPasteFiles, roomy = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  // The height fit, shared with the commit below so a mode change snaps before paint.
+  const fitBox = useRef<() => void>(() => {});
   const [prompt] = useState(() => new Compartment());
   // The editor is made once; it calls whatever the latest render handed in.
   const latest = useRef({ onChange, onCaret, onKeyDown, onPasteFiles });
@@ -316,20 +320,56 @@ export function PromptEditor({ ref, value, placeholder, label, known, entries, o
   }, [value]);
 
   // The box eases to the editor's height, so a new line slides in instead of jumping.
+  // The first height snaps, and so does any later resize that is not a line the user
+  // typed. Opening a tab measures the centred field (two lines) before the transcript
+  // lands and the field drops to one; easing that catch-up shifted the composer.
   useLayoutEffect(() => {
     const editor = view.current;
     const outer = box.current;
     if (!editor || !outer) return;
+    let primed = false;
+    let seen = editor.state.doc.toString();
     const fit = () => {
-      outer.style.height = `${editor.dom.offsetHeight}px`;
+      // A tab behind another is display:none, so it measures 0. Keeping the last real
+      // height means revealing it does not open from nothing.
+      const measured = editor.dom.offsetHeight;
+      if (measured === 0) return;
+      const next = `${measured}px`;
+      const text = editor.state.doc.toString();
+      const typed = primed && text !== seen;
+      seen = text;
+      if (outer.style.height === next) {
+        primed = true;
+        return;
+      }
+      if (!typed) {
+        outer.style.setProperty("transition", "none");
+        outer.style.height = next;
+        // Commit the snap before the height transition is allowed back on.
+        void outer.offsetHeight;
+        outer.style.removeProperty("transition");
+      } else {
+        outer.style.height = next;
+      }
+      primed = true;
+      outer.dataset.eased = "";
     };
+    fitBox.current = fit;
     fit();
-    void outer.offsetHeight;
-    outer.dataset.eased = "";
     const observer = new ResizeObserver(fit);
     observer.observe(editor.dom);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      delete outer.dataset.eased;
+      fitBox.current = () => {};
+    };
   }, []);
+
+  // The centred field and the docked one trade places in the commit that reveals the
+  // tab. Fitting here, before paint, is what keeps that frame from showing the stale height.
+  useLayoutEffect(() => {
+    fitBox.current();
+  }, [roomy]);
 
   useImperativeHandle(
     ref,
