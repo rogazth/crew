@@ -81,7 +81,8 @@ impl AppServer {
         });
         let mut server = Self { child, stdin, rx, next_id: 0 };
         let hello = json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "crew", "title": "Crew", "version": "0" } } });
-        let sent = writeln!(server.stdin, "{hello}").and_then(|_| writeln!(server.stdin, "{}", json!({ "method": "initialized", "params": {} })));
+        let sent = writeln!(server.stdin, "{hello}")
+            .and_then(|_| writeln!(server.stdin, "{}", json!({ "method": "initialized", "params": {} })));
         sent.ok()?;
         Some(server)
     }

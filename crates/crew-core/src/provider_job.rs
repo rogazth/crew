@@ -693,7 +693,7 @@ mod tests {
         assert!(!command.contains("cursor-agent") && !command.contains("agent\""), "{command}");
         let grok = super::spec("grok").unwrap();
         let command =
-            uninstall_command(&grok, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/grok"), Some(home)).unwrap();
+            uninstall_command(grok, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/grok"), Some(home)).unwrap();
         assert!(command.contains("$HOME/.grok/downloads") && command.contains("$HOME/.grok/bin"), "{command}");
         assert!(command.contains(".local/bin/grok") && command.contains(".local/bin/agent"), "{command}");
         assert!(!command.contains("auth.json"), "{command}");

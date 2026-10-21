@@ -31,10 +31,10 @@ use super::{
 };
 use crate::command_sources::cursor_commands;
 use crate::providers::grok::{
-    build_grok_prompt, build_grok_spawn_args, cancel_params, classify_request, initialize_params, isolation_env, mcp_servers,
-    new_session_id, permission_answer, permission_response, plan_response, prompt_params, questions_response, rpc_error_message,
-    session_missing, session_request, set_config_params, task_done, tool_detail, tool_end, tool_label, tool_name, turn_end,
-    unsupported_error, AcpTool, GrokAsk, GrokQuestion, PromptSignal, TurnEnd,
+    build_grok_prompt, build_grok_spawn_args, cancel_params, classify_request, content_text, initialize_params, isolation_env,
+    mcp_servers, new_session_id, permission_answer, permission_response, plan_response, prompt_params, questions_response,
+    rpc_error_message, session_missing, session_request, set_config_params, task_done, tool_detail, tool_end, tool_label,
+    tool_name, tool_ready, turn_end, unsupported_error, AcpTool, GrokAsk, GrokQuestion, PromptSignal, TurnEnd,
 };
 use crate::providers::{as_record, string_field};
 
@@ -839,16 +839,7 @@ fn end_from(live: &mut GrokLive, answer: &Result<Value, String>) -> (Vec<Harness
 }
 
 fn grok_update(live: &mut GrokLive, update: &Map<String, Value>, events: &mut Vec<HarnessEvent>) {
-    let text = || {
-        update
-            .get("content")
-            .and_then(as_record)
-            .filter(|content| string_field(Some(content), "type").as_deref() == Some("text"))
-            .and_then(|content| content.get("text"))
-            .and_then(Value::as_str)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
-    };
+    let text = || content_text(update.get("content")).filter(|text| !text.trim().is_empty());
     match string_field(Some(update), "sessionUpdate").as_deref() {
         // The prompt's own text, replayed. Not a new message.
         Some("user_message_chunk") => {}
@@ -876,11 +867,10 @@ fn grok_update(live: &mut GrokLive, update: &Map<String, Value>, events: &mut Ve
             let tool = tool.clone();
             let status = string_field(Some(update), "status").unwrap_or_default();
             let output = update.get("rawOutput").and_then(as_record);
-            let ready = tool.named() || matches!(status.as_str(), "in_progress" | "completed" | "failed");
+            let detail = tool_detail(&tool, update);
+            let ready = tool_ready(&tool, &status);
             if !live.started.contains(&id) {
-                let unnamed =
-                    tool.use_tool().is_none() && (tool.title == "use_tool" || tool.native.as_deref() == Some("use_tool"));
-                if !ready || unnamed {
+                if !ready {
                     return;
                 }
                 live.started.insert(id.clone());
@@ -890,7 +880,7 @@ fn grok_update(live: &mut GrokLive, update: &Map<String, Value>, events: &mut Ve
                     call_id: id.clone(),
                     name: tool_name(&tool),
                     title: tool_label(&tool),
-                    detail: tool_detail(&tool, output),
+                    detail: detail.clone(),
                 });
             } else if renamed && kind == "tool_call_update" {
                 live.saw_output = true;
@@ -898,18 +888,13 @@ fn grok_update(live: &mut GrokLive, update: &Map<String, Value>, events: &mut Ve
                     call_id: id.clone(),
                     title: Some(tool_label(&tool)),
                     status: None,
-                    detail: tool_detail(&tool, output),
+                    detail: detail.clone(),
                 });
             }
             if let Some(end) = tool_end(&status, output) {
                 live.open.retain(|open| *open != id);
                 live.saw_output = true;
-                events.push(HarnessEvent::ToolUpdated {
-                    call_id: id,
-                    title: None,
-                    status: Some(end),
-                    detail: tool_detail(&tool, output),
-                });
+                events.push(HarnessEvent::ToolUpdated { call_id: id, title: None, status: Some(end), detail });
             }
         }
         _ => {}
@@ -1466,5 +1451,53 @@ mod tests {
         host.on_agent_lines("stdout", "s", vec![thought]);
         let still = matches!(host.lock().get("s"), Some(Live::Grok(live)) if !live.saw_output);
         assert!(still, "an empty thought is not output");
+    }
+
+    /// The same recorded `use_tool` updates, through the live driver and the
+    /// history decoder. The row's name, label and detail are the events.
+    #[test]
+    fn a_recorded_use_tool_update_matches_between_live_and_history() {
+        use crate::session_history::Decoder;
+        let lines: Vec<&str> = include_str!("../../tests/fixtures/grok/history-updates.jsonl")
+            .lines()
+            .filter(|line| line.contains("call-mcp"))
+            .collect();
+        assert!(!lines.is_empty());
+
+        let mut decoder = crate::session_history::grok::GrokDecoder::default();
+        let mut history = Vec::new();
+        let mut live_state = super::GrokLive::new(None, crate::providers::Autonomy::Ask);
+        let mut live = Vec::new();
+        for line in lines {
+            for decoded in decoder.decode(line) {
+                if let crate::session_history::Decoded::Event { event, .. } = decoded {
+                    history.push(event);
+                }
+            }
+            let rec: Value = serde_json::from_str(line).expect("line");
+            let update = rec["params"]["update"].as_object().expect("update");
+            super::grok_update(&mut live_state, update, &mut live);
+        }
+
+        let tools = |events: Vec<HarnessEvent>| {
+            events
+                .into_iter()
+                .filter(|event| matches!(event, HarnessEvent::ToolStarted { .. } | HarnessEvent::ToolUpdated { .. }))
+                .collect::<Vec<_>>()
+        };
+        let history = tools(history);
+        let live = tools(live);
+        assert_eq!(history, live);
+
+        let HarnessEvent::ToolStarted { name, title, detail, .. } = &live[0] else { panic!("open: {live:?}") };
+        assert_eq!(name, "mcp__demo__echo");
+        assert_eq!(title, "demo · echo");
+        let Some(crew_protocol::ToolDetail::Mcp { server, tool, input, .. }) = detail else { panic!("{detail:?}") };
+        assert_eq!((server.as_str(), tool.as_str()), ("demo", "echo"));
+        assert!(input.as_deref().unwrap().contains("\"text\": \"ping\""));
+        let HarnessEvent::ToolUpdated { status, detail, .. } = live.last().unwrap() else { panic!("end: {live:?}") };
+        assert_eq!(status, &Some(ToolStatus::Failed));
+        let Some(crew_protocol::ToolDetail::Mcp { output, .. }) = detail else { panic!("{detail:?}") };
+        assert_eq!(output.as_deref(), Some("Tool not found: demo__echo"));
     }
 }

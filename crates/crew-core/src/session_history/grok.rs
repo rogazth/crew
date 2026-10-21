@@ -26,8 +26,8 @@ use crew_protocol::{HarnessEvent, ToolDetail, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::{Decoded, Decoder};
-use crate::providers::cursor::{plan_detail, tool_detail, tool_end, tool_label, tool_name, AcpTool};
-use crate::providers::{as_record, string_field};
+use crate::providers::grok::{content_text, tool_detail, tool_end, tool_label, tool_name, tool_ready, AcpTool};
+use crate::providers::{as_record, string_field, todo_items};
 
 /// `costUsdTicks` is 10^10 ticks per USD.
 const TICKS_PER_USD: f64 = 10_000_000_000.0;
@@ -101,22 +101,18 @@ impl GrokDecoder {
     }
 
     /// One call, opened by `tool_call` and filled in by `tool_call_update`.
-    /// The same helpers that read Cursor's ACP updates name the row, once
-    /// grok's record is put in those terms.
-    fn tool(&mut self, kind: &str, raw: &Map<String, Value>, at_ms: Option<i64>, out: &mut Vec<Decoded>) {
-        let update = prepared(raw);
-        let Some(id) = string_field(Some(&update), "toolCallId") else { return };
+    /// The same helpers the live driver uses name the row.
+    fn tool(&mut self, kind: &str, update: &Map<String, Value>, at_ms: Option<i64>, out: &mut Vec<Decoded>) {
+        let Some(id) = string_field(Some(update), "toolCallId") else { return };
         let stored = self.tools.entry(id.clone()).or_insert_with(|| AcpTool::new(&id));
         let renamed = update.contains_key("title") || update.contains_key("rawInput");
-        stored.merge(&update);
+        stored.merge(update);
         let tool = stored.clone();
-        let status = string_field(Some(&update), "status").unwrap_or_default();
+        let status = string_field(Some(update), "status").unwrap_or_default();
         let output = update.get("rawOutput").and_then(as_record);
-        let content = update.get("content");
-        let detail = with_mcp_output(tool_detail(&tool, output, content), &update);
-        let ready = tool.named() || matches!(status.as_str(), "in_progress" | "completed" | "failed");
+        let detail = tool_detail(&tool, update);
         if !self.started.contains(&id) {
-            if !ready {
+            if !tool_ready(&tool, &status) {
                 return;
             }
             self.started.insert(id.clone());
@@ -146,19 +142,15 @@ impl GrokDecoder {
     }
 
     fn plan(&mut self, update: &Map<String, Value>, at_ms: Option<i64>, out: &mut Vec<Decoded>) {
-        let Some(detail) = plan_detail(update) else { return };
+        let Some(items) = todo_items(update.get("entries")) else { return };
+        let detail = Some(ToolDetail::Todo { items });
         match self.plan.clone() {
-            Some(call_id) => {
-                out.push(event(at_ms, HarnessEvent::ToolUpdated { call_id, title: None, status: None, detail: Some(detail) }))
-            }
+            Some(call_id) => out.push(event(at_ms, HarnessEvent::ToolUpdated { call_id, title: None, status: None, detail })),
             None => {
                 self.plans += 1;
                 let call_id = format!("grok-plan-{}", self.plans);
                 self.plan = Some(call_id.clone());
-                out.push(event(
-                    at_ms,
-                    HarnessEvent::ToolStarted { call_id, name: "todo".into(), title: "Todos".into(), detail: Some(detail) },
-                ));
+                out.push(event(at_ms, HarnessEvent::ToolStarted { call_id, name: "todo".into(), title: "Todos".into(), detail }));
             }
         }
     }
@@ -208,131 +200,6 @@ fn usage_of(update: &Map<String, Value>) -> TurnUsage {
         cost_usd: number("costUsdTicks").map(|ticks| ticks as f64 / TICKS_PER_USD),
         duration_ms: update.get("elapsed_ms").and_then(Value::as_u64),
     }
-}
-
-/// grok's first `tool_call` names the tool in `_meta` and often omits `kind`.
-/// A shell result is `exit_code` plus text, not Cursor's `exitCode` and
-/// `stdout`. A `use_tool` call's real tool is `rawInput.tool_name`.
-fn prepared(update: &Map<String, Value>) -> Map<String, Value> {
-    let mut update = update.clone();
-    if string_field(Some(&update), "kind").is_none() {
-        if let Some(kind) = meta_field(&update, "kind") {
-            update.insert("kind".into(), Value::String(kind));
-        }
-    }
-    if let Some(raw) = update.get_mut("rawOutput").and_then(Value::as_object_mut) {
-        if raw.get("output").is_some_and(Value::is_array) {
-            raw.remove("output");
-        }
-    }
-    let unwrap = unwrap_use_tool(&update);
-    if let Some(input) = update.get_mut("rawInput").and_then(Value::as_object_mut) {
-        if let Some(target) = input.get("target_file").cloned() {
-            input.entry("path".to_string()).or_insert(target);
-        }
-        if unwrap {
-            rewrite_use_tool(input);
-        }
-    }
-    attach_output(&mut update);
-    update
-}
-
-fn meta_field(update: &Map<String, Value>, key: &str) -> Option<String> {
-    update
-        .get("_meta")
-        .and_then(as_record)
-        .and_then(|meta| meta.get("x.ai/tool"))
-        .and_then(as_record)
-        .and_then(|tool| string_field(Some(tool), key))
-}
-
-/// The native tool is `_meta["x.ai/tool"].name`. Unwrap only `use_tool`.
-/// A later update drops that meta and still carries `tool_name`.
-fn unwrap_use_tool(update: &Map<String, Value>) -> bool {
-    match meta_field(update, "name").as_deref() {
-        Some("use_tool") => true,
-        Some(_) => false,
-        None => update.get("rawInput").and_then(as_record).is_some_and(|input| input.contains_key("tool_name")),
-    }
-}
-
-/// `use_tool`'s `tool_name` (`server__tool`) is the MCP call itself. Put it
-/// where an ACP update keeps an MCP call, so the shared helpers render it.
-fn rewrite_use_tool(input: &mut Map<String, Value>) {
-    if input.contains_key("providerIdentifier") {
-        return;
-    }
-    let Some(name) = string_field(Some(input), "tool_name") else { return };
-    let Some((server, tool)) = name.split_once("__") else { return };
-    if server.is_empty() || tool.is_empty() {
-        return;
-    }
-    let args = input.get("tool_input").cloned().unwrap_or_else(|| Value::Object(Map::new()));
-    input.insert("providerIdentifier".into(), Value::String(server.to_string()));
-    input.insert("toolName".into(), Value::String(tool.to_string()));
-    input.insert("args".into(), args);
-}
-
-/// The text of a finished call. An earlier update's `content` is the
-/// description, not the result, so only a call that ended contributes it.
-fn attach_output(update: &mut Map<String, Value>) {
-    let status = string_field(Some(update), "status").unwrap_or_default();
-    let terminal = matches!(status.as_str(), "completed" | "failed");
-    let printed = terminal.then(|| content_text(update.get("content"))).flatten();
-    let Some(raw) = update.get("rawOutput").cloned().and_then(|value| match value {
-        Value::Object(map) => Some(map),
-        _ => None,
-    }) else {
-        return;
-    };
-    if !terminal && raw.is_empty() {
-        return;
-    }
-    let mut raw = raw;
-    if raw.get("exitCode").is_none() {
-        if let Some(code) = raw.get("exit_code").cloned() {
-            raw.insert("exitCode".into(), code);
-        }
-    }
-    if raw.get("stdout").and_then(Value::as_str).is_none() {
-        if let Some(text) = printed.clone().or_else(|| prompt_body(&raw)) {
-            raw.insert("stdout".into(), Value::String(text));
-        }
-    }
-    if raw.get("content").and_then(Value::as_str).is_none() {
-        if let Some(text) = file_body(&raw).or(printed) {
-            raw.insert("content".into(), Value::String(text));
-        }
-    }
-    update.insert("rawOutput".into(), Value::Object(raw));
-}
-
-fn file_body(raw: &Map<String, Value>) -> Option<String> {
-    let file = raw.get("FileContent").and_then(as_record)?;
-    string_owned(file.get("raw_output")).or_else(|| string_owned(file.get("content")))
-}
-
-/// `output_for_prompt` leads with `exit: 0`. The text after that line is the output.
-fn prompt_body(raw: &Map<String, Value>) -> Option<String> {
-    let text = string_owned(raw.get("output_for_prompt"))?;
-    Some(match text.split_once('\n') {
-        Some((head, tail)) if head.trim_start().starts_with("exit:") => tail.to_string(),
-        _ => text,
-    })
-}
-
-fn with_mcp_output(detail: Option<ToolDetail>, update: &Map<String, Value>) -> Option<ToolDetail> {
-    let Some(ToolDetail::Mcp { server, tool, input, output }) = detail else { return detail };
-    let status = string_field(Some(update), "status").unwrap_or_default();
-    let output = output.or_else(|| {
-        if !matches!(status.as_str(), "completed" | "failed") {
-            return None;
-        }
-        content_text(update.get("content"))
-            .or_else(|| update.get("rawOutput").and_then(as_record).and_then(|raw| string_field(Some(raw), "message")))
-    });
-    Some(ToolDetail::Mcp { server, tool, input, output })
 }
 
 /// A submitted prompt. `<user_query>` is the wrapper around it. Anything else
@@ -398,33 +265,6 @@ pub(crate) fn line_has_user_prompt(line: &str) -> bool {
 fn chunk_text(update: &Map<String, Value>) -> Option<String> {
     let text = content_text(update.get("content"))?;
     (!text.trim().is_empty()).then_some(text)
-}
-
-fn content_text(content: Option<&Value>) -> Option<String> {
-    let content = content?;
-    if let Some(text) = text_part(content) {
-        return Some(text);
-    }
-    let mut out = String::new();
-    for part in content.as_array()? {
-        let text = part.as_object().and_then(|part| part.get("content")).and_then(text_part).or_else(|| text_part(part));
-        if let Some(text) = text {
-            out.push_str(&text);
-        }
-    }
-    (!out.is_empty()).then_some(out)
-}
-
-fn text_part(value: &Value) -> Option<String> {
-    let rec = as_record(value)?;
-    if rec.get("type").and_then(Value::as_str) != Some("text") {
-        return None;
-    }
-    string_owned(rec.get("text"))
-}
-
-fn string_owned(value: Option<&Value>) -> Option<String> {
-    value.and_then(Value::as_str).map(str::to_string)
 }
 
 /// `"sessionUpdate":"<kind>"`. The closing quote keeps `tool_call` from
@@ -657,11 +497,5 @@ mod tests {
         ));
         let ran = tool(&blocks, "echo hi");
         assert_eq!(ran.name, "bash");
-    }
-
-    #[test]
-    fn prompt_body_drops_the_exit_line() {
-        let raw = Map::from_iter([("output_for_prompt".to_string(), Value::String("exit: 0\nhi-from-tool\n".into()))]);
-        assert_eq!(prompt_body(&raw).as_deref(), Some("hi-from-tool\n"));
     }
 }

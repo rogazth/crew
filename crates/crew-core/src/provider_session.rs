@@ -641,24 +641,6 @@ fn tier_of(item: &serde_json::Value) -> (Option<String>, Option<String>) {
 /// left out until Crew knows the token.
 const GROK_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/// Env that keeps a model-list probe from importing Claude or Cursor config,
-/// or from starting the auto-updater. A turn's own process sets the same.
-pub(crate) fn grok_quiet_env() -> [(&'static str, &'static str); 11] {
-    [
-        ("GROK_DISABLE_AUTOUPDATER", "1"),
-        ("GROK_CLAUDE_AGENTS_ENABLED", "0"),
-        ("GROK_CLAUDE_HOOKS_ENABLED", "0"),
-        ("GROK_CLAUDE_MCPS_ENABLED", "0"),
-        ("GROK_CLAUDE_RULES_ENABLED", "0"),
-        ("GROK_CLAUDE_SKILLS_ENABLED", "0"),
-        ("GROK_CURSOR_AGENTS_ENABLED", "0"),
-        ("GROK_CURSOR_HOOKS_ENABLED", "0"),
-        ("GROK_CURSOR_MCPS_ENABLED", "0"),
-        ("GROK_CURSOR_RULES_ENABLED", "0"),
-        ("GROK_CURSOR_SKILLS_ENABLED", "0"),
-    ]
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GrokListing {
     models: Vec<ListedModel>,
@@ -726,13 +708,6 @@ pub fn grok_configured_model() -> String {
     grok_model_from(std::env::var("GROK_DEFAULT_MODEL").ok().as_deref(), &grok_config_text(), &listing.default_model)
 }
 
-fn grok_home() -> Option<PathBuf> {
-    match std::env::var("GROK_HOME") {
-        Ok(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
-        _ => home().map(|dir| dir.join(".grok")),
-    }
-}
-
 fn grok_config_text() -> String {
     grok_home().and_then(|dir| std::fs::read_to_string(dir.join("config.toml")).ok()).unwrap_or_default()
 }
@@ -765,7 +740,7 @@ fn probe_grok_acp(binary: &Path) -> Result<GrokListing, String> {
     let mut child = Command::new(binary)
         .args(["--no-auto-update", "agent", "--no-leader", "stdio"])
         .env("PATH", shell_path::joined())
-        .envs(grok_quiet_env())
+        .envs(crate::providers::grok::isolation_env())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -805,12 +780,7 @@ fn probe_grok_acp(binary: &Path) -> Result<GrokListing, String> {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": {
-            "protocolVersion": 1,
-            "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
-            "clientInfo": { "name": "crew", "version": env!("CARGO_PKG_VERSION") },
-            "_meta": { "clientType": "extension" },
-        }
+        "params": crate::providers::grok::initialize_params(),
     });
     let result = (|| {
         writeln!(stdin, "{initialize}").map_err(|err| format!("grok agent stdio: {err}"))?;
@@ -855,7 +825,7 @@ fn grok_models_from_cli(binary: &Path) -> Result<GrokListing, String> {
     let mut child = Command::new(binary)
         .arg("models")
         .env("PATH", shell_path::joined())
-        .envs(grok_quiet_env())
+        .envs(crate::providers::grok::isolation_env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -974,10 +944,8 @@ fn parse_grok_models_text(text: &str) -> GrokListing {
         let Some(id) = rest.split_whitespace().next().filter(|id| !id.is_empty() && !id.starts_with('(')) else {
             continue;
         };
-        if trimmed.starts_with('*') || rest.contains("(default)") {
-            if default_model.is_empty() {
-                default_model = id.to_string();
-            }
+        if (trimmed.starts_with('*') || rest.contains("(default)")) && default_model.is_empty() {
+            default_model = id.to_string();
         }
         if models.iter().any(|model: &ListedModel| model.id == id) {
             continue;

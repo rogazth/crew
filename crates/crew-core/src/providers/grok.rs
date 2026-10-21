@@ -25,17 +25,24 @@ use super::{as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pret
 /// tools through `use_tool` as `crew__<name>`.
 pub const CREW_SERVER: &str = "crew";
 
-/// Keeps a Crew-started grok from running Claude's or Cursor's hooks and MCP
-/// servers, and from importing Claude's permission mode. Grok's own
-/// `~/.grok` config stays. Names checked against grok 1.0.62 (`grok inspect`
-/// and the debug log).
+/// Keeps a Crew-started grok from importing Claude's or Cursor's agents,
+/// hooks, MCP servers, rules and skills, and from seeding its permission
+/// mode off Claude's. The auto-updater stays off. Grok's own `~/.grok`
+/// config stays. A model probe sets the same list. Names checked against
+/// grok 1.0.62 (`grok inspect` and the debug log).
 pub fn isolation_env() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("GROK_DISABLE_AUTOUPDATER", "1"),
+        ("GROK_CLAUDE_AGENTS_ENABLED", "0"),
         ("GROK_CLAUDE_HOOKS_ENABLED", "0"),
         ("GROK_CLAUDE_MCPS_ENABLED", "0"),
+        ("GROK_CLAUDE_RULES_ENABLED", "0"),
+        ("GROK_CLAUDE_SKILLS_ENABLED", "0"),
+        ("GROK_CURSOR_AGENTS_ENABLED", "0"),
         ("GROK_CURSOR_HOOKS_ENABLED", "0"),
         ("GROK_CURSOR_MCPS_ENABLED", "0"),
-        ("GROK_DISABLE_AUTOUPDATER", "1"),
+        ("GROK_CURSOR_RULES_ENABLED", "0"),
+        ("GROK_CURSOR_SKILLS_ENABLED", "0"),
         ("_GROK_CLAUDE_MARKER_OVERRIDE", "1"),
     ]
 }
@@ -213,18 +220,14 @@ impl AcpTool {
     }
 
     pub fn merge(&mut self, update: &Map<String, Value>) {
-        if let Some(kind) = string_field(Some(update), "kind") {
+        // The first `tool_call` often names the kind only under `_meta`.
+        if let Some(kind) = string_field(Some(update), "kind").or_else(|| string_field(xai_tool(update), "kind")) {
             self.kind = kind;
         }
         if let Some(title) = string_field(Some(update), "title") {
             self.title = title;
         }
-        if let Some(name) = update
-            .get("_meta")
-            .and_then(|meta| meta.get("x.ai/tool"))
-            .and_then(as_record)
-            .and_then(|tool| string_field(Some(tool), "name"))
-        {
+        if let Some(name) = string_field(xai_tool(update), "name") {
             self.native = Some(name);
         }
         if let Some(input) = update.get("rawInput").and_then(as_record).filter(|input| !input.is_empty()) {
@@ -251,8 +254,14 @@ impl AcpTool {
     /// holds `tool_name` (`server__tool`) and `tool_input` (the arguments).
     /// A nested `tool_input.tool_name` is read when that is what arrived.
     /// The native name is `_meta["x.ai/tool"].name`, which is `use_tool`
-    /// while the title is often just "Tool".
+    /// while the title is often just "Tool". A native name that is something
+    /// else is that tool: `tool_name` in its input is an argument, not a
+    /// wrapper. A later update can drop the meta and still carry `tool_name`;
+    /// the native name stays on the call.
     pub fn use_tool(&self) -> Option<(String, String, Map<String, Value>)> {
+        if self.native.as_deref().is_some_and(|name| name != "use_tool") {
+            return None;
+        }
         let wrapped = self.native.as_deref() == Some("use_tool")
             || self.title == "use_tool"
             || self.input.contains_key("tool_name")
@@ -393,29 +402,100 @@ pub fn tool_label(tool: &AcpTool) -> String {
     }
 }
 
-pub fn tool_detail(tool: &AcpTool, output: Option<&Map<String, Value>>) -> Option<ToolDetail> {
+pub fn tool_detail(tool: &AcpTool, update: &Map<String, Value>) -> Option<ToolDetail> {
+    let output = update.get("rawOutput").and_then(as_record);
+    let status = string_field(Some(update), "status").unwrap_or_default();
+    let terminal = matches!(status.as_str(), "completed" | "failed");
+    // An earlier update's `content` is the description, not the result.
+    let printed = if terminal { content_text(update.get("content")).filter(|text| !text.trim().is_empty()) } else { None };
     if let Some((server, name, args)) = tool.use_tool() {
         if server == CREW_SERVER {
             return crew_tool_detail(&format!("mcp__crew__{name}"), &args);
         }
-        return Some(ToolDetail::Mcp { server, tool: name, input: pretty_input(&args), output: None });
+        let from_output = terminal.then(|| output.and_then(|raw| owned_str(raw.get("message")))).flatten();
+        return Some(ToolDetail::Mcp { server, tool: name, input: pretty_input(&args), output: printed.or(from_output) });
     }
-    let text = |key: &str| {
-        output.and_then(|row| row.get(key)).and_then(Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
-    };
+    let text = |key: &str| output.and_then(|row| owned_str(row.get(key)));
     match tool.kind_of() {
         "execute" => {
             let command = string_field(Some(&tool.input), "command")?;
-            let printed = text("stdout").or_else(|| text("output")).or_else(|| text("stderr"));
+            let printed =
+                text("stdout").or_else(|| text("output")).or_else(|| text("stderr")).or_else(|| prompt_body(output)).or(printed);
             Some(ToolDetail::Command { command, exit_code: output.and_then(exit_code), output: printed })
         }
-        "read" => Some(ToolDetail::File { path: tool.path()?, line_start: None, line_end: None, preview: text("content") }),
+        "read" => {
+            let preview = file_body(output).or_else(|| text("content")).or(printed);
+            Some(ToolDetail::File { path: tool.path()?, line_start: None, line_end: None, preview })
+        }
         _ => None,
     }
 }
 
+/// `_meta["x.ai/tool"]`, where grok names the tool the title does not.
+fn xai_tool(update: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    update.get("_meta").and_then(as_record)?.get("x.ai/tool").and_then(as_record)
+}
+
+fn owned_str(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(str::to_string).filter(|text| !text.trim().is_empty())
+}
+
+/// The text of a content block. A chunk is one `{type: text}` object. A tool
+/// result is a list of `{type: content, content: {type: text}}` parts.
+pub(crate) fn content_text(content: Option<&Value>) -> Option<String> {
+    let content = content?;
+    if let Some(text) = text_part(content) {
+        return Some(text);
+    }
+    let mut out = String::new();
+    for part in content.as_array()? {
+        let text = part.as_object().and_then(|part| part.get("content")).and_then(text_part).or_else(|| text_part(part));
+        if let Some(text) = text {
+            out.push_str(&text);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn text_part(value: &Value) -> Option<String> {
+    let rec = as_record(value)?;
+    if rec.get("type").and_then(Value::as_str) != Some("text") {
+        return None;
+    }
+    value_str(rec.get("text"))
+}
+
+fn value_str(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(str::to_string)
+}
+
+/// A finished read. `raw_output` is the file. `content` is the same text with
+/// line numbers, used when that is all grok wrote.
+fn file_body(raw: Option<&Map<String, Value>>) -> Option<String> {
+    let file = raw?.get("FileContent").and_then(as_record)?;
+    owned_str(file.get("raw_output")).or_else(|| owned_str(file.get("content")))
+}
+
+/// `output_for_prompt` leads with `exit: 0`. The text after that line is the output.
+fn prompt_body(raw: Option<&Map<String, Value>>) -> Option<String> {
+    let text = owned_str(raw?.get("output_for_prompt"))?;
+    let body = match text.split_once('\n') {
+        Some((head, tail)) if head.trim_start().starts_with("exit:") => tail.to_string(),
+        _ => text,
+    };
+    (!body.trim().is_empty()).then_some(body)
+}
+
 fn exit_code(row: &Map<String, Value>) -> Option<i32> {
     row.get("exitCode").or_else(|| row.get("exit_code")).and_then(Value::as_i64).map(|code| code as i32)
+}
+
+/// Whether this update can open the row. `use_tool` waits until it names a
+/// tool, even when grok already says the call is running. A title of "Tool"
+/// is not a name.
+pub fn tool_ready(tool: &AcpTool, status: &str) -> bool {
+    let unnamed = tool.use_tool().is_none() && (tool.title == "use_tool" || tool.native.as_deref() == Some("use_tool"));
+    !unnamed && (tool.named() || matches!(status, "in_progress" | "completed" | "failed"))
 }
 
 pub fn tool_end(status: &str, output: Option<&Map<String, Value>>) -> Option<ToolStatus> {
@@ -708,14 +788,25 @@ mod tests {
     }
 
     #[test]
-    fn isolation_env_disables_foreign_hooks_and_the_claude_permission_seed() {
+    fn isolation_env_disables_foreign_imports_and_the_claude_permission_seed() {
         let env: HashMap<_, _> = isolation_env().into_iter().collect();
-        assert_eq!(env["GROK_CLAUDE_HOOKS_ENABLED"], "0");
-        assert_eq!(env["GROK_CLAUDE_MCPS_ENABLED"], "0");
-        assert_eq!(env["GROK_CURSOR_HOOKS_ENABLED"], "0");
-        assert_eq!(env["GROK_CURSOR_MCPS_ENABLED"], "0");
+        for key in [
+            "GROK_CLAUDE_AGENTS_ENABLED",
+            "GROK_CLAUDE_HOOKS_ENABLED",
+            "GROK_CLAUDE_MCPS_ENABLED",
+            "GROK_CLAUDE_RULES_ENABLED",
+            "GROK_CLAUDE_SKILLS_ENABLED",
+            "GROK_CURSOR_AGENTS_ENABLED",
+            "GROK_CURSOR_HOOKS_ENABLED",
+            "GROK_CURSOR_MCPS_ENABLED",
+            "GROK_CURSOR_RULES_ENABLED",
+            "GROK_CURSOR_SKILLS_ENABLED",
+        ] {
+            assert_eq!(env[key], "0", "{key}");
+        }
         assert_eq!(env["GROK_DISABLE_AUTOUPDATER"], "1");
         assert_eq!(env["_GROK_CLAUDE_MARKER_OVERRIDE"], "1");
+        assert_eq!(env.len(), 12);
     }
 
     #[test]
@@ -732,7 +823,7 @@ mod tests {
         );
         assert_eq!(tool_name(&tool), "mcp__crew__send_message");
         assert!(tool_label(&tool).contains("lead"), "{}", tool_label(&tool));
-        assert!(matches!(tool_detail(&tool, None), Some(ToolDetail::Message { .. })));
+        assert!(matches!(tool_detail(&tool, &Map::new()), Some(ToolDetail::Message { .. })));
         assert!(tool.is_crew());
     }
 
@@ -746,6 +837,13 @@ mod tests {
         let output = json!({ "exit_code": 1, "output": "no" });
         assert_eq!(tool_end("completed", output.as_object()), Some(ToolStatus::Failed));
         assert_eq!(tool_end("completed", json!({ "exit_code": 0 }).as_object()), Some(ToolStatus::Completed));
+        let update = json!({ "status": "completed", "rawOutput": { "exit_code": 0, "output_for_prompt": "exit: 0\nhi\n" } });
+        let Some(ToolDetail::Command { command, exit_code, output }) = tool_detail(&tool, update.as_object().unwrap()) else {
+            panic!("command");
+        };
+        assert_eq!(command, "echo hi");
+        assert_eq!(exit_code, Some(0));
+        assert_eq!(output.as_deref(), Some("hi\n"));
     }
 
     #[test]

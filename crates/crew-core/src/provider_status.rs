@@ -234,7 +234,7 @@ fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
         .stderr(Stdio::piped())
         .process_group(0);
     if path.file_name().and_then(|name| name.to_str()) == Some("grok") {
-        command.envs(crate::provider_session::grok_quiet_env());
+        command.envs(crate::providers::grok::isolation_env());
     }
     let mut child = command.spawn().ok()?;
     fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
