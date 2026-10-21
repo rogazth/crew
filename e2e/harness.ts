@@ -826,7 +826,7 @@ export async function startChat(
 /** ⌘N: the start screen, not a session. */
 export async function startScreen(crew: Crew): Promise<Locator> {
   await pressChord(crew, `${MOD}+n`);
-  const field = crew.window.locator("[data-workspace-start] textarea");
+  const field = crew.window.locator("[data-workspace-start] .cm-content");
   await field.waitFor();
   return field;
 }

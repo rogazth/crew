@@ -401,7 +401,7 @@ export function PromptEditor({ ref, value, placeholder, label, known, entries, o
   );
 
   return (
-    <div ref={box} className="ds-prompt-box">
+    <div ref={box} className="ds-prompt-box" {...(roomy ? { "data-roomy": "" } : {})}>
       <div ref={host} className="ds-prompt" />
     </div>
   );

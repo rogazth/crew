@@ -677,25 +677,6 @@ html[data-sidebar-resize="active"] * {
 :root {
   --chat-text: 14px;
 }
-/* The new-workspace composer's field. */
-.crew-composer-field {
-  display: block;
-  width: 100%;
-  min-height: 24px;
-  max-height: 200px;
-  padding: 0;
-  border: 0;
-  resize: none;
-  background: transparent;
-  outline: none;
-  font: inherit;
-  font-size: var(--chat-text);
-  line-height: calc(var(--chat-text) * 1.5);
-  letter-spacing: -0.1px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  tab-size: 4;
-}
 .crew-popover {
   overflow: hidden;
   padding: 4px 0;

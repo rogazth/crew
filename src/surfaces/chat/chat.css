@@ -74,8 +74,9 @@
   padding: 0;
   caret-color: var(--color-text);
 }
-/* A new chat's composer is the page: two lines of room to start in. */
-.ds-composer[data-roomy] .ds-prompt .cm-content {
+/* A new chat's composer is the page: two lines of room to start in. The start
+   screen stays one line; `data-roomy` on its form only points the menus down. */
+.ds-prompt-box[data-roomy] .cm-content {
   min-height: calc(var(--chat-text) * 3);
 }
 .ds-prompt .cm-line {

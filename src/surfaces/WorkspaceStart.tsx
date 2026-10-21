@@ -2,7 +2,7 @@
 // screen: a mark and a line, the composer, then the other ways in. Sending is
 // what creates the session, with the text as its first message.
 import { BotIcon, FileSearchIcon, GlobeIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
 import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
 import { machineIcon } from "../chrome/EnvBits";
@@ -27,13 +27,14 @@ import { extensionFor, pathSource, upload } from "../lib/upload";
 import { AttachmentStrip } from "./chat/Attachments";
 import { AttachMenu, SendButton } from "./chat/ComposerParts";
 import { MentionPicker } from "./chat/MentionPicker";
+import { PromptEditor, type PromptHandle } from "./chat/PromptEditor";
 import { SlashPicker } from "./chat/SlashPicker";
 import { useMentionMenu } from "./chat/useMentionMenu";
 import { EmptyHead, Fact, IntroWaysFrame, StarterCard } from "./chat/SessionIntro";
 
 /** Puts the caret in the composer, so the sidebar's New session lands where typing starts. */
 export function focusWorkspaceStart() {
-  document.querySelector<HTMLElement>("[data-workspace-start] textarea")?.focus();
+  document.querySelector<HTMLElement>("[data-workspace-start] .cm-content")?.focus();
 }
 
 /** What a `/` offers before any session exists: Crew's own actions on the chips. A provider's commands need its CLI running. */
@@ -83,7 +84,7 @@ export function StartScreen({
     [rememberPick, setPickedDraft, update],
   );
   const [draft, setDraft] = useState("");
-  const field = useRef<HTMLTextAreaElement>(null);
+  const field = useRef<PromptHandle>(null);
   const model = useRef<Opener>(null);
   const effort = useRef<Opener>(null);
   const access = useRef<Opener>(null);
@@ -101,7 +102,9 @@ export function StartScreen({
     },
     [cwd],
   );
-  const { mention, results } = useMentionMenu(draft, cursor, projectFiles, resolvePath);
+  const { mention, indexed, results } = useMentionMenu(draft, cursor, projectFiles, resolvePath);
+  const [mentioned, setMentioned] = useState<readonly string[]>([]);
+  const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...mentioned]), [indexed, mentioned]);
   const fitted = fitChoice(choice);
   const canFast = fastChoice(fitted.provider, fitted.model).available;
   const hasEfforts = effortsOf(fitted.provider, fitted.model).length > 0;
@@ -112,27 +115,20 @@ export function StartScreen({
     [slash?.query, actions], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const choices = mention ? results.length : slashResults.length;
-  const syncCursor = () => {
-    const el = field.current;
-    if (el) setCursor(el.selectionStart);
-  };
   // The draft has just changed: the caret goes where the change left it once the field has the new text.
   const place = (at: number, then?: () => void) => {
     requestAnimationFrame(() => {
-      const el = field.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(at, at);
-      setCursor(at);
+      field.current?.select(at);
       then?.();
     });
   };
   const pickMention = (file: ProjectFile, into = false) => {
     const el = field.current;
     if (!el) return;
-    const next = completeMention(draft, el.selectionStart, file, { into });
+    const next = completeMention(draft, el.read().from, file, { into });
     if (!next) return;
     rememberMention(file.path);
+    setMentioned((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
     setDraft(next.text);
     setActive(0);
     place(next.cursor);
@@ -140,7 +136,7 @@ export function StartScreen({
   const pickSlash = (entry: CommandEntry) => {
     const el = field.current;
     if (!el) return;
-    const next = removeSlash(draft, el.selectionStart);
+    const next = removeSlash(draft, el.read().from);
     if (!next) return;
     setDraft(next.text);
     setActive(0);
@@ -154,7 +150,7 @@ export function StartScreen({
       }
     });
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (event: KeyboardEvent) => {
     if (choices > 0) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -182,7 +178,7 @@ export function StartScreen({
       if (next) setPicked(fitChoice({ ...fitted, effort: next }));
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       send();
     }
@@ -217,7 +213,7 @@ export function StartScreen({
   };
   // What the plus menu types for you: the mark at the caret, and its menu opens.
   const typeMark = (mark: string) => {
-    const at = mark === "/" && draft.trim() === "" ? 0 : (field.current?.selectionStart ?? draft.length);
+    const at = mark === "/" && draft.trim() === "" ? 0 : (field.current?.read().from ?? draft.length);
     const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
     const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
     setDraft(`${before}${gap}${mark}${draft.slice(at)}`);
@@ -263,29 +259,21 @@ export function StartScreen({
             </div>
           )}
           <div className="ds-composer-text">
-            <textarea
+            <PromptEditor
               ref={field}
-              rows={2}
               value={draft}
-              aria-label="Ask anything"
               placeholder="Ask anything…"
-              onChange={(event) => {
-                setDraft(event.target.value);
-                setCursor(event.target.selectionStart);
+              label="Ask anything"
+              known={known}
+              entries={actions}
+              onChange={(value, caret) => {
+                setDraft(value);
+                setCursor(caret);
                 setActive(0);
               }}
-              onSelect={syncCursor}
-              onKeyUp={syncCursor}
-              onClick={syncCursor}
-              onBlur={() => setCursor(-1)}
+              onCaret={setCursor}
               onKeyDown={onKeyDown}
-              onPaste={(event) => {
-                const list = [...event.clipboardData.files];
-                if (list.length === 0) return;
-                event.preventDefault();
-                pasted(list);
-              }}
-              className="crew-composer-field resize-none text-text placeholder:text-placeholder"
+              onPasteFiles={pasted}
             />
           </div>
           <div className="flex h-8 items-center justify-between gap-2">
