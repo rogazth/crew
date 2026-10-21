@@ -57,10 +57,16 @@ function jumpKeys(index: number): string {
   return index < 9 ? commandKeys(`workspace-${index + 1}` as CommandId) : "";
 }
 
-/** What a workspace out of sight has to say: the loudest status among its sessions, idle and read ones aside. */
-function loudest(sessions: Session[]): SessionStatus | null {
+const IN_PROGRESS: SessionStatus[] = ["working", "starting", "background"];
+
+/**
+ * What a workspace has to say: the loudest status among its sessions, idle and read ones aside.
+ * The current workspace shows its sessions itself, so it only reports work still in progress.
+ */
+function loudest(sessions: Session[], current: boolean): SessionStatus | null {
   for (const status of STATUS_ORDER) {
     if (status === "idle") return null;
+    if (current && !IN_PROGRESS.includes(status)) continue;
     if (sessions.some((session) => session.status === status)) return status;
   }
   return null;
@@ -106,7 +112,7 @@ export function WorkspaceRail(props: Props) {
         <HomeMark
           active={props.home.id === props.activeId && !props.settingsOpen}
           current={props.home.id === props.activeId}
-          status={props.home.id === props.activeId ? null : loudest(byWorkspace.get(props.home.id) ?? [])}
+          status={loudest(byWorkspace.get(props.home.id) ?? [], props.home.id === props.activeId)}
           onSelect={() => props.onSelect(props.home!.id)}
         />
       )}
@@ -121,7 +127,7 @@ export function WorkspaceRail(props: Props) {
                 workspace={workspace}
                 active={workspace.id === props.activeId && !props.settingsOpen}
                 current={workspace.id === props.activeId}
-                status={workspace.id === props.activeId ? null : loudest(byWorkspace.get(workspace.id) ?? [])}
+                status={loudest(byWorkspace.get(workspace.id) ?? [], workspace.id === props.activeId)}
                 onSelect={() => props.onSelect(workspace.id)}
                 onMenu={(point) => {
                   onPeek(workspace.id, null);
