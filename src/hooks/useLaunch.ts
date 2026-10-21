@@ -92,10 +92,10 @@ export function useLaunch({
       if (item.kind === "browser") openBrowser(item.url, item.incognito);
       if (item.kind === "explorer") openExplorer();
       if (item.kind === "new-bot") newBot();
-      if (item.kind === "new-session") startSession(item.provider);
+      if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
-    [newBot, openSession, openStub, startSession, openTerminal, openBrowser, openExplorer, worktree],
+    [newBot, newSession, openSession, openStub, openTerminal, openBrowser, openExplorer, worktree],
   );
 
   return { newSession, startSession, launch };

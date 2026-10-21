@@ -295,7 +295,7 @@ export function App() {
       explorer.toggle("search", selectedLine());
     },
     newBot: () => sheet.newBot(),
-    newSession: () => startSession(),
+    newSession: () => void newSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
