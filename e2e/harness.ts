@@ -866,8 +866,8 @@ export async function openShell(crew: Crew): Promise<void> {
  * Tabs that are not on screen stay mounted, hidden.
  */
 export function composerOf(crew: Crew, session?: Session): Locator {
-  if (session) return crew.window.locator(`form[data-session="${session.id}"] textarea:visible`);
-  return crew.window.locator("textarea:not(.xterm-helper-textarea):visible");
+  if (session) return crew.window.locator(`form[data-session="${session.id}"] .cm-content:visible`);
+  return crew.window.locator("form[data-composer] .cm-content:visible");
 }
 
 /** Types `text` in the chat on screen and sends it. */

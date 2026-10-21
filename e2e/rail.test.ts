@@ -198,6 +198,8 @@ test("R2: a workspace out of sight shows on its mark what its claude session did
   const session = await newSession(crew, back.id);
   await sendInChat(crew, "work 4");
   await waitFor(async () => (await storedStatus(crew, session.id)) === "working", { message: "the turn starts" });
+  // On screen, the mark still reports work in progress.
+  await waitFor(async () => (await lightIn(mark(crew, "back"))) === "Working", { message: "back's mark reads Working while it is on screen" });
   await pressChord(crew, `${MOD}+1`);
   await sessionRow(crew, session.name).waitFor({ state: "detached" });
 
