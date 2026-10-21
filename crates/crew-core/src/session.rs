@@ -201,8 +201,8 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
     })
 }
 
-/// A row written without a model runs its provider's default. Cursor, Codex
-/// and opencode use the one their CLI has selected; Claude's is fixed.
+/// A row written without a model runs its provider's default. Cursor, Codex,
+/// opencode and Grok use the one their CLI has selected; Claude's is fixed.
 fn or_default_model(provider: &str, model: String) -> String {
     if model.is_empty() {
         crate::tools::unnamed_model(provider)
@@ -1060,8 +1060,16 @@ mod tests {
         switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), String::new(), "ask".into())
             .expect("switch");
         assert_eq!(name_of(&store, &s.id), "Mine");
-        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), String::new(), "ask".into())
-            .is_err());
+        assert!(switch_provider(
+            &store,
+            s.id.clone(),
+            "gemini".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "ask".into()
+        )
+        .is_err());
         let b = bot(&store, &workspace, "b", "ask").expect("bot");
         assert!(switch_provider(&store, b.id, "codex".into(), String::new(), String::new(), String::new(), "ask".into()).is_err());
     }

@@ -46,7 +46,7 @@ pub enum ProviderJobPhase {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct ProviderJobStart {
-    /// `claude`, `codex`, `cursor`, `opencode`.
+    /// `claude`, `codex`, `cursor`, `opencode`, `grok`.
     pub provider: String,
     pub action: ProviderJobAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]

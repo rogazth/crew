@@ -808,7 +808,7 @@ pub struct ListedTier {
 }
 
 /// One model a provider's CLI lists for this account, as it spells it.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct ListedModel {
@@ -819,6 +819,15 @@ pub struct ListedModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tiers: Option<Vec<ListedTier>>,
+    /// Reasoning efforts this model takes, least to most. Absent when the
+    /// listing puts the effort in the id, or does not speak of efforts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub efforts: Option<Vec<String>>,
+    /// The effort this model runs when none is named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default_effort: Option<String>,
 }
 
 /// Whether this account can use Claude's fast mode, as Crew shows it. `reason`

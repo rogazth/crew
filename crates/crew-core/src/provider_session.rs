@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -367,6 +368,28 @@ fn toml_string(raw: &str) -> Option<String> {
     None
 }
 
+/// A `key = "value"` inside `[table]`, before the next table.
+fn toml_table_string(text: &str, table: &str, key: &str) -> Option<String> {
+    let header = format!("[{table}]");
+    let mut inside = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            inside = trimmed == header;
+            continue;
+        }
+        if !inside || trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((found, rest)) = trimmed.split_once('=') else { continue };
+        if found.trim() != key {
+            continue;
+        }
+        return toml_string(rest.trim());
+    }
+    None
+}
+
 /// `priority` is the wire name of fast. Anything else Crew cannot pass is dropped.
 fn normalize_service_tier(raw: &str) -> String {
     match raw {
@@ -580,7 +603,7 @@ fn listed_codex_model(row: &serde_json::Value) -> Option<ListedModel> {
         .iter()
         .find_map(|key| row.get(*key).and_then(|v| v.as_str()).map(str::trim).filter(|label| !label.is_empty()))
         .unwrap_or(id);
-    Some(ListedModel { id: id.to_string(), label: label.to_string(), tiers: Some(codex_tiers(row)) })
+    Some(ListedModel { id: id.to_string(), label: label.to_string(), tiers: Some(codex_tiers(row)), ..Default::default() })
 }
 
 fn codex_tiers(row: &serde_json::Value) -> Vec<ListedTier> {
@@ -612,6 +635,409 @@ fn tier_of(item: &serde_json::Value) -> (Option<String>, Option<String>) {
         .find_map(|key| item.get(*key).and_then(|v| v.as_str()))
         .map(str::to_string);
     (id, name)
+}
+
+/// Efforts Crew can hand Grok, least to most. Anything else the CLI adds is
+/// left out until Crew knows the token.
+const GROK_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Env that keeps a model-list probe from importing Claude or Cursor config,
+/// or from starting the auto-updater. A turn's own process sets the same.
+pub(crate) fn grok_quiet_env() -> [(&'static str, &'static str); 11] {
+    [
+        ("GROK_DISABLE_AUTOUPDATER", "1"),
+        ("GROK_CLAUDE_AGENTS_ENABLED", "0"),
+        ("GROK_CLAUDE_HOOKS_ENABLED", "0"),
+        ("GROK_CLAUDE_MCPS_ENABLED", "0"),
+        ("GROK_CLAUDE_RULES_ENABLED", "0"),
+        ("GROK_CLAUDE_SKILLS_ENABLED", "0"),
+        ("GROK_CURSOR_AGENTS_ENABLED", "0"),
+        ("GROK_CURSOR_HOOKS_ENABLED", "0"),
+        ("GROK_CURSOR_MCPS_ENABLED", "0"),
+        ("GROK_CURSOR_RULES_ENABLED", "0"),
+        ("GROK_CURSOR_SKILLS_ENABLED", "0"),
+    ]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GrokListing {
+    models: Vec<ListedModel>,
+    default_model: String,
+}
+
+static GROK_MODELS: Mutex<Option<(Instant, GrokListing)>> = Mutex::new(None);
+static GROK_LISTING: Mutex<()> = Mutex::new(());
+static GROK_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Lists Grok's models off the caller's thread when its CLI is installed.
+pub fn prewarm_grok_models() {
+    thread::spawn(|| {
+        if shell_path::resolve("grok").is_some() {
+            grok_models();
+        }
+    });
+}
+
+/// Every model `grok agent stdio` offers this account, hidden ones left out.
+/// Each carries the reasoning efforts it advertises. Empty when the CLI is
+/// missing or fails, and then asked again next time.
+pub fn grok_models() -> Vec<ListedModel> {
+    grok_listing().models
+}
+
+fn grok_listing() -> GrokListing {
+    if let Some((at, listing)) = cached_grok_listing() {
+        if at.elapsed() >= MODELS_TTL && !GROK_REFRESHING.swap(true, Ordering::SeqCst) {
+            thread::spawn(|| {
+                refresh_grok_models();
+                GROK_REFRESHING.store(false, Ordering::SeqCst);
+            });
+        }
+        return listing;
+    }
+    let _listing = GROK_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    match cached_grok_listing() {
+        Some((_, listing)) => listing,
+        None => refresh_grok_models(),
+    }
+}
+
+fn cached_grok_listing() -> Option<(Instant, GrokListing)> {
+    GROK_MODELS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn refresh_grok_models() -> GrokListing {
+    let listing = list_grok_models().unwrap_or_else(|err| {
+        eprintln!("[models] {err}");
+        GrokListing { models: Vec::new(), default_model: String::new() }
+    });
+    if !listing.models.is_empty() {
+        *GROK_MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), listing.clone()));
+    }
+    listing
+}
+
+/// The model a new Grok session runs when nobody named one. `GROK_DEFAULT_MODEL`
+/// wins, then `[models] default` in the CLI's config, then the model the
+/// provider reports. A launch that names no model can run a different id, so
+/// the session stores this one and the turn sets it.
+pub fn grok_configured_model() -> String {
+    let listing = grok_listing();
+    grok_model_from(std::env::var("GROK_DEFAULT_MODEL").ok().as_deref(), &grok_config_text(), &listing.default_model)
+}
+
+fn grok_home() -> Option<PathBuf> {
+    match std::env::var("GROK_HOME") {
+        Ok(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => home().map(|dir| dir.join(".grok")),
+    }
+}
+
+fn grok_config_text() -> String {
+    grok_home().and_then(|dir| std::fs::read_to_string(dir.join("config.toml")).ok()).unwrap_or_default()
+}
+
+fn nonempty(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
+}
+
+/// `GROK_DEFAULT_MODEL`, then `[models] default`, then what the provider reports.
+fn grok_model_from(env_model: Option<&str>, config: &str, reported: &str) -> String {
+    nonempty(env_model).or_else(|| toml_table_string(config, "models", "default")).unwrap_or_else(|| reported.to_string())
+}
+
+/// `initialize`, then `x.ai/models/list` when that list is empty. Neither
+/// opens a login or a session. `grok models` is the last resort.
+fn list_grok_models() -> Result<GrokListing, String> {
+    let binary = shell_path::resolve("grok").ok_or_else(|| "`grok` was not found on your PATH.".to_string())?;
+    if let Ok(listing) = probe_grok_acp(&binary) {
+        if !listing.models.is_empty() {
+            return Ok(listing);
+        }
+    }
+    Ok(grok_models_from_cli(&binary).unwrap_or_else(|err| {
+        eprintln!("[models] {err}");
+        GrokListing { models: Vec::new(), default_model: String::new() }
+    }))
+}
+
+fn probe_grok_acp(binary: &Path) -> Result<GrokListing, String> {
+    let mut child = Command::new(binary)
+        .args(["--no-auto-update", "agent", "--no-leader", "stdio"])
+        .env("PATH", shell_path::joined())
+        .envs(grok_quiet_env())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("grok agent stdio: {e}"))?;
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            stop_child(&mut child);
+            return Err("grok agent stdio: no stdin".into());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            stop_child(&mut child);
+            return Err("grok agent stdio: no stdout".into());
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    // `extension` is the client type Auto will still ask. `generic` is a silent denial.
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
+            "clientInfo": { "name": "crew", "version": env!("CARGO_PKG_VERSION") },
+            "_meta": { "clientType": "extension" },
+        }
+    });
+    let result = (|| {
+        writeln!(stdin, "{initialize}").map_err(|err| format!("grok agent stdio: {err}"))?;
+        let mut listing = grok_rpc_listing(&rx, 1, deadline)?;
+        if listing.models.is_empty() {
+            let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "x.ai/models/list", "params": {} });
+            writeln!(stdin, "{list}").map_err(|err| format!("grok models/list: {err}"))?;
+            if let Ok(next) = grok_rpc_listing(&rx, 2, deadline) {
+                if !next.models.is_empty() {
+                    listing = next;
+                }
+            }
+        }
+        Ok(listing)
+    })();
+    drop(stdin);
+    stop_child(&mut child);
+    result
+}
+
+fn grok_rpc_listing(rx: &mpsc::Receiver<String>, id: i64, deadline: Instant) -> Result<GrokListing, String> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err("grok agent initialize did not answer".into());
+        }
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => match grok_rpc_line(&line, id) {
+                Ok(Some(value)) => return Ok(parse_grok_models_value(&value)),
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("grok agent initialize exited before answering".into());
+            }
+        }
+    }
+}
+
+/// `grok models`. Exit 0 is the only output worth reading; a failure is not a catalogue.
+fn grok_models_from_cli(binary: &Path) -> Result<GrokListing, String> {
+    let mut child = Command::new(binary)
+        .arg("models")
+        .env("PATH", shell_path::joined())
+        .envs(grok_quiet_env())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("grok models: {e}"))?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            stop_child(&mut child);
+            return Err("grok models: no stdout".into());
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        let _ = tx.send(text);
+    });
+    let text = match rx.recv_timeout(MODELS_TIMEOUT) {
+        Ok(text) => text,
+        Err(_) => {
+            stop_child(&mut child);
+            return Ok(GrokListing { models: Vec::new(), default_model: String::new() });
+        }
+    };
+    let status = child.wait().map_err(|e| format!("grok models: {e}"))?;
+    if !status.success() {
+        return Ok(GrokListing { models: Vec::new(), default_model: String::new() });
+    }
+    Ok(parse_grok_models_text(&text))
+}
+
+fn stop_child(child: &mut std::process::Child) {
+    let pid = child.id() as i32;
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// One JSON-RPC line whose id is `id`. `Ok(None)` is a notification or another answer.
+fn grok_rpc_line(line: &str, id: i64) -> Result<Option<Value>, String> {
+    let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+        return Ok(None);
+    };
+    if value.get("id").and_then(Value::as_i64) != Some(id) {
+        return Ok(None);
+    }
+    if let Some(error) = value.get("error") {
+        let message = error.get("message").and_then(Value::as_str).unwrap_or("initialize failed");
+        return Err(format!("grok agent initialize: {message}"));
+    }
+    Ok(Some(value))
+}
+
+/// `initialize`'s `_meta.modelState`, or that object on its own. Hidden models
+/// are left out. Efforts come back most-first; Crew keeps them least-first.
+#[cfg(test)]
+fn parse_grok_models(text: &str) -> GrokListing {
+    let trimmed = text.trim();
+    if trimmed.starts_with('{') {
+        let value: Value = serde_json::from_str(trimmed).unwrap_or(Value::Null);
+        return parse_grok_models_value(&value);
+    }
+    parse_grok_models_text(trimmed)
+}
+
+fn parse_grok_models_value(value: &Value) -> GrokListing {
+    let state = grok_model_state(value);
+    let rows = state.get("availableModels").and_then(Value::as_array);
+    let models: Vec<ListedModel> = rows.into_iter().flatten().filter_map(listed_grok_model).collect();
+    let current = state.get("currentModelId").and_then(Value::as_str).unwrap_or("");
+    let default_model = if models.iter().any(|model| model.id == current) {
+        current.to_string()
+    } else {
+        models.first().map(|model| model.id.clone()).unwrap_or_default()
+    };
+    GrokListing { models, default_model }
+}
+
+/// `initialize` nests the catalogue under `result._meta.modelState`.
+/// `x.ai/models/list` returns that state as `result`. A fixture may be either.
+fn grok_model_state(value: &Value) -> &Value {
+    let Some(result) = value.get("result") else {
+        return value;
+    };
+    if let Some(state) = result.get("_meta").and_then(|meta| meta.get("modelState")) {
+        if state.get("availableModels").is_some() {
+            return state;
+        }
+    }
+    if result.get("availableModels").is_some() {
+        return result;
+    }
+    value
+}
+
+/// `grok models` text. The default row is a `*` bullet; the rest are `-`.
+/// A blank line ends the section, so a footer bullet is not a model.
+fn parse_grok_models_text(text: &str) -> GrokListing {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(header) = lines.iter().position(|line| line.trim() == "Available models:") else {
+        return GrokListing { models: Vec::new(), default_model: String::new() };
+    };
+    let mut models = Vec::new();
+    let mut default_model = String::new();
+    for line in lines.iter().skip(header + 1) {
+        if line.trim().is_empty() && !models.is_empty() {
+            break;
+        }
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix('*').or_else(|| trimmed.strip_prefix('-')) else {
+            continue;
+        };
+        let rest = rest.trim();
+        let Some(id) = rest.split_whitespace().next().filter(|id| !id.is_empty() && !id.starts_with('(')) else {
+            continue;
+        };
+        if trimmed.starts_with('*') || rest.contains("(default)") {
+            if default_model.is_empty() {
+                default_model = id.to_string();
+            }
+        }
+        if models.iter().any(|model: &ListedModel| model.id == id) {
+            continue;
+        }
+        models.push(ListedModel { id: id.to_string(), label: id.to_string(), ..Default::default() });
+    }
+    if default_model.is_empty() {
+        default_model = models.first().map(|model| model.id.clone()).unwrap_or_default();
+    }
+    GrokListing { models, default_model }
+}
+
+fn listed_grok_model(row: &Value) -> Option<ListedModel> {
+    if row.get("hidden").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let meta = row.get("_meta");
+    if meta.and_then(|meta| meta.get("hidden")).and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let id = ["modelId", "id"].iter().find_map(|key| row.get(*key).and_then(Value::as_str).filter(|id| !id.is_empty()))?;
+    let label = ["name", "label"]
+        .iter()
+        .find_map(|key| row.get(*key).and_then(Value::as_str).map(str::trim).filter(|label| !label.is_empty()))
+        .unwrap_or(id);
+    let efforts = grok_efforts(meta);
+    let default_effort = grok_default_effort(meta, efforts.as_deref());
+    Some(ListedModel { id: id.to_string(), label: label.to_string(), efforts, default_effort, ..Default::default() })
+}
+
+fn grok_efforts(meta: Option<&Value>) -> Option<Vec<String>> {
+    let meta = meta?;
+    if meta.get("supportsReasoningEffort").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let list = meta.get("reasoningEfforts").and_then(Value::as_array)?;
+    let mut ids: Vec<String> = list
+        .iter()
+        .filter_map(|item| {
+            let id = item.as_str().or_else(|| item.get("id").or_else(|| item.get("value")).and_then(Value::as_str))?;
+            (!id.is_empty()).then(|| id.to_string())
+        })
+        .collect();
+    ids.sort_by_key(|id| GROK_EFFORTS.iter().position(|effort| *effort == id).unwrap_or(GROK_EFFORTS.len()));
+    ids.dedup();
+    (!ids.is_empty()).then_some(ids)
+}
+
+fn grok_default_effort(meta: Option<&Value>, efforts: Option<&[String]>) -> Option<String> {
+    let efforts = efforts?;
+    let meta = meta?;
+    let marked = meta.get("reasoningEfforts").and_then(Value::as_array).and_then(|list| {
+        list.iter().find_map(|item| {
+            (item.get("default").and_then(Value::as_bool) == Some(true))
+                .then(|| item.get("id").and_then(Value::as_str).map(str::to_string))
+                .flatten()
+        })
+    });
+    let fallback = meta.get("reasoningEffort").and_then(Value::as_str).map(str::to_string);
+    marked.or(fallback).filter(|id| efforts.iter().any(|effort| effort == id))
 }
 
 static CLAUDE_FAST_MODE: Mutex<Option<(Instant, FastMode)>> = Mutex::new(None);
@@ -989,7 +1415,7 @@ fn parse_cursor_models(out: &str) -> Vec<ListedModel> {
                 return None;
             }
             let label = label.replace('\u{200b}', "").split_whitespace().collect::<Vec<_>>().join(" ");
-            Some(ListedModel { id: id.to_string(), label, tiers: Some(Vec::new()) })
+            Some(ListedModel { id: id.to_string(), label, tiers: Some(Vec::new()), ..Default::default() })
         })
         .collect()
 }
@@ -1257,11 +1683,13 @@ note
                         ListedTier { id: "fast".into(), label: "Fast".into() },
                         ListedTier { id: "flex".into(), label: "Flex".into() },
                     ]),
+                    ..Default::default()
                 },
                 ListedModel {
                     id: "gpt-5.6-terra".into(),
                     label: "GPT-5.6-Terra".into(),
                     tiers: Some(vec![ListedTier { id: "ultrafast".into(), label: "Ultrafast".into() }]),
+                    ..Default::default()
                 },
             ]
         );
@@ -1287,6 +1715,65 @@ note
         assert!(!codex_configured_model().is_empty());
         assert!(!codex_configured_effort().is_empty());
         assert!(!opencode_configured_model().is_empty());
+    }
+
+    /// `models-acp.json` is an `initialize` answer with the account's models.
+    /// The hidden `grok-internal` row was added to the capture so the filter is tested.
+    #[test]
+    fn grok_models_come_from_initialize_with_efforts_and_without_hidden_ones() {
+        let listing = parse_grok_models(include_str!("../tests/fixtures/grok/models-acp.json"));
+        assert_eq!(listing.default_model, "grok-4.7");
+        let rows: Vec<_> = listing
+            .models
+            .iter()
+            .map(|model| (model.id.as_str(), model.label.as_str(), model.efforts.clone(), model.default_effort.clone()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "grok-4.7",
+                    "Grok 4.7",
+                    Some(vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]),
+                    Some("high".into())
+                ),
+                (
+                    "grok-4.7-build-fast",
+                    "Grok 4.7 Fast",
+                    Some(vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]),
+                    Some("high".into()),
+                ),
+                (
+                    "grok-4.6",
+                    "Grok 4.6",
+                    Some(vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]),
+                    Some("high".into())
+                ),
+                ("grok-4.5", "Grok 4.5", Some(vec!["low".into(), "medium".into(), "high".into()]), Some("high".into())),
+            ]
+        );
+        let text = parse_grok_models(include_str!("../tests/fixtures/grok/models-text.txt"));
+        assert_eq!(text.default_model, "grok-4.7");
+        assert_eq!(
+            text.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+        );
+        assert!(text.models.iter().all(|model| model.efforts.is_none()));
+        let footer = format!("{}\n\n  - not-a-model\n", include_str!("../tests/fixtures/grok/models-text.txt"));
+        assert!(!parse_grok_models(&footer).models.iter().any(|model| model.id == "not-a-model"));
+        let signed_out = parse_grok_models(include_str!("../tests/fixtures/grok/models-signed-out.txt"));
+        assert_eq!(signed_out.default_model, "grok-4.6");
+        assert_eq!(signed_out.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["grok-4.6", "grok-4.5"]);
+        assert!(parse_grok_models("not json").models.is_empty());
+    }
+
+    #[test]
+    fn grok_defaults_prefer_the_env_then_config_then_the_provider() {
+        let config = "[cli]\nauto_update = true\n\n[models]\ndefault = \"grok-4.5\"\ndefault_reasoning_effort = \"low\"\n\n[ui]\nyolo = true\n";
+        assert_eq!(grok_model_from(Some("grok-4.6"), config, "grok-4.7"), "grok-4.6");
+        assert_eq!(grok_model_from(Some("  "), config, "grok-4.7"), "grok-4.5");
+        assert_eq!(grok_model_from(None, config, "grok-4.7"), "grok-4.5");
+        assert_eq!(grok_model_from(None, "[cli]\nauto_update = true\n", "grok-4.7"), "grok-4.7");
     }
 
     #[test]

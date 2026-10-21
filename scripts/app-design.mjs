@@ -18,7 +18,7 @@ const data = process.env.CREW_USER_DATA || join(homedir(), "Library/Application 
 const env = { ...process.env, CREW_USER_DATA: data, CREW_PORT: process.env.CREW_PORT || "1421", CREW_KEEP_STATUS: "1" };
 
 // Providers by id, as Settings names them; the daemon checks binaries.
-const BINARIES = { claude: "claude", codex: "codex", cursor: "cursor-agent", opencode: "opencode" };
+const BINARIES = { claude: "claude", codex: "codex", cursor: "cursor-agent", opencode: "opencode", grok: "grok" };
 const missing = process.argv.find((arg) => arg.startsWith("--missing="))?.slice("--missing=".length);
 if (missing) env.CREW_MISSING_PROVIDERS = missing.split(",").map((id) => BINARIES[id.trim()] ?? id.trim()).join(",");
 

@@ -2102,7 +2102,7 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "delegate",
             description: concat!(
-                "Hand one job to a subagent: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
+                "Hand one job to a subagent: a provider CLI (claude, codex, opencode, cursor or grok) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
                 "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
                 "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. ",
@@ -2115,7 +2115,7 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "start_session",
             description: concat!(
-                "Start a separate session: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, that shows in the sidebar like one the user opened. It is the user's: it works for the user, reports to nobody, is not capped and is not ended when idle. It opens as a chat. ",
+                "Start a separate session: a provider CLI (claude, codex, opencode, cursor or grok) working on prompt, in this workspace, that shows in the sidebar like one the user opened. It is the user's: it works for the user, reports to nobody, is not capped and is not ended when idle. It opens as a chat. ",
                 "Use it when the user wants a session they can see and talk to. Do not use it just because the user said \"subagent\": that is delegate. ",
                 "It sees nothing of your conversation: put everything it needs in the prompt. Its first prompt arrives in a message naming you, so it can answer with send_message to your id (unless your CLI takes no letters); to coordinate, say so in the prompt (\"product decisions: ask me with send_message to <your id>, not the user\"). Crew does nothing more for you than record that you launched it. read_session and stop_session are for subagents. ",
                 "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. request_id makes the call safe to retry: the same id from you returns the session the first call made. For several at once, start_sessions."

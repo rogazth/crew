@@ -34,7 +34,7 @@ export type Reading = {
   updatedAt: number;
 };
 
-const NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor", opencode: "OpenCode" };
+const NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor", opencode: "OpenCode", grok: "Grok" };
 
 export function providerName(provider: string): string {
   return NAMES[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1);

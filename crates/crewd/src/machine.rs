@@ -12,7 +12,7 @@ use std::time::Duration;
 use crew_protocol::{DirEntry, DirListing, MachineInfo, MachineSample, PROTOCOL};
 
 /// The agent CLIs Settings reports as found or missing.
-const AGENT_CLIS: &[&str] = &["claude", "codex", "cursor-agent", "opencode"];
+const AGENT_CLIS: &[&str] = &["claude", "codex", "cursor-agent", "opencode", "grok"];
 
 pub fn info(agents_running: u32) -> MachineInfo {
     let (memory_total, memory_available) = memory();

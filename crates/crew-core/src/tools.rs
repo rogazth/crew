@@ -62,11 +62,12 @@ const PROVIDERS: &[(&str, &[&str])] = &[
             "opencode/muse-spark-1.3-contributor-free",
         ],
     ),
+    ("grok", &[]),
 ];
 
 /// The model a session runs when none was picked and the CLI's own selection
-/// cannot be read. Cursor, Codex and opencode otherwise use that selection
-/// (`unnamed_model`). Mirrors `defaultModel` in `src/lib/providers.ts`.
+/// cannot be read. Cursor, Codex, opencode and Grok otherwise use that
+/// selection (`unnamed_model`). Mirrors `defaultModel` in `src/lib/providers.ts`.
 pub fn default_model(provider: &str) -> &'static str {
     match provider {
         "claude" => "claude-opus-5-5",
@@ -85,34 +86,40 @@ pub fn default_effort(provider: &str) -> &'static str {
     }
 }
 
-/// A session's model when the caller named none. Cursor, Codex and opencode
-/// use whatever their CLI has selected; the rest use `default_model`.
+/// A session's model when the caller named none. Cursor, Codex, opencode and
+/// Grok use whatever their CLI has selected; the rest use `default_model`.
 pub fn unnamed_model(provider: &str) -> String {
     match provider {
         "cursor" => crate::provider_session::cursor_configured_model(),
         "codex" => crate::provider_session::codex_configured_model(),
         "opencode" => crate::provider_session::opencode_configured_model(),
+        "grok" => crate::provider_session::grok_configured_model(),
         _ => default_model(provider).to_string(),
     }
 }
 
-/// The effort the environment asks Claude and Codex sessions to start at when
-/// none was picked: `CREW_DEFAULT_EFFORT` in the daemon's environment, which a
-/// test run sets to `low` so the sessions it starts stay cheap. Nothing else
-/// sets it.
+/// The effort the environment asks Claude, Codex and Grok sessions to start at
+/// when none was picked: `CREW_DEFAULT_EFFORT` in the daemon's environment,
+/// which a test run sets to `low` so the sessions it starts stay cheap. Nothing
+/// else sets it.
 fn effort_from_env(provider: &str, value: Option<String>) -> Option<String> {
     let value = value?.trim().to_string();
-    (matches!(provider, "claude" | "codex") && !value.is_empty()).then_some(value)
+    (matches!(provider, "claude" | "codex" | "grok") && !value.is_empty()).then_some(value)
 }
 
 /// A session's effort when the caller named none. `CREW_DEFAULT_EFFORT` wins;
-/// then Codex's is the one in its config, and the rest use `default_effort`.
+/// then Codex's is the one in its config. Grok's stays unset: sending the
+/// model's marked effort would clear a higher default the CLI already has.
+/// The rest use `default_effort`.
 pub fn unnamed_effort(provider: &str) -> String {
     if let Some(effort) = effort_from_env(provider, std::env::var("CREW_DEFAULT_EFFORT").ok()) {
         return effort;
     }
     if provider == "codex" {
         return crate::provider_session::codex_configured_effort();
+    }
+    if provider == "grok" {
+        return String::new();
     }
     default_effort(provider).to_string()
 }
@@ -368,15 +375,24 @@ pub(crate) fn provider_names() -> Vec<&'static str> {
 /// which is neither the provider nor the spelling — and reports back that the
 /// model does not exist here.
 pub(crate) fn model_sheet() -> String {
-    let sheet =
-        PROVIDERS.iter().map(|(provider, models)| format!("{provider}: {}", models.join(", "))).collect::<Vec<_>>().join("\n");
-    format!("{sheet}\n{CURSOR_LISTED}")
+    let sheet = PROVIDERS
+        .iter()
+        .filter(|(_, models)| !models.is_empty())
+        .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{sheet}\n{CURSOR_LISTED}\n{GROK_LISTED}")
 }
 
 /// cursor-agent lists hundreds of ids for an account, one per effort and fast
 /// variant: too many for a schema, so the sheet names the pattern instead.
 const CURSOR_LISTED: &str = "cursor also takes every id `cursor-agent models` lists, its effort and speed in the id: \
      grok-4.7-high, claude-opus-5-5-xhigh, gpt-5.6-sol-low-fast.";
+
+/// Grok's catalogue and each model's efforts change without a release of Crew,
+/// so the sheet names the pattern instead of a list.
+const GROK_LISTED: &str = "grok takes every id its CLI lists, and a separate effort that model offers \
+     (low, medium, high or xhigh). Pass provider \"grok\", the id, and the effort. Hidden models are not offered.";
 
 /// Each provider's models: Crew's own list, then what its CLI lists for this
 /// account that the list does not have yet.
@@ -398,11 +414,12 @@ fn with_listed(provider: &str, models: &[&str]) -> Vec<String> {
 fn listed_models(provider: &str) -> Vec<String> {
     match provider {
         "cursor" => crate::provider_session::cursor_models().into_iter().map(|m| m.id).collect(),
+        "grok" => crate::provider_session::grok_models().into_iter().map(|m| m.id).collect(),
         _ => Vec::new(),
     }
 }
 
-/// Tests run on machines with and without cursor-agent; they see Crew's list.
+/// Tests run on machines with and without the CLIs; they see Crew's list.
 #[cfg(test)]
 fn listed_models(_provider: &str) -> Vec<String> {
     Vec::new()
@@ -589,7 +606,7 @@ pub fn on_demand(name: &str) -> bool {
 
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
-pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; a bot outlives its sessions, and a session can be thrown away. A subagent is a session started with delegate to do one job for the session that started it, with any provider: nested under its parent, reporting to it, disposable. A session of the user's, an independent one, is started with start_session: it shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. A message is a letter written with send_message; it arrives as a turn, in an envelope that names who wrote it. A report is a subagent's last message of a turn its parent started; it needs no tool. A subagent works for the session that started it; a session works for the user.";
+pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor, grok) running a conversation; a bot outlives its sessions, and a session can be thrown away. A subagent is a session started with delegate to do one job for the session that started it, with any provider: nested under its parent, reporting to it, disposable. A session of the user's, an independent one, is started with start_session: it shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. A message is a letter written with send_message; it arrives as a turn, in an envelope that names who wrote it. A report is a subagent's last message of a turn its parent started; it needs no tool. A subagent works for the session that started it; a session works for the user.";
 
 /// Every tool a caller of this kind is listed once every family is
 /// registered, as the daemon has them.
@@ -1159,6 +1176,7 @@ pub(crate) fn unknown_model(wanted: &str, provider: &str) -> String {
     }
     // Crew's own lists: cursor-agent's runs to hundreds of variants.
     let mine = PROVIDERS.iter().find(|(name, _)| *name == provider).map(|(_, models)| models.join(", ")).unwrap_or_default();
+    let mine = if mine.is_empty() { "whatever its CLI lists".to_string() } else { mine };
     format!(
         "No model \"{wanted}\" anywhere, under {provider} or elsewhere. {provider} has: {mine}.\n\
          Everything there is:\n{}",
@@ -1499,6 +1517,7 @@ mod tests {
         for provider in ["claude:", "cursor:", "codex:", "opencode:"] {
             assert!(said.contains(provider), "{provider} missing: {said}");
         }
+        assert!(said.contains("grok takes every id"), "grok's pattern missing: {said}");
     }
 
     #[test]

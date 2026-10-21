@@ -1769,10 +1769,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
-            // Cursor and Codex list their models; the others keep Crew's own list.
+            // Cursor, Codex and Grok list their models; the others keep Crew's own list.
             let models = match provider.as_str() {
                 "cursor" => block(|| Ok::<_, String>(provider_session::cursor_models())).await?,
                 "codex" => block(|| Ok::<_, String>(provider_session::codex_models())).await?,
+                "grok" => block(|| Ok::<_, String>(provider_session::grok_models())).await?,
                 _ => Vec::new(),
             };
             json(models)

@@ -9,6 +9,7 @@ import {
   modelLabel,
   modelsOf,
   PROVIDERS,
+  providerOf,
   searchModels,
   setFast,
   setListedModels,
@@ -215,9 +216,33 @@ describe("choiceForNewSession", () => {
     });
   });
 
-  it("leaves codex and opencode unnamed so the daemon reads the CLI", () => {
+  it("leaves codex, opencode and grok unnamed so the daemon reads the CLI", () => {
     expect(choiceForNewSession("codex", defaults)).toMatchObject({ provider: "codex", model: "", effort: "", access: "full" });
     expect(choiceForNewSession("opencode", defaults)).toMatchObject({ provider: "opencode", model: "", effort: "", access: "full" });
+    expect(choiceForNewSession("grok", defaults)).toMatchObject({ provider: "grok", model: "", effort: "", access: "full" });
+  });
+
+  it("keeps a grok model that was picked and leaves an unpicked effort unset", () => {
+    setListedModels("grok", [
+      { id: "grok-4.7", label: "Grok 4.7", efforts: ["xhigh", "high", "medium", "low"], defaultEffort: "high" },
+      { id: "grok-4.5", label: "Grok 4.5", efforts: ["high", "medium", "low"], defaultEffort: "high" },
+    ]);
+    expect(effortsOf("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(effortsOf("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(choiceForNewSession({ provider: "grok", model: "grok-4.7", effort: "", access: "full" }, defaults)).toMatchObject({
+      model: "grok-4.7",
+      effort: "",
+    });
+    expect(choiceForNewSession({ provider: "grok", model: "grok-4.7", effort: "xhigh", access: "full" }, defaults)).toMatchObject({
+      model: "grok-4.7",
+      effort: "xhigh",
+    });
+    expect(choiceForNewSession({ provider: "grok", model: "grok-4.5", effort: "xhigh", access: "ask" }, defaults)).toMatchObject({
+      model: "grok-4.5",
+      effort: "",
+      access: "ask",
+    });
+    expect(providerOf("grok")?.remoteLogin).toBe("grok login --device-auth");
   });
 
   it("keeps a codex model that was picked", () => {

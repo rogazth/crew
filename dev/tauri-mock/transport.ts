@@ -59,6 +59,7 @@ const sessions: Row[] = [
   session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done", SOCKET_REPLAY),
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
   session("s6", "w3", "bot", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
+  session("s8", "w1", "bot", "Grok", "grok", "", "idle"),
   // Orchestration: Lead and the sessions it started, one it handed to the user.
   session("s7", "w1", "bot", "Lead", "claude", "claude-opus-5", "idle"),
   child("c1", "Auth refactor", "claude", "working", null, 0, `${MOCK_WORKTREES}/crew/feat-auth-refactor`),
@@ -489,7 +490,16 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
   agent_installed: ({ names }) => names,
-  agent_models: () => [],
+  // Grok's listing as `initialize` reports it: efforts per model, grok-4.5 without xhigh.
+  agent_models: ({ provider }) =>
+    provider === "grok"
+      ? [
+          { id: "grok-4.7", label: "Grok 4.7", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+          { id: "grok-4.7-build-fast", label: "Grok 4.7 Fast", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+          { id: "grok-4.6", label: "Grok 4.6", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+          { id: "grok-4.5", label: "Grok 4.5", efforts: ["low", "medium", "high"], defaultEffort: "high" },
+        ]
+      : [],
   session_provider_create: () => "mock-chat",
   session_provider_discover: () => null,
   session_claude_rebind: () => null,

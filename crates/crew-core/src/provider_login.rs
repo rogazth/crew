@@ -28,6 +28,7 @@ pub fn command(provider: &str) -> Result<ProviderLoginCommand, String> {
         "codex" => ("codex login", "codex logout"),
         "cursor" => ("cursor-agent login", "cursor-agent logout"),
         "opencode" => ("opencode auth login", "opencode auth logout"),
+        "grok" => ("grok login", "grok logout"),
         other => return Err(format!("unknown provider `{other}`")),
     };
     Ok(ProviderLoginCommand { provider: provider.into(), login: login.into(), logout: logout.into() })
@@ -148,7 +149,9 @@ impl ProviderLogins {
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break event(ProviderLoginPhase::Failed, Some("Codex stopped before the sign-in finished")),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break event(ProviderLoginPhase::Failed, Some("Codex stopped before the sign-in finished"))
+                }
             }
         };
         drop(server);
@@ -170,6 +173,10 @@ mod tests {
         assert_eq!(command("codex").unwrap().login, "codex login");
         assert_eq!(command("cursor").unwrap().logout, "cursor-agent logout");
         assert_eq!(command("opencode").unwrap().login, "opencode auth login");
+        assert_eq!(
+            (command("grok").unwrap().login.as_str(), command("grok").unwrap().logout.as_str()),
+            ("grok login", "grok logout")
+        );
         assert!(command("gemini").is_err());
     }
 
@@ -177,7 +184,10 @@ mod tests {
     fn a_device_code_comes_out_of_the_start_result() {
         let result = json!({ "type": "chatgptDeviceCode", "loginId": "L1", "userCode": "ABCD-1234", "verificationUrl": "https://auth.openai.com/codex/device" });
         let flow = parse_flow(&result).unwrap();
-        assert_eq!((flow.login_id.as_str(), flow.user_code.as_str(), flow.verification_url.as_str()), ("L1", "ABCD-1234", "https://auth.openai.com/codex/device"));
+        assert_eq!(
+            (flow.login_id.as_str(), flow.user_code.as_str(), flow.verification_url.as_str()),
+            ("L1", "ABCD-1234", "https://auth.openai.com/codex/device")
+        );
         assert!(parse_flow(&json!({ "type": "chatgpt", "loginId": "L1", "authUrl": "https://x" })).is_none());
         assert!(parse_flow(&Value::Null).is_none());
     }
@@ -188,7 +198,8 @@ mod tests {
         let event = parse_completed(&done, "L1").unwrap();
         assert_eq!((event.phase, event.error), (ProviderLoginPhase::Done, None));
         assert!(parse_completed(&done, "L2").is_none());
-        let bad = json!({ "method": "account/login/completed", "params": { "loginId": null, "success": false, "error": "denied" } });
+        let bad =
+            json!({ "method": "account/login/completed", "params": { "loginId": null, "success": false, "error": "denied" } });
         let event = parse_completed(&bad, "L1").unwrap();
         assert_eq!((event.phase, event.error.as_deref()), (ProviderLoginPhase::Failed, Some("denied")));
         assert!(parse_completed(&json!({ "method": "account/updated", "params": {} }), "L1").is_none());

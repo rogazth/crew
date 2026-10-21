@@ -283,6 +283,7 @@ await session("crew", "bot", "Archivist", { ago: 3 * 24 * HOUR, description: "Id
 await session("crew", "terminal", "claude — design tokens", { status: "working", ago: 0 });
 await session("crew", "terminal", "codex — release notes", { provider: "codex", status: "done", ago: 25 * MIN });
 await session("crew", "terminal", "opencode", { provider: "opencode", ago: 5 * HOUR });
+await session("crew", "terminal", "grok", { provider: "grok", ago: 90 * MIN });
 
 const tabsBot = await session("crew", "bot", "Indicator", {
   worktree: crewTrees.tabs,
@@ -306,7 +307,7 @@ await session("spendo", "bot", "Biweekly", { worktree: spendoTrees.budgets, stat
 // orca — lots of bots, to see the grid wrap and the folded faces stack.
 for (const [i, name] of ["Atlas", "Beacon", "Comet", "Delta", "Echo", "Flint", "Gale"].entries()) {
   await session("orca", "bot", name, {
-    provider: ["claude", "codex", "cursor", "opencode"][i % 4],
+    provider: ["claude", "codex", "cursor", "opencode", "grok"][i % 5],
     status: ["idle", "working", "idle", "done", "idle", "idle", "error"][i],
     ago: i * 17 * MIN,
   });

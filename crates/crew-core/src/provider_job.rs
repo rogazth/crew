@@ -75,6 +75,7 @@ fn install_script(provider: &str) -> Option<&'static str> {
         "claude" => Some("curl -fsSL https://claude.ai/install.sh | bash"),
         "cursor" => Some("curl https://cursor.com/install -fsS | bash"),
         "opencode" => Some("curl -fsSL https://opencode.ai/install | bash"),
+        "grok" => Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
         _ => None,
     }
 }
@@ -184,6 +185,12 @@ fn uninstall_command(spec: &Spec, method: ProviderJobMethod, path: &Path, home: 
                     "$HOME/.local/share/cursor-agent",
                     " && case \"$(readlink \"$HOME/.local/bin/agent\" 2>/dev/null)\" in *cursor-agent*) rm -f \"$HOME/.local/bin/agent\";; esac".to_string(),
                 ),
+                // The installer keeps the binary in ~/.grok/downloads and links
+                // ~/.grok/bin plus ~/.local/bin. Sessions and auth stay in ~/.grok.
+                "grok" => (
+                    "$HOME/.grok/downloads",
+                    " && rm -rf \"$HOME/.grok/bin\" \"$HOME/.grok/completions\" && for link in \"$HOME/.local/bin/grok\" \"$HOME/.local/bin/agent\"; do case \"$(readlink \"$link\" 2>/dev/null)\" in *grok*) rm -f \"$link\";; esac; done".to_string(),
+                ),
                 _ => return Err(format!("{} has no uninstaller; remove {} by hand", spec.binary, path.display())),
             };
             Ok(format!("rm -f {}{extra} && rm -rf \"{data}\"", quote(&path.to_string_lossy())))
@@ -196,6 +203,7 @@ fn logout_command(spec: &Spec) -> Result<String, String> {
         "claude" => Ok("claude auth logout".into()),
         "codex" => Ok("codex logout".into()),
         "cursor" => Ok("cursor-agent logout".into()),
+        "grok" => Ok("grok logout".into()),
         // `opencode auth logout` opens an account picker; it needs a terminal.
         _ => Err("opencode asks which account to sign out of; run `opencode auth logout` in a terminal".into()),
     }
@@ -561,6 +569,7 @@ mod tests {
         assert_eq!(commands(&start("cursor", Install, None, None).unwrap()), ["curl https://cursor.com/install -fsS | bash"]);
         assert_eq!(commands(&start("opencode", Install, None, None).unwrap()), ["curl -fsSL https://opencode.ai/install | bash"]);
         assert_eq!(commands(&start("codex", Install, None, None).unwrap()), ["npm install -g @openai/codex"]);
+        assert_eq!(commands(&start("grok", Install, None, None).unwrap()), ["curl -fsSL https://x.ai/cli/install.sh | bash"]);
     }
 
     #[test]
@@ -587,6 +596,7 @@ mod tests {
         assert_eq!(commands(&start("codex", Update, None, at).unwrap()), ["codex update"]);
         assert_eq!(commands(&start("cursor", Update, None, at).unwrap()), ["cursor-agent update"]);
         assert_eq!(commands(&start("opencode", Update, None, at).unwrap()), ["opencode upgrade"]);
+        assert_eq!(commands(&start("grok", Update, None, at).unwrap()), ["grok update"]);
         assert_eq!(commands(&start("codex", Update, Some(Npm), at).unwrap()), ["npm install -g @openai/codex@latest"]);
         assert_eq!(commands(&start("codex", Update, Some(Brew), at).unwrap()), ["brew upgrade codex"]);
         assert_eq!(commands(&start("claude", Update, Some(Brew), at).unwrap()), ["brew upgrade --cask claude-code"]);
@@ -650,6 +660,7 @@ mod tests {
         assert_eq!(commands(&start("codex", Logout, None, at).unwrap()), ["codex logout"]);
         assert_eq!(commands(&start("cursor", Logout, None, at).unwrap()), ["cursor-agent logout"]);
         assert!(start("opencode", Logout, None, at).unwrap_err().contains("opencode auth logout"));
+        assert_eq!(commands(&start("grok", Logout, None, at).unwrap()), ["grok logout"]);
     }
 
     #[test]
@@ -680,6 +691,13 @@ mod tests {
         let command =
             uninstall_command(&claude, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/claude"), Some(home)).unwrap();
         assert!(!command.contains("cursor-agent") && !command.contains("agent\""), "{command}");
+        let grok = super::spec("grok").unwrap();
+        let command =
+            uninstall_command(&grok, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/grok"), Some(home)).unwrap();
+        assert!(command.contains("$HOME/.grok/downloads") && command.contains("$HOME/.grok/bin"), "{command}");
+        assert!(command.contains(".local/bin/grok") && command.contains(".local/bin/agent"), "{command}");
+        assert!(!command.contains("auth.json"), "{command}");
+        assert!(command.split("$HOME/.grok").skip(1).all(|rest| rest.starts_with('/')), "{command}");
     }
 
     #[test]

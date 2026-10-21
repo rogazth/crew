@@ -33,7 +33,7 @@ import { useProviderStatus } from "../../hooks/useProviderStatus";
 import { LOCAL, reconnect, type EnvLink } from "../../lib/client/registry";
 import { filesHost, openUrl, remotesHost } from "../../lib/host";
 import type { ProviderJob, ProviderJobMethod, ProviderStatus } from "../../lib/protocol";
-import { PROVIDERS, type ProviderId } from "../../lib/providers";
+import { PROVIDERS, providerOf, type ProviderId } from "../../lib/providers";
 import { errorText } from "../../lib/remotes";
 import { METHOD_LABELS, PROVIDER_META } from "./providerMeta";
 import { setProvidersEnv, useProvidersEnv } from "./route";
@@ -394,7 +394,11 @@ function signIn(id: ProviderId, ctx: Ctx) {
   }
   void jobs
     .loginCommand(id)
-    .then(({ login }) => ctx.onOpenTerminal(link.id, login))
+    .then(({ login }) => {
+      // A browser login on a remote machine has nowhere to finish. `remoteLogin` prints a code instead.
+      const command = link.id !== LOCAL ? (providerOf(id)?.remoteLogin ?? login) : login;
+      return ctx.onOpenTerminal(link.id, command);
+    })
     .catch(fail);
 }
 

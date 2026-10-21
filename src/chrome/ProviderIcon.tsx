@@ -1,10 +1,11 @@
 import claude from "../assets/providers/claude.svg";
 import codex from "../assets/providers/codex.svg";
 import cursor from "../assets/providers/cursor.svg";
+import grok from "../assets/providers/grok.svg";
 import opencode from "../assets/providers/opencode.svg";
 import type { ProviderId } from "../lib/providers";
 
-const MARKS: Record<ProviderId, string> = { claude, cursor, codex, opencode };
+const MARKS: Record<ProviderId, string> = { claude, cursor, codex, opencode, grok };
 
 export function ProviderIcon({
   provider,
@@ -15,9 +16,9 @@ export function ProviderIcon({
 }) {
   const src = MARKS[provider as ProviderId];
   if (!src) return <span className={`${className} shrink-0`} />;
-  // The cursor mark is a single-colour glyph, so an <img> would pin it to black.
+  // A single-colour glyph (cursor, grok) would pin to black as an <img>.
   // Painting it as a mask lets it follow the theme's icon colour.
-  if (provider === "cursor") {
+  if (provider === "cursor" || provider === "grok") {
     return (
       <span
         aria-hidden

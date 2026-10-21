@@ -44,6 +44,12 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
     blurb: "Models from many vendors, one subscription",
     install: { script: "curl https://cursor.com/install -fsS | bash" },
   },
+  grok: {
+    name: "Grok Build",
+    vendor: "xAI",
+    blurb: "xAI's coding agent, Grok models",
+    install: { script: "curl -fsSL https://x.ai/cli/install.sh | bash" },
+  },
 };
 
 export const METHOD_LABELS: Record<ProviderJobMethod, string> = {

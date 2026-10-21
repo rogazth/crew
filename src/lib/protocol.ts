@@ -590,7 +590,16 @@ export type ListedModel = { id: string, label: string,
  * Codex service tiers besides Standard. An empty list advertised none;
  * absent means this listing does not speak of tiers.
  */
-tiers?: Array<ListedTier>, };
+tiers?: Array<ListedTier>, 
+/**
+ * Reasoning efforts this model takes, least to most. Absent when the
+ * listing puts the effort in the id, or does not speak of efforts.
+ */
+efforts?: Array<string>, 
+/**
+ * The effort this model runs when none is named.
+ */
+defaultEffort?: string, };
 
 /**
  * One service tier a model advertises, besides Standard.
@@ -1024,7 +1033,7 @@ export type ProviderJobPhase = "running" | "done" | "failed" | "cancelled";
  */
 export type ProviderJobStart = { 
 /**
- * `claude`, `codex`, `cursor`, `opencode`.
+ * `claude`, `codex`, `cursor`, `opencode`, `grok`.
  */
 provider: string, action: ProviderJobAction, method?: ProviderJobMethod, };
 

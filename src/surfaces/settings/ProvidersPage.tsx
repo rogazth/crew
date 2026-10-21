@@ -20,6 +20,7 @@ import {
   listedModelsVersion,
   loadListedModels,
   modelsOf,
+  providerOf,
   subscribeListedModels,
   type Access,
   type ProviderDef,
@@ -50,7 +51,8 @@ function DefaultAgent({ refresh }: { refresh: number }) {
   return (
     <section className="flex flex-col gap-2" data-setting="default-agent">
       <Heading title="Preferred agent" description="Default for new sessions and bots." />
-      <div className="grid grid-cols-2 gap-2 @[620px]:grid-cols-4">
+      {/* One row of equal cards however many CLIs are installed, so none sits alone below. */}
+      <div className="grid grid-cols-2 gap-2 @[620px]:grid-flow-col @[620px]:auto-cols-fr @[620px]:grid-cols-none">
         {installed.map((p) => {
           const on = p.id === preferred.provider;
           return (
@@ -116,7 +118,10 @@ function ModelAndEffort() {
             <Select
               label="Default effort"
               value={preferred.effort}
-              options={efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] }))}
+              options={[
+                ...(providerOf(preferred.provider)?.cliEffort ? [{ value: "" as const, label: "CLI default" }] : []),
+                ...efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] })),
+              ]}
               className="w-56"
               onChange={(next) => update(fitChoice({ ...preferred, effort: next }))}
             />

@@ -22,6 +22,9 @@ use crate::shell_path;
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// cursor-agent's `about` and `status` measured 7 to 24 seconds.
 const CURSOR_TIMEOUT: Duration = Duration::from_secs(30);
+/// `grok models` and `grok update --check` measured under a second; a cold
+/// catalog fetch can take longer.
+const GROK_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(20);
 /// The newest release changes rarely, and asking costs a network round trip.
 const LATEST_TTL: Duration = Duration::from_secs(60 * 60);
@@ -42,6 +45,7 @@ pub(crate) const SPECS: &[Spec] = &[
     Spec { id: "codex", binary: "codex", npm: Some("@openai/codex") },
     Spec { id: "cursor", binary: "cursor-agent", npm: None },
     Spec { id: "opencode", binary: "opencode", npm: Some("@opencode/cli") },
+    Spec { id: "grok", binary: "grok", npm: None },
 ];
 
 #[derive(Default)]
@@ -57,7 +61,7 @@ fn with_cache<R>(id: &'static str, f: impl FnOnce(&mut Cached) -> R) -> R {
     f(guard.get_or_insert_with(HashMap::new).entry(id).or_default())
 }
 
-/// The four CLIs, looked up concurrently. `refresh` skips the caches.
+/// The CLIs, looked up concurrently. `refresh` skips the caches.
 pub fn all(refresh: bool) -> Vec<ProviderStatus> {
     thread::scope(|scope| {
         let handles: Vec<_> = SPECS.iter().map(|spec| scope.spawn(move || one(spec, refresh))).collect();
@@ -122,13 +126,18 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
         (Some((at, account)), false) if at.elapsed() < ACCOUNT_TTL => Some(account.clone()),
         _ => None,
     });
-    // Cursor reports its newest release and plan in one call.
+    // Cursor reports its newest release and plan in one call. Grok's updater
+    // says whether a newer build exists (`grok update --check --json`).
     let cursor = spec.id == "cursor";
     let want_about = cursor && (cached_latest.is_none() || cached_account.is_none());
+    let want_grok_latest = spec.id == "grok" && cached_latest.is_none();
 
-    let (version, npm, about, account) = thread::scope(|scope| {
+    let (version, npm, about, grok_latest, account) = thread::scope(|scope| {
         let version = scope.spawn(|| run(path, &["--version"], LOOKUP_TIMEOUT).and_then(|out| parse_version(&out)));
         let about = want_about.then(|| scope.spawn(|| run(path, &["about", "--format", "json"], CURSOR_TIMEOUT)));
+        let grok_latest = want_grok_latest.then(|| {
+            scope.spawn(|| run(path, &["update", "--check", "--json"], GROK_TIMEOUT).and_then(|out| parse_grok_update(&out)))
+        });
         let npm = match (&cached_latest, spec.npm) {
             (None, Some(pkg)) => Some(scope.spawn(move || npm_latest(pkg))),
             _ => None,
@@ -142,6 +151,7 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
             version.join().ok().flatten(),
             npm.and_then(|handle| handle.join().ok().flatten()),
             about.and_then(|handle| handle.join().ok().flatten()).as_deref().map(parse_cursor_about),
+            grok_latest.and_then(|handle| handle.join().ok().flatten()),
             account,
         )
     });
@@ -149,10 +159,10 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
     let latest = match cached_latest {
         Some(latest) => latest,
         None => {
-            let latest = npm.or_else(|| about.as_ref().and_then(|(latest, _)| latest.clone()));
+            let latest = npm.or_else(|| about.as_ref().and_then(|(latest, _)| latest.clone())).or(grok_latest);
             // Offline leaves it unknown; cache that too, so a page that polls does not ask every time.
             // A lookup that timed out or failed is not an answer, though: ask again next time.
-            let failed = want_about && about.is_none();
+            let failed = (want_about && about.is_none()) || (want_grok_latest && latest.is_none());
             if latest.is_some() || !failed {
                 with_cache(spec.id, |c| c.latest = Some((Instant::now(), latest.clone())));
             }
@@ -187,6 +197,15 @@ fn account_of(id: &str, path: &Path) -> Option<ProviderAccount> {
         },
         "cursor" => parse_cursor_status(&run(path, &["status", "--format", "json"], CURSOR_TIMEOUT)?),
         "opencode" => parse_opencode_auth(&run(path, &["auth", "list"], LOOKUP_TIMEOUT)?),
+        // `grok models` exits 0 signed in or out, so the line is the signal.
+        // A key in the environment is a login of its own; the value stays put.
+        "grok" => {
+            if api_key_present(std::env::var("XAI_API_KEY").ok().as_deref()) {
+                ProviderAccount { signed_in: Some(true), ..Default::default() }
+            } else {
+                parse_grok_login(&run(path, &["models"], GROK_TIMEOUT)?)
+            }
+        }
         _ => return None,
     })
 }
@@ -205,16 +224,19 @@ fn npm_latest(package: &str) -> Option<String> {
 /// their status there). The exit code is ignored: a signed-out CLI says so and
 /// exits 1. None when it does not start or does not answer in time.
 fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .args(args)
         .env("PATH", shell_path::joined())
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .ok()?;
+        .process_group(0);
+    if path.file_name().and_then(|name| name.to_str()) == Some("grok") {
+        command.envs(crate::provider_session::grok_quiet_env());
+    }
+    let mut child = command.spawn().ok()?;
     fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
         thread::spawn(move || {
             let mut text = String::new();
@@ -242,8 +264,9 @@ fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     Some(text).filter(|text| !text.trim().is_empty())
 }
 
-/// `2.1.299 (Claude Code)`, `codex-cli 0.160.0`, `opencode v2.0.27` and
-/// `2026.10.01-14929f9` all answer with the number they carry.
+/// `2.1.299 (Claude Code)`, `codex-cli 0.160.0`, `opencode v2.0.27`,
+/// `2026.10.01-14929f9` and `grok 1.0.62 (hash) [stable]` all answer with the
+/// number they carry.
 pub fn parse_version(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     let re = regex::Regex::new(r"\d+(?:\.\d+)+(?:-[0-9A-Za-z.]+)?").ok()?;
@@ -282,11 +305,9 @@ pub fn parse_claude_auth(json: &str) -> ProviderAccount {
 /// No account while sign-in is required is signed out; an API key has no email or plan.
 pub fn parse_codex_account(result: &Value) -> ProviderAccount {
     match result.get("account") {
-        Some(account) if account.is_object() => ProviderAccount {
-            signed_in: Some(true),
-            email: string(account, "email"),
-            plan: string(account, "planType"),
-        },
+        Some(account) if account.is_object() => {
+            ProviderAccount { signed_in: Some(true), email: string(account, "email"), plan: string(account, "planType") }
+        }
         Some(Value::Null) if result.get("requiresOpenaiAuth").and_then(Value::as_bool) != Some(false) => {
             ProviderAccount { signed_in: Some(false), ..Default::default() }
         }
@@ -323,6 +344,30 @@ pub fn parse_cursor_status(json: &str) -> ProviderAccount {
 pub fn parse_cursor_about(json: &str) -> (Option<String>, Option<String>) {
     let Ok(value) = serde_json::from_str::<Value>(json) else { return (None, None) };
     (string(&value, "latestVersion"), string(&value, "subscriptionTier"))
+}
+
+/// `You are logged in with grok.com.` or `You are not authenticated.` The line
+/// says whether, not who: no address and no token comes out of it. A non-zero
+/// `grok models` never reaches here.
+pub fn parse_grok_login(text: &str) -> ProviderAccount {
+    let lower = text.to_lowercase();
+    if lower.contains("not authenticated") || lower.contains("not logged in") {
+        return ProviderAccount { signed_in: Some(false), ..Default::default() };
+    }
+    if lower.contains("logged in") {
+        return ProviderAccount { signed_in: Some(true), ..Default::default() };
+    }
+    ProviderAccount::default()
+}
+
+fn api_key_present(key: Option<&str>) -> bool {
+    key.is_some_and(|key| !key.trim().is_empty())
+}
+
+/// `latestVersion` from `grok update --check --json`. Unpinned: whatever the CLI calls latest.
+pub fn parse_grok_update(json: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(json).ok()?;
+    value.get("latestVersion")?.as_str().map(str::to_string).filter(|version| !version.is_empty())
 }
 
 /// One row per stored credential (`OpenAI  OAuth  stored`), or a count line;
@@ -380,6 +425,7 @@ mod tests {
         assert_eq!(parse_version("codex-cli 0.160.0").as_deref(), Some("0.160.0"));
         assert_eq!(parse_version("opencode v2.0.27").as_deref(), Some("2.0.27"));
         assert_eq!(parse_version("2026.10.01-14929f9").as_deref(), Some("2026.10.01-14929f9"));
+        assert_eq!(parse_version("grok 1.0.62 (1474f9cbdd91) [stable]\n").as_deref(), Some("1.0.62"));
         assert_eq!(parse_version("dev build").as_deref(), Some("dev build"));
         assert_eq!(parse_version("  \n"), None);
     }
@@ -453,6 +499,22 @@ mod tests {
         let about = r#"{"cliVersion":"2026.10.01-14929f9","latestVersion":"2026.10.19-6bbf2c4","subscriptionTier":"Free"}"#;
         assert_eq!(parse_cursor_about(about), (Some("2026.10.19-6bbf2c4".into()), Some("Free".into())));
         assert_eq!(parse_cursor_about("nope"), (None, None));
+    }
+
+    #[test]
+    fn grok_login_reads_the_models_line_and_the_updater_says_what_is_current() {
+        let signed = parse_grok_login(include_str!("../tests/fixtures/grok/models-text.txt"));
+        assert_eq!((signed.signed_in, signed.email.as_deref(), signed.plan.as_deref()), (Some(true), None, None));
+        let out = parse_grok_login(include_str!("../tests/fixtures/grok/models-signed-out.txt"));
+        assert_eq!(out.signed_in, Some(false));
+        assert_eq!(parse_grok_login("something else").signed_in, None);
+        let check = r#"{"currentVersion":"1.0.62","latestVersion":"1.0.63","updateAvailable":true,"installer":"internal","channel":"stable","autoUpdate":true,"error":null}"#;
+        assert_eq!(parse_grok_update(check).as_deref(), Some("1.0.63"));
+        assert_eq!(parse_grok_update(r#"{"latestVersion":""}"#), None);
+        assert_eq!(parse_grok_update("not json"), None);
+        assert!(api_key_present(Some("present")));
+        assert!(!api_key_present(Some("  ")));
+        assert!(!api_key_present(None));
     }
 
     #[test]

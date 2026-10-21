@@ -2,7 +2,7 @@ import { fuzzyMatch } from "./fuzzy";
 import type { ListedModel } from "./protocol";
 
 /** Provider + model registry. Adding a provider is a row here, never an `if`. */
-export type ProviderId = "claude" | "cursor" | "codex" | "opencode";
+export type ProviderId = "claude" | "cursor" | "codex" | "opencode" | "grok";
 
 /** How hard the model thinks, least to most. `none` and `minimal` are only some cursor models'. */
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -22,6 +22,8 @@ export type Model = {
    * runs when nothing is said.
    */
   variants?: Partial<Record<Effort, string>>;
+  /** The effort this model runs when none was picked. From the provider's listing. */
+  defaultEffort?: Effort;
   /** The fast id for each effort that has one: `grok-4.7-high-fast` beside `grok-4.7-high`. */
   fastVariants?: Partial<Record<Effort, string>>;
   /** The fast id of a model whose effort is not part of the id: `composer-2.5-fast`. */
@@ -51,11 +53,25 @@ export type ProviderDef = {
   /**
    * What a session runs when nothing was picked and the CLI's own selection
    * cannot be read. Mirrors `default_model` and `default_effort` in
-   * `crates/crew-core/src/tools.rs`. Cursor, Codex and opencode leave a new
-   * session that names no model blank, and the daemon reads the CLI.
+   * `crates/crew-core/src/tools.rs`.
    */
   defaultModel: string;
   defaultEffort?: Effort;
+  /**
+   * A new session that names no model stays blank, and the daemon reads the
+   * CLI. Naming a model keeps it.
+   */
+  cliModel?: boolean;
+  /**
+   * An effort nobody picked stays unset, so the CLI's own default is not
+   * cleared. Settings offers that as "CLI default".
+   */
+  cliEffort?: boolean;
+  /**
+   * The sign-in to type on a remote machine, where a browser login has
+   * nowhere to finish. Absent, the daemon's login command is used everywhere.
+   */
+  remoteLogin?: string;
 };
 
 export const PROVIDERS: ProviderDef[] = [
@@ -97,6 +113,7 @@ export const PROVIDERS: ProviderDef[] = [
     // `variants`, read from `cursor-agent models` (`loadListedModels`).
     efforts: [],
     listsModels: true,
+    cliModel: true,
     defaultModel: "auto",
     models: [
       { id: "auto", label: "Auto", note: "Default" },
@@ -126,6 +143,7 @@ export const PROVIDERS: ProviderDef[] = [
     access: { ask: [], auto: ["--approve-for-me"], full: ["--dangerously-bypass-approvals-and-sandbox"] },
     efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
     listsModels: true,
+    cliModel: true,
     defaultModel: "gpt-6-astra",
     defaultEffort: "medium",
     models: [
@@ -145,6 +163,7 @@ export const PROVIDERS: ProviderDef[] = [
     access: { ask: [], full: ["--auto"] },
     efforts: [],
     // Its one positional is the project folder.
+    cliModel: true,
     defaultModel: "opencode/ling-3.0-flash-fin-free",
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },
@@ -153,6 +172,27 @@ export const PROVIDERS: ProviderDef[] = [
       { id: "opencode/mimo-v2.5-free", label: "MiMo v2.5", note: "Free" },
       { id: "opencode/muse-spark-1.3-contributor-free", label: "Muse Spark 1.3", note: "Free" },
     ],
+  },
+  {
+    id: "grok",
+    label: "Grok",
+    binary: "grok",
+    access: {
+      // Edits has no agent mode: the launch is ask, and the client approves edits.
+      // Full is `--always-approve` on `agent`, not the TUI's bypassPermissions.
+      ask: ["--permission-mode", "default"],
+      edits: ["--permission-mode", "default"],
+      auto: ["--permission-mode", "auto"],
+      full: ["--always-approve"],
+    },
+    // Each model's efforts come from the CLI's listing (`loadListedModels`).
+    efforts: [],
+    listsModels: true,
+    cliModel: true,
+    cliEffort: true,
+    remoteLogin: "grok login --device-auth",
+    defaultModel: "",
+    models: [],
   },
 ];
 
@@ -300,10 +340,11 @@ export function defaultModelOf(providerId: string): string {
   return providerOf(providerId)?.defaultModel ?? "";
 }
 
-/** The effort a model thinks at when none was picked: its provider's, else the most it takes. */
+/** The effort a model thinks at when none was picked: its own, else its provider's, else the most it takes. `cliEffort` leaves it unset so the CLI's default stays. */
 export function defaultEffortOf(providerId: string, modelId: string): Effort | "" {
+  if (providerOf(providerId)?.cliEffort) return "";
   const efforts = effortsOf(providerId, modelId);
-  const preferred = providerOf(providerId)?.defaultEffort;
+  const preferred = findModel(providerId, modelId)?.defaultEffort ?? providerOf(providerId)?.defaultEffort;
   if (preferred && efforts.includes(preferred)) return preferred;
   return efforts.at(-1) ?? "";
 }
@@ -394,16 +435,17 @@ export function providerLine(providerId: string, modelId: string): string {
 }
 
 /**
- * What a new session is created with. Cursor, Codex and opencode go out with
- * a blank model when nobody named one: the daemon reads the CLI's selection
- * instead of substituting Crew's stand-in. A model that was picked is kept,
- * and so is its effort.
+ * What a new session is created with. `cliModel` goes out with a blank model
+ * when nobody named one, and the daemon reads the CLI. For Grok it then
+ * stores the id the provider reports, because a launch that names no model
+ * can run a different one. `cliEffort` stays blank either way, so the CLI's
+ * own default is not cleared.
  */
 export function choiceForNewSession(pick: ProviderId | AgentChoice, defaults: AgentChoice): AgentChoice {
   const specified: AgentChoice =
     typeof pick === "object" ? pick : { ...defaults, provider: pick, model: pick === defaults.provider ? defaults.model : "" };
   const choice = fitChoice(specified);
-  if (specified.model === "" && (choice.provider === "cursor" || choice.provider === "codex" || choice.provider === "opencode")) {
+  if (specified.model === "" && providerOf(choice.provider)?.cliModel) {
     return { ...choice, model: "", effort: "", serviceTier: "" };
   }
   return choice;
@@ -495,7 +537,22 @@ export function groupListed(rows: ListedModel[]): Model[] {
       host.tiers = dedupeTiers(group.flatMap((row) => row.tiers ?? []));
     }
   }
+  applyListedEfforts(models, rows);
   return models;
+}
+
+/** Efforts a listing names on the model itself, least to most. Cursor's live in the id. */
+function applyListedEfforts(models: Model[], rows: ListedModel[]) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  for (const model of models) {
+    if (model.variants) continue;
+    const row = byId.get(model.id);
+    if (!row?.efforts?.length) continue;
+    const efforts = EFFORTS.filter((effort) => row.efforts!.includes(effort));
+    if (efforts.length === 0) continue;
+    model.efforts = efforts;
+    if (row.defaultEffort && efforts.includes(row.defaultEffort as Effort)) model.defaultEffort = row.defaultEffort as Effort;
+  }
 }
 
 /** Efforts of one family, the way a listing without a fast split already folded them. */

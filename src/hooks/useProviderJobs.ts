@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
+import { PROVIDERS } from "../lib/providers";
 import type {
   ProviderJob,
   ProviderJobAction,
@@ -116,7 +117,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
   // The remembered methods, read once per machine.
   useEffect(() => {
     let alive = true;
-    const providers = ["claude", "codex", "cursor", "opencode"];
+    const providers = PROVIDERS.map((provider) => provider.id);
     void Promise.all(providers.map((p) => api.stateGet(api.providerMethodKey(envId, p)).catch(() => null))).then((values) => {
       if (!alive) return;
       const found: Record<string, ProviderJobMethod> = {};
