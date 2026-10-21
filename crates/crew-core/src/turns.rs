@@ -1269,13 +1269,13 @@ impl TurnHost {
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A session that
         // carries on its provider's own conversation is handed none.
-        let history = if carries {
-            None
-        } else {
+        let trail = (!carries).then(|| {
             self.transcripts.read(&params.session_id, |blocks| {
                 working_set::history(blocks, crate::prompts::Harness::for_provider(&session.provider))
             })
-        };
+        });
+        // Each letter is a block of its own; otherwise the turn's text is one.
+        let appended = letters.len().max(1);
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the
@@ -1360,6 +1360,12 @@ impl TurnHost {
                 ),
             }
         }
+        // Under the tail, the header of this turn names the blocks its message
+        // took: the number `rules` cites a decision of the user's by.
+        let history = trail.map(|trail| {
+            let last = self.transcripts.len(&params.session_id);
+            working_set::with_turn(trail, (last + 1).saturating_sub(appended).max(1), last)
+        });
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
@@ -4905,6 +4911,39 @@ mod mailbox_tests {
         let rules = second["permissions"].as_array().unwrap();
         assert!(rules.contains(&json!({ "action": "question", "resource": "*", "effect": "deny" })), "{rules:?}");
         assert_eq!(rules.last(), Some(&json!({ "action": "crew_*", "resource": "*", "effect": "allow" })));
+    }
+
+    /// The block numbers a bot is shown — under the trail for this turn, and
+    /// on each message the user typed — are the ones `rules` takes as `from`.
+    #[test]
+    fn the_block_numbers_a_bot_is_shown_are_the_ones_from_accepts() {
+        let world = world();
+        let ws = workspace(&world);
+        let probe = bot(&world, &ws, "Probe");
+
+        turn(&world, &probe, "nunca hagas push a master");
+        settle(&world, &probe.id);
+        let first = launches(&world)[0].clone();
+        let prompt = first["prompt"].as_str().unwrap();
+        assert!(prompt.starts_with("## This turn (block 1)\n\nnunca hagas push a master"), "{prompt}");
+
+        turn(&world, &probe, "y corre los tests");
+        settle(&world, &probe.id);
+        let second = launches(&world)[1].clone();
+        let prompt = second["prompt"].as_str().unwrap().to_string();
+        let rows = blocks(&world, &probe.id);
+        assert_eq!(prompt.matches("## This turn").count(), 1, "{prompt}");
+        let header = prompt.split("## This turn (block ").nth(1).expect("the header").split(')').next().unwrap();
+        let now: usize = header.parse().expect("a number");
+        assert_eq!(rows[now - 1].text, "y corre los tests", "{prompt}");
+        assert!(crate::rules::user_message(&rows, now as i64).is_ok());
+        assert!(prompt.contains("[#1 · ") && prompt.contains("· user] nunca hagas push a master"), "{prompt}");
+        let numbered: Vec<&str> = prompt.lines().filter(|line| line.starts_with("[#")).collect();
+        assert!(!numbered.is_empty(), "{prompt}");
+        for line in numbered {
+            let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
+            assert!(crate::rules::user_message(&rows, n).is_ok(), "{line}");
+        }
     }
 
     /// A bot has a folder of its own from its first turn: its prompt says

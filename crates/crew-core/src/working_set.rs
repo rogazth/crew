@@ -4,6 +4,9 @@
 //! has of what it already did. It renders the tail of the transcript the way
 //! the chat renders it folded — text as text, a tool as the one line it did,
 //! never its output — and stops at a whole block when the budget runs out.
+//!
+//! A message the user typed says its block number, and so does the header of
+//! this turn: that is what `rules` takes as `from`, the decision it cites.
 
 use crew_protocol::{ApprovalDecision, Block, BlockRole, TodoStatus, ToolDetail, ToolStatus};
 
@@ -17,7 +20,7 @@ pub const TAIL_BLOCKS: usize = 2_000;
 
 /// The budget the rendered tail must fit in, in characters. Blocks, not tokens:
 /// a prefix that changes length on every turn is a prefix no provider caches.
-pub const TAIL_BUDGET: usize = 20_000;
+pub const TAIL_BUDGET: usize = 12_000;
 
 const LINE_LIMIT: usize = 200;
 /// A message before the last exchange. Long enough for a typical reply.
@@ -35,11 +38,25 @@ pub fn history(blocks: &[Block], harness: Harness) -> Option<String> {
     render(blocks, TAIL_BUDGET, harness)
 }
 
+/// The trail with the header of this turn under it, naming the blocks the
+/// turn's message took (`first` to `last`, 1-based): a message the user typed
+/// is cited by that number. A first turn has no trail and still the header.
+pub fn with_turn(trail: Option<String>, first: usize, last: usize) -> String {
+    let header = match first == last {
+        true => format!("## This turn (block {last})"),
+        false => format!("## This turn (blocks {first}-{last})"),
+    };
+    match trail {
+        Some(trail) => format!("{trail}\n\n{header}"),
+        None => header,
+    }
+}
+
 /// Walks back from the newest line so the budget is spent on what just
 /// happened, and drops whole lines rather than half of one.
 pub fn render(blocks: &[Block], budget: usize, harness: Harness) -> Option<String> {
     let offset = blocks.len().saturating_sub(TAIL_BLOCKS);
-    let units = units(&blocks[offset..]);
+    let units = units(&blocks[offset..], offset);
     let mut lines: Vec<&str> = Vec::new();
     let mut spent = 0usize;
     let mut first = blocks.len();
@@ -76,7 +93,9 @@ pub fn render(blocks: &[Block], budget: usize, harness: Harness) -> Option<Strin
 
 /// The trail's lines, oldest first, each with the index of the block it
 /// starts at. A run of tools is folded into one line unless it is short.
-fn units(blocks: &[Block]) -> Vec<(usize, String)> {
+/// `offset` is how many blocks of the transcript come before `blocks`, so a
+/// line can say its block's number.
+fn units(blocks: &[Block], offset: usize) -> Vec<(usize, String)> {
     // Everything the bot said since the user last wrote is the latest reply.
     let latest = blocks.iter().rposition(|block| block.role == BlockRole::User).map_or(0, |at| at + 1);
     let mut out: Vec<(usize, String)> = Vec::new();
@@ -89,40 +108,44 @@ fn units(blocks: &[Block]) -> Vec<(usize, String)> {
         if block.role == BlockRole::Reasoning {
             continue;
         }
-        let Some(line) = line(block, index >= latest) else {
+        let Some(line) = line(block, index >= latest, offset + index + 1) else {
             continue;
         };
-        flush(&mut run, &mut out);
+        flush(&mut run, &mut out, offset);
         out.push((index, line));
     }
-    flush(&mut run, &mut out);
+    flush(&mut run, &mut out, offset);
     out
 }
 
 /// A block that goes into a run of tools: a tool that is not a message, a
-/// delegation or one of Crew's own actions (those are the conversation), and
-/// an approval, which says something only when it was denied.
+/// delegation, one of Crew's own actions or a change to the rules (those are
+/// the conversation), and an approval, which says something only when it was
+/// denied.
 fn folds(block: &Block) -> bool {
     match block.role {
-        BlockRole::Tool => !block.tool.as_ref().and_then(|tool| tool.detail.as_ref()).is_some_and(|detail| {
-            matches!(
-                detail,
-                ToolDetail::Message { .. } | ToolDetail::Agent { .. } | ToolDetail::Crew { .. } | ToolDetail::Plan { .. }
-            )
+        BlockRole::Tool => !block.tool.as_ref().is_some_and(|tool| {
+            is_rules(tool)
+                || tool.detail.as_ref().is_some_and(|detail| {
+                    matches!(
+                        detail,
+                        ToolDetail::Message { .. } | ToolDetail::Agent { .. } | ToolDetail::Crew { .. } | ToolDetail::Plan { .. }
+                    )
+                })
         }),
         BlockRole::Approval => true,
         _ => false,
     }
 }
 
-fn flush(run: &mut Vec<(usize, &Block)>, out: &mut Vec<(usize, String)>) {
+fn flush(run: &mut Vec<(usize, &Block)>, out: &mut Vec<(usize, String)>, offset: usize) {
     let shown: Vec<(usize, &Block)> =
-        std::mem::take(run).into_iter().filter(|(_, block)| parts(block, false).is_some()).collect();
+        std::mem::take(run).into_iter().filter(|(index, block)| parts(block, false, offset + index + 1).is_some()).collect();
     let Some((start, first)) = shown.first().copied() else {
         return;
     };
     if shown.len() <= RUN_LINES {
-        out.extend(shown.into_iter().filter_map(|(index, block)| Some((index, line(block, false)?))));
+        out.extend(shown.into_iter().filter_map(|(index, block)| Some((index, line(block, false, offset + index + 1)?))));
         return;
     }
     let body = tally(shown.iter().map(|(_, block)| *block));
@@ -233,9 +256,17 @@ fn short_name(tool: &crew_protocol::BlockTool) -> String {
 /// it "yesterday" has nothing to resolve against and `read_session { days }`
 /// is a guess. A block with no time still renders — the tail is memory, and
 /// half of it is better than none.
-fn line(block: &Block, latest: bool) -> Option<String> {
-    let (who, text) = parts(block, latest)?;
-    Some(stamped(block, &who, &text))
+///
+/// A message the user typed leads with its block `number`: `[#20 · …`, what
+/// `rules` takes as `from`. Nothing else is numbered, so a number is never
+/// one `from` refuses.
+fn line(block: &Block, latest: bool, number: usize) -> Option<String> {
+    let (who, text) = parts(block, latest, number)?;
+    let line = stamped(block, &who, &text);
+    Some(match crate::rules::typed_by_user(block) {
+        true => format!("[#{number} · {}", &line[1..]),
+        false => line,
+    })
 }
 
 fn stamped(block: &Block, who: &str, text: &str) -> String {
@@ -246,8 +277,9 @@ fn stamped(block: &Block, who: &str, text: &str) -> String {
 }
 
 /// Who a block is from and what it says. `latest` is for what the bot said
-/// since the user last wrote, which is not clipped like the rest.
-fn parts(block: &Block, latest: bool) -> Option<(String, String)> {
+/// since the user last wrote, which is not clipped like the rest; an older
+/// reply is its first paragraph and where the rest is (`number`, its block).
+fn parts(block: &Block, latest: bool, number: usize) -> Option<(String, String)> {
     match block.role {
         // The model's own thinking belongs to the session that produced it.
         BlockRole::Reasoning => None,
@@ -262,8 +294,12 @@ fn parts(block: &Block, latest: bool) -> Option<(String, String)> {
                 None => ("user".to_string(), text),
             })
         }
+        BlockRole::Assistant if latest => {
+            let text = clip(&block.text, LATEST_LIMIT);
+            (!text.is_empty()).then(|| ("you".to_string(), text))
+        }
         BlockRole::Assistant => {
-            let text = clip(&block.text, if latest { LATEST_LIMIT } else { MESSAGE_LIMIT });
+            let text = first_paragraph(&block.text, number);
             (!text.is_empty()).then(|| ("you".to_string(), text))
         }
         BlockRole::System => {
@@ -272,6 +308,9 @@ fn parts(block: &Block, latest: bool) -> Option<(String, String)> {
         }
         BlockRole::Tool => {
             let tool = block.tool.as_ref()?;
+            if is_rules(tool) {
+                return Some(("tool".to_string(), rules_line(tool)));
+            }
             let body = match &tool.detail {
                 Some(detail) => detail_line(detail),
                 None => clip(&tool.title, LINE_LIMIT),
@@ -296,6 +335,45 @@ fn parts(block: &Block, latest: bool) -> Option<(String, String)> {
                 },
             ))
         }
+    }
+}
+
+/// An older reply as its first paragraph, and how much more there is where:
+/// `Done. (+1,240 chars, block 18)`. Still clipped, as a ceiling.
+fn first_paragraph(text: &str, number: usize) -> String {
+    let whole = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let first = text.trim().split("\n\n").map(str::trim).find(|para| !para.is_empty()).unwrap_or("");
+    let shown = clip(first, MESSAGE_LIMIT);
+    let kept = shown.trim_end_matches('…').chars().count();
+    match whole.chars().count().saturating_sub(kept) {
+        // The space a paragraph break became is not more to read.
+        0 | 1 => shown,
+        rest => format!("{shown} (+{} chars, block {number})", crate::rules::thousands(rest)),
+    }
+}
+
+/// A call to Crew's `rules`, as any harness names it.
+fn is_rules(tool: &crew_protocol::BlockTool) -> bool {
+    let crew = match &tool.detail {
+        Some(ToolDetail::Mcp { server, tool, .. }) => server == "crew" && tool == "rules",
+        _ => false,
+    };
+    crew || ["mcp__crew__rules", "crew_rules", "crew__rules"].contains(&tool.name.as_str())
+}
+
+/// `rules: added r3`: what the call answered, in one line. Its answer is
+/// short by design; a refusal says only that it was one.
+fn rules_line(tool: &crew_protocol::BlockTool) -> String {
+    let answer = match &tool.detail {
+        Some(ToolDetail::Mcp { output, .. }) => output.as_deref(),
+        Some(ToolDetail::Output { text }) => Some(text.as_str()),
+        _ => None,
+    };
+    let answer = answer.and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()));
+    match (&tool.status, answer) {
+        (ToolStatus::Failed, _) => "rules: refused".to_string(),
+        (_, Some(answer)) => format!("rules: {}", clip(answer, 80)),
+        (status, None) => format!("rules{}", outcome(status)),
     }
 }
 
@@ -388,13 +466,20 @@ mod tests {
     use crew_protocol::{BlockTool, BotRef};
 
     /// The rendered body with the stamps taken off, so an assertion can be
-    /// about who said what. The stamps have their own test.
+    /// about who said what. The stamps have their own test; a user line's
+    /// block number stays.
     fn unstamped(out: &str) -> String {
         let body = out.rsplit("\n\n").next().unwrap_or_default();
         body.lines()
-            .map(|line| match line.split_once(" · ") {
-                Some((head, rest)) if head.starts_with('[') => format!("[{rest}"),
-                _ => line.to_string(),
+            .map(|line| {
+                let (number, line) = match line.strip_prefix("[#").and_then(|rest| rest.split_once(" · ")) {
+                    Some((n, rest)) => (format!("#{n} · "), format!("[{rest}")),
+                    None => (String::new(), line.to_string()),
+                };
+                match line.split_once(" · ") {
+                    Some((head, rest)) if head.starts_with('[') => format!("[{number}{rest}"),
+                    _ => line.replacen('[', &format!("[{number}"), 1),
+                }
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -435,7 +520,7 @@ mod tests {
         let out = render(&blocks, TAIL_BUDGET, Harness::Cursor).expect("history");
         assert_eq!(
             unstamped(&out),
-            "[user] arregla el parser\n\
+            "[#1 · user] arregla el parser\n\
              [tool] ran: cargo test → 0\n\
              [tool] edited: parser.rs +12 −3\n\
              [you] 14 tests pasan."
@@ -484,7 +569,7 @@ mod tests {
         let mut block = new_block(BlockRole::User, "arregla el parser");
         block.at = Some(at);
         let out = render(&[block], TAIL_BUDGET, Harness::Cursor).expect("history");
-        assert!(out.contains(&format!("[{} · user] arregla el parser", crate::store::stamp(at))), "{out}");
+        assert!(out.contains(&format!("[#1 · {} · user] arregla el parser", crate::store::stamp(at))), "{out}");
     }
 
     #[test]
@@ -513,7 +598,7 @@ mod tests {
     fn the_budget_drops_the_oldest_and_says_how_many() {
         let blocks: Vec<Block> = (1..=10).map(|n| new_block(BlockRole::User, format!("message number {n}"))).collect();
         let out = render(&blocks, 200, Harness::Cursor).expect("history");
-        assert!(unstamped(&out).contains("[user] message number 10"), "{out}");
+        assert!(unstamped(&out).contains("[#10 · user] message number 10"), "{out}");
         assert!(!out.contains("message number 1\n"), "{out}");
         assert!(out.contains("What came before block"), "{out}");
         assert!(out.contains("`read_session` with a query"), "{out}");
@@ -523,7 +608,7 @@ mod tests {
     fn a_tail_that_never_fits_still_carries_the_newest_block() {
         let blocks = vec![new_block(BlockRole::User, "a".repeat(500))];
         let out = render(&blocks, 10, Harness::Cursor).expect("a tail of one is still a tail");
-        assert!(unstamped(&out).contains("[user] aaa"), "{out}");
+        assert!(unstamped(&out).contains("[#1 · user] aaa"), "{out}");
     }
 
     #[test]
@@ -553,7 +638,7 @@ mod tests {
             size: None,
         }]);
         let out = render(&[block], TAIL_BUDGET, Harness::Cursor).expect("history");
-        assert!(unstamped(&out).contains("[user] mira esto (attached: /tmp/shot.png)"), "{out}");
+        assert!(unstamped(&out).contains("[#1 · user] mira esto (attached: /tmp/shot.png)"), "{out}");
     }
 
     /// A turn that drove a browser for sixty calls is one exchange: the user's
@@ -572,11 +657,11 @@ mod tests {
         let body = unstamped(&out);
         assert_eq!(
             body,
-            "[user] el id del item es 1234567890\n\
+            "[#1 · user] el id del item es 1234567890\n\
              [you] Lo reviso.\n\
              [tool] tools: browser_navigate x40, browser_evaluate x20\n\
              [you] Listo.\n\
-             [user] y el precio?"
+             [#64 · user] y el precio?"
         );
         assert!(!out.contains("What came before"), "{out}");
     }
@@ -660,7 +745,7 @@ mod tests {
     }
 
     /// The bot's reply since the user last wrote is kept whole; one from an
-    /// earlier exchange is clipped.
+    /// earlier exchange is clipped, and says how much more there is and where.
     #[test]
     fn the_latest_reply_is_whole_and_older_ones_are_clipped() {
         let long = "palabra ".repeat(300);
@@ -673,7 +758,108 @@ mod tests {
         let out = render(&blocks, TAIL_BUDGET, Harness::Cursor).expect("history");
         let lines: Vec<&str> = out.lines().filter(|line| line.contains("· you]")).collect();
         assert_eq!(lines.len(), 2, "{out}");
-        assert!(lines[0].ends_with('…') && lines[0].chars().count() < 700, "{}", lines[0]);
+        assert!(lines[0].ends_with("… (+1,800 chars, block 2)") && lines[0].chars().count() < 700, "{}", lines[0]);
         assert!(lines[1].ends_with(long.trim()), "{}", lines[1]);
+    }
+
+    /// An older reply is its first paragraph and where the rest is; a short
+    /// one is whole, and the latest is whole however many paragraphs it has.
+    #[test]
+    fn an_older_reply_is_its_first_paragraph() {
+        let blocks = vec![
+            new_block(BlockRole::User, "hola"),
+            new_block(BlockRole::Assistant, "Primer párrafo.\n\nSegundo párrafo largo."),
+            new_block(BlockRole::Assistant, "Corto."),
+            new_block(BlockRole::User, "otra"),
+            new_block(BlockRole::Assistant, "Último.\n\nEntero."),
+        ];
+        let out = render(&blocks, TAIL_BUDGET, Harness::Cursor).expect("history");
+        assert_eq!(
+            unstamped(&out),
+            "[#1 · user] hola\n\
+             [you] Primer párrafo. (+23 chars, block 2)\n\
+             [you] Corto.\n\
+             [#4 · user] otra\n\
+             [you] Último. Entero."
+        );
+    }
+
+    /// A message the user typed says its block; a letter from a bot, a
+    /// routine's prompt and everything else do not, so every number in the
+    /// trail is one `rules` takes as `from`.
+    #[test]
+    fn only_the_users_messages_are_numbered() {
+        let mut letter = new_block(BlockRole::User, "revisa el PR");
+        letter.from_bot = Some(BotRef::bot("a1", "Cuddles"));
+        let mut routine = new_block(BlockRole::User, "resume el día");
+        routine.hidden = Some(true);
+        let blocks = vec![
+            new_block(BlockRole::User, "nunca hagas push a master"),
+            letter,
+            routine,
+            new_block(BlockRole::System, "Description updated by itself"),
+            new_block(BlockRole::User, "y corre los tests"),
+        ];
+        let out = render(&blocks, TAIL_BUDGET, Harness::Cursor).expect("history");
+        assert_eq!(
+            unstamped(&out),
+            "[#1 · user] nunca hagas push a master\n\
+             [Cuddles a1] revisa el PR\n\
+             [user] resume el día\n\
+             [crew] Description updated by itself\n\
+             [#5 · user] y corre los tests"
+        );
+        for line in out.lines().filter(|line| line.starts_with("[#")) {
+            let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
+            assert!(crate::rules::user_message(&blocks, n).is_ok(), "{line}");
+        }
+        // Counted from the start of the transcript, not of the trail.
+        let mut long: Vec<Block> = (0..TAIL_BLOCKS + 5).map(|_| new_block(BlockRole::System, "x")).collect();
+        long.push(new_block(BlockRole::User, "al final"));
+        let out = render(&long, TAIL_BUDGET, Harness::Cursor).expect("history");
+        assert!(out.contains(&format!("[#{} · ", TAIL_BLOCKS + 6)), "{out}");
+    }
+
+    /// A change to the rules is one short line, never folded into a run of
+    /// tools: what the call answered, or that it was refused.
+    #[test]
+    fn a_rules_call_is_one_line() {
+        let rules = |status: ToolStatus, answer: &str| {
+            let mut block = new_block(BlockRole::Tool, "");
+            block.tool = Some(BlockTool {
+                call_id: "r".into(),
+                name: "mcp__crew__rules".into(),
+                title: "mcp__crew__rules".into(),
+                status,
+                detail: Some(ToolDetail::Mcp {
+                    server: "crew".into(),
+                    tool: "rules".into(),
+                    input: Some("{\"action\": \"add\"}".into()),
+                    output: Some(answer.into()),
+                }),
+            });
+            block
+        };
+        let mut blocks: Vec<Block> = (0..5).map(|_| named("Grep", ToolStatus::Completed)).collect();
+        blocks.push(rules(ToolStatus::Completed, "added r3"));
+        blocks.push(rules(ToolStatus::Failed, "Rules hold the user's decisions, and block 2 is not a message from the user.\nrules takes: action, content, from, id."));
+        blocks.extend((0..5).map(|_| named("Grep", ToolStatus::Completed)));
+        let out = render(&blocks, TAIL_BUDGET, Harness::Cursor).expect("history");
+        assert_eq!(
+            unstamped(&out),
+            "[tool] tools: Grep x5\n[tool] rules: added r3\n[tool] rules: refused\n[tool] tools: Grep x5"
+        );
+    }
+
+    /// The header under the trail names the block the turn's message took,
+    /// or the blocks, when it carries several letters.
+    #[test]
+    fn the_turns_header_names_its_block() {
+        assert_eq!(with_turn(None, 1, 1), "## This turn (block 1)");
+        assert_eq!(
+            with_turn(Some("## The conversation so far".into()), 7, 7),
+            "## The conversation so far\n\n## This turn (block 7)"
+        );
+        assert_eq!(with_turn(None, 7, 9), "## This turn (blocks 7-9)");
     }
 }
