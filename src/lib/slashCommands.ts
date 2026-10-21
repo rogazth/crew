@@ -168,12 +168,6 @@ export function dispatchOf(text: string, entries: readonly CommandEntry[]): { co
   return { ...(command ? { command } : {}), skills };
 }
 
-/** The token that ends right at the caret, so one Backspace takes all of it. */
-export function tokenBefore(text: string, cursor: number, entries: readonly CommandEntry[]): { start: number; end: number } | null {
-  const found = tokensOf(text, entries).find((token) => token.end === cursor);
-  return found ? { start: found.start, end: found.end } : null;
-}
-
 /** Replaces the slash word under the caret with the chosen entry; returns the new text and caret. */
 export function completeSlash(
   text: string,

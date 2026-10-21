@@ -1,3 +1,4 @@
+import type { PromptHandle } from "./PromptEditor";
 import type { Upload } from "../../hooks/useUploads";
 import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
@@ -23,7 +24,7 @@ export type ChatSurfaceProps = {
   draft: string;
   files: AttachedFile[];
   over: boolean;
-  field: RefObject<HTMLTextAreaElement | null>;
+  field: RefObject<PromptHandle | null>;
   onDraft: (draft: string) => void;
   /** `mode` is how a message written while a turn runs goes: absent when no turn runs. */
   onSend: (mode?: "steer" | "queue") => void;

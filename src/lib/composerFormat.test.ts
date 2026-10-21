@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { continueList, indentList, listItemAt, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers, type TextEdit } from "./composerFormat";
+import { continueList, indentList, listItemAt, onIndentedListLine, onListLine, removeListMarker, type TextEdit } from "./composerFormat";
 
 /** Applies an edit to a string, the caret written as `|` (or a selection as `[`…`]`). */
 function run(edit: TextEdit | null, text: string): string | null {
@@ -90,6 +90,25 @@ describe("continueList", () => {
   });
 });
 
+describe("removeListMarker", () => {
+  it("takes an empty item and the line break before it, at once", () => {
+    expect(removeListMarker("1. Test\n2. ", 11)).toEqual({ start: 7, end: 11, insert: "", selStart: 7, selEnd: 7 });
+    expect(removeListMarker("- a\n  - \nb", 8)).toEqual({ start: 3, end: 8, insert: "", selStart: 3, selEnd: 3 });
+  });
+  it("keeps an item's text as a plain line", () => {
+    expect(removeListMarker("- a\n* b", 6)).toEqual({ start: 4, end: 6, insert: "", selStart: 4, selEnd: 4 });
+  });
+  it("on the first line, takes only the marker", () => {
+    expect(removeListMarker("- ", 2)).toEqual({ start: 0, end: 2, insert: "", selStart: 0, selEnd: 0 });
+  });
+  it("leaves carets elsewhere and selections to the textarea", () => {
+    expect(removeListMarker("- ab", 3)).toBeNull();
+    expect(removeListMarker("- ab", 1)).toBeNull();
+    expect(removeListMarker("- ab", 2, 4)).toBeNull();
+    expect(removeListMarker("plain", 5)).toBeNull();
+  });
+});
+
 describe("indentList", () => {
   it("indents a list item by two spaces, the caret moving with it", () => {
     expect(indent("- one|", 1)).toBe("  - one|");
@@ -124,65 +143,5 @@ describe("onListLine / onIndentedListLine", () => {
     expect(onIndentedListLine("  - b", 3)).toBe(true);
     expect(onIndentedListLine("- b", 3)).toBe(false);
     expect(onIndentedListLine("  plain", 3)).toBe(false);
-  });
-});
-
-describe("splitListMarkers", () => {
-  const text = (value: string) => ({ kind: "text", text: value });
-  const joined = (parts: { text: string }[]) => parts.map((part) => part.text).join("");
-
-  it("takes the markers at line starts apart, keeping every character", () => {
-    const parts = splitListMarkers([text("- a\n  2. b\nc - d")]);
-    expect(parts).toEqual([
-      { kind: "marker", text: "-" },
-      { kind: "text", text: " a\n  " },
-      { kind: "marker", text: "2." },
-      { kind: "text", text: " b\nc - d" },
-    ]);
-    expect(joined(parts)).toBe("- a\n  2. b\nc - d");
-  });
-  it("needs the space after the marker", () => {
-    expect(splitListMarkers([text("-a\n**b**")])).toEqual([text("-a\n**b**")]);
-  });
-  it("knows where lines start across mentions", () => {
-    const mention = { kind: "mention", text: "@a.ts" };
-    const parts = splitListMarkers([text("- see "), mention, text(" - not\n- yes")]);
-    expect(parts).toEqual([
-      { kind: "marker", text: "-" },
-      text(" see "),
-      mention,
-      text(" - not\n"),
-      { kind: "marker", text: "-" },
-      text(" yes"),
-    ]);
-  });
-  it("keeps a run's other fields", () => {
-    expect(splitListMarkers([{ kind: "text", text: "- a", path: "x" }])).toEqual([
-      { kind: "marker", text: "-" },
-      { kind: "text", text: " a", path: "x" },
-    ]);
-  });
-});
-
-describe("splitInlineCode", () => {
-  const text = (value: string) => ({ kind: "text", text: value });
-
-  it("takes the backticks and the code apart, keeping every character", () => {
-    const parts = splitInlineCode([text("run `npm test` now")]);
-    expect(parts).toEqual([
-      text("run "),
-      { kind: "tick", text: "`" },
-      { kind: "code", text: "npm test" },
-      { kind: "tick", text: "`" },
-      text(" now"),
-    ]);
-    expect(parts.map((part) => part.text).join("")).toBe("run `npm test` now");
-  });
-  it("leaves an unclosed or multi-line tick alone", () => {
-    expect(splitInlineCode([text("a `b\nc` d")])).toEqual([text("a `b\nc` d")]);
-  });
-  it("never splits a mention", () => {
-    const mention = { kind: "mention", text: "@a`b`" };
-    expect(splitInlineCode([mention])).toEqual([mention]);
   });
 });

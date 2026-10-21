@@ -141,16 +141,6 @@ describe("dispatchOf", () => {
   });
 });
 
-describe("tokenBefore", () => {
-  it("finds the token that ends at the caret", async () => {
-    const { tokenBefore } = await slash();
-    expect(tokenBefore("fix /prototype", 14, ENTRIES)).toEqual({ start: 4, end: 14 });
-    expect(tokenBefore("fix /prototype ", 15, ENTRIES)).toBeNull();
-    expect(tokenBefore("fix /prototype", 9, ENTRIES)).toBeNull();
-    expect(tokenBefore("fix /nope", 9, ENTRIES)).toBeNull();
-  });
-});
-
 describe("completeSlash and removeSlash", () => {
   it("swaps the query for the name and a space, the one there if it has one", async () => {
     const { completeSlash } = await slash();

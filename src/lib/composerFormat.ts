@@ -1,5 +1,5 @@
 // Simple formatting while typing in the composer: lists that carry on and indent. Not a markdown
-// editor — the text stays plain markdown, and every change is one edit of the textarea's text.
+// editor — the text stays plain markdown, and every change is one edit of the draft's text.
 
 /** One replacement of the text: `[start, end)` becomes `insert`, then the selection is `[selStart, selEnd]`. */
 export interface TextEdit {
@@ -57,7 +57,7 @@ function nextMarker(marker: string): string {
 export function continueList(text: string, selStart: number, selEnd: number = selStart): TextEdit | null {
   const item = listItemAt(text, selStart);
   if (!item) return null;
-  // A selection that runs past the line, or a caret inside the marker itself, is left to the textarea.
+  // A selection that runs past the line, or a caret inside the marker itself, is left to the editor.
   if (selEnd > item.lineEnd || selStart < item.contentStart) return null;
   const content = text.slice(item.contentStart, item.lineEnd);
   if (content.trim() === "" && selStart === selEnd) {
@@ -68,6 +68,23 @@ export function continueList(text: string, selStart: number, selEnd: number = se
   const insert = `\n${item.indent}${nextMarker(item.marker)}${gap}`;
   const caret = selStart + insert.length;
   return { start: selStart, end: selEnd, insert, selStart: caret, selEnd: caret };
+}
+
+/**
+ * Backspace with the caret right after a list marker takes the whole marker at once, as an editor
+ * would: an empty item goes with the line break before it (the caret lands at the end of the line
+ * above), and an item with text keeps its text as a plain line. Null anywhere else.
+ */
+export function removeListMarker(text: string, selStart: number, selEnd: number = selStart): TextEdit | null {
+  if (selStart !== selEnd) return null;
+  const item = listItemAt(text, selStart);
+  if (!item || selStart !== item.contentStart) return null;
+  const empty = text.slice(item.contentStart, item.lineEnd).trim() === "";
+  if (empty && item.lineStart > 0) {
+    const at = item.lineStart - 1;
+    return { start: at, end: item.lineEnd, insert: "", selStart: at, selEnd: at };
+  }
+  return { start: item.lineStart, end: item.contentStart, insert: "", selStart: item.lineStart, selEnd: item.lineStart };
 }
 
 export const INDENT = "  ";
@@ -126,94 +143,4 @@ export function onListLine(text: string, at: number): boolean {
 export function onIndentedListLine(text: string, at: number): boolean {
   const item = listItemAt(text, at);
   return item !== null && item.indent.length > 0;
-}
-
-const MARKER = /^([ \t]*)([-*+]|\d{1,9}[.)])(?= )/;
-
-/**
- * Splits the overlay's runs further, the list markers at line starts apart, so they can be tinted. Only
- * `text` runs are split; the characters stay exactly the same, so the overlay keeps its alignment.
- */
-export function splitListMarkers<T extends { kind: string; text: string }>(
-  segments: readonly T[],
-): (T | { kind: "marker"; text: string })[] {
-  const parts: (T | { kind: "marker"; text: string })[] = [];
-  let atLineStart = true;
-  for (const segment of segments) {
-    if (segment.kind !== "text") {
-      parts.push(segment);
-      if (segment.text.length > 0) atLineStart = segment.text.endsWith("\n");
-      continue;
-    }
-    const text = segment.text;
-    let rest = 0;
-    let lineStart: number = atLineStart ? 0 : text.indexOf("\n") + 1;
-    // No line starts in this run when it neither begins one nor holds a newline.
-    if (!atLineStart && lineStart === 0) lineStart = -1;
-    while (lineStart !== -1) {
-      const lineEnd = text.indexOf("\n", lineStart);
-      const match = MARKER.exec(text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd));
-      if (match) {
-        const from = lineStart + match[1]!.length;
-        const to = from + match[2]!.length;
-        if (from > rest) parts.push({ ...segment, text: text.slice(rest, from) });
-        parts.push({ kind: "marker", text: text.slice(from, to) });
-        rest = to;
-      }
-      lineStart = lineEnd === -1 ? -1 : lineEnd + 1;
-    }
-    if (rest < text.length) parts.push({ ...segment, text: text.slice(rest) });
-    if (text.length > 0) atLineStart = text.endsWith("\n");
-  }
-  return parts;
-}
-
-const CODE = /`[^`\n]+`/g;
-
-/**
- * Splits the overlay's text runs at inline code: each `` `span` `` becomes its backticks (`tick`) and
- * what is between them (`code`), so the span can be tinted. Like the list markers, every character stays
- * where it was and keeps the field's font, so the overlay never drifts from the textarea.
- */
-export function splitInlineCode<T extends { kind: string; text: string }>(
-  segments: readonly T[],
-): (T | { kind: "tick" | "code"; text: string })[] {
-  const parts: (T | { kind: "tick" | "code"; text: string })[] = [];
-  for (const segment of segments) {
-    if (segment.kind !== "text") {
-      parts.push(segment);
-      continue;
-    }
-    let rest = 0;
-    for (const match of segment.text.matchAll(CODE)) {
-      const at = match.index;
-      if (at > rest) parts.push({ ...segment, text: segment.text.slice(rest, at) });
-      parts.push({ kind: "tick", text: "`" });
-      parts.push({ kind: "code", text: match[0].slice(1, -1) });
-      parts.push({ kind: "tick", text: "`" });
-      rest = at + match[0].length;
-    }
-    if (rest < segment.text.length) parts.push({ ...segment, text: segment.text.slice(rest) });
-  }
-  return parts;
-}
-
-/**
- * Applies an edit through the textarea, so the browser's own undo takes it back: the selection is set
- * and the text typed over it. Where the browser will not type, the value is set and an input event sent.
- */
-export function applyEdit(el: HTMLTextAreaElement, edit: TextEdit): void {
-  el.focus();
-  el.setSelectionRange(edit.start, edit.end);
-  const typed =
-    edit.insert === ""
-      ? edit.start === edit.end || document.execCommand("delete", false)
-      : document.execCommand("insertText", false, edit.insert);
-  if (!typed) {
-    const value = el.value.slice(0, edit.start) + edit.insert + el.value.slice(edit.end);
-    // React tracks the value it last set: the native setter makes the input event read as a change.
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  el.setSelectionRange(edit.selStart, edit.selEnd);
 }

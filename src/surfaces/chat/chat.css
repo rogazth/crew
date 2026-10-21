@@ -36,64 +36,146 @@
   transition-timing-function: var(--ease-spring);
 }
 
-/* The field keeps the shipped metrics (the overlay that marks mentions must
-   match the textarea to the pixel); the side padding lives on its wrapper. */
+/* The field: a CodeMirror editor over the plain-markdown draft. The side
+   padding lives on its wrapper. */
 .ds-composer-text {
   position: relative;
   padding: 2px 8px 0;
 }
-/* The overlay sits exactly over the textarea's box, inside the wrapper's padding. */
-.ds-composer-text > .crew-composer-overlay {
-  inset: 2px 8px auto;
+/* The box eases to the editor's height, so a new line slides in. */
+.ds-prompt-box {
+  overflow: hidden;
 }
-.ds-composer-text .crew-composer-field {
+.ds-prompt-box[data-eased] {
+  transition: height 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-prompt-box[data-eased] {
+    transition: none;
+  }
+}
+.ds-prompt .cm-editor {
   font-size: var(--chat-text);
   line-height: calc(var(--chat-text) * 1.5);
+  letter-spacing: -0.1px;
+  color: var(--color-text);
+}
+.ds-prompt .cm-editor.cm-focused {
+  outline: none;
+}
+.ds-prompt .cm-scroller {
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: inherit;
+  line-height: inherit;
+}
+.ds-prompt .cm-content {
   min-height: calc(var(--chat-text) * 1.5);
+  padding: 0;
+  caret-color: var(--color-text);
 }
 /* A new chat's composer is the page: two lines of room to start in. */
-.ds-composer[data-roomy] .ds-composer-text .crew-composer-field {
+.ds-composer[data-roomy] .ds-prompt .cm-content {
   min-height: calc(var(--chat-text) * 3);
 }
+.ds-prompt .cm-line {
+  padding: 0;
+}
+.ds-prompt .cm-placeholder {
+  color: var(--color-placeholder);
+}
 
-/* An `@path` in the draft wears what it will wear once sent (`.crew-file-ref`):
-   the card fill, no ring. The shadow only widens the same fill past the glyphs
-   (padding would move the overlay off the caret). */
-.ds-composer-text .crew-mention-run {
-  border-radius: 5px;
+/* An `@path`, a command or a skill: one chip, a small coloured square with
+   its kind's glyph, then its name. The caret steps over it; Backspace takes it whole. */
+.ds-prompt .cm-chip {
+  /* A block in the line, not a flex box: its baseline is its name's, so the
+     name sits on the line's baseline whatever icon comes first. */
+  display: inline-block;
+  margin: 0 1px;
+  padding: 0 7px 0 3px;
+  border-radius: 7px;
   background: var(--color-card);
-  color: inherit;
-  box-shadow: 0 0 0 2px var(--color-card);
+  line-height: calc(var(--chat-text) * 1.5 - 2px);
+  white-space: nowrap;
+  cursor: default;
 }
-/* Inline `code`: one pill, the same ground and edge as the transcript's
-   (`.crew-inline-code`). Its ticks are still typed, so they stay, unseen, as
-   the pill's padding; the field's font is kept so nothing moves off the caret. */
-.ds-composer-text .ds-code-run {
-  border-radius: 6px;
-  background: var(--color-card);
-  box-shadow: inset 0 0 0 1px var(--color-hairline);
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+.ds-prompt .cm-chip-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -2px;
+  border-radius: 4px;
+  background: var(--chip-ink);
+  color: white;
 }
-.ds-composer-text .ds-code-tick {
-  color: transparent;
+.ds-prompt .cm-chip-icon > svg {
+  width: 10px;
+  height: 10px;
 }
-/* A `-`, `*` or `+` list marker reads as a bullet: the character is hidden
-   and a dot drawn in its place, centred on the same advance. */
-.ds-composer-text .ds-bullet {
-  position: relative;
-  color: transparent;
+/* A file or folder wears the explorer's own icon, no square behind it. */
+.ds-prompt .cm-chip:is([data-kind="file"], [data-kind="folder"]) .cm-chip-icon {
+  background: none;
 }
-.ds-composer-text .ds-bullet::before {
+.ds-prompt .cm-chip:is([data-kind="file"], [data-kind="folder"]) .cm-chip-icon > svg {
+  width: 15px;
+  height: 15px;
+}
+.ds-prompt .cm-chip[data-kind="skill"] {
+  --chip-ink: light-dark(oklch(55% 0.17 295), oklch(62% 0.16 295));
+}
+.ds-prompt .cm-chip[data-kind="command"] {
+  --chip-ink: light-dark(oklch(35% 0.01 260), oklch(55% 0.01 260));
+}
+
+/* A list item: its marker in a column of its own, the item's wrapped lines
+   hanging under its text, each level in by one step. */
+.ds-prompt .cm-line.cm-li {
+  padding-left: calc(var(--li-depth) * 1.25em + var(--li-mark) + 0.25em);
+  text-indent: calc(-1 * var(--li-mark));
+}
+.ds-prompt .cm-li-mark {
+  display: inline-flex;
+  width: var(--li-mark);
+  height: calc(var(--chat-text) * 1.5);
+  vertical-align: top;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 0.45em;
+  text-indent: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ds-prompt .cm-li-mark[data-bullet]::before {
   content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: var(--color-text-muted);
-  transform: translate(-50%, -50%);
+  background: currentColor;
+}
+.ds-prompt .cm-li-box {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1.5px var(--color-border-strong);
+}
+.ds-prompt .cm-li-box[data-done] {
+  background: var(--color-text);
+  box-shadow: none;
+}
+
+/* Inline `code`: the transcript's pill (`.crew-inline-code`), its ticks faint. */
+.ds-prompt .cm-icode {
+  border-radius: 5px;
+  background: var(--color-card);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  padding: 1px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+.ds-prompt .cm-icode-tick {
+  color: var(--color-placeholder);
 }
 
 /* Where the session runs, when it is another machine: a quiet pill in the status line. */

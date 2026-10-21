@@ -33,6 +33,7 @@ import type { QueueScope } from "./chat/Queue";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 import { AgentView, type Crumb } from "./chat/AgentView";
 import { Thread } from "./chat/Thread";
+import type { PromptHandle } from "./chat/PromptEditor";
 
 type Props = {
   session: Session;
@@ -66,7 +67,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     noteUnsent(session.id, { draft, files });
   }, [session.id, draft, files]);
   useEffect(() => () => forgetUnsent(session.id), [session.id]);
-  const field = useRef<HTMLTextAreaElement>(null);
+  const field = useRef<PromptHandle>(null);
   const pane = useRef<HTMLDivElement | null>(null);
   const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);
   const bindPane = useCallback((el: HTMLDivElement | null) => {

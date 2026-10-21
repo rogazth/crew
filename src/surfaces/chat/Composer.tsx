@@ -3,14 +3,10 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent,
   type FormEvent,
-  type KeyboardEvent,
-  type ReactNode,
   type Ref,
 } from "react";
 import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
@@ -23,7 +19,6 @@ import { nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
   rememberMention,
-  splitMentions,
 } from "../../lib/mentions";
 import type { CommandEntry } from "../../lib/protocol";
 import {
@@ -33,8 +28,6 @@ import {
   removeSlash,
   searchCommands,
   slashAt,
-  splitTokens,
-  tokenBefore,
 } from "../../lib/slashCommands";
 import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
@@ -47,7 +40,8 @@ import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
 import { useMentionMenu } from "./useMentionMenu";
 import { SlashPicker } from "./SlashPicker";
-import { applyEdit, continueList, indentList, onIndentedListLine, onListLine, splitInlineCode, splitListMarkers } from "../../lib/composerFormat";
+import { continueList, indentList, onIndentedListLine, onListLine, removeListMarker, type TextEdit } from "../../lib/composerFormat";
+import { PromptEditor, type PromptHandle } from "./PromptEditor";
 import {
   AgentClip,
   clipOf,
@@ -58,45 +52,8 @@ import {
   WorktreeSegment,
 } from "./ComposerParts";
 
-/**
- * The overlay's runs. A `-`, `*` or `+` marker wears a bullet over it, an inline
- * code span becomes one pill with its ticks hidden inside it as padding, and a mention its own pill.
- * Every character stays in place, in the field's font, so the overlay never drifts from the caret.
- */
-function overlayRuns(parts: readonly { kind: string; text: string }[]) {
-  const runs: ReactNode[] = [];
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index]!;
-    const code = parts[index + 1];
-    const close = parts[index + 2];
-    if (part.kind === "tick" && code?.kind === "code" && close?.kind === "tick") {
-      runs.push(
-        <span key={index} className="ds-code-run">
-          <span className="ds-code-tick">`</span>
-          {code.text}
-          <span className="ds-code-tick">`</span>
-        </span>,
-      );
-      index += 2;
-    } else if (part.kind === "marker") {
-      runs.push(
-        <span key={index} className={/^[-*+]$/.test(part.text) ? "ds-bullet" : "text-text-muted"}>
-          {part.text}
-        </span>,
-      );
-    } else if (part.kind === "mention" || part.kind === "token") {
-      runs.push(
-        <mark key={index} className="crew-mention-run">
-          {part.text}
-        </mark>,
-      );
-    } else runs.push(<span key={index}>{part.text}</span>);
-  }
-  return runs;
-}
-
 type Props = {
-  ref?: Ref<HTMLTextAreaElement>;
+  ref?: Ref<PromptHandle>;
   session: Session;
   draft: string;
   files: AttachedFile[];
@@ -145,8 +102,6 @@ const choiceOf = (session: Session): AgentChoice => ({
   access: session.autonomy as Access,
 });
 
-const MAX_FIELD_PX = 160;
-
 /** The menu before the daemon has answered: nothing to list or to paint. */
 const NO_ENTRIES: CommandEntry[] = [];
 
@@ -176,9 +131,13 @@ export function Composer({
   switchProvider = false,
   escBack = false,
 }: Props) {
-  const field = useRef<HTMLTextAreaElement>(null);
-  const overlay = useRef<HTMLDivElement>(null);
-  useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
+  const field = useRef<PromptHandle>(null);
+  useImperativeHandle(ref, () => ({
+    focus: () => field.current?.focus(),
+    read: () => field.current?.read() ?? { value: draft, from: draft.length, to: draft.length },
+    select: (at: number) => field.current?.select(at),
+    apply: (edit: TextEdit) => field.current?.apply(edit),
+  }));
   const { files: projectFiles, confirm, resolvePath } = useChatActions();
   // A file still travelling has no path to send yet.
   const uploading = uploads.some((upload) => upload.error === undefined);
@@ -217,27 +176,10 @@ export function Composer({
   const effort = useRef<Opener>(null);
   const access = useRef<Opener>(null);
 
-  // Grows with the draft up to the cap; the browser's own sizing is one line.
-  useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
-    if (overlay.current) overlay.current.style.height = el.style.height;
-  }, [draft]);
-
-  const syncCursor = () => {
-    const el = field.current;
-    if (el) setCursor(el.selectionStart);
-  };
-
   // The draft has just changed: the caret goes where the change left it once the field has the new text.
   const place = (at: number, then?: () => void) => {
     requestAnimationFrame(() => {
-      const el = field.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(at, at);
+      field.current?.select(at);
       setCursor(at);
       then?.();
     });
@@ -247,7 +189,7 @@ export function Composer({
   const pick = (file: ProjectFile, into = false) => {
     const el = field.current;
     if (!el) return;
-    const next = completeMention(draft, el.selectionStart, file, { into });
+    const next = completeMention(draft, el.read().from, file, { into });
     if (!next) return;
     rememberMention(file.path);
     setPicked((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
@@ -261,7 +203,8 @@ export function Composer({
     const el = field.current;
     if (!el) return;
     const acts = entry.kind === "crew";
-    const next = acts ? removeSlash(draft, el.selectionStart) : completeSlash(draft, el.selectionStart, entry);
+    const at = el.read().from;
+    const next = acts ? removeSlash(draft, at) : completeSlash(draft, at, entry);
     if (!next) return;
     onDraft(next.text);
     setActive(0);
@@ -287,25 +230,8 @@ export function Composer({
     if (canSend) sendAs(false);
   };
 
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const pasted = [...(event.clipboardData?.files ?? [])];
-    if (pasted.length === 0) return;
-    event.preventDefault();
-    onPasteFiles(pasted);
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // A command or skill is one word to the eye, so one Backspace takes all of it.
+  const onKeyDown = (event: KeyboardEvent) => {
     const el = field.current;
-    if (event.key === "Backspace" && el && el.selectionStart === el.selectionEnd && !event.nativeEvent.isComposing) {
-      const token = tokenBefore(draft, el.selectionStart, entries);
-      if (token) {
-        event.preventDefault();
-        onDraft(draft.slice(0, token.start) + draft.slice(token.end));
-        place(token.start);
-        return;
-      }
-    }
     if (choices > 0) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -329,13 +255,21 @@ export function Composer({
     // Lists carry on and indent as you type; the text stays plain markdown. Enter still sends, even on a
     // list item: the key that writes a new line here is ⇧↵, so that is the one that continues the list
     // (and ends it on an empty item). Making ↵ continue instead would change what ↵ means mid-message.
-    if (el && !event.nativeEvent.isComposing && !event.altKey && !event.metaKey && !event.ctrlKey) {
-      const { value, selectionStart, selectionEnd } = el;
+    if (el && !event.isComposing && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      const { value, from: selectionStart, to: selectionEnd } = el.read();
+      if (event.key === "Backspace" && !event.shiftKey) {
+        const edit = removeListMarker(value, selectionStart, selectionEnd);
+        if (edit) {
+          event.preventDefault();
+          el.apply(edit);
+          return;
+        }
+      }
       if (event.key === "Enter" && event.shiftKey) {
         const edit = continueList(value, selectionStart, selectionEnd);
         if (edit) {
           event.preventDefault();
-          applyEdit(el, edit);
+          el.apply(edit);
           return;
         }
       }
@@ -344,7 +278,7 @@ export function Composer({
         const edit = indentList(value, selectionStart, selectionEnd, event.shiftKey ? -1 : 1);
         if (edit) {
           event.preventDefault();
-          applyEdit(el, edit);
+          el.apply(edit);
           return;
         }
       }
@@ -363,7 +297,7 @@ export function Composer({
       onStop();
       return;
     }
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     if (canSend) sendAs(event.metaKey || event.ctrlKey);
   };
@@ -377,14 +311,10 @@ export function Composer({
   const hasClip = clipOf(work) !== null;
   const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
 
-  // A mention is marked where it is typed, in the text; the row over the field never repeats it.
-  const segments = splitTokens(draft, entries).flatMap<{ kind: string; text: string }>((part) =>
-    part.kind === "token" ? [part] : splitMentions(part.text, known),
-  );
   // What the plus menu types for you: an `@` or a `/` at the caret, so the pickers open as if typed.
   const typeAtCaret = (mark: string) => {
     const el = field.current;
-    const at = mark === "/" && draft.trim() === "" ? 0 : (el?.selectionStart ?? draft.length);
+    const at = mark === "/" && draft.trim() === "" ? 0 : (el?.read().from ?? draft.length);
     const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
     const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
     const text = `${before}${gap}${mark}${draft.slice(at)}`;
@@ -435,32 +365,21 @@ export function Composer({
           </div>
         )}
         <div className="ds-composer-text">
-          <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
-            {overlayRuns(splitInlineCode(splitListMarkers(segments)))}
-            {"​"}
-          </div>
-          <textarea
+          <PromptEditor
             ref={field}
-            rows={1}
             value={draft}
             placeholder={placeholder}
-            aria-label={`Message ${session.name}`}
-            spellCheck={false}
-            onChange={(event) => {
-              onDraft(event.target.value);
-              setCursor(event.target.selectionStart);
+            label={`Message ${session.name}`}
+            known={known}
+            entries={entries}
+            onChange={(value, caret) => {
+              onDraft(value);
+              setCursor(caret);
               setActive(0);
             }}
-            onSelect={syncCursor}
-            onKeyUp={syncCursor}
-            onClick={syncCursor}
-            onBlur={() => setCursor(-1)}
-            onScroll={(event) => {
-              if (overlay.current) overlay.current.scrollTop = event.currentTarget.scrollTop;
-            }}
+            onCaret={setCursor}
             onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            className="crew-composer-field crew-composer-input"
+            onPasteFiles={onPasteFiles}
           />
         </div>
         <div className="flex h-8 items-center justify-between gap-2">

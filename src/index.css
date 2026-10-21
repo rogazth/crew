@@ -677,7 +677,7 @@ html[data-sidebar-resize="active"] * {
 :root {
   --chat-text: 14px;
 }
-/* The composer's field: a textarea over an overlay that paints the same text with mentions marked. */
+/* The new-workspace composer's field. */
 .crew-composer-field {
   display: block;
   width: 100%;
@@ -695,39 +695,6 @@ html[data-sidebar-resize="active"] * {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 4;
-}
-/* The textarea keeps the caret and the events; the overlay behind it paints the same text with mentions marked. */
-.crew-composer-input {
-  position: relative;
-  color: transparent;
-  caret-color: var(--color-text);
-}
-.crew-composer-input::placeholder {
-  color: var(--color-placeholder);
-}
-.crew-composer-input::selection {
-  background: light-dark(oklch(84% 0.08 245 / 0.6), oklch(45% 0.11 255 / 0.6));
-  color: transparent;
-}
-.crew-composer-overlay {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  color: var(--color-text);
-}
-/* An `@path` in the draft. The overlay must keep the textarea's metrics, so
-   the run takes no padding or font of its own: the ring is drawn by shadows,
-   in the look of `.crew-file-ref`. */
-.crew-mention-run {
-  border-radius: 5px;
-  background: var(--color-card);
-  color: inherit;
-  box-shadow:
-    0 0 0 2px var(--color-card),
-    0 0 0 3px var(--color-hairline);
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
 }
 .crew-popover {
   overflow: hidden;
