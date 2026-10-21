@@ -407,7 +407,8 @@ export function Composer({
                 />
               </div>
             )}
-            <ContextRing sessionId={session.id} provider={session.provider} />
+            {/* A bot starts every message blank, so its context never fills. */}
+            {!session.botId && <ContextRing sessionId={session.id} provider={session.provider} />}
             <SendButton
               stopping={stopping}
               canSend={canSend}
