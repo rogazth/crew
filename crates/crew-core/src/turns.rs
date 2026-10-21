@@ -897,7 +897,8 @@ impl TurnHost {
         let branch = crate::worktree::current_branch(cwd);
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
-            let notes = crate::notes::get(&self.store, &session.id).unwrap_or_default();
+            let rules = crate::rules::list(&self.store, &session.id).unwrap_or_default();
+            let folder = self.bot_folder(session);
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
                 id: &session.id,
@@ -905,7 +906,8 @@ impl TurnHost {
                 place,
                 harness,
                 tools: &tools,
-                notes: &notes,
+                rules: &rules,
+                folder: folder.as_deref(),
             }));
         }
         let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
@@ -1267,13 +1269,13 @@ impl TurnHost {
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A session that
         // carries on its provider's own conversation is handed none.
-        let history = if carries {
-            None
-        } else {
+        let trail = (!carries).then(|| {
             self.transcripts.read(&params.session_id, |blocks| {
                 working_set::history(blocks, crate::prompts::Harness::for_provider(&session.provider))
             })
-        };
+        });
+        // Each letter is a block of its own; otherwise the turn's text is one.
+        let appended = letters.len().max(1);
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the
@@ -1358,6 +1360,12 @@ impl TurnHost {
                 ),
             }
         }
+        // Under the tail, the header of this turn names the blocks its message
+        // took: the number `rules` cites a decision of the user's by.
+        let history = trail.map(|trail| {
+            let last = self.transcripts.len(&params.session_id);
+            working_set::with_turn(trail, (last + 1).saturating_sub(appended).max(1), last)
+        });
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
@@ -2350,19 +2358,32 @@ impl TurnHost {
     }
 
     fn agent_env(&self, session_id: &str) -> HashMap<String, String> {
-        let Ok(info) = self.bridge.info() else {
-            return HashMap::new();
+        let mut env = match self.bridge.info() {
+            Ok(info) => HashMap::from([
+                ("CREW_SOCKET".into(), info.socket_path),
+                // Minted for this session, here, once per process: a driver that
+                // keeps its process across turns calls this once, since a later
+                // mint would retire the token the live CLI's MCP server holds. It
+                // is what says who is calling: the id no longer travels on the
+                // wire, so a shell that inherited this cannot speak as another
+                // agent.
+                ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
+            ]),
+            Err(_) => HashMap::new(),
         };
-        HashMap::from([
-            ("CREW_SOCKET".into(), info.socket_path),
-            // Minted for this session, here, once per process: a driver that
-            // keeps its process across turns calls this once, since a later
-            // mint would retire the token the live CLI's MCP server holds. It
-            // is what says who is calling: the id no longer travels on the
-            // wire, so a shell that inherited this cannot speak as another
-            // agent.
-            ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
-        ])
+        // A bot's own folder, for its shell as for its prompt.
+        if let Some(folder) = crate::bot_folder::ensure(&self.store, session_id) {
+            env.insert(crate::bot_folder::ENV.into(), folder.to_string_lossy().into_owned());
+        }
+        env
+    }
+
+    /// A bot's folder, made on its first turn; none for any other session.
+    pub(crate) fn bot_folder(&self, session: &crate::session::Session) -> Option<String> {
+        (session.kind == "bot")
+            .then(|| crate::bot_folder::ensure(&self.store, &session.id))
+            .flatten()
+            .map(|folder| folder.to_string_lossy().into_owned())
     }
 
     fn mcp(&self) -> Option<(String, Vec<String>)> {
@@ -3599,6 +3620,7 @@ impl TurnHost {
             // account that cannot use fast mode for it.
             fast: session.service_tier == "fast"
                 && crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden,
+            add_dirs: self.bot_folder(session).into_iter().collect(),
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
@@ -4880,7 +4902,7 @@ mod mailbox_tests {
         assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
         let prompt = second["prompt"].as_str().unwrap();
         assert!(system.contains("`crew_read_session`") && !prompt.contains("You are Coder,"), "{prompt}");
-        assert!(system.contains("### Your notes [0% - 0/4,000]"), "the notes are on every turn: {system}");
+        assert!(system.contains("### Your rules [0% - 0/1,500]"), "the rules are on every turn: {system}");
         assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
         assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
         assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
@@ -4889,6 +4911,57 @@ mod mailbox_tests {
         let rules = second["permissions"].as_array().unwrap();
         assert!(rules.contains(&json!({ "action": "question", "resource": "*", "effect": "deny" })), "{rules:?}");
         assert_eq!(rules.last(), Some(&json!({ "action": "crew_*", "resource": "*", "effect": "allow" })));
+    }
+
+    /// The block numbers a bot is shown — under the trail for this turn, and
+    /// on each message the user typed — are the ones `rules` takes as `from`.
+    #[test]
+    fn the_block_numbers_a_bot_is_shown_are_the_ones_from_accepts() {
+        let world = world();
+        let ws = workspace(&world);
+        let probe = bot(&world, &ws, "Probe");
+
+        turn(&world, &probe, "nunca hagas push a master");
+        settle(&world, &probe.id);
+        let first = launches(&world)[0].clone();
+        let prompt = first["prompt"].as_str().unwrap();
+        assert!(prompt.starts_with("## This turn (block 1)\n\nnunca hagas push a master"), "{prompt}");
+
+        turn(&world, &probe, "y corre los tests");
+        settle(&world, &probe.id);
+        let second = launches(&world)[1].clone();
+        let prompt = second["prompt"].as_str().unwrap().to_string();
+        let rows = blocks(&world, &probe.id);
+        assert_eq!(prompt.matches("## This turn").count(), 1, "{prompt}");
+        let header = prompt.split("## This turn (block ").nth(1).expect("the header").split(')').next().unwrap();
+        let now: usize = header.parse().expect("a number");
+        assert_eq!(rows[now - 1].text, "y corre los tests", "{prompt}");
+        assert!(crate::rules::user_message(&rows, now as i64).is_ok());
+        assert!(prompt.contains("[#1 · ") && prompt.contains("· user] nunca hagas push a master"), "{prompt}");
+        let numbered: Vec<&str> = prompt.lines().filter(|line| line.starts_with("[#")).collect();
+        assert!(!numbered.is_empty(), "{prompt}");
+        for line in numbered {
+            let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
+            assert!(crate::rules::user_message(&rows, n).is_ok(), "{line}");
+        }
+    }
+
+    /// A bot has a folder of its own from its first turn: its prompt says
+    /// where in one line, and its shell finds it in `CREW_SCRATCH_SELF`.
+    #[test]
+    fn a_bot_is_handed_its_folder() {
+        let world = world();
+        let ws = workspace(&world);
+        let keeper = bot(&world, &ws, "Keeper");
+        turn(&world, &keeper, "hola");
+        settle(&world, &keeper.id);
+        let launch = launches(&world)[0].clone();
+        let folder = crate::bot_folder::get(world.host.test_store(), &keeper.id).unwrap().expect("a folder");
+        assert!(folder.is_dir(), "{}", folder.display());
+        assert!(folder.ends_with("workspaces/w/bots/keeper"), "{}", folder.display());
+        let system = launch["system"].as_str().unwrap();
+        assert!(system.contains(&format!("\nYour folder, for anything you want to keep: {}\n", folder.display())), "{system}");
+        assert_eq!(launch["env"][crate::bot_folder::ENV], json!(folder.to_string_lossy()), "{launch}");
     }
 
     /// The setting overrides a bot that asks: its next session is made the

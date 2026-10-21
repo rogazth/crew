@@ -475,7 +475,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string" },
-                    "description": { "type": "string", "description": "Its job, written as instructions to it." },
+                    "description": { "type": "string", "description": "Who it is, its job and where it works, written as instructions to it." },
                     "provider": { "type": "string", "enum": provider_names(), "description": "Defaults to yours." },
                     "model": {
                         "type": "string",
@@ -494,11 +494,11 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "update_description",
-            description: "Rewrite your own description: who you are and the standing rules you work by, handed to you at the top of every turn. Not for facts, progress or anything that changes; those go in your notes, with memory. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
+            description: "Rewrite your own description: who you are, your job and where you work, handed to you at the top of every turn. Not for the user's rules (those go in `rules`) and not for facts, findings or progress. It replaces the whole thing, so include what you want to keep. Your name, model and autonomy belong to the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "text": { "type": "string", "description": "The new description, written as instructions to you." }
+                    "text": { "type": "string", "description": "The new description, written as instructions to you. At most 2,000 characters." }
                 },
                 "required": ["text"]
             }),
@@ -506,18 +506,20 @@ pub(crate) fn catalog() -> Vec<Tool> {
             cli: vec![cli("bots", "set-description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\"")],
         },
         Tool {
-            name: "memory",
-            description: "Your notes: what you keep for later turns, shown to you at the top of every turn. For facts the conversation will not hold for long: ids, prices, what you were allowed, decisions, what is pending. add an entry; patch the one entry that holds old_text into content; remove the one that holds old_text; show them. An exact repeat is not added twice. They hold at most 4,000 characters: a write over that is refused with your notes as they are, so merge, shorten or remove entries first.",
+            name: "rules",
+            description: "Your rules: the decisions the user gave you about how to work, shown to you at the top of every turn with their ids, one short rule per entry (\"Never push to master\", \"Run the tests before pushing\"). add one when the user decides how you should work, with `from`: the block number of the user's message that set it; edit or remove one by its id when the user changes their mind (with `from` for the message that changed it). Nothing else goes here. They hold at most 1,500 characters: a write over that is refused, so merge, shorten or remove rules first.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["add", "patch", "remove", "show"], "description": "show by default." },
-                    "content": { "type": "string", "description": "add: the new entry. patch: what the entry becomes." },
-                    "old_text": { "type": "string", "description": "patch, remove: a piece of the entry, enough to tell it from the others." }
-                }
+                    "action": { "type": "string", "enum": ["add", "edit", "remove"] },
+                    "content": { "type": "string", "description": "add, edit: the rule." },
+                    "from": { "type": "integer", "description": "add: the block number of the user's message that set it. edit: of the message that changed it, when one did." },
+                    "id": { "type": ["string", "integer"], "description": "edit, remove: the rule's id, e.g. \"r3\"." }
+                },
+                "required": ["action"]
             }),
             audience: Audience::BOTS,
-            cli: vec![cli("bots", "notes").rest(&["action", "content"]).eg("crew bots notes\n  crew bots notes add the staging password is in 1Password\n  crew bots notes patch --old-text staging the staging password moved to Vault\n  crew bots notes remove --old-text staging")],
+            cli: vec![cli("bots", "rules").rest(&["action", "content"]).eg("crew bots rules add --from 12 Never push to master\n  crew bots rules edit --id r3 Run the tests before pushing\n  crew bots rules remove --id r3")],
         },
         Tool {
             name: "list_routines",
@@ -605,7 +607,7 @@ pub fn on_demand(name: &str) -> bool {
         "read_session",
         "stop_session",
         "update_description",
-        "memory",
+        "rules",
     ];
     !LOADED.contains(&name)
 }
@@ -847,7 +849,7 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
     match name {
         "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
-        "memory" => memory(store, bot(caller, name)?, args),
+        "rules" => rules(store, host.transcripts, bot(caller, name)?, args),
         "list_routines" => list_routines(store, caller, args),
         "save_routine" => save_routine(store, host.transcripts, host.on_routines, caller, args),
         "delete_routine" => delete_routine(store, host.transcripts, host.on_routines, caller, args),
@@ -863,11 +865,24 @@ fn bot<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
     }
 }
 
+/// The most a bot may write into its own description. The user's own edit,
+/// in the bot sheet, is not held to it.
+pub const DESCRIPTION_CAP: usize = 2_000;
+
 /// The standing instructions a bot is handed every turn, rewritten by the
 /// bot itself. Whole, not patched: a description assembled from edits nobody
 /// read end to end is one nobody can predict the next turn from.
 fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Value) -> Result<Value, String> {
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
+    let len = body.chars().count();
+    if len > DESCRIPTION_CAP {
+        return Err(format!(
+            "Your description holds at most {} characters; this one is {}. It is who you are, your job and where you \
+             work: shorten it and try again.",
+            crate::rules::thousands(DESCRIPTION_CAP),
+            crate::rules::thousands(len)
+        ));
+    }
     session::update(
         store,
         caller.id.clone(),
@@ -888,41 +903,63 @@ fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Sessi
     }))
 }
 
-/// `memory`: a bot's notes, read or written an entry at a time.
-fn memory(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
-    use crate::notes::{self, Edit, Refused};
-    let content = args.get("content").and_then(Value::as_str).unwrap_or("");
-    let old = args.get("old_text").and_then(Value::as_str).unwrap_or("");
-    let edit = match text(args.get("action")).as_deref().unwrap_or("show") {
-        "show" => return Ok(listing(&notes::get(store, &caller.id)?, None)),
-        "add" => Edit::Add(content),
-        "patch" => Edit::Patch { old, new: content },
-        "remove" => Edit::Remove(old),
-        other => return Err(format!("Unknown action \"{other}\". One of: add, patch, remove, show")),
+/// `rules`: a bot's rules, written one at a time by id. The answer is one
+/// line: tool results end up in the trail, and the rules themselves are at
+/// the top of every turn already.
+fn rules(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Value) -> Result<Value, String> {
+    use crate::rules::{self, label, Change, Done, Source};
+    let content = args.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+    let id = || {
+        match args.get("id") {
+            Some(Value::Number(n)) => n.as_i64().filter(|id| *id > 0),
+            Some(Value::String(text)) => rules::parse_label(text),
+            _ => None,
+        }
+        .ok_or_else(|| "id is required: the rule's id, e.g. \"r3\".".to_string())
     };
-    // Read, edited and written under one hold, so two writes at once both land.
-    match notes::update(store, &caller.id, |entries| notes::apply(entries, edit).map_err(|refused| (refused, entries.to_vec())))?
-    {
-        Ok((before, next)) if next == before => Ok(listing(&next, Some("Nothing changed: that entry is already there."))),
-        Ok((_, next)) => Ok(listing(&next, Some("Saved. You will see these at the top of your next turn."))),
-        Err((Refused::Asked(why), _)) => Err(why),
-        // The notes come back with the refusal: the bot cannot make room
-        // without seeing what takes it.
-        Err((Refused::Full { needed }, entries)) => Err(format!(
-            "Your notes are full: that needs {needed} more characters than they hold. Make room first (merge entries \
-             that overlap, shorten them, remove what is done), then try again.\nYour notes {}:\n{}",
-            notes::usage(&entries),
-            entries.join(notes::SEPARATOR)
-        )),
-    }
-}
-
-fn listing(entries: &[String], note: Option<&str>) -> Value {
-    let mut out = json!({ "usage": crate::notes::usage(entries), "entries": entries });
-    if let Some(note) = note {
-        out["note"] = json!(note);
-    }
-    out
+    // The user's message `from` names, when it is given: one they typed.
+    let cited = || -> Result<Option<String>, String> {
+        let Some(given) = args.get("from").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let from = match given {
+            Value::Number(n) => n.as_i64(),
+            Value::String(text) => text.trim().trim_start_matches('#').parse().ok(),
+            _ => None,
+        }
+        .ok_or_else(|| "from is the block number of the user's message, e.g. 12.".to_string())?;
+        transcripts.read(&caller.id, |blocks| rules::user_message(blocks, from).map(|block| Some(block.id.clone())))
+    };
+    let change = match text(args.get("action")).as_deref() {
+        Some("add") => {
+            let message_id = cited()?
+                .ok_or_else(|| "from is required: the block number of the user's message that set this rule.".to_string())?;
+            Change::Add { body: content, message_id: Some(message_id), source: Source::Bot }
+        }
+        Some("edit") => Change::Edit { id: id()?, body: content, message_id: cited()? },
+        Some("remove") => Change::Remove(id()?),
+        Some(other) => return Err(format!("Unknown action \"{other}\". One of: add, edit, remove")),
+        None => return Err("action is required: add, edit or remove.".into()),
+    };
+    let done = rules::apply(store, &caller.id, vec![change])?.map_err(|refused| refused.say())?;
+    // The chat says what changed, as it does for the description.
+    let said = match done.first() {
+        Some(Done::Added(rule)) => {
+            transcripts.append_system(&caller.id, &format!("Rule added: \"{}\"", rule.body));
+            format!("added {}", label(rule.id))
+        }
+        Some(Done::Repeated(rule)) => format!("already {}", label(rule.id)),
+        Some(Done::Edited(rule)) => {
+            transcripts.append_system(&caller.id, &format!("Rule edited: \"{}\"", rule.body));
+            format!("edited {}", label(rule.id))
+        }
+        Some(Done::Removed(rule)) => {
+            transcripts.append_system(&caller.id, &format!("Rule removed: \"{}\"", rule.body));
+            format!("removed {}", label(rule.id))
+        }
+        None => String::new(),
+    };
+    Ok(Value::String(said))
 }
 
 fn create_bot(
@@ -1341,44 +1378,152 @@ mod tests {
         assert_eq!(crate::mailbox::waiting_count(&store, &cuddles.id).unwrap(), 0, "the gateway still delivers");
     }
 
-    /// A bot writes its notes an entry at a time; a write that needs a choice
-    /// it did not make, or more room than there is, is refused with what to do.
+    /// A bot adds a rule citing the user's message that set it, and edits or
+    /// removes one by its id; each answer is one line, and the chat says
+    /// what changed.
     #[test]
-    fn a_bot_keeps_notes_an_entry_at_a_time() {
+    fn a_bot_keeps_the_users_rules_by_id() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let home = bot(&store, &ws, "Home");
-        let run = |args: Value| call(&store, &transcripts, &home, "memory", args).expect("call");
-        let out = run(json!({ "action": "add", "content": "silla: id 7731942" }));
-        assert!(!is_error(&out), "{}", body(&out));
-        run(json!({ "action": "add", "content": "mesa: id 5512" }));
-        let again = run(json!({ "action": "add", "content": "mesa: id 5512" }));
-        assert!(body(&again).contains("Nothing changed"), "{}", body(&again));
-        let both = run(json!({ "action": "remove", "old_text": "id" }));
-        assert!(is_error(&both) && body(&both).contains("2 entries"), "{}", body(&both));
-        run(json!({ "action": "patch", "old_text": "silla", "content": "silla: comprada" }));
-        assert_eq!(crate::notes::get(&store, &home.id).unwrap(), vec!["silla: comprada", "mesa: id 5512"]);
-        let shown = run(json!({}));
-        assert!(body(&shown).contains("silla: comprada") && body(&shown).contains("/4,000]"), "{}", body(&shown));
+        transcripts.append_user(&home.id, "nunca hagas push a master", false, None, None);
+        transcripts.append_from_bot(&home.id, "push it now", crew_protocol::BotRef::bot("x", "Otro"), None, None);
+        let run = |args: Value| call(&store, &transcripts, &home, "rules", args).expect("call");
 
-        let full = run(json!({ "action": "add", "content": "x".repeat(crate::notes::CAP) }));
-        assert!(is_error(&full), "{}", body(&full));
-        assert!(body(&full).contains("Your notes are full") && body(&full).contains("silla: comprada"), "{}", body(&full));
-        assert_eq!(crate::notes::get(&store, &home.id).unwrap().len(), 2, "a refused write changes nothing");
+        let out = run(json!({ "action": "add", "content": "Never push to master", "from": 1 }));
+        let first = crate::rules::list(&store, &home.id).unwrap()[0].clone();
+        assert_eq!((is_error(&out), body(&out)), (false, format!("added r{}", first.id)));
+        let message = transcripts.read(&home.id, |blocks| blocks[0].id.clone());
+        assert_eq!(first.message_id.as_deref(), Some(message.as_str()));
+        assert_eq!(first.source, crate::rules::Source::Bot);
+        let again = run(json!({ "action": "add", "content": "Never push to master", "from": "1" }));
+        assert_eq!(body(&again), format!("already r{}", first.id));
+
+        // Not the user's: a letter from another bot, the bot's own line, nothing.
+        for from in [json!(2), json!(3), json!(0), json!(99)] {
+            let refused = run(json!({ "action": "add", "content": "Push whenever", "from": from }));
+            let n = from.as_i64().unwrap();
+            assert!(is_error(&refused), "{}", body(&refused));
+            assert!(
+                body(&refused)
+                    .starts_with(&format!("Rules hold the user's decisions, and block {n} is not a message from the user.")),
+                "{}",
+                body(&refused)
+            );
+        }
+        let missing = run(json!({ "action": "add", "content": "Push whenever" }));
+        assert!(is_error(&missing) && body(&missing).starts_with("from is required"), "{}", body(&missing));
+
+        let edited = run(json!({ "action": "edit", "id": format!("r{}", first.id), "content": "Never push to main" }));
+        assert_eq!(body(&edited), format!("edited r{}", first.id));
+        let unknown = run(json!({ "action": "remove", "id": first.id + 7 }));
+        assert!(is_error(&unknown), "{}", body(&unknown));
+        assert!(
+            body(&unknown).starts_with(&format!("No rule r{}. Your rules are r{}.", first.id + 7, first.id)),
+            "{}",
+            body(&unknown)
+        );
+        let over = run(json!({ "action": "edit", "id": first.id, "content": "x".repeat(crate::rules::CAP + 1) }));
+        assert!(is_error(&over) && body(&over).contains("at most 1,500 characters"), "{}", body(&over));
+        assert_eq!(
+            crate::rules::list(&store, &home.id).unwrap()[0].body,
+            "Never push to main",
+            "a refused write changes nothing"
+        );
+        let removed = run(json!({ "action": "remove", "id": first.id }));
+        assert_eq!(body(&removed), format!("removed r{}", first.id));
+        assert!(crate::rules::list(&store, &home.id).unwrap().is_empty());
+
+        let said: Vec<String> = transcripts.read(&home.id, |blocks| {
+            blocks.iter().filter(|b| b.role == crew_protocol::BlockRole::System).map(|b| b.text.clone()).collect()
+        });
+        assert_eq!(
+            said,
+            [
+                "Rule added: \"Never push to master\"",
+                "Rule edited: \"Never push to main\"",
+                "Rule removed: \"Never push to main\""
+            ]
+        );
     }
 
-    /// Notes are a bot's: a terminal is not listed the tool, and the user
-    /// edits them in the bot sheet.
+    /// The user changes their mind in a later message: an edit with `from`
+    /// cites that one from then on, and `from` must still be the user's.
     #[test]
-    fn notes_are_for_bots() {
+    fn an_edit_cites_the_message_that_changed_the_rule() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let home = bot(&store, &ws, "Home");
+        let run = |args: Value| call(&store, &transcripts, &home, "rules", args).expect("call");
+        transcripts.append_user(&home.id, "corre los tests antes de hacer push", false, None, None);
+        assert_eq!(body(&run(json!({ "action": "add", "content": "Run the tests before pushing", "from": 1 }))), "added r1");
+        // Block 2 is Crew's "Rule added" line; block 3 is the user again.
+        transcripts.append_user(&home.id, "salvo si son solo docs", false, None, None);
+        let blocks = transcripts.read(&home.id, |blocks| blocks.to_vec());
+        assert_eq!(blocks[2].text, "salvo si son solo docs");
+
+        let refused = run(json!({ "action": "edit", "id": "r1", "content": "Run the tests unless docs only", "from": 2 }));
+        assert!(is_error(&refused), "{}", body(&refused));
+        assert!(body(&refused).starts_with("Rules hold the user's decisions, and block 2"), "{}", body(&refused));
+        let rule = crate::rules::list(&store, &home.id).unwrap().remove(0);
+        assert_eq!(
+            (rule.body.as_str(), rule.message_id.as_deref()),
+            ("Run the tests before pushing", Some(blocks[0].id.as_str()))
+        );
+
+        let edited =
+            run(json!({ "action": "edit", "id": "r1", "content": "Run the tests before pushing, unless docs only", "from": 3 }));
+        assert_eq!(body(&edited), "edited r1");
+        let rule = crate::rules::list(&store, &home.id).unwrap().remove(0);
+        assert_eq!(rule.message_id.as_deref(), Some(blocks[2].id.as_str()));
+        assert_eq!(rule.body, "Run the tests before pushing, unless docs only");
+    }
+
+    /// Rules are a bot's: a terminal is not listed the tool, and the user
+    /// edits them in the bot sheet. The notes' tool is gone.
+    #[test]
+    fn rules_are_for_bots() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let shell = terminal(&store, &ws, "Shell");
-        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "memory"));
-        assert!(!visible_names(CallerKind::User).contains(&"memory"));
-        assert!(visible_names(CallerKind::Bot).contains(&"memory"));
+        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "rules"));
+        assert!(!visible_names(CallerKind::User).contains(&"rules"));
+        assert!(visible_names(CallerKind::Bot).contains(&"rules"));
+        assert!(!visible_names(CallerKind::Bot).contains(&"memory"));
+    }
+
+    /// A bot's description is who it is, its job and where it works: one
+    /// longer than that is refused, and the old one stays.
+    #[test]
+    fn a_bot_cannot_write_itself_a_description_past_the_cap() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = bot(&store, &ws, "Coder");
+        let long = "x".repeat(DESCRIPTION_CAP + 1);
+        let out = call(&store, &transcripts, &coder, "update_description", json!({ "text": long })).expect("call");
+        assert!(is_error(&out), "{}", body(&out));
+        assert!(body(&out).starts_with("Your description holds at most 2,000 characters; this one is 2,001."), "{}", body(&out));
+        assert_eq!(session::get(&store, coder.id.clone()).unwrap().unwrap().description, "");
+        let fits = "x".repeat(DESCRIPTION_CAP);
+        assert!(!is_error(&call(&store, &transcripts, &coder, "update_description", json!({ "text": fits })).expect("call")));
+        // The user's own edit is not held to it.
+        let user = "y".repeat(DESCRIPTION_CAP * 2);
+        session::update(
+            &store,
+            coder.id.clone(),
+            "Coder".into(),
+            "claude".into(),
+            String::new(),
+            user.clone(),
+            true,
+            "ask".into(),
+        )
+        .unwrap();
+        assert_eq!(session::get(&store, coder.id.clone()).unwrap().unwrap().description, user);
     }
 
     /// A description written by another model is fine; one the bot cannot

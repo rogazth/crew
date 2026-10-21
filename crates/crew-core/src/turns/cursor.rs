@@ -381,8 +381,11 @@ impl TurnHost {
         let env = self.agent_env(session_id);
         let mut mcp_env: Vec<(String, String)> = env.clone().into_iter().collect();
         mcp_env.sort();
-        let args =
-            build_cursor_spawn_args(&CursorSpawn { model: Some(session.model.clone()).filter(|m| !m.is_empty()), autonomy });
+        let args = build_cursor_spawn_args(&CursorSpawn {
+            model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+            autonomy,
+            add_dirs: self.bot_folder(session).into_iter().collect(),
+        });
         self.agents.spawn(session_id.to_string(), path, args, cwd.to_string(), Some(env))?;
         Ok(mcp_servers(mcp, &mcp_env))
     }

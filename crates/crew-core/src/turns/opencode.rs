@@ -358,7 +358,8 @@ impl TurnHost {
     fn opencode_open(&self, session: &session::Session, params: &TurnStart, conn: &Conn) -> Result<String, String> {
         let client = conn.client();
         let autonomy = self.autonomy(session);
-        let rules = permission_rules(&autonomy, session.kind == "bot");
+        let folder = self.bot_folder(session);
+        let rules = permission_rules(&autonomy, session.kind == "bot", folder.as_deref());
         let model = model_ref(&session.model, &session.effort);
         let resume = conversation_to_resume(session)
             .filter(|oc| client.get_json(&format!("/api/session/{oc}")).is_ok_and(|reply| reply.status == 200));
@@ -412,14 +413,14 @@ impl TurnHost {
     /// none of the server's own (its password and config).
     fn opencode_bind(&self, session: &session::Session, conn: &Conn, oc: &str) -> Result<(), String> {
         let token = self.bind_opencode_session(conn, oc, &session.id)?;
-        self.opencode_shell(conn, oc, &token)?;
+        self.opencode_shell(conn, oc, &token, self.bot_folder(session).as_deref())?;
         if let Some(Live::Opencode(live)) = self.lock().get_mut(&session.id) {
             live.epoch = conn.epoch;
         }
         Ok(())
     }
 
-    fn opencode_shell(&self, conn: &Conn, oc: &str, token: &str) -> Result<(), String> {
+    fn opencode_shell(&self, conn: &Conn, oc: &str, token: &str, folder: Option<&str>) -> Result<(), String> {
         let mut variables: Map<String, Value> = std::env::vars()
             .filter(|(key, _)| !crate::child_env::inherited_from_parent(key) && !key.starts_with("OPENCODE_"))
             .map(|(key, value)| (key, json!(value)))
@@ -429,6 +430,9 @@ impl TurnHost {
             variables.insert("CREW_SOCKET".into(), json!(info.socket_path));
         }
         variables.insert("CREW_TOKEN".into(), json!(token));
+        if let Some(folder) = folder {
+            variables.insert(crate::bot_folder::ENV.into(), json!(folder));
+        }
         ok(
             conn.client().put_json(&format!("/api/session/{oc}/environment"), &json!({ "variables": variables })),
             "set the session's environment",
@@ -459,7 +463,8 @@ impl TurnHost {
             }
         }
         if now.autonomy != since.autonomy {
-            let rules = permission_rules(&now.autonomy, session.kind == "bot");
+            let folder = self.bot_folder(session);
+            let rules = permission_rules(&now.autonomy, session.kind == "bot", folder.as_deref());
             ok(client.patch_json(&format!("/api/session/{oc}"), &json!({ "permissions": rules })), "set the permissions")?;
         }
         if epoch != conn.epoch {

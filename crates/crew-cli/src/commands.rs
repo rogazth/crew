@@ -29,7 +29,7 @@ pub struct Group {
 pub const GROUPS: &[Group] = &[
     Group {
         name: "bots",
-        about: "The workspace's bots: make new ones, rewrite your own instructions, keep your notes",
+        about: "The workspace's bots: make new ones, rewrite your own instructions, keep the user's rules",
         aliases: &["bot"],
     },
     Group {

@@ -82,7 +82,10 @@ fn crew_rule() -> Value {
 /// - Edits, and auto (which has no reviewer here): edits go, a command, a
 ///   fetch or a file outside the folder asks.
 /// - Ask: edits ask too.
-pub fn permission_rules(autonomy: &Autonomy, bot: bool) -> Value {
+///
+/// A bot's folder is outside the session's folder and is its own: going there
+/// does not ask (what it does there still asks as anywhere else).
+pub fn permission_rules(autonomy: &Autonomy, bot: bool, folder: Option<&str>) -> Value {
     let mut rules = match autonomy {
         Autonomy::Full => vec![rule("*", "allow")],
         Autonomy::Edits | Autonomy::Auto => {
@@ -94,6 +97,9 @@ pub fn permission_rules(autonomy: &Autonomy, bot: bool) -> Value {
     };
     if bot {
         rules.push(rule("question", "deny"));
+    }
+    if let Some(folder) = folder.filter(|_| *autonomy != Autonomy::Full) {
+        rules.push(json!({ "action": "external_directory", "resource": format!("{folder}/*"), "effect": "allow" }));
     }
     rules.push(crew_rule());
     Value::Array(rules)
@@ -778,7 +784,7 @@ mod tests {
     #[test]
     fn each_autonomy_is_a_set_of_rules_ending_with_crews_tools_allowed() {
         let effects = |autonomy: Autonomy, bot: bool| -> Vec<(String, String)> {
-            permission_rules(&autonomy, bot)
+            permission_rules(&autonomy, bot, None)
                 .as_array()
                 .unwrap()
                 .iter()
@@ -800,6 +806,14 @@ mod tests {
         for rules in [full, ask, edits, bot] {
             assert_eq!(rules.last().unwrap(), &("crew_*".to_string(), "allow".to_string()));
         }
+        // A bot's folder is its own: going there does not ask.
+        let folder = permission_rules(&Autonomy::Ask, true, Some("/w/bots/brisa"));
+        let rules = folder.as_array().unwrap();
+        assert_eq!(
+            rules[rules.len() - 2],
+            json!({ "action": "external_directory", "resource": "/w/bots/brisa/*", "effect": "allow" })
+        );
+        assert_eq!(permission_rules(&Autonomy::Full, true, Some("/w/bots/brisa")), permission_rules(&Autonomy::Full, true, None));
     }
 
     /// The server's config is the 2.x format: one execution timeout, Crew's

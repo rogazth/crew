@@ -63,7 +63,8 @@ pub(crate) fn invocations(text: &str, name: &str) -> Vec<usize> {
 ///
 /// The turn goes last because it is the instruction, and the tail above it is
 /// memory. Reversed, the newest thing the user said sits behind a wall of what
-/// they said before.
+/// they said before. A bot's history ends with the header of this turn
+/// (`working_set::with_turn`), which names the block its message took.
 pub fn assemble(system: String, history: Option<&str>, turn: &str) -> String {
     let history = history.map(str::trim).filter(|tail| !tail.is_empty());
     let turn = turn.trim();
@@ -76,11 +77,6 @@ pub fn assemble(system: String, history: Option<&str>, turn: &str) -> String {
     };
     if let Some(history) = history {
         push(history);
-        // The header earns its place as a separator; with nothing above it, it
-        // is a heading over the user's own message.
-        if !turn.is_empty() {
-            push("## This turn");
-        }
     }
     if !turn.is_empty() {
         push(turn);
@@ -737,8 +733,9 @@ mod tests {
         }
     }
 
-    /// A first turn has nothing behind it, so the separator would be a heading
-    /// over the user's own message.
+    /// With no history there is no header: a bot's comes with its history
+    /// (`working_set::with_turn`), even on its first turn, and `assemble`
+    /// adds none of its own.
     #[test]
     fn a_first_turn_is_the_persona_and_the_message() {
         for prompt in turn_prompts(None) {
@@ -764,6 +761,7 @@ mod tests {
             mcp_config: None,
             user_settings: false,
             fast: false,
+            add_dirs: Vec::new(),
         });
         assert!(args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona), "{args:?}");
         let message = claude::build_claude_user_message("sid", Some(TAIL), "y ahora?", &[], &[]);
@@ -789,6 +787,7 @@ mod tests {
                 mcp_config: None,
                 user_settings: false,
                 fast: false,
+                add_dirs: Vec::new(),
             })
         };
         let pair = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
@@ -811,6 +810,7 @@ mod tests {
             autonomy: Autonomy::Ask,
             mcp: None,
             mcp_env: Vec::new(),
+            writable_roots: Vec::new(),
         }
     }
 
@@ -831,8 +831,9 @@ mod tests {
                 mcp_config: None,
                 user_settings: false,
                 fast: false,
+                add_dirs: Vec::new(),
             }),
-            cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
+            cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask, add_dirs: Vec::new() }),
             grok::build_grok_spawn_args(&Autonomy::Ask),
         ];
         for args in runs {
@@ -866,6 +867,7 @@ mod tests {
             mcp_config: None,
             user_settings: false,
             fast: false,
+            add_dirs: Vec::new(),
         });
         assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");

@@ -685,14 +685,19 @@ pub(crate) fn is_placeholder_name(name: &str, provider: &str) -> bool {
 }
 
 /// A bot goes with its session, and its session with it: deleting either
-/// id deletes both, with the transcript, the mailbox and the routines.
+/// id deletes both, with the transcript, the mailbox, the routines, the rules
+/// and the bot's folder.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
+    let folder = crate::bot_folder::get(store, &id)?;
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM bots WHERE id = ?1", params![id])?;
         tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         tx.commit()
     })?;
+    if let Some(folder) = folder {
+        crate::bot_folder::remove(&folder);
+    }
     Ok(())
 }
 

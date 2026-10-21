@@ -479,8 +479,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if current < 40 {
         let tx = conn.unchecked_transaction()?;
         // A bot's notes: what it keeps for later turns, apart from its description.
-        tx.execute_batch(crate::notes::MIGRATION_V40)?;
+        tx.execute_batch(crate::rules::MIGRATION_V40)?;
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (40, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 41 {
+        let tx = conn.unchecked_transaction()?;
+        // The notes become rules, a row each numbered within its bot, and the
+        // notes table goes.
+        crate::rules::migrate_v41(&tx)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (41, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 42 {
+        let tx = conn.unchecked_transaction()?;
+        // A bot's folder, set the first time a turn needs it (see `bot_folder`).
+        if !has_column(&tx, "bots", "folder")? {
+            tx.execute_batch(crate::bot_folder::MIGRATION_V42)?;
+        }
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     Ok(())

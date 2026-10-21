@@ -23,9 +23,11 @@ pub const CREW_SERVER: &str = "crew";
 pub struct CursorSpawn {
     pub model: Option<String>,
     pub autonomy: Autonomy,
+    /// `--add-dir`: folders it works in besides its own, a bot's folder.
+    pub add_dirs: Vec<String>,
 }
 
-/// `cursor-agent [--model m] [--force | --auto-review] --disable-codebase-ref acp`.
+/// `cursor-agent [--model m] [--force | --auto-review] [--add-dir d]… --disable-codebase-ref acp`.
 /// The model goes on argv rather than through `session/set_config_option`: argv
 /// takes the ids Crew's model list names (`gpt-5.6-sol-medium`), ACP only its
 /// own (`gpt-5.6-sol`). `--yolo` is not honoured in ACP mode; `--force` is.
@@ -44,6 +46,10 @@ pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
         Autonomy::Full => args.push("--force".into()),
         Autonomy::Auto => args.push("--auto-review".into()),
         Autonomy::Ask | Autonomy::Edits => {}
+    }
+    for dir in &input.add_dirs {
+        args.push("--add-dir".into());
+        args.push(dir.clone());
     }
     args.push("--disable-codebase-ref".into());
     args.push("acp".into());
@@ -768,14 +774,18 @@ mod tests {
 
     #[test]
     fn autonomy_and_model_go_on_argv_before_acp() {
-        let args = |autonomy| build_cursor_spawn_args(&CursorSpawn { model: Some("gpt-5.6-sol-medium".into()), autonomy });
+        let args = |autonomy| {
+            build_cursor_spawn_args(&CursorSpawn { model: Some("gpt-5.6-sol-medium".into()), autonomy, add_dirs: Vec::new() })
+        };
         assert_eq!(args(Autonomy::Full), ["--model", "gpt-5.6-sol-medium", "--force", "--disable-codebase-ref", "acp"]);
         assert_eq!(args(Autonomy::Auto), ["--model", "gpt-5.6-sol-medium", "--auto-review", "--disable-codebase-ref", "acp"]);
         assert_eq!(args(Autonomy::Ask), ["--model", "gpt-5.6-sol-medium", "--disable-codebase-ref", "acp"]);
         assert_eq!(
-            build_cursor_spawn_args(&CursorSpawn { model: None, autonomy: Autonomy::Edits }),
+            build_cursor_spawn_args(&CursorSpawn { model: None, autonomy: Autonomy::Edits, add_dirs: Vec::new() }),
             ["--disable-codebase-ref", "acp"]
         );
+        let folder = CursorSpawn { model: None, autonomy: Autonomy::Ask, add_dirs: vec!["/w/bots/brisa".into()] };
+        assert_eq!(build_cursor_spawn_args(&folder), ["--add-dir", "/w/bots/brisa", "--disable-codebase-ref", "acp"]);
     }
 
     #[test]
