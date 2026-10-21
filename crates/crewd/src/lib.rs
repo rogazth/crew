@@ -30,7 +30,7 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotNotes, BotNotesSet, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
+    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
     NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
     PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
     SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
@@ -455,24 +455,59 @@ impl ToolDispatch {
     }
 }
 
-/// A bot's notes, after writing the user's edit when given. Only a bot has notes.
-fn bot_notes(store: &Store, id: &str, edit: Option<BotNotesSet>) -> Result<BotNotes, String> {
-    use crew_core::notes;
+/// A bot's rules, after writing the user's edit when given. Only a bot has
+/// rules. What the user wrote in the sheet is theirs: it cites no message.
+fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotRules, String> {
+    use crew_core::rules::{self, Change, Source};
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
-    let entries = match edit {
-        Some(BotNotesSet { entries, base, .. }) => {
-            let laid = notes::update(store, &row.id, |current| {
-                let next = match &base {
-                    Some(base) => notes::merge(current, base, &entries),
-                    None => notes::tidy(entries.clone()),
-                };
-                notes::fits(&next).map(|()| next)
-            })?;
-            laid?.1
-        }
-        None => notes::get(store, &row.id)?,
-    };
-    Ok(BotNotes { used: notes::used(&entries) as u32, cap: notes::CAP as u32, entries })
+    if let Some(BotRulesSave { add, edit, remove, .. }) = save {
+        // A rule the bot removed while the sheet was open is not the user's
+        // to edit or remove any more.
+        let there: Vec<i64> = rules::list(store, &row.id)?.into_iter().map(|rule| rule.id).collect();
+        let changes: Vec<Change> = remove
+            .into_iter()
+            .filter(|id| there.contains(id))
+            .map(Change::Remove)
+            .chain(
+                edit.into_iter()
+                    .filter(|edit| there.contains(&edit.id))
+                    .map(|edit| Change::Edit { id: edit.id, body: edit.body }),
+            )
+            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add {
+                body,
+                message_id: None,
+                source: Source::Sheet,
+            }))
+            .collect();
+        rules::apply(store, &row.id, changes)?.map_err(|refused| match refused {
+            rules::Refused::Full { used } => {
+                format!("Rules hold at most {} characters; these are {}.", rules::thousands(rules::CAP), rules::thousands(used))
+            }
+            other => other.say(),
+        })?;
+    }
+    let listed = rules::list(store, &row.id)?;
+    Ok(BotRules {
+        used: rules::used(&listed) as u32,
+        cap: rules::CAP as u32,
+        rules: listed
+            .into_iter()
+            .map(|rule| proto::BotRule {
+                id: rule.id,
+                body: rule.body,
+                cited: rule.cited.map(|cited| proto::CitedMessage { excerpt: excerpt(&cited.text, 160), at: cited.at }),
+            })
+            .collect(),
+    })
+}
+
+/// The start of a message, on one line.
+fn excerpt(text: &str, limit: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.chars().count() > limit {
+        true => format!("{}…", flat.chars().take(limit - 1).collect::<String>().trim_end()),
+        false => flat,
+    }
 }
 
 fn proto_session(row: &crew_core::session::Session) -> proto::Session {
@@ -1412,18 +1447,18 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             Ok(Value::Null)
         }
-        "bot_notes_get" => {
+        "bot_rules_get" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || bot_notes(&store, &id, None)).await?)
+            json(block(move || bot_rules(&store, &id, None)).await?)
         }
-        // The user's edit, every entry at once: the sheet sends what it shows
-        // and what it opened with, so the bot's writes meanwhile survive it.
-        "bot_notes_set" => {
-            let edit: BotNotesSet = parse(params)?;
+        // The user's edit, by id: what the bot wrote meanwhile is another
+        // rule, and stays.
+        "bot_rules_save" => {
+            let save: BotRulesSave = parse(params)?;
             let store = hosts.store.clone();
-            let id = edit.id.clone();
-            json(block(move || bot_notes(&store, &id, Some(edit))).await?)
+            let id = save.id.clone();
+            json(block(move || bot_rules(&store, &id, Some(save))).await?)
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
@@ -2563,33 +2598,57 @@ mod tests {
         handle.shutdown();
     }
 
-    /// What a bot writes with `memory` is what the sheet reads, and the
-    /// user's edit from the sheet is what the bot reads next.
+    /// What a bot writes with `rules` is what the sheet reads, with the
+    /// user's message it cites, and the user's edit from the sheet goes by
+    /// id: the bot's rule written meanwhile stays.
     #[tokio::test]
-    async fn the_bot_sheet_reads_and_writes_the_notes_the_bot_keeps() {
-        let dir = test_dir("bot-notes");
+    async fn the_bot_sheet_reads_and_writes_the_rules_the_bot_keeps() {
+        let dir = test_dir("bot-rules");
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+        handle.turns.transcripts().append_user(&session_id, "nunca\nhagas push a master", false, None, None);
+        // The sheet reads the cited message from the database.
+        handle.turns.transcripts().flush_all();
         let info = bridge.info().expect("info");
-        let payload = serde_json::json!({
-            "token": bridge.mint(&session_id),
-            "method": "tools/call",
-            "params": { "name": "memory", "arguments": { "action": "add", "content": "el item es 7731942" } }
-        });
-        let reply = unix_call(&info.socket_path, &payload);
+        let add = |content: &str| {
+            serde_json::json!({
+                "token": bridge.mint(&session_id),
+                "method": "tools/call",
+                "params": { "name": "rules", "arguments": { "action": "add", "content": content, "from": 1 } }
+            })
+        };
+        let reply = unix_call(&info.socket_path, &add("Never push to master"));
         assert!(reply["result"]["isError"].as_bool() != Some(true), "reply: {reply}");
-        let read = rpc(&mut ws, 50, "bot_notes_get", serde_json::json!({ "id": session_id })).await;
-        let notes: BotNotes = serde_json::from_value(read.result.expect("notes")).expect("notes");
-        assert_eq!(notes, BotNotes { entries: vec!["el item es 7731942".into()], used: 18, cap: 4_000 });
+        let read = rpc(&mut ws, 50, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
+        let rules: BotRules = serde_json::from_value(read.result.expect("rules")).expect("rules");
+        assert_eq!((rules.used, rules.cap, rules.rules.len()), (20, 1_500, 1));
+        let first = rules.rules[0].clone();
+        assert_eq!(first.body, "Never push to master");
+        assert_eq!(first.cited.as_ref().map(|cited| cited.excerpt.as_str()), Some("nunca hagas push a master"));
 
-        let edit = serde_json::json!({ "id": session_id, "entries": ["el item es 7731942 ", "", "comprado"] });
-        let set: BotNotes = serde_json::from_value(rpc(&mut ws, 51, "bot_notes_set", edit).await.result.expect("set")).unwrap();
-        assert_eq!(set.entries, vec!["el item es 7731942", "comprado"]);
-        let again = rpc(&mut ws, 53, "bot_notes_get", serde_json::json!({ "id": session_id })).await;
-        assert_eq!(serde_json::from_value::<BotNotes>(again.result.expect("notes")).unwrap(), set);
-        let over = serde_json::json!({ "id": session_id, "entries": ["x".repeat(4_001)] });
-        assert!(rpc(&mut ws, 52, "bot_notes_set", over).await.result.is_none(), "over the cap");
+        // The bot writes another while the sheet is open; the sheet's save
+        // edits the first and adds one, and the bot's stays.
+        unix_call(&info.socket_path, &add("Run the tests before pushing"));
+        let save = serde_json::json!({
+            "id": session_id,
+            "edit": [{ "id": first.id, "body": "Never push to main" }],
+            "add": ["Ask before deleting a branch", " "]
+        });
+        let saved: BotRules =
+            serde_json::from_value(rpc(&mut ws, 51, "bot_rules_save", save).await.result.expect("saved")).unwrap();
+        let bodies: Vec<&str> = saved.rules.iter().map(|rule| rule.body.as_str()).collect();
+        assert_eq!(bodies, ["Never push to main", "Run the tests before pushing", "Ask before deleting a branch"]);
+        assert!(saved.rules[0].cited.is_some() && saved.rules[2].cited.is_none());
+        let again = rpc(&mut ws, 52, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
+        assert_eq!(serde_json::from_value::<BotRules>(again.result.expect("rules")).unwrap(), saved);
+
+        let removed = serde_json::json!({ "id": session_id, "remove": [first.id, first.id + 100] });
+        let left: BotRules =
+            serde_json::from_value(rpc(&mut ws, 53, "bot_rules_save", removed).await.result.expect("removed")).unwrap();
+        assert_eq!(left.rules.len(), 2);
+        let over = serde_json::json!({ "id": session_id, "add": ["x".repeat(1_501)] });
+        assert!(rpc(&mut ws, 54, "bot_rules_save", over).await.result.is_none(), "over the cap");
         handle.shutdown();
     }
 

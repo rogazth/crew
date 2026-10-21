@@ -350,14 +350,33 @@ function threadMessages({ a, b, before, limit }: Row): Row {
   return { letters: all.slice(start, stop), more: start > 0 };
 }
 
-/** Each bot's notes, as `crew_core::notes` keeps them. */
-const botNotes = new Map<string, string[]>([
-  ["s1", ["The release branch is cut on Thursdays.", "Staging password: in 1Password, vault Crew."]],
+/** Each bot's rules, as `crew_core::rules` keeps them. */
+type MockRule = { id: number; body: string; cited?: { excerpt: string; at: number } };
+const botRules = new Map<string, MockRule[]>([
+  [
+    "s1",
+    [
+      { id: 1, body: "Never push to master.", cited: { excerpt: "nunca hagas push directo a master, abre un PR", at: now - 2 * 86_400_000 } },
+      { id: 2, body: "Run the tests before pushing." },
+    ],
+  ],
 ]);
-function notesOf(id: string) {
-  const entries = botNotes.get(id) ?? [];
-  const used = entries.reduce((sum, entry) => sum + [...entry].length, 0) + 3 * Math.max(0, entries.length - 1);
-  return { entries, used, cap: 4000 };
+let nextRule = 3;
+function rulesOf(id: string) {
+  const rules = botRules.get(id) ?? [];
+  return { rules, used: rules.reduce((sum, rule) => sum + [...rule.body].length, 0), cap: 1500 };
+}
+function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
+  const tidy = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
+  const rules = (botRules.get(String(id)) ?? [])
+    .filter((rule) => !(remove as number[]).includes(rule.id))
+    .map((rule) => {
+      const changed = (edit as { id: number; body: string }[]).find((e) => e.id === rule.id);
+      return changed ? { ...rule, body: tidy(changed.body) } : rule;
+    });
+  for (const body of add as string[]) if (tidy(body)) rules.push({ id: nextRule++, body: tidy(body) });
+  botRules.set(String(id), rules);
+  return rulesOf(String(id));
 }
 
 const commands: Record<string, (args: Row) => unknown> = {
@@ -406,11 +425,8 @@ const commands: Record<string, (args: Row) => unknown> = {
   },
   session_get: ({ id }) => sessions.find((s) => s.id === id) ?? null,
   session_update: ({ id, ...rest }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, rest),
-  bot_notes_get: ({ id }) => notesOf(String(id)),
-  bot_notes_set: ({ id, entries }) => {
-    botNotes.set(String(id), (entries as string[]).map((entry) => entry.trim()).filter(Boolean));
-    return notesOf(String(id));
-  },
+  bot_rules_get: ({ id }) => rulesOf(String(id)),
+  bot_rules_save: saveRules,
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),

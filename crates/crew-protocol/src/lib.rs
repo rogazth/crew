@@ -480,28 +480,62 @@ pub struct SessionUpdate {
     pub autonomy: String,
 }
 
-/// A bot's notes, as the bot sheet shows them: its entries, oldest first,
-/// and the characters they take of the most they may.
+/// A bot's rules, as the bot sheet shows them: each by its id, oldest
+/// first, and the characters they take of the most they may.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BotNotes {
-    pub entries: Vec<String>,
+pub struct BotRules {
+    pub rules: Vec<BotRule>,
     pub used: u32,
     pub cap: u32,
 }
 
-/// `bot_notes_set`: the user's edit of a bot's notes, every entry.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+/// One of a bot's rules: the user's decision about how it works.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BotNotesSet {
-    pub id: String,
-    pub entries: Vec<String>,
-    /// The entries the edit was made from. Given, the edit is laid over the
-    /// notes as they are now, so what the bot wrote meanwhile stays; left
-    /// out, `entries` replaces them.
+pub struct BotRule {
+    /// What the bot names it by, after an `r`: 3 is `r3`.
+    #[ts(type = "number")]
+    pub id: i64,
+    pub body: String,
+    /// The user's message that set it, while the transcript has it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub base: Option<Vec<String>>,
+    pub cited: Option<CitedMessage>,
+}
+
+/// The start of the user's message a rule cites, and when it was written.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct CitedMessage {
+    pub excerpt: String,
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
+/// id, applied whole or not at all. An edit or a removal of a rule the bot
+/// removed meanwhile is dropped.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotRulesSave {
+    pub id: String,
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub edit: Vec<BotRuleEdit>,
+    #[serde(default)]
+    #[ts(type = "Array<number>")]
+    pub remove: Vec<i64>,
+}
+
+/// A rule's new text.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotRuleEdit {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub body: String,
 }
 
 /// What a session's composer changes: its model, effort, service tier and autonomy.

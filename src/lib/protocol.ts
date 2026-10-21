@@ -163,23 +163,6 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
 /**
- * A bot's notes, as the bot sheet shows them: its entries, oldest first,
- * and the characters they take of the most they may.
- */
-export type BotNotes = { entries: Array<string>, used: number, cap: number, };
-
-/**
- * `bot_notes_set`: the user's edit of a bot's notes, every entry.
- */
-export type BotNotesSet = { id: string, entries: Array<string>, 
-/**
- * The entries the edit was made from. Given, the edit is laid over the
- * notes as they are now, so what the bot wrote meanwhile stays; left
- * out, `entries` replaces them.
- */
-base?: Array<string>, };
-
-/**
  * Who wrote a message, when it was not the user. Bots address each other by
  * name; the id is what the UI opens when you click it.
  */
@@ -190,6 +173,37 @@ export type BotRef = { id: string, name: string,
  * who reads the reply in this chat.
  */
 kind?: string, };
+
+/**
+ * One of a bot's rules: the user's decision about how it works.
+ */
+export type BotRule = { 
+/**
+ * What the bot names it by, after an `r`: 3 is `r3`.
+ */
+id: number, body: string, 
+/**
+ * The user's message that set it, while the transcript has it.
+ */
+cited?: CitedMessage, };
+
+/**
+ * A rule's new text.
+ */
+export type BotRuleEdit = { id: number, body: string, };
+
+/**
+ * A bot's rules, as the bot sheet shows them: each by its id, oldest
+ * first, and the characters they take of the most they may.
+ */
+export type BotRules = { rules: Array<BotRule>, used: number, cap: number, };
+
+/**
+ * `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
+ * id, applied whole or not at all. An edit or a removal of a rule the bot
+ * removed meanwhile is dropped.
+ */
+export type BotRulesSave = { id: string, add: Array<string>, edit: Array<BotRuleEdit>, remove: Array<number>, };
 
 /**
  * The host has a `browser-call` and is working on it.
@@ -298,6 +312,11 @@ workspaceId?: string, };
  * A browser tool run as the user, from the window or `crew`.
  */
 export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
+
+/**
+ * The start of the user's message a rule cites, and when it was written.
+ */
+export type CitedMessage = { excerpt: string, at: number, };
 
 /**
  * A session's `/` menu as it stood when it was read.

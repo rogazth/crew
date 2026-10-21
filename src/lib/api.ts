@@ -6,7 +6,8 @@ import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BackgroundList,
   BackgroundOutput,
-  BotNotes,
+  BotRules,
+  BotRulesSave,
   BrowserLeases,
   CommandCatalog,
   CookieRead,
@@ -139,16 +140,15 @@ export const updateSession = (
   },
 ): Promise<void> => client.request("session_update", { id, ...input });
 
-/** A bot's notes: what it keeps for later turns, apart from its description. */
-export const getBotNotes = (id: string): Promise<BotNotes> => client.request("bot_notes_get", { id });
+/** A bot's rules: the user's decisions about how it works, each by id. */
+export const getBotRules = (id: string): Promise<BotRules> => client.request("bot_rules_get", { id });
 
 /**
- * The user's edit of a bot's notes, every entry, made from `base` (what the
- * sheet opened with): laid over the notes as they are now, so what the bot
- * wrote meanwhile stays. Refused over the cap.
+ * The user's edit of a bot's rules, by id: what the bot wrote meanwhile is
+ * another rule and stays. Applied whole or not at all; refused over the cap.
  */
-export const setBotNotes = (id: string, entries: string[], base: string[]): Promise<BotNotes> =>
-  client.request("bot_notes_set", { id, entries, base });
+export const saveBotRules = (id: string, changes: Omit<BotRulesSave, "id">): Promise<BotRules> =>
+  client.request("bot_rules_save", { id, ...changes });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });
