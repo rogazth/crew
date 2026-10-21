@@ -501,13 +501,13 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "rules",
-            description: "Your rules: the decisions the user gave you about how to work, shown to you at the top of every turn with their ids, one short rule per entry (\"Never push to master\", \"Run the tests before pushing\"). add one when the user decides how you should work, with `from`: the block number of the user's message that set it; edit or remove one by its id when the user changes their mind. Nothing else goes here. They hold at most 1,500 characters: a write over that is refused, so merge, shorten or remove rules first.",
+            description: "Your rules: the decisions the user gave you about how to work, shown to you at the top of every turn with their ids, one short rule per entry (\"Never push to master\", \"Run the tests before pushing\"). add one when the user decides how you should work, with `from`: the block number of the user's message that set it; edit or remove one by its id when the user changes their mind (with `from` for the message that changed it). Nothing else goes here. They hold at most 1,500 characters: a write over that is refused, so merge, shorten or remove rules first.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "action": { "type": "string", "enum": ["add", "edit", "remove"] },
                     "content": { "type": "string", "description": "add, edit: the rule." },
-                    "from": { "type": "integer", "description": "add: the block number of the user's message that set it." },
+                    "from": { "type": "integer", "description": "add: the block number of the user's message that set it. edit: of the message that changed it, when one did." },
                     "id": { "type": ["string", "integer"], "description": "edit, remove: the rule's id, e.g. \"r3\"." }
                 },
                 "required": ["action"]
@@ -911,19 +911,26 @@ fn rules(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Va
         }
         .ok_or_else(|| "id is required: the rule's id, e.g. \"r3\".".to_string())
     };
+    // The user's message `from` names, when it is given: one they typed.
+    let cited = || -> Result<Option<String>, String> {
+        let Some(given) = args.get("from").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let from = match given {
+            Value::Number(n) => n.as_i64(),
+            Value::String(text) => text.trim().trim_start_matches('#').parse().ok(),
+            _ => None,
+        }
+        .ok_or_else(|| "from is the block number of the user's message, e.g. 12.".to_string())?;
+        transcripts.read(&caller.id, |blocks| rules::user_message(blocks, from).map(|block| Some(block.id.clone())))
+    };
     let change = match text(args.get("action")).as_deref() {
         Some("add") => {
-            let from = match args.get("from") {
-                Some(Value::Number(n)) => n.as_i64(),
-                Some(Value::String(text)) => text.trim().trim_start_matches('#').parse().ok(),
-                _ => None,
-            }
-            .ok_or_else(|| "from is required: the block number of the user's message that set this rule.".to_string())?;
-            let message_id =
-                transcripts.read(&caller.id, |blocks| rules::user_message(blocks, from).map(|block| block.id.clone()))?;
+            let message_id = cited()?
+                .ok_or_else(|| "from is required: the block number of the user's message that set this rule.".to_string())?;
             Change::Add { body: content, message_id: Some(message_id), source: Source::Bot }
         }
-        Some("edit") => Change::Edit { id: id()?, body: content },
+        Some("edit") => Change::Edit { id: id()?, body: content, message_id: cited()? },
         Some("remove") => Change::Remove(id()?),
         Some(other) => return Err(format!("Unknown action \"{other}\". One of: add, edit, remove")),
         None => return Err("action is required: add, edit or remove.".into()),
@@ -1433,6 +1440,39 @@ mod tests {
                 "Rule removed: \"Never push to main\""
             ]
         );
+    }
+
+    /// The user changes their mind in a later message: an edit with `from`
+    /// cites that one from then on, and `from` must still be the user's.
+    #[test]
+    fn an_edit_cites_the_message_that_changed_the_rule() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let home = bot(&store, &ws, "Home");
+        let run = |args: Value| call(&store, &transcripts, &home, "rules", args).expect("call");
+        transcripts.append_user(&home.id, "corre los tests antes de hacer push", false, None, None);
+        assert_eq!(body(&run(json!({ "action": "add", "content": "Run the tests before pushing", "from": 1 }))), "added r1");
+        // Block 2 is Crew's "Rule added" line; block 3 is the user again.
+        transcripts.append_user(&home.id, "salvo si son solo docs", false, None, None);
+        let blocks = transcripts.read(&home.id, |blocks| blocks.to_vec());
+        assert_eq!(blocks[2].text, "salvo si son solo docs");
+
+        let refused = run(json!({ "action": "edit", "id": "r1", "content": "Run the tests unless docs only", "from": 2 }));
+        assert!(is_error(&refused), "{}", body(&refused));
+        assert!(body(&refused).starts_with("Rules hold the user's decisions, and block 2"), "{}", body(&refused));
+        let rule = crate::rules::list(&store, &home.id).unwrap().remove(0);
+        assert_eq!(
+            (rule.body.as_str(), rule.message_id.as_deref()),
+            ("Run the tests before pushing", Some(blocks[0].id.as_str()))
+        );
+
+        let edited =
+            run(json!({ "action": "edit", "id": "r1", "content": "Run the tests before pushing, unless docs only", "from": 3 }));
+        assert_eq!(body(&edited), "edited r1");
+        let rule = crate::rules::list(&store, &home.id).unwrap().remove(0);
+        assert_eq!(rule.message_id.as_deref(), Some(blocks[2].id.as_str()));
+        assert_eq!(rule.body, "Run the tests before pushing, unless docs only");
     }
 
     /// Rules are a bot's: a terminal is not listed the tool, and the user

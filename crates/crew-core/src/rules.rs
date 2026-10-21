@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS bot_notes (
 ";
 
 /// One row per rule. `number` is the rule's id within its bot (`r3`);
-/// `message_id` is the `messages.id` of the user's message that set it; `source` says who wrote it (see [`Source`]).
+/// `message_id` is the `messages.id` of the user's message that set it, or
+/// last changed it; `source` says who wrote it (see [`Source`]).
 const RULES_TABLE: &str = "
 CREATE TABLE IF NOT EXISTS bot_rules (
   id          INTEGER PRIMARY KEY,
@@ -192,8 +193,18 @@ pub fn tidy(body: &str) -> String {
 /// What a write to the rules does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
-    Add { body: String, message_id: Option<String>, source: Source },
-    Edit { id: i64, body: String },
+    Add {
+        body: String,
+        message_id: Option<String>,
+        source: Source,
+    },
+    /// `message_id`, given, is the user's message that changed the rule: the
+    /// rule cites it from now on.
+    Edit {
+        id: i64,
+        body: String,
+        message_id: Option<String>,
+    },
     Remove(i64),
 }
 
@@ -295,7 +306,7 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             )?;
             Ok(Done::Added(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just added")))
         }
-        Change::Edit { id, body } => {
+        Change::Edit { id, body, message_id } => {
             let body = tidy(&body);
             if body.is_empty() {
                 return Ok(Err(Refused::Asked("content is required: what the rule becomes. To drop it, remove it.".into())));
@@ -303,10 +314,17 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             if let Err(refused) = find(id) {
                 return Ok(Err(refused));
             }
-            conn.execute(
-                "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
-                params![bot_id, id, body, now],
-            )?;
+            match &message_id {
+                Some(message_id) => conn.execute(
+                    "UPDATE bot_rules SET body = ?3, updated_at = ?4, message_id = ?5, source = 'bot'
+                      WHERE bot_id = ?1 AND number = ?2",
+                    params![bot_id, id, body, now, message_id],
+                )?,
+                None => conn.execute(
+                    "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
+                    params![bot_id, id, body, now],
+                )?,
+            };
             Ok(Done::Edited(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just edited")))
         }
         Change::Remove(id) => {
@@ -446,7 +464,8 @@ mod tests {
         let again = apply(&store, &bot, vec![add("Never push to master")]).unwrap().unwrap();
         assert!(matches!(&again[..], [Done::Repeated(rule)] if rule.id == first.id), "{again:?}");
 
-        let edited = apply(&store, &bot, vec![Change::Edit { id: first.id, body: "Never push to main".into() }]);
+        let edited =
+            apply(&store, &bot, vec![Change::Edit { id: first.id, body: "Never push to main".into(), message_id: None }]);
         assert!(matches!(&edited.unwrap().unwrap()[..], [Done::Edited(rule)] if rule.body == "Never push to main"));
         assert_eq!(bodies(&store, &bot), ["Never push to main", "Run the tests before pushing"]);
         let kept = list(&store, &bot).unwrap().remove(0);
@@ -491,6 +510,43 @@ mod tests {
         assert_eq!(bodies(&store, &bot), ["Never push to master", "Ask before deleting a branch"]);
     }
 
+    /// An edit given the message that changed the rule cites that message
+    /// from then on; one without keeps the citation it had.
+    #[test]
+    fn an_edit_from_a_later_message_moves_the_citation() {
+        let (store, bot, _) = store();
+        let (early, late): (i64, i64) = (1_792_000_000_000, 1_792_500_000_000);
+        store
+            .with(|conn| {
+                conn.execute_batch(&format!(
+                    "INSERT INTO messages (session_id, pos, id, role, text, at) VALUES
+                       ('{bot}', 1, 'm1', 'user', 'run the tests before pushing', {early}),
+                       ('{bot}', 2, 'm2', 'user', 'unless it is docs only', {late});"
+                ))
+            })
+            .unwrap();
+        let cited =
+            Change::Add { body: "Run the tests before pushing.".into(), message_id: Some("m1".into()), source: Source::Bot };
+        let rule = added(apply(&store, &bot, vec![cited]));
+        let body = "Run the tests before pushing, unless it is docs only.";
+        apply(&store, &bot, vec![Change::Edit { id: rule.id, body: body.into(), message_id: None }]).unwrap().unwrap();
+        assert_eq!(list(&store, &bot).unwrap()[0].message_id.as_deref(), Some("m1"));
+
+        let moved = Change::Edit { id: rule.id, body: body.into(), message_id: Some("m2".into()) };
+        let done = apply(&store, &bot, vec![moved]).unwrap().unwrap();
+        let [Done::Edited(edited)] = &done[..] else { panic!("{done:?}") };
+        assert_eq!(edited.message_id.as_deref(), Some("m2"));
+        assert_eq!(edited.cited, Some(Cited { text: "unless it is docs only".into(), at: late }));
+        assert_eq!(edited.created_at, rule.created_at);
+        assert_eq!(lines(&list(&store, &bot).unwrap()), format!("[r1] {body} (user, {})", day(late)));
+
+        // A rule the user wrote in the sheet becomes one that cites them.
+        let sheet = added(apply(&store, &bot, vec![add("Ask first.")]));
+        let cite = Change::Edit { id: sheet.id, body: "Ask first.".into(), message_id: Some("m2".into()) };
+        apply(&store, &bot, vec![cite]).unwrap().unwrap();
+        assert_eq!(list(&store, &bot).unwrap()[1].source, Source::Bot);
+    }
+
     /// Over the cap the whole write is refused, and nothing of it is kept.
     #[test]
     fn a_write_over_the_cap_is_refused_whole() {
@@ -517,7 +573,7 @@ mod tests {
             })
             .unwrap();
         assert!(apply(&store, &bot, vec![add("one more")]).unwrap().is_err());
-        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50) };
+        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50), message_id: None };
         assert!(apply(&store, &bot, vec![shorter]).unwrap().is_ok());
     }
 

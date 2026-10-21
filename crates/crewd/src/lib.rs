@@ -469,7 +469,10 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
             .iter()
             .filter_map(|label| known(label))
             .map(Change::Remove)
-            .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
+            .chain(
+                edit.into_iter()
+                    .filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body, message_id: None })),
+            )
             .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add {
                 body,
                 message_id: None,
