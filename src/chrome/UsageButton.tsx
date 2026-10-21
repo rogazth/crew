@@ -1,7 +1,7 @@
 // The providers' plan usage at the rail's foot: a ring per chosen provider (or
-// one with the tightest limit), and a card with every provider's windows, when
-// each resets and, at the current pace, whether it lasts until then. Mounting
-// it also keeps the usage store fed.
+// one with the tightest limit), and a card with each chosen provider's windows,
+// when each resets and, at the current pace, whether it lasts until then.
+// Mounting it also keeps the usage store fed.
 import { Popover } from "@base-ui/react/popover";
 import { ArrowRightIcon, GaugeIcon, RefreshCwIcon } from "lucide-react";
 import { IconButton } from "./kit";
@@ -38,8 +38,10 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
   useUsageSync();
   const rings = useRings();
   const fresh = useFreshness();
-  const readings = useReadings();
+  const all = useReadings();
   const now = useNow();
+  const chosen = shownInOrder(rings);
+  const readings = inOrder(rings, all).filter((reading) => chosen.includes(reading.provider));
   const top = tightest(readings);
   if (readings.length === 0) return null;
   const level = tone(top?.window.used ?? 0);
@@ -71,12 +73,11 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
               />
             </div>
             <div className="flex flex-col gap-1 px-2">
-              {inOrder(rings, readings).map((reading) => (
+              {readings.map((reading) => (
                 <ProviderUsage
                   key={`${reading.provider}|${reading.account ?? ""}`}
                   reading={reading}
                   color={colorOf(rings, reading.provider)}
-                  ring={rings.shown.includes(reading.provider)}
                 />
               ))}
             </div>
@@ -94,7 +95,7 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
   );
 }
 
-function ProviderUsage({ reading, color, ring }: { reading: Reading; color: string; ring: boolean }) {
+function ProviderUsage({ reading, color }: { reading: Reading; color: string }) {
   if (!hasWindows(reading) && reading.tokens === null) {
     return (
       <div className="flex items-center gap-2 rounded-xl px-2 py-2 opacity-55">
@@ -110,7 +111,7 @@ function ProviderUsage({ reading, color, ring }: { reading: Reading; color: stri
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="text-[12.5px] font-medium">{reading.name}</span>
         <span className="text-[11.5px] text-text-muted">{reading.plan}</span>
-        {INDICATOR === "rings" && ring && hasWindows(reading) && (
+        {INDICATOR === "rings" && hasWindows(reading) && (
           <span aria-hidden className="ml-auto size-2 rounded-full" style={{ background: color }} />
         )}
       </div>
