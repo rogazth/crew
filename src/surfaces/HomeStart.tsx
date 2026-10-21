@@ -1,4 +1,5 @@
-import { BotIcon, FolderPlusIcon, GlobeIcon, HouseIcon, MonitorIcon } from "lucide-react";
+import { BotIcon, FolderPlusIcon, GlobeIcon, HouseIcon } from "lucide-react";
+import { machineIcon } from "../chrome/EnvBits";
 import type { AttachedFile } from "../lib/blocks";
 import type { AgentChoice } from "../lib/providers";
 import { Fact, StarterCard as WayCard } from "./chat/SessionIntro";
@@ -35,7 +36,7 @@ export function HomeStart({ firstRun, cwd, onAsk, onOpenFolder, onNewBot, onOpen
           <Fact icon={HouseIcon} title="Runs in your Home folder">
             Home
           </Fact>
-          <Fact icon={MonitorIcon}>This Mac</Fact>
+          <Fact icon={machineIcon(false)}>This Mac</Fact>
         </>
       }
       ways={

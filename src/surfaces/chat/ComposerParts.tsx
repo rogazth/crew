@@ -1,5 +1,5 @@
 // The composer's pieces. Composer.tsx keeps the logic and lays these out: the
-// agent clip over it, the context row, the attach menu, the joined model
+// agent clip over it, the remote badge, the attach menu, the joined model
 // chip, the context ring and the send button that turns into Stop.
 import { Menu } from "@base-ui/react/menu";
 import {
@@ -8,9 +8,9 @@ import {
   ChevronUpIcon,
   GitBranchIcon,
   ImageIcon,
-  MonitorIcon,
   PaperclipIcon,
   PlusIcon,
+  ServerIcon,
   SlashIcon,
   SquareIcon,
 } from "lucide-react";
@@ -114,30 +114,15 @@ export function AgentClip({
   );
 }
 
-/** The context row: the machine, when it is not this one. Mentions are marked in the text itself, never twice. */
-export function ContextRow({
-  where,
-  hidePlace = false,
-  children,
-}: {
-  where: Where;
-  /** The page already says where it runs. */
-  hidePlace?: boolean;
-  children?: ReactNode;
-}) {
-  // Where it runs is the tab's and the sidebar's to say; the row only adds a remote machine.
-  const remote = where.remote && !hidePlace;
-  if (!remote && !children) return null;
+/** The machine a session runs on, at the status line's left, when it is not this one. */
+export function RemoteSegment({ where, hidePlace = false }: { where: Where; hidePlace?: boolean }) {
+  // Where it runs is the tab's and the sidebar's to say; the line only adds a remote machine.
+  if (!where.remote || hidePlace) return null;
   return (
-    <div className="ds-context">
-      {remote && (
-        <span className="ds-tag" title={`Runs on ${where.machine}`}>
-          <MonitorIcon />
-          <span>{where.machine}</span>
-        </span>
-      )}
-      {children}
-    </div>
+    <span className="ds-tag" title={`Runs on ${where.machine}`}>
+      <ServerIcon />
+      <span>{where.machine}</span>
+    </span>
   );
 }
 
@@ -153,10 +138,10 @@ export function WorktreeSegment({ session }: { session: Session }) {
   );
 }
 
-/** The context row for a session's composer: reads where it runs itself, so the shipped composer never asks. */
-export function SessionContextRow({ session, hidePlace = false }: { session: Session; hidePlace?: boolean }) {
+/** The remote badge for a session's status line: reads where it runs itself, so the shipped composer never asks. */
+export function SessionRemoteSegment({ session, hidePlace = false }: { session: Session; hidePlace?: boolean }) {
   const where = useWhere(session);
-  return <ContextRow where={where} hidePlace={hidePlace} />;
+  return <RemoteSegment where={where} hidePlace={hidePlace} />;
 }
 
 /** The plus: attach, mention, command. Each one does what typing would. */

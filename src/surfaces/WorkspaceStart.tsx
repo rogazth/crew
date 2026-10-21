@@ -1,10 +1,11 @@
 // A workspace with no tab open is a new session's first
 // screen: a mark and a line, the composer, then the other ways in. Sending is
 // what creates the session, with the text as its first message.
-import { BotIcon, FileSearchIcon, GlobeIcon, MonitorIcon } from "lucide-react";
+import { BotIcon, FileSearchIcon, GlobeIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
 import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
+import { machineIcon } from "../chrome/EnvBits";
 import type { Opener } from "../chrome/ModelPicker";
 import { useUploads } from "../hooks/useUploads";
 import { useWorkspaceLink } from "../hooks/useEnvLinks";
@@ -330,7 +331,8 @@ export function WorkspaceStart({
   onOpenFile: () => void;
   onOpenBrowser: () => void;
 }) {
-  const machine = useWorkspaceLink(workspaceId)?.name ?? "This Mac";
+  const link = useWorkspaceLink(workspaceId);
+  const machine = link?.name ?? "This Mac";
   const [path, setPath] = useState(defaultPath);
   // Picking another worktree in the sidebar moves the start with it.
   useEffect(() => setPath(defaultPath), [defaultPath]);
@@ -342,7 +344,7 @@ export function WorkspaceStart({
       facts={
         <>
           {place && <WorktreeFact place={place} places={places} onMove={setPath} />}
-          <Fact icon={MonitorIcon}>{machine}</Fact>
+          <Fact icon={machineIcon(link !== null)}>{machine}</Fact>
         </>
       }
       ways={

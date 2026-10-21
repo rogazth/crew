@@ -54,7 +54,7 @@ import {
   AttachMenu,
   ContextRing,
   SendButton,
-  SessionContextRow,
+  SessionRemoteSegment,
   WorktreeSegment,
 } from "./ComposerParts";
 
@@ -429,7 +429,6 @@ export function Composer({
             <QueueChips queue={queue} />
           </div>
         )}
-        <SessionContextRow session={session} hidePlace={centered} />
         {(files.length > 0 || uploads.length > 0) && (
           <div className="px-1.5">
             <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />
@@ -502,6 +501,7 @@ export function Composer({
         </div>
       </form>
       <div data-status-line data-session={session.id} className="ds-status">
+        <SessionRemoteSegment session={session} hidePlace={centered} />
         {!centered && <WorktreeSegment session={session} />}
         {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
         {session.paused && <PausedSegment />}

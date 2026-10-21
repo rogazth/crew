@@ -96,15 +96,7 @@
   transform: translate(-50%, -50%);
 }
 
-/* Where the message goes: the context row, quiet until it matters. */
-.ds-context {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 0 6px;
-}
+/* Where the session runs, when it is another machine: a quiet pill in the status line. */
 .ds-tag {
   display: inline-flex;
   height: 22px;

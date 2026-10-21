@@ -9,7 +9,9 @@ function tone(link: EnvLink | null): string {
   return "text-icon";
 }
 
-/** The machine: a laptop for this Mac, a server for anything on the tailnet. */
+/** The machine's icon: a laptop for this Mac, a server for anything on the tailnet. */
+export const machineIcon = (remote: boolean) => (remote ? ServerIcon : LaptopIcon);
+
 export function EnvGlyph({ link, className = "size-4" }: { link: EnvLink | null; className?: string }) {
   const Glyph = !link || link.id === LOCAL ? LaptopIcon : ServerIcon;
   return <Glyph aria-hidden className={`shrink-0 ${tone(link)} ${className}`} />;

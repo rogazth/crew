@@ -7,12 +7,12 @@ import {
   GitBranchIcon,
   GitCommitHorizontalIcon,
   GitPullRequestIcon,
-  MonitorIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { CrewGlyph } from "../../chrome/CrewGlyph";
+import { machineIcon } from "../../chrome/EnvBits";
 import { defaultModelOf, modelLabel } from "../../lib/providers";
 import type { Session } from "../../lib/types";
 import { usePanePlace, WorktreeFact } from "./panePlace";
@@ -113,7 +113,7 @@ export function IntroHead({ session }: { session: Session }) {
           ) : (
             branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
           )}
-          <Fact icon={MonitorIcon}>{where.machine}</Fact>
+          <Fact icon={machineIcon(where.remote)}>{where.machine}</Fact>
           {modelFact}
         </>
       }
