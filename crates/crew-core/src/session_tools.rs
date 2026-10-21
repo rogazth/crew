@@ -3822,7 +3822,7 @@ time.sleep(600)
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
         assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
 
-        for (provider, head) in [("cursor", "Cursor reads")] {
+        for (provider, head) in [("cursor", "Cursor reads"), ("grok", "Grok reads")] {
             let id = session::create(
                 w.turns.store(),
                 w.workspace.clone(),
@@ -8398,6 +8398,30 @@ time.sleep(600)
         w.settle(&id);
         assert_ne!(w.live_pid(&id), pid, "the model change kept the process");
         assert!(report.to_lowercase().contains("mango"), "the session was not loaded: {report:?}");
+    }
+
+    /// One real `grok agent stdio` turn, then a second on the same process.
+    /// Needs `grok` logged in. Does nothing unless `GROK_LIVE=1`, so
+    /// `--ignored` does not spend a call by accident.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok`
+    #[test]
+    #[ignore]
+    fn live_grok_two_turns_run_on_one_process() {
+        if std::env::var("GROK_LIVE").ok().as_deref() != Some("1") {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
+        let _reap = Reap(&w, id.clone());
+        let report = w.live_say(&parent, &id, "Reply with just the word one.");
+        says_one(&report);
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let report = w.live_say(&parent, &id, "Reply with just the word two.");
+        w.settle(&id);
+        assert!(report.to_lowercase().contains("two"), "the report was: {report:?}");
+        assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
     }
 
     /// Runs the real `codex app-server`: one gpt-5.6-luna turn at low effort

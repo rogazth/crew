@@ -38,6 +38,7 @@ use crate::working_set;
 
 mod codex;
 mod cursor;
+mod grok;
 mod mcp;
 mod opencode;
 mod opencode_server;
@@ -47,6 +48,7 @@ use codex::CodexLive;
 use cursor::CursorLive;
 #[cfg(test)]
 pub(crate) use cursor::{fake_cursor, ACP_NOTE as CURSOR_ACP_NOTE};
+use grok::GrokLive;
 #[cfg(test)]
 pub(crate) use opencode::fake_opencode_server;
 use opencode::OpencodeLive;
@@ -703,6 +705,7 @@ enum Live {
     Claude(Box<ClaudeLive>),
     Codex(Box<CodexLive>),
     Cursor(Box<CursorLive>),
+    Grok(Box<GrokLive>),
     Opencode(Box<OpencodeLive>),
 }
 
@@ -911,9 +914,10 @@ impl TurnHost {
             place,
             harness,
             tools: &tools,
-            // Claude's AskUserQuestion, Codex's user-input requests and
-            // opencode's question forms reach the parent; Cursor offers none.
-            question_tool: matches!(session.provider.as_str(), "claude" | "codex" | "opencode"),
+            // Claude's AskUserQuestion, Codex's user-input requests,
+            // opencode's question forms and Grok's `ask_user_question` reach
+            // the parent. Cursor offers none.
+            question_tool: matches!(session.provider.as_str(), "claude" | "codex" | "opencode" | "grok"),
         }))
     }
 
@@ -1233,6 +1237,7 @@ impl TurnHost {
                 Live::Claude(row) => row.active,
                 Live::Codex(row) => row.active,
                 Live::Cursor(row) => row.active,
+                Live::Grok(row) => row.active,
                 Live::Opencode(row) => row.active,
             });
             if live || !running.insert(params.session_id.clone()) {
@@ -1443,7 +1448,11 @@ impl TurnHost {
             "codex" => self.reload_codex(&session, &cwd)?,
             "opencode" => self.reload_opencode(&session, &cwd)?,
             other => {
-                let name = if other == "cursor" { "Cursor" } else { other };
+                let name = match other {
+                    "cursor" => "Cursor",
+                    "grok" => "Grok",
+                    other => other,
+                };
                 format!("{name} reads its commands and skills again when the session restarts. Use /restart.")
             }
         };
@@ -1531,6 +1540,7 @@ impl TurnHost {
                 Live::Claude(row) => row.active,
                 Live::Codex(row) => row.active,
                 Live::Cursor(row) => row.active,
+                Live::Grok(row) => row.active,
                 Live::Opencode(row) => row.active,
             });
             if active || !turns.insert(session_id.to_string()) {
@@ -1828,6 +1838,7 @@ impl TurnHost {
         let key = (session_id.to_string(), request_id);
         let taken = self.codex_respond(session_id, request_id, decision.clone()).is_some()
             || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
+            || self.grok_respond(session_id, request_id, decision.clone()).is_some()
             || self.opencode_respond(session_id, request_id, decision.clone()).is_some()
             || {
                 let mut map = self.lock();
@@ -1902,6 +1913,7 @@ impl TurnHost {
         let key = (session_id.to_string(), request_id);
         let taken = self.codex_answer(session_id, request_id, answers.clone()).is_some()
             || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
+            || self.grok_answer(session_id, request_id, answers.clone()).is_some()
             || self.opencode_answer(session_id, request_id, answers.clone()).is_some()
             || {
                 let mut map = self.lock();
@@ -1948,6 +1960,7 @@ impl TurnHost {
                     Live::Claude(row) => &mut row.stderr,
                     Live::Codex(row) => &mut row.stderr,
                     Live::Cursor(row) => &mut row.stderr,
+                    Live::Grok(row) => &mut row.stderr,
                     // A binding on the server has no process of its own.
                     Live::Opencode(_) => return,
                 };
@@ -1978,6 +1991,7 @@ impl TurnHost {
             Live::Claude(_) => "Claude Code",
             Live::Codex(_) => "Codex",
             Live::Cursor(_) => "Cursor Agent",
+            Live::Grok(_) => "Grok",
             Live::Opencode(_) => "opencode",
         };
         match live {
@@ -2046,6 +2060,21 @@ impl TurnHost {
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
+            Live::Grok(row) => {
+                row.release();
+                if !row.active {
+                    drop(map);
+                    self.detach(session_id);
+                    return;
+                }
+                if row.cancelled || row.settled {
+                    return;
+                }
+                let stderr = row.stderr.clone();
+                drop(map);
+                self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
+                self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
+            }
             // Its server's exit is the server's (`on_opencode_server_exit`).
             Live::Opencode(_) => {}
         }
@@ -2064,6 +2093,13 @@ impl TurnHost {
                     }
                 }
                 Live::Cursor(row) => {
+                    row.active = false;
+                    row.settled = true;
+                    if let Some(tx) = row.turn_tx.take() {
+                        let _ = tx.send(outcome);
+                    }
+                }
+                Live::Grok(row) => {
                     row.active = false;
                     row.settled = true;
                     if let Some(tx) = row.turn_tx.take() {
@@ -2089,7 +2125,11 @@ impl TurnHost {
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
         // this one. Without a turn to interrupt, it settles here.
-        if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) || self.opencode_interrupt(session_id) {
+        if self.codex_interrupt(session_id)
+            || self.cursor_interrupt(session_id)
+            || self.grok_interrupt(session_id)
+            || self.opencode_interrupt(session_id)
+        {
             return;
         }
         // Claude is interrupted, never told to stop its tasks: `initialize`
@@ -2143,6 +2183,15 @@ impl TurnHost {
                         }
                     }
                     Live::Cursor(row) => {
+                        row.cancelled = true;
+                        row.active = false;
+                        row.settled = true;
+                        row.release();
+                        if let Some(tx) = row.turn_tx.take() {
+                            let _ = tx.send(TurnOutcome::Stopped);
+                        }
+                    }
+                    Live::Grok(row) => {
                         row.cancelled = true;
                         row.active = false;
                         row.settled = true;
@@ -2316,6 +2365,7 @@ impl TurnHost {
             "claude" => self.run_claude(session, params, history),
             "codex" => self.run_codex(session, params, history),
             "cursor" => self.run_cursor(session, params, history),
+            "grok" => self.run_grok(session, params, history),
             "opencode" => self.run_opencode(session, params, history),
             other => TurnOutcome::Failed(format!("{other} agents are not wired up yet. Pick Claude for now.")),
         };
@@ -3264,11 +3314,12 @@ impl TurnHost {
         rest: Vec<Extra>,
     ) -> Result<(), String> {
         // The kind first, out of the lock: `codex_steer` takes it again.
-        let (codex, cursor, opencode) = match self.lock().get(session_id) {
-            Some(Live::Codex(_)) => (true, false, false),
-            Some(Live::Cursor(_)) => (false, true, false),
-            Some(Live::Opencode(_)) => (false, false, true),
-            _ => (false, false, false),
+        let (codex, cursor, opencode, grok) = match self.lock().get(session_id) {
+            Some(Live::Codex(_)) => (true, false, false, false),
+            Some(Live::Cursor(_)) => (false, true, false, false),
+            Some(Live::Opencode(_)) => (false, false, true, false),
+            Some(Live::Grok(_)) => (false, false, false, true),
+            _ => (false, false, false, false),
         };
         if codex {
             return self.codex_steer(session_id, text, from, letter, files, rest);
@@ -3279,6 +3330,9 @@ impl TurnHost {
         if cursor {
             // No `session/steer`, and a second prompt cancels the first.
             return Err("Cursor cannot take a message in the middle of a turn".into());
+        }
+        if grok {
+            return Err("Grok cannot take a message in the middle of a turn".into());
         }
         let typed = session::get(&self.store, session_id.to_string())
             .ok()
@@ -3637,6 +3691,7 @@ impl TurnHost {
                 match map.get(&id) {
                     Some(Live::Codex(live)) => live.active && !live.saw_output && !live.cancelled,
                     Some(Live::Cursor(live)) => live.active && !live.saw_output && !live.cancelled,
+                    Some(Live::Grok(live)) => live.active && !live.saw_output && !live.cancelled,
                     Some(Live::Opencode(live)) => live.active && !live.saw_output && !live.cancelled,
                     _ => false,
                 }
@@ -3659,6 +3714,9 @@ impl TurnHost {
             match map.get_mut(session_id) {
                 Some(Live::Codex(live)) => live.saw_output = true,
                 Some(Live::Cursor(live)) => live.saw_output = true,
+                // Grok's handshake and `available_commands_update` are not the
+                // model speaking. The driver sets this on a real update.
+                Some(Live::Grok(_)) => {}
                 _ => {}
             }
         }
@@ -3668,6 +3726,7 @@ impl TurnHost {
                 Some(Live::Claude(_)) => "claude",
                 Some(Live::Codex(_)) => "codex",
                 Some(Live::Cursor(_)) => "cursor",
+                Some(Live::Grok(_)) => "grok",
                 Some(Live::Opencode(_)) | None => return,
             }
         };
@@ -3675,6 +3734,7 @@ impl TurnHost {
             "claude" => self.handle_claude_line(session_id, line),
             "codex" => self.handle_codex_line(session_id, line),
             "cursor" => self.handle_cursor_line(session_id, line),
+            "grok" => self.handle_grok_line(session_id, line),
             _ => {}
         }
     }
@@ -4524,6 +4584,10 @@ impl TurnHost {
 
     pub(crate) fn test_install_cursor(&self, id: &str) {
         self.lock().insert(id.to_string(), Live::Cursor(Box::new(CursorLive::new(None, Autonomy::Ask))));
+    }
+
+    pub(crate) fn test_install_grok(&self, id: &str) {
+        self.lock().insert(id.to_string(), Live::Grok(Box::new(GrokLive::new(None, Autonomy::Ask))));
     }
 }
 

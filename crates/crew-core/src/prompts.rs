@@ -28,6 +28,9 @@ pub enum Harness {
     /// Cursor lists a server's tools under the server and calls them by their
     /// own name: `send_message` on the MCP server `crew`.
     Cursor,
+    /// Grok reaches an MCP tool through `use_tool`, with `tool_name`
+    /// `crew__send_message` and the arguments in `tool_input`.
+    Grok,
 }
 
 impl Harness {
@@ -35,6 +38,7 @@ impl Harness {
         match provider {
             "opencode" => Harness::Opencode,
             "cursor" => Harness::Cursor,
+            "grok" => Harness::Grok,
             _ => Harness::Mcp,
         }
     }
@@ -45,6 +49,7 @@ impl Harness {
             Harness::Mcp => format!("`mcp__crew__{tool}`"),
             Harness::Opencode => format!("`crew_{tool}`"),
             Harness::Cursor => format!("`{tool}`"),
+            Harness::Grok => format!("`crew__{tool}`"),
         }
     }
 
@@ -54,6 +59,10 @@ impl Harness {
             Harness::Mcp => "Crew's tools come from its `crew` MCP server, and your harness lists them as `mcp__crew__<name>`.",
             Harness::Opencode => "Crew's tools come from its `crew` MCP server, and your harness lists them as `crew_<name>`.",
             Harness::Cursor => "Crew's tools are the tools of the MCP server `crew`, called by their own names.",
+            Harness::Grok => {
+                "Crew's tools come from its `crew` MCP server. Call one with `use_tool`: `tool_name` is `crew__<name>` \
+                 and `tool_input` is the arguments."
+            }
         }
     }
 }
@@ -69,7 +78,7 @@ impl Harness {
                 "Some of them, such as the process, browser and routine tools, are listed by name only until you load \
                  them with your tool search: search for one before calling it, and before deciding it is unavailable."
             }
-            Harness::Opencode | Harness::Cursor => "",
+            Harness::Opencode | Harness::Cursor | Harness::Grok => "",
         }
     }
 }
@@ -501,7 +510,7 @@ mod tests {
         session(&Session { parent, place: PLACE, harness, tools, question_tool })
     }
 
-    const HARNESSES: [Harness; 3] = [Harness::Mcp, Harness::Opencode, Harness::Cursor];
+    const HARNESSES: [Harness; 4] = [Harness::Mcp, Harness::Opencode, Harness::Cursor, Harness::Grok];
 
     /// Each reader is told every tool `tools/list` gives it, spelled the way
     /// its harness lists them, and none it does not have.

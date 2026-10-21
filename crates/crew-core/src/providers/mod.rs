@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod grok;
 pub mod opencode;
 pub mod runtime;
 
@@ -714,7 +715,10 @@ mod tests {
     /// The providers that take the persona in the prompt itself. opencode's
     /// is an instruction entry of its session (`turns/opencode.rs`).
     fn turn_prompts(history: Option<&str>) -> Vec<String> {
-        vec![cursor::build_cursor_prompt(PERSONA, history, "y ahora?", &[])]
+        vec![
+            cursor::build_cursor_prompt(PERSONA, history, "y ahora?", &[]),
+            grok::build_grok_prompt(PERSONA, history, "y ahora?", &[]),
+        ]
     }
 
     /// The bug this replaced: every provider was resumed, so the persona and the
@@ -829,6 +833,7 @@ mod tests {
                 fast: false,
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
+            grok::build_grok_spawn_args(&Autonomy::Ask),
         ];
         for args in runs {
             for arg in &args {
@@ -840,6 +845,9 @@ mod tests {
         assert!(params.get("threadId").is_none(), "{params}");
         let (method, params) = cursor::session_request("/w", None, &serde_json::json!([]));
         assert_eq!(method, "session/new", "{params}");
+        let (method, params) = grok::session_request("/w", None, &serde_json::json!([]));
+        assert_eq!(method, "session/new", "{params}");
+        assert!(params.get("sessionId").is_none(), "{params}");
     }
 
     /// A child session is the opposite case: it is its provider's own
@@ -871,6 +879,12 @@ mod tests {
         let (method, cursor) = cursor::session_request("/w", Some("acp-1"), &serde_json::json!([]));
         assert_eq!(method, "session/load", "{cursor}");
         assert_eq!(cursor["sessionId"], "acp-1", "{cursor}");
+
+        let (method, grok) = grok::session_request("/w", Some("grok-1"), &serde_json::json!([]));
+        assert_eq!(method, "session/load", "{grok}");
+        assert_eq!(grok["sessionId"], "grok-1", "{grok}");
+        let (method, grok) = grok::session_request("/w", None, &serde_json::json!([]));
+        assert_eq!(method, "session/new", "{grok}");
     }
 
     /// A message row, once its call answers, names the letter it made and

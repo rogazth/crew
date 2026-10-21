@@ -14,6 +14,8 @@
 //!   in the browser, and a reconnect is `experimental/mcp/{name}/connect`. See
 //!   `turns/opencode.rs`.
 //! - Cursor does not say what its servers are: it is not `reported`.
+//! - Grok says so on its own channel (`_x.ai/mcp/server_status`) and Crew does
+//!   not read it: a grok session is not `reported` either.
 
 use std::thread;
 use std::time::Duration;
@@ -40,7 +42,7 @@ impl TurnHost {
     /// A session's servers as its provider last said them.
     pub fn mcp_list(&self, session_id: &str) -> Result<McpStatus, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
-        if session.provider == "cursor" {
+        if session.provider == "cursor" || session.provider == "grok" {
             return Ok(McpStatus { servers: Vec::new(), reported: false });
         }
         Ok(self.mcp_status.list(session_id))
@@ -65,6 +67,7 @@ impl TurnHost {
                 self.opencode_mcp_login(&cwd, name).map(|url| McpSignIn::Url { url })
             }
             "cursor" => Err("Cursor does not report its servers, so Crew cannot sign in to them.".into()),
+            "grok" => Err("Grok does not report its servers, so Crew cannot sign in to them.".into()),
             other => Err(format!("Crew does not sign in to {other}'s servers yet.")),
         }
     }
@@ -93,6 +96,7 @@ impl TurnHost {
                 self.opencode_read_mcp(&cwd, session_id)?;
             }
             "cursor" => return Err("Cursor does not report its servers, so Crew cannot reconnect them.".into()),
+            "grok" => return Err("Grok does not report its servers, so Crew cannot reconnect them.".into()),
             other => return Err(format!("Crew does not reconnect {other}'s servers yet.")),
         }
         Ok(self.mcp_status.list(session_id))

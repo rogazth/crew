@@ -1,0 +1,17 @@
+{"_fixture":"grok 1.0.62 agent stdio","image":"an ACP image block is accepted (stopReason end_turn) and the model does not see the pixels: a red PNG was called green. The same file read with read_file was called red. Attachments are paths."}
+{"method":"initialize","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":false,"audio":false,"embeddedContext":true},"mcpCapabilities":{"http":true,"sse":true},"sessionCapabilities":{"list":{},"resume":{},"close":{}}}}}
+{"method":"session/new","params":{"cwd":"/tmp/work","mcpServers":[{"type":"stdio","name":"crew","command":"crew","args":["--mcp"],"env":[]}],"_meta":{}}}
+{"method":"session/new","resultKeys":["sessionId","models","configOptions","_meta"],"configOptions":["model","reasoning_effort"]}
+{"method":"session/set_config_option","params":{"sessionId":"sid","configId":"model","value":"grok-4.5"}}
+{"method":"session/set_config_option","params":{"sessionId":"sid","configId":"reasoning_effort","value":"low"},"result":{"configOptions":[{"id":"reasoning_effort","currentValue":"low"}]}}
+{"method":"session/update","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"I will run the shell command."}}}
+{"method":"session/update","update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"run_terminal_command","status":"in_progress","rawInput":{"command":"echo hi","description":"say hi"}}}
+{"method":"session/update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","kind":"execute","status":"completed","rawInput":{"variant":"Bash","command":"echo hi","description":"say hi","is_background":false},"rawOutput":{"type":"Bash","output":"hi\n","exit_code":0,"command":"echo hi"}}}
+{"method":"session/update","update":{"sessionUpdate":"tool_call","toolCallId":"call-2","title":"use_tool","status":"pending","rawInput":{"tool_name":"crew__echo","tool_input":{"text":"ping"}}}}
+{"method":"session/update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-2","title":"crew__echo","kind":"other","status":"completed","rawInput":{"variant":"UseTool","tool_name":"crew__echo","tool_input":{"text":"ping"}},"rawOutput":{"type":"MCP","tool_name":"echo","server_name":"crew","output":{"OkayOutput":"echo:ping"}}}}
+{"method":"session/request_permission","params":{"sessionId":"sid","toolCall":{"toolCallId":"call-3","kind":"execute","title":"Execute `printf hi > written.txt`","rawInput":{"variant":"Bash","command":"printf hi > written.txt","description":"Write hi","is_background":false}},"options":[{"kind":"allow_always","optionId":"always-allow","name":"Yes, and don't ask again for bash commands"},{"kind":"allow_once","optionId":"allow-once","name":"Yes, proceed"},{"kind":"reject_once","optionId":"reject-once","name":"No, and tell Grok what to do differently"},{"kind":"reject_always","optionId":"reject-always","name":"No, and don't ask again for this command"}]}}
+{"method":"session/cancel","params":{"sessionId":"sid"}}
+{"method":"session/prompt","result":{"stopReason":"cancelled","_meta":{"cancellationCategory":"MidTurnAbort"}}}
+{"method":"session/load","params":{"sessionId":"sid","cwd":"/tmp/work","mcpServers":[{"type":"stdio","name":"crew","command":"crew","args":["--mcp"],"env":[]}]}}
+{"method":"session/prompt","result":{"stopReason":"end_turn"}}
+{"note":"session/set_mode returns {} for any modeId, including one that does not exist. Duplicate session updates also arrive as _x.ai/session/update and _x.ai/session_notification; only session/update is the turn."}
