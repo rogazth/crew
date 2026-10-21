@@ -19,7 +19,7 @@ use crew_protocol::{ApprovalDecision, Question, QuestionOption, ToolDetail, Tool
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pretty_input, string_field};
+use super::{as_record, clip, crew_label, crew_result_detail, crew_tool_detail, leaf, mcp_label, pretty_input, string_field};
 
 /// The name Crew's MCP server goes by in `session/new`. The model calls its
 /// tools through `use_tool` as `crew__<name>`.
@@ -410,7 +410,13 @@ pub fn tool_detail(tool: &AcpTool, update: &Map<String, Value>) -> Option<ToolDe
     let printed = if terminal { content_text(update.get("content")).filter(|text| !text.trim().is_empty()) } else { None };
     if let Some((server, name, args)) = tool.use_tool() {
         if server == CREW_SERVER {
-            return crew_tool_detail(&format!("mcp__crew__{name}"), &args);
+            let name = format!("mcp__crew__{name}");
+            // The answer names what the call made (the session a delegate
+            // started, the letter it sent), which the row opens.
+            let answer = terminal.then(|| mcp_answer(output).or(printed)).flatten();
+            let failed = tool_end(&status, output) == Some(ToolStatus::Failed);
+            let done = answer.and_then(|answer| crew_result_detail(&name, &args, &answer, failed));
+            return done.or_else(|| crew_tool_detail(&name, &args));
         }
         let from_output = terminal.then(|| output.and_then(|raw| owned_str(raw.get("message")))).flatten();
         return Some(ToolDetail::Mcp { server, tool: name, input: pretty_input(&args), output: printed.or(from_output) });
@@ -429,6 +435,13 @@ pub fn tool_detail(tool: &AcpTool, update: &Map<String, Value>) -> Option<ToolDe
         }
         _ => None,
     }
+}
+
+/// An MCP call's answer in `rawOutput`: `{output: {OkayOutput: "…"}}`, or
+/// the same with the error's variant when it failed.
+fn mcp_answer(raw: Option<&Map<String, Value>>) -> Option<String> {
+    let output = raw?.get("output")?;
+    owned_str(Some(output)).or_else(|| as_record(output)?.values().find_map(|value| owned_str(Some(value))))
 }
 
 /// `_meta["x.ai/tool"]`, where grok names the tool the title does not.
@@ -825,6 +838,38 @@ mod tests {
         assert!(tool_label(&tool).contains("lead"), "{}", tool_label(&tool));
         assert!(matches!(tool_detail(&tool, &Map::new()), Some(ToolDetail::Message { .. })));
         assert!(tool.is_crew());
+    }
+
+    #[test]
+    fn a_finished_delegate_names_the_subagent_it_started() {
+        let mut tool = AcpTool::new("d");
+        tool.merge(
+            &json!({
+                "title": "use_tool",
+                "rawInput": { "tool_name": "crew__delegate", "tool_input": { "name": "lorem", "prompt": "Print lorem ipsum" } }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let answer = json!({ "id": "s-1", "name": "lorem", "letter_id": "L1", "kind": "subagent" }).to_string();
+        let update = json!({
+            "status": "completed",
+            "rawOutput": { "type": "MCP", "tool_name": "delegate", "server_name": "crew", "output": { "OkayOutput": answer } }
+        });
+        let Some(ToolDetail::Message { to_id, to_name, letter_id, what, text, .. }) =
+            tool_detail(&tool, update.as_object().unwrap())
+        else {
+            panic!("message");
+        };
+        assert_eq!((to_id.as_deref(), to_name.as_deref(), letter_id.as_deref()), (Some("s-1"), Some("lorem"), Some("L1")));
+        assert_eq!((what.as_deref(), text.as_str()), (Some("start"), "Print lorem ipsum"));
+        // Still running, it has only what it was asked.
+        let running = json!({ "status": "in_progress" });
+        let Some(ToolDetail::Message { to_id, .. }) = tool_detail(&tool, running.as_object().unwrap()) else {
+            panic!("message");
+        };
+        assert_eq!(to_id, None);
     }
 
     #[test]
