@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crew_protocol::{ApprovalDecision, ApprovalResolution, CommandEntry, HarnessEvent, ToolStatus};
 use serde_json::{json, Map, Value};
@@ -78,6 +78,11 @@ pub(super) struct GrokLive {
     pub(super) turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     pub(super) stderr: Vec<String>,
     pub(super) saw_output: bool,
+    /// `_x.ai/mcp_initialized` has arrived for this process. The prompt waits
+    /// for it: grok answers `session/new` before its MCP servers are connected,
+    /// and a turn that starts then is told there are no tools.
+    mcp_ready: bool,
+    mcp_wait: Option<mpsc::Sender<()>>,
 }
 
 impl GrokLive {
@@ -107,6 +112,15 @@ impl GrokLive {
             turn_tx,
             stderr: Vec::new(),
             saw_output: false,
+            mcp_ready: false,
+            mcp_wait: None,
+        }
+    }
+
+    fn mark_mcp_ready(&mut self) {
+        self.mcp_ready = true;
+        if let Some(wait) = self.mcp_wait.take() {
+            let _ = wait.send(());
         }
     }
 
@@ -346,7 +360,48 @@ impl TurnHost {
         if let Some(Live::Grok(live)) = self.lock().get_mut(session_id) {
             live.acp_session = Some(acp_session.clone());
         }
+        self.wait_for_mcp(session_id, &servers)?;
         self.grok_prompt(session_id, &acp_session, text, model, effort)
+    }
+
+    /// `session/new` returns before MCP servers finish connecting. The notice
+    /// is `_x.ai/mcp_initialized`. Without it the model is told the session
+    /// has no tools. A server that never reports does not block the turn.
+    fn wait_for_mcp(&self, session_id: &str, servers: &Value) -> Result<(), String> {
+        let expecting = servers.as_array().is_some_and(|rows| !rows.is_empty());
+        if !expecting {
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut map = self.lock();
+            let Some(Live::Grok(live)) = map.get_mut(session_id) else {
+                return Err("Grok is not running.".into());
+            };
+            live.mcp_wait = Some(tx);
+            if live.mcp_ready {
+                live.mcp_wait = None;
+                return Ok(());
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if self.stop_requested(session_id) {
+                return Err("cancelled".into());
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                if let Some(Live::Grok(live)) = self.lock().get_mut(session_id) {
+                    live.mcp_wait = None;
+                }
+                return Ok(());
+            }
+            match rx.recv_timeout(left.min(Duration::from_millis(200))) {
+                Ok(()) => return Ok(()),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err("Grok stopped before its tools were ready.".into()),
+            }
+        }
     }
 
     /// The session is open: the model and the effort are set, then the prompt
@@ -705,6 +760,12 @@ impl TurnHost {
     }
 
     fn grok_notification(&self, session_id: &str, method: &str, params: &Value) {
+        if method == "_x.ai/mcp_initialized" || method == "x.ai/mcp_initialized" {
+            if let Some(Live::Grok(live)) = self.lock().get_mut(session_id) {
+                live.mark_mcp_ready();
+            }
+            return;
+        }
         // A prompt can finish on a notice while `session/prompt` stays open.
         // Both spellings, and a root `turn_completed` with the same id.
         if let Some(signal) = crate::providers::grok::prompt_signal(method, params) {
@@ -1035,7 +1096,17 @@ for line in sys.stdin:
     elif method == "session/new":
         sid = str(uuid.uuid4())
         save(sid, [])
-        out({"id": rid, "result": {"sessionId": sid}})
+        def mcp_ready(sid=sid):
+            if os.path.exists(os.path.join(HERE, "late-mcp")):
+                time.sleep(0.4)
+            log({"method": "_x.ai/mcp_initialized", "sent": True})
+            out({"method": "_x.ai/mcp_initialized", "params": {"sessionId": sid, "mcpToolCount": 1}})
+        if os.path.exists(os.path.join(HERE, "late-mcp")):
+            out({"id": rid, "result": {"sessionId": sid}})
+            threading.Thread(target=mcp_ready, daemon=True).start()
+        else:
+            mcp_ready()
+            out({"id": rid, "result": {"sessionId": sid}})
         update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "compact", "description": "Compact", "input": None}]})
     elif method == "session/load":
         sid = params.get("sessionId")
@@ -1043,6 +1114,7 @@ for line in sys.stdin:
         if convo is None:
             out({"id": rid, "error": {"code": -32602, "message": "Invalid params", "data": {"message": "Session not found"}}})
             continue
+        out({"method": "_x.ai/mcp_initialized", "params": {"sessionId": sid, "mcpToolCount": 1}})
         for turn in convo:
             update(sid, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": turn["user"]}})
             update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": turn["agent"]}})
@@ -1251,6 +1323,28 @@ mod tests {
             blocks.iter().any(|block| block.role == crew_protocol::BlockRole::Reasoning && block.text == "thinking"),
             "{blocks:?}"
         );
+    }
+
+    /// grok answers `session/new` before MCP servers connect. The prompt goes
+    /// out after `_x.ai/mcp_initialized`, not before.
+    #[test]
+    fn the_prompt_waits_until_mcp_tools_are_connected() {
+        let k = Kept::child();
+        std::fs::write(std::path::Path::new(&k.cwd).join("late-mcp"), "").expect("marker");
+        k.say("hi");
+        let log = k.log();
+        let marks: Vec<String> = log
+            .iter()
+            .filter_map(|line| {
+                if line.get("sent").and_then(Value::as_bool) == Some(true) {
+                    return Some("ready".to_string());
+                }
+                line["method"].as_str().map(str::to_string)
+            })
+            .collect();
+        let ready = marks.iter().position(|mark| mark == "ready").expect("the notice");
+        let prompt = marks.iter().position(|mark| mark == "session/prompt").expect("the prompt");
+        assert!(ready < prompt, "{marks:?}");
     }
 
     #[test]
