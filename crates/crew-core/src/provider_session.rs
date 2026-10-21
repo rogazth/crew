@@ -1295,6 +1295,173 @@ fn fast_mode_from(state: Option<&str>, reason: Option<&str>, last: Option<&FastM
     }
 }
 
+#[derive(Clone)]
+struct OpencodeListing {
+    models: Vec<ListedModel>,
+    /// The newest model in the catalogue: what opencode starts on when the
+    /// configured model and the last one used are both gone.
+    default_model: String,
+}
+
+static OPENCODE_MODELS: Mutex<Option<(Instant, OpencodeListing)>> = Mutex::new(None);
+static OPENCODE_LISTING: Mutex<()> = Mutex::new(());
+static OPENCODE_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Lists opencode's models off the caller's thread when its CLI is installed.
+pub fn prewarm_opencode_models() {
+    thread::spawn(|| {
+        if shell_path::resolve("opencode").is_some() {
+            opencode_models();
+        }
+    });
+}
+
+/// Every model `opencode api model.list` offers this account. Empty when the
+/// CLI is missing or fails, and then asked again next time.
+pub fn opencode_models() -> Vec<ListedModel> {
+    opencode_listing().models
+}
+
+fn opencode_listing() -> OpencodeListing {
+    if let Some((at, listing)) = cached_opencode_listing() {
+        if at.elapsed() >= MODELS_TTL && !OPENCODE_REFRESHING.swap(true, Ordering::SeqCst) {
+            thread::spawn(|| {
+                refresh_opencode_models();
+                OPENCODE_REFRESHING.store(false, Ordering::SeqCst);
+            });
+        }
+        return listing;
+    }
+    let _listing = OPENCODE_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    match cached_opencode_listing() {
+        Some((_, listing)) => listing,
+        None => refresh_opencode_models(),
+    }
+}
+
+fn cached_opencode_listing() -> Option<(Instant, OpencodeListing)> {
+    OPENCODE_MODELS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn refresh_opencode_models() -> OpencodeListing {
+    let listing = list_opencode_models().unwrap_or_else(|err| {
+        eprintln!("[models] {err}");
+        OpencodeListing { models: Vec::new(), default_model: String::new() }
+    });
+    if !listing.models.is_empty() {
+        *OPENCODE_MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), listing.clone()));
+    }
+    listing
+}
+
+/// `opencode api model.list`. The catalogue is one JSON value, sometimes
+/// after a line of chatter. A model that does not speak text is left out.
+fn list_opencode_models() -> Result<OpencodeListing, String> {
+    let binary = shell_path::resolve("opencode").ok_or_else(|| "`opencode` was not found on your PATH.".to_string())?;
+    let mut child = Command::new(binary)
+        .args(["api", "model.list"])
+        .env("PATH", shell_path::joined())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("opencode models: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("opencode models: no stdout")?;
+    let reader = thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("opencode models did not answer".into());
+            }
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("opencode models exited with {status}"));
+    }
+    Ok(parse_opencode_models(&out))
+}
+
+/// The newest text model is marked `(default)`, which the client reads as the
+/// fallback. A `-fast` id loses to a standard one released at the same time.
+fn parse_opencode_models(text: &str) -> OpencodeListing {
+    let start = json_start(text);
+    let value: Value = serde_json::from_str(text[start..].trim()).unwrap_or(Value::Null);
+    let rows = value.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut models = Vec::new();
+    let mut newest: Option<(i64, bool, String)> = None;
+    for row in &rows {
+        let Some(model) = listed_opencode_model(row) else { continue };
+        let released = row.pointer("/time/released").and_then(Value::as_i64).unwrap_or(0);
+        let fast = model.id.ends_with("-fast");
+        let better = match &newest {
+            None => true,
+            Some((at, was_fast, _)) => released > *at || (released == *at && *was_fast && !fast),
+        };
+        if better {
+            newest = Some((released, fast, model.id.clone()));
+        }
+        models.push(model);
+    }
+    let default_model = newest.map(|(_, _, id)| id).unwrap_or_default();
+    if let Some(model) = models.iter_mut().find(|model| model.id == default_model) {
+        if !model.label.ends_with(" (default)") {
+            model.label = format!("{} (default)", model.label);
+        }
+    }
+    OpencodeListing { models, default_model }
+}
+
+fn listed_opencode_model(row: &Value) -> Option<ListedModel> {
+    if row.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    if let Some(status) = row.get("status").and_then(Value::as_str) {
+        if status != "active" {
+            return None;
+        }
+    }
+    if let Some(output) = row.pointer("/capabilities/output").and_then(Value::as_array) {
+        if !output.iter().any(|item| item.as_str() == Some("text")) {
+            return None;
+        }
+    }
+    let provider = row.get("providerID").and_then(Value::as_str).unwrap_or("").trim();
+    // `id` is the model a session runs (`gpt-5.6-sol-fast`). `modelID` is the
+    // upstream id several rows share (`gpt-5.6-sol`), so it cannot name the row.
+    let id = row.get("id").or_else(|| row.get("modelID")).and_then(Value::as_str).unwrap_or("").trim();
+    if provider.is_empty() || id.is_empty() || provider.contains('/') {
+        return None;
+    }
+    let label = row.get("name").and_then(Value::as_str).map(str::trim).filter(|label| !label.is_empty()).unwrap_or(id);
+    Some(ListedModel { id: format!("{provider}/{id}"), label: label.to_string(), ..Default::default() })
+}
+
+/// A remembered model that the catalogue still lists. Otherwise the catalogue's
+/// newest, which is what opencode itself falls back to. An empty catalogue
+/// keeps the remembered model: the CLI has not answered yet.
+fn opencode_model_from(selected: &str, listing: &OpencodeListing) -> String {
+    if listing.models.is_empty() {
+        return selected.to_string();
+    }
+    if listing.models.iter().any(|model| model.id == selected) {
+        return selected.to_string();
+    }
+    if !listing.default_model.is_empty() {
+        return listing.default_model.clone();
+    }
+    selected.to_string()
+}
+
 fn opencode_config_file() -> Option<PathBuf> {
     let config = match std::env::var("XDG_CONFIG_HOME") {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
@@ -1347,9 +1514,19 @@ fn file_mtime(path: &Option<PathBuf>) -> Option<SystemTime> {
     path.as_ref().and_then(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok())
 }
 
-/// The model opencode would start on, from its config or its last-used list.
-/// Missing files are Crew's stand-in.
+/// The model opencode would start on: config, then the last one used, then
+/// the newest in the catalogue once that has been read. A remembered model
+/// the catalogue no longer lists is replaced by that newest one.
 pub fn opencode_configured_model() -> String {
+    let selected = opencode_selected_model();
+    match cached_opencode_listing() {
+        Some((_, listing)) if !listing.models.is_empty() => opencode_model_from(&selected, &listing),
+        _ => selected,
+    }
+}
+
+/// Config `model`, else the last entry of `model.json`, else Crew's stand-in.
+fn opencode_selected_model() -> String {
     let config_path = opencode_config_file();
     let state_path = opencode_model_state();
     if config_path.is_none() && state_path.is_none() {
@@ -1740,6 +1917,41 @@ note
         let skip = r#"{"recent":[{"providerID":""},{"modelID":"x"},{"providerID":"opencode","modelID":"mimo-v2.5-free"}]}"#;
         assert_eq!(opencode_selection("", skip).as_deref(), Some("opencode/mimo-v2.5-free"));
         assert!(opencode_selection("", "{}").is_none());
+    }
+
+    /// A model the catalogue dropped is not kept. The newest text model, marked
+    /// on its label, is what a new session runs instead. Image-only rows are not models.
+    #[test]
+    fn opencode_drops_a_model_the_catalogue_no_longer_lists() {
+        let catalog = r#"
+note
+{"data":[
+  {"providerID":"opencode","modelID":"old","name":"Old","status":"active","enabled":true,"time":{"released":1},"capabilities":{"output":["text"]}},
+  {"providerID":"opencode","modelID":"flint","name":"Flint","status":"active","enabled":true,"time":{"released":9},"capabilities":{"output":["text"]}},
+  {"providerID":"openai","id":"gpt-5-fast","modelID":"gpt-5","name":"GPT-5 Fast","status":"active","enabled":true,"time":{"released":9},"capabilities":{"output":["text"]}},
+  {"providerID":"openai","modelID":"gpt-5","name":"GPT-5","status":"active","enabled":true,"time":{"released":9},"capabilities":{"output":["text"]}},
+  {"providerID":"opencode","modelID":"picture","name":"Picture","status":"active","enabled":true,"capabilities":{"output":["image"]}},
+  {"providerID":"opencode","modelID":"retired","name":"Retired","status":"deprecated","enabled":true,"time":{"released":20},"capabilities":{"output":["text"]}}
+]}"#;
+        let listing = parse_opencode_models(catalog);
+        assert_eq!(listing.default_model, "opencode/flint");
+        assert_eq!(
+            listing.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            ["opencode/old", "opencode/flint", "openai/gpt-5-fast", "openai/gpt-5"]
+        );
+        assert_eq!(
+            listing.models.iter().find(|model| model.id == "opencode/flint").map(|model| model.label.as_str()),
+            Some("Flint (default)")
+        );
+        assert_eq!(opencode_model_from("opencode/old", &listing), "opencode/old");
+        assert_eq!(opencode_model_from("opencode/muse-spark-1.3-contributor-free", &listing), "opencode/flint");
+        assert_eq!(opencode_model_from("opencode/flint-40b-free", &listing), "opencode/flint");
+        let empty = OpencodeListing { models: Vec::new(), default_model: String::new() };
+        assert_eq!(
+            opencode_model_from("opencode/muse-spark-1.3-contributor-free", &empty),
+            "opencode/muse-spark-1.3-contributor-free"
+        );
+        assert!(parse_opencode_models("not json").models.is_empty());
     }
 
     #[test]

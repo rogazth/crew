@@ -1,4 +1,4 @@
-import { useImperativeHandle, useState, type Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, ZapIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
@@ -13,6 +13,8 @@ import {
   fastChoice,
   findModel,
   fitChoice,
+  listedModelsVersion,
+  selectedEffort,
   setFast,
   tiersOf,
   type Access,
@@ -41,16 +43,27 @@ type Props = {
 /** The composer's model, effort, speed and access chips, the same in Home and in a chat. A chip opens its menu itself: no chevron. */
 export function ModelControls({ value, onChange, lockProvider = false, openers }: Props) {
   useListedModels(value.provider);
+  const listedAt = listedModelsVersion();
   const fitted = fitChoice(value);
   const efforts = effortsOf(value.provider, value.model);
+  const effort = selectedEffort(value.provider, value.model, fitted.effort);
   const speed = fastChoice(value.provider, value.model);
+  // OpenCode drops models. Once its list is in, a chip still naming one that
+  // left switches to the catalogue's default instead of keeping a dead id.
+  const snapped = useRef("");
+  useEffect(() => {
+    if (value.provider !== "opencode" || !value.model || fitted.model === value.model) return;
+    if (snapped.current === fitted.model) return;
+    snapped.current = fitted.model;
+    onChange(fitted);
+  }, [fitted, listedAt, onChange, value.model, value.provider]);
   return (
     <>
       <ModelPicker
         {...(openers?.model ? { ref: openers.model } : {})}
         trigger="chip"
         provider={value.provider}
-        model={value.model}
+        model={value.provider === "opencode" ? fitted.model : value.model}
         lockProvider={lockProvider}
         onChange={(provider: ProviderId, model) => {
           const next = fitChoice({ ...value, provider, model });
@@ -61,7 +74,7 @@ export function ModelControls({ value, onChange, lockProvider = false, openers }
       {efforts.length > 0 && (
         <EffortPicker
           {...(openers?.effort ? { ref: openers.effort } : {})}
-          value={fitted.effort}
+          value={effort}
           efforts={efforts}
           onChange={(effort) => onChange(fitChoice({ ...value, effort }))}
         />

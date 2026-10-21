@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   choiceForNewSession,
+  defaultModelOf,
   effortsOf,
   fastChoice,
   findModel,
@@ -11,6 +12,7 @@ import {
   PROVIDERS,
   providerOf,
   searchModels,
+  selectedEffort,
   setFast,
   setListedModels,
   splitVariant,
@@ -117,6 +119,37 @@ describe("groupListed", () => {
     expect(models.find((model) => model.id === "composer-2.5")?.tiers).toBeUndefined();
   });
 
+  it("joins a fast model the listing names on its own to the standard one", () => {
+    const models = groupListed([
+      { id: "grok-4.7", label: "Grok 4.7", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+      { id: "grok-4.7-build-fast", label: "Grok 4.7 Fast", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+      { id: "grok-4.6", label: "Grok 4.6", efforts: ["high", "medium", "low"], defaultEffort: "high" },
+    ]);
+    expect(models.map((model) => model.label)).toEqual(["Grok 4.7", "Grok 4.6"]);
+    expect(models[0]).toMatchObject({
+      id: "grok-4.7",
+      label: "Grok 4.7",
+      fastId: "grok-4.7-build-fast",
+      efforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "high",
+    });
+    setListedModels("grok", [
+      { id: "grok-4.7", label: "Grok 4.7", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+      { id: "grok-4.7-build-fast", label: "Grok 4.7 Fast", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "high" },
+    ]);
+    expect(fastChoice("grok", "grok-4.7")).toEqual({ on: false, available: true });
+    expect(fastChoice("grok", "grok-4.7-build-fast")).toEqual({ on: true, available: true });
+    expect(setFast("grok", "grok-4.7", true)).toBe("grok-4.7-build-fast");
+    expect(setFast("grok", "grok-4.7-build-fast", false)).toBe("grok-4.7");
+    expect(fitChoice({ provider: "grok", model: "grok-4.7-build-fast", effort: "low", access: "full" })).toMatchObject({
+      model: "grok-4.7-build-fast",
+      effort: "low",
+    });
+    // The menu shows the model's default while the stored effort stays unset.
+    expect(selectedEffort("grok", "grok-4.7", "")).toBe("high");
+    expect(selectedEffort("grok", "grok-4.7-build-fast", "low")).toBe("low");
+  });
+
   it("leaves a model with one effort, or none, as it is", () => {
     expect(byLabel("Claude Sonnet 4.6 1M Thinking")).toEqual({ id: "claude-4.6-sonnet-medium-thinking", label: "Claude Sonnet 4.6 1M Thinking" });
     expect(byLabel("Composer 2.5")).toEqual({ id: "composer-2.5", label: "Composer 2.5", fastId: "composer-2.5-fast" });
@@ -198,6 +231,18 @@ describe("a provider whose CLI lists its models", () => {
 
   it("does not touch providers that list nothing", () => {
     expect(fitChoice({ provider: "claude", model: "claude-opus-5-5", effort: "", access: "full" }).effort).toBe("high");
+  });
+
+  it("replaces an opencode model the live list dropped with the list's default", () => {
+    setListedModels("opencode", [
+      { id: "opencode/old", label: "Old" },
+      { id: "opencode/flint-40b-free", label: "Flint 40B (default)" },
+    ]);
+    expect(defaultModelOf("opencode")).toBe("opencode/flint-40b-free");
+    expect(fitChoice({ provider: "opencode", model: "opencode/muse-spark-1.3-contributor-free", effort: "", access: "full" }).model).toBe(
+      "opencode/flint-40b-free",
+    );
+    expect(fitChoice({ provider: "opencode", model: "opencode/old", effort: "", access: "full" }).model).toBe("opencode/old");
   });
 });
 

@@ -301,6 +301,7 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     crew_core::shell_path::prewarm();
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
+    crew_core::provider_session::prewarm_opencode_models();
     crew_core::provider_session::prewarm_grok_models();
     crew_core::provider_session::prewarm_claude_fast_mode();
     // Before the hosts: what a crashed `crewd` left running goes first, and

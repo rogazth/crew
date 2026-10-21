@@ -14,7 +14,7 @@ import type { Opener } from "../../chrome/ModelPicker";
 import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
 import { composerHints } from "../../lib/composerHints";
-import { effortsOf, fitChoice, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
+import { effortsOf, fitChoice, selectedEffort, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextEffort } from "../../lib/sessionOptions";
 import {
   completeMention,
@@ -287,7 +287,7 @@ export function Composer({
     if (event.key === "Tab" && event.shiftKey && onOptions) {
       event.preventDefault();
       const fitted = fitChoice(choiceOf(session));
-      const next = nextEffort(fitted.effort, effortsOf(fitted.provider, fitted.model));
+      const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
       if (next) onOptions(fitChoice({ ...fitted, effort: next }));
       return;
     }

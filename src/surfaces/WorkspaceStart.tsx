@@ -11,7 +11,7 @@ import { useUploads } from "../hooks/useUploads";
 import { useWorkspaceLink } from "../hooks/useEnvLinks";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useProjectFiles } from "../hooks/useProjectFiles";
-import { effortsOf, fastChoice, fitChoice, toggledFast, type AgentChoice } from "../lib/providers";
+import { effortsOf, fastChoice, fitChoice, selectedEffort, toggledFast, type AgentChoice } from "../lib/providers";
 import { completeMention, rememberMention } from "../lib/mentions";
 import type { CommandEntry } from "../lib/protocol";
 import { nextEffort } from "../lib/sessionOptions";
@@ -178,7 +178,7 @@ export function StartScreen({
     // ⇧Tab steps the effort levels, as in a session's composer.
     if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
-      const next = nextEffort(fitted.effort, effortsOf(fitted.provider, fitted.model));
+      const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
       if (next) setPicked(fitChoice({ ...fitted, effort: next }));
       return;
     }

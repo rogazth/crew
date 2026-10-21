@@ -162,15 +162,23 @@ export const PROVIDERS: ProviderDef[] = [
     /** opencode's own models, which answer without any login. */
     access: { ask: [], full: ["--auto"] },
     efforts: [],
-    // Its one positional is the project folder.
+    // Its one positional is the project folder. `opencode models` replaces this
+    // stand-in; the first row is the newest free model, opencode's own fallback.
+    listsModels: true,
     cliModel: true,
-    defaultModel: "opencode/ling-3.0-flash-fin-free",
+    defaultModel: "opencode/flint-40b-free",
     models: [
-      { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },
+      { id: "opencode/flint-40b-free", label: "Flint 40B", note: "Free" },
+      { id: "opencode/minimax-m3.1-flash-free", label: "MiniMax M3.1 Flash", note: "Free" },
+      { id: "opencode/nemotron-3.5-super-vl-free", label: "Nemotron 3.5 Super VL", note: "Free" },
+      { id: "opencode/beam-free", label: "Beam", note: "Free" },
+      { id: "opencode/longcat-2.5-preview-free", label: "LongCat 2.5 Preview", note: "Free" },
+      { id: "opencode/mimo-v2.6-flash-free", label: "MiMo v2.6 Flash", note: "Free" },
+      { id: "opencode/deepseek-v4.1-flash-free", label: "DeepSeek V4.1 Flash", note: "Free" },
+      { id: "opencode/glm-5.3-flash-free", label: "GLM 5.3 Flash", note: "Free" },
       { id: "opencode/nemotron-3.5-lightning-free", label: "Nemotron 3.5 Lightning", note: "Free" },
       { id: "opencode/nemotron-3-ultra-free", label: "Nemotron 3 Ultra", note: "Free" },
-      { id: "opencode/mimo-v2.5-free", label: "MiMo v2.5", note: "Free" },
-      { id: "opencode/muse-spark-1.3-contributor-free", label: "Muse Spark 1.3", note: "Free" },
+      { id: "opencode/big-pickle", label: "Big Pickle" },
     ],
   },
   {
@@ -335,9 +343,26 @@ export function toggledFast(value: AgentChoice): AgentChoice | null {
   return fitChoice({ ...fitted, serviceTier: fitted.serviceTier === "fast" ? "" : "fast" });
 }
 
-/** The model a session of this provider runs when none was picked. */
+/** The model a session of this provider runs when none was picked. A live list's marked default wins over the stand-in. */
 export function defaultModelOf(providerId: string): string {
+  if (listed.has(providerId)) {
+    const marked = modelsOf(providerId).find((model) => model.note === "Default");
+    if (marked) return marked.id;
+  }
   return providerOf(providerId)?.defaultModel ?? "";
+}
+
+/**
+ * The effort the chip shows. An unset one takes the model's own default, so
+ * the menu always has a selection. Grok still stores nothing until someone
+ * picks, and the turn leaves the CLI's effort alone.
+ */
+export function selectedEffort(providerId: string, modelId: string, effort: Effort | ""): Effort | "" {
+  const efforts = effortsOf(providerId, modelId);
+  if (effort && efforts.includes(effort)) return effort;
+  const preferred = findModel(providerId, modelId)?.defaultEffort;
+  if (preferred && efforts.includes(preferred)) return preferred;
+  return efforts.at(-1) ?? "";
 }
 
 /** The effort a model thinks at when none was picked: its own, else its provider's, else the most it takes. `cliEffort` leaves it unset so the CLI's default stays. */
@@ -376,7 +401,12 @@ export const accessLabel = (access: string): string => ACCESSES.find((a) => a.id
  * model's default, an access it has no mode for asks.
  */
 export function fitChoice(choice: AgentChoice): AgentChoice {
-  const modelId = choice.model || defaultModelOf(choice.provider);
+  let modelId = choice.model || defaultModelOf(choice.provider);
+  // OpenCode's catalogue moves. Once it has been read, a model that left it
+  // (the last one used, a stand-in that aged out) becomes the catalogue's default.
+  if (choice.provider === "opencode" && listed.has("opencode") && choice.model && !findModel("opencode", choice.model)) {
+    modelId = defaultModelOf("opencode");
+  }
   const access = accessesOf(choice.provider).includes(choice.access) ? choice.access : "ask";
   const found = findModel(choice.provider, modelId);
   const variants = found?.variants;
@@ -538,7 +568,32 @@ export function groupListed(rows: ListedModel[]): Model[] {
     }
   }
   applyListedEfforts(models, rows);
-  return models;
+  return pairNamedFast(models);
+}
+
+/**
+ * A fast run the listing names as its own model ("Grok 4.7 Fast" beside
+ * "Grok 4.7") joins that model, so the Fast toggle switches the id. One the
+ * id already folded (`-fast`) is not here. Two hosts with the same label are
+ * left alone.
+ */
+function pairNamedFast(models: Model[]): Model[] {
+  const drop = new Set<number>();
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i]!;
+    if (drop.has(i) || model.variants || model.fastVariants || model.fastId) continue;
+    if (!model.label.endsWith(" Fast")) continue;
+    const baseLabel = model.label.slice(0, -" Fast".length).trim();
+    if (!baseLabel) continue;
+    const hosts = models.flatMap((other, index) =>
+      index !== i && !drop.has(index) && other.label === baseLabel && !other.fastId && !other.fastVariants ? [index] : [],
+    );
+    const host = hosts.length === 1 ? hosts[0] : undefined;
+    if (host === undefined) continue;
+    models[host]!.fastId = model.id;
+    drop.add(i);
+  }
+  return models.filter((_, index) => !drop.has(index));
 }
 
 /** Efforts a listing names on the model itself, least to most. Cursor's live in the id. */
