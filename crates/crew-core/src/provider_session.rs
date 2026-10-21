@@ -1442,6 +1442,7 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
             cursor_acp_title(&cursor.join("acp-sessions"), id).or_else(|| cursor_title(&cursor.join("chats"), id))
         }
         "opencode" => opencode_title(&opencode_db()?, id),
+        "grok" => grok_title(&grok_home()?.join("sessions"), id),
         _ => None,
     }?;
     let title = title.trim();
@@ -1458,6 +1459,8 @@ pub fn has_conversation(home: Option<&Path>, provider: &str, crew_id: &str, boun
         "claude" => claude_has_turn(&claude_transcript(home, cwd, bound.unwrap_or(crew_id))),
         "cursor" => bound.is_some_and(|id| cursor_has_conversation(&home.join(".cursor/chats"), id)),
         "codex" | "opencode" => bound.is_some(),
+        "grok" => grok_root(Some(home), std::env::var("GROK_HOME").ok().as_deref())
+            .is_some_and(|root| bound.is_some_and(|id| grok_has_conversation(&root.join("sessions"), id))),
         _ => true,
     }
 }
@@ -1573,6 +1576,67 @@ pub fn cursor_transcript(id: &str) -> Option<PathBuf> {
         .into_iter()
         .map(|project| project.join("agent-transcripts").join(id).join(format!("{id}.jsonl")))
         .find(|path| path.is_file())
+}
+
+/// `GROK_HOME` when it is set, otherwise `~/.grok`.
+pub fn grok_home() -> Option<PathBuf> {
+    grok_root(home().as_deref(), std::env::var("GROK_HOME").ok().as_deref())
+}
+
+fn grok_root(user_home: Option<&Path>, override_home: Option<&str>) -> Option<PathBuf> {
+    match override_home {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => Some(user_home?.join(".grok")),
+    }
+}
+
+/// Where grok wrote session `id`'s ACP log.
+///
+/// Sessions sit in `sessions/<cwd>/<id>/`. The id is unique, so either cwd
+/// layout is found by walking the groups.
+pub fn grok_transcript(id: &str) -> Option<PathBuf> {
+    grok_updates(&grok_home()?.join("sessions"), id)
+}
+
+pub(crate) fn grok_updates(sessions: &Path, id: &str) -> Option<PathBuf> {
+    let path = grok_session_dir(sessions, id)?.join("updates.jsonl");
+    path.is_file().then_some(path)
+}
+
+fn grok_session_dir(sessions: &Path, id: &str) -> Option<PathBuf> {
+    if !is_chat_id(id) {
+        return None;
+    }
+    sorted_dirs(sessions).into_iter().find_map(|group| {
+        let dir = group.join(id);
+        dir.is_dir().then_some(dir)
+    })
+}
+
+fn summary_value(dir: &Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(dir.join("summary.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// `generated_title`, then `session_summary`. A blank one is skipped.
+fn summary_title(value: &serde_json::Value) -> Option<String> {
+    ["generated_title", "session_summary"].into_iter().find_map(|key| {
+        let title = value.get(key)?.as_str()?.trim();
+        (!title.is_empty()).then(|| title.to_string())
+    })
+}
+
+/// The name grok shows for the session.
+pub(crate) fn grok_title(sessions: &Path, id: &str) -> Option<String> {
+    summary_title(&summary_value(&grok_session_dir(sessions, id)?)?)
+}
+
+/// A prompt the user submitted. Hooks, bootstrap context, and a background
+/// wake are not a conversation.
+pub(crate) fn grok_has_conversation(sessions: &Path, id: &str) -> bool {
+    let Some(path) = grok_updates(sessions, id) else { return false };
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    BufReader::new(file).lines().map_while(Result::ok).any(|line| crate::session_history::grok::line_has_user_prompt(&line))
 }
 
 fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
@@ -2094,5 +2158,66 @@ time.sleep(600)
         assert!(is_chat_id("5e047119-f117-40d3-9552-3c77cfffe071"));
         assert!(!is_chat_id(""));
         assert!(!is_chat_id("Error: not logged in"));
+    }
+
+    #[test]
+    fn grok_home_follows_grok_home_then_the_user_home() {
+        assert_eq!(grok_root(Some(std::path::Path::new("/home/dev")), None).unwrap(), PathBuf::from("/home/dev/.grok"));
+        assert_eq!(grok_root(Some(std::path::Path::new("/home/dev")), Some("")).unwrap(), PathBuf::from("/home/dev/.grok"));
+        assert_eq!(grok_root(None, Some("/var/grok")).unwrap(), PathBuf::from("/var/grok"));
+        assert!(grok_root(None, None).is_none());
+    }
+
+    /// An encoded cwd and a slug-hash group are the same lookup: the session
+    /// id is the folder under either one.
+    #[test]
+    fn grok_sessions_are_found_under_either_cwd_layout() {
+        let root = temp_dir("grok-sessions");
+        let sessions = root.join("sessions");
+        let encoded = sessions.join("%2Fwork%2Fdemo");
+        let slug = sessions.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0123abcd0123abcd");
+        let encoded_id = "11111111-2222-4333-8444-555555555555";
+        let slug_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let summary_id = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+        let wake_id = "cccccccc-dddd-4eee-8fff-000000000000";
+        std::fs::create_dir_all(encoded.join(encoded_id)).unwrap();
+        std::fs::write(
+            encoded.join(encoded_id).join("updates.jsonl"),
+            concat!(
+                "{\"params\":{\"update\":{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"<user_info>home</user_info>\"}}}}\n",
+                "{\"params\":{\"update\":{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"Read hello.txt\"}}}}\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            encoded.join(encoded_id).join("summary.json"),
+            r#"{"session_summary":"not the title","generated_title":"Read hello.txt"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(slug.join(slug_id)).unwrap();
+        std::fs::write(slug.join(slug_id).join("updates.jsonl"), "{\"sessionUpdate\":\"hook_execution\"}\n").unwrap();
+        std::fs::write(slug.join(slug_id).join("summary.json"), r#"{"generated_title":"   ","session_summary":"Echo hi"}"#)
+            .unwrap();
+        std::fs::create_dir_all(encoded.join(summary_id)).unwrap();
+        std::fs::write(encoded.join(summary_id).join("summary.json"), r#"{"session_summary":"From the summary"}"#).unwrap();
+        std::fs::create_dir_all(encoded.join(wake_id)).unwrap();
+        std::fs::write(
+            encoded.join(wake_id).join("updates.jsonl"),
+            "{\"params\":{\"_meta\":{\"promptId\":\"task-completed-abc\"},\"update\":{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"done\"}}}}\n",
+        )
+        .unwrap();
+
+        assert_eq!(grok_updates(&sessions, encoded_id).unwrap(), encoded.join(encoded_id).join("updates.jsonl"));
+        assert_eq!(grok_updates(&sessions, slug_id).unwrap(), slug.join(slug_id).join("updates.jsonl"));
+        assert!(grok_updates(&sessions, "nope").is_none());
+        assert!(grok_updates(&sessions, "../escape").is_none());
+        assert_eq!(grok_title(&sessions, encoded_id).as_deref(), Some("Read hello.txt"));
+        assert_eq!(grok_title(&sessions, slug_id).as_deref(), Some("Echo hi"));
+        assert_eq!(grok_title(&sessions, summary_id).as_deref(), Some("From the summary"));
+
+        assert!(grok_has_conversation(&sessions, encoded_id));
+        assert!(!grok_has_conversation(&sessions, slug_id), "hooks alone are not a conversation");
+        assert!(!grok_has_conversation(&sessions, wake_id), "a background wake is not a conversation");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

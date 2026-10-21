@@ -8,6 +8,7 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod grok;
 pub mod opencode;
 
 use std::fs::File;
@@ -594,7 +595,7 @@ pub(super) fn apply_stamped(blocks: Vec<Block>, event: HarnessEvent, at_ms: Opti
 }
 
 /// What crewd holds for a chat, whatever the CLI keeps its history in: a
-/// JSONL file (Claude, Codex, Cursor) or a database (opencode).
+/// JSONL file (Claude, Codex, Cursor, Grok) or a database (opencode).
 pub trait SessionHistory: Send {
     /// What changed since the last look, if anything.
     fn poll(&mut self) -> io::Result<Option<Change>>;

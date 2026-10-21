@@ -3,9 +3,9 @@
 //! Up to migration 38 a session in the terminal view had no transcript in
 //! Crew: its chat was read from the provider's file each time (Claude's
 //! `~/.claude/projects/<slug>/<id>.jsonl`, Codex's rollout, opencode's
-//! database, cursor-agent's transcript). Migration 38 made every session a
-//! chat, which reads `messages` only, so those sessions opened empty. This
-//! reads each one's file once and stores what it said.
+//! database, cursor-agent's transcript, grok's `updates.jsonl`). Migration 38
+//! made every session a chat, which reads `messages` only, so those sessions
+//! opened empty. This reads each one's file once and stores what it said.
 //!
 //! It runs at every start and is a no-op once done: a session's history goes
 //! in only ahead of the first block Crew stored for it, and only when that
@@ -24,6 +24,7 @@ use crate::session::{self, Session};
 use crate::session_history::claude::ClaudeDecoder;
 use crate::session_history::codex::{rollout_path, CodexDecoder};
 use crate::session_history::cursor::CursorDecoder;
+use crate::session_history::grok::GrokDecoder;
 use crate::session_history::opencode::OpencodeHistory;
 use crate::session_history::{History, SessionHistory};
 use crate::store::{Store, CURSOR_ACP_NOTE};
@@ -38,6 +39,7 @@ pub struct Sources {
     pub codex_home: Option<PathBuf>,
     pub opencode_db: Option<PathBuf>,
     pub cursor_transcript: fn(&str) -> Option<PathBuf>,
+    pub grok_transcript: fn(&str) -> Option<PathBuf>,
 }
 
 impl Sources {
@@ -48,6 +50,7 @@ impl Sources {
             codex_home: provider_session::codex_home(),
             opencode_db: provider_session::opencode_db(),
             cursor_transcript: provider_session::cursor_transcript,
+            grok_transcript: provider_session::grok_transcript,
         }
     }
 }
@@ -130,6 +133,10 @@ fn read(store: &Store, sources: &Sources, row: &Session) -> Option<Vec<Block>> {
             let path = noted.or(bound).and_then(|id| (sources.cursor_transcript)(&id))?;
             whole(History::open(path, CursorDecoder::default(), PAGE_MESSAGES).ok()?)?
         }
+        "grok" => {
+            let path = (sources.grok_transcript)(&bound?)?;
+            whole(History::open(path, GrokDecoder::default(), PAGE_MESSAGES).ok()?)?
+        }
         _ => return None,
     };
     let blocks = settle_turn(blocks, ToolStatus::Completed);
@@ -177,6 +184,10 @@ mod tests {
         None
     }
 
+    fn no_grok(_: &str) -> Option<PathBuf> {
+        None
+    }
+
     fn stored(store: &Store, id: &str) -> Vec<Block> {
         store.with(|conn| messages::all(conn, id)).expect("messages")
     }
@@ -221,8 +232,13 @@ mod tests {
         since.at = Some(crate::store::now_millis() + 1);
         write(&store, &used.id, &[since.clone()]);
 
-        let sources =
-            Sources { claude_projects: Some(projects), codex_home: None, opencode_db: None, cursor_transcript: no_cursor };
+        let sources = Sources {
+            claude_projects: Some(projects),
+            codex_home: None,
+            opencode_db: None,
+            cursor_transcript: no_cursor,
+            grok_transcript: no_grok,
+        };
         assert_eq!(import_all(&store, &sources).expect("import"), 2);
 
         let history = stored(&store, &old.id);

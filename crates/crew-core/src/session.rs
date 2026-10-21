@@ -1260,7 +1260,8 @@ mod tests {
         let spoken = terminal(&store, &workspace, "codex 2", "codex");
         set_provider_session(&store, spoken.id.clone(), "rollout".into()).expect("bind");
         let open = terminal(&store, &workspace, "codex 3", "codex");
-        let unread = terminal(&store, &workspace, "grok", "grok");
+        // A provider whose files Crew does not read counts as spoken, so it stays.
+        let unread = terminal(&store, &workspace, "other", "other");
         let planner = bot(&store, &workspace, "codex", "ask").expect("bot");
         crate::store::set(
             &store,
