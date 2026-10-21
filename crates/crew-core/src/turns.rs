@@ -717,6 +717,9 @@ pub struct TurnHost {
     bridge: Bridge,
     inner: Arc<Mutex<HashMap<String, Live>>>,
     binaries: Arc<Mutex<HashMap<String, String>>>,
+    /// `crewd` for a live test. The test binary does not speak `--mcp`.
+    #[cfg(test)]
+    mcp_exe: Arc<Mutex<Option<String>>>,
     /// Where Claude keeps its conversations, when not under `$HOME`.
     claude_home: Arc<Mutex<Option<std::path::PathBuf>>>,
     /// Where Cursor keeps its ACP sessions' stores (`~/.cursor/acp-sessions`),
@@ -811,6 +814,8 @@ impl TurnHost {
             bridge,
             inner: Arc::new(Mutex::new(HashMap::new())),
             binaries: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            mcp_exe: Arc::new(Mutex::new(None)),
             claude_home: Arc::new(Mutex::new(None)),
             cursor_acp_sessions: Arc::new(Mutex::new(None)),
             cursor_plugins: Arc::new(Mutex::new(None)),
@@ -927,6 +932,12 @@ impl TurnHost {
 
     pub fn override_binary(&self, name: &str, path: impl Into<String>) {
         self.binaries.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), path.into());
+    }
+
+    /// Crew's MCP server is this binary instead of the one running the tests.
+    #[cfg(test)]
+    pub fn override_mcp_exe(&self, path: impl Into<String>) {
+        *self.mcp_exe.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.into());
     }
 
     /// Look for Cursor's ACP session stores in `dir` instead of
@@ -2356,7 +2367,8 @@ impl TurnHost {
 
     fn mcp(&self) -> Option<(String, Vec<String>)> {
         let info = self.bridge.info().ok()?;
-        Some((info.exe, vec!["--mcp".into()]))
+        let exe = self.mcp_exe.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or(info.exe);
+        Some((exe, vec!["--mcp".into()]))
     }
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {

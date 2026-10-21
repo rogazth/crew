@@ -2641,6 +2641,39 @@ while True:
         fake: String,
     }
 
+    /// The bridge's tool host for a test: the toolbox `world` registers.
+    struct BridgeHost {
+        turns: TurnHost,
+    }
+
+    impl crate::bridge::ToolHost for BridgeHost {
+        fn resolve(&self, bearer: &crate::bridge::Bearer, workspace: Option<&str>) -> Result<Caller, String> {
+            Caller::resolve(self.turns.store(), bearer, workspace)
+        }
+
+        fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String> {
+            let host = crate::tools::Host {
+                store: self.turns.store(),
+                transcripts: self.turns.transcripts(),
+                on_created: &|_| {},
+                on_routines: &|| {},
+                toolbox: &self.turns.toolbox(),
+            };
+            crate::tools::handle(&host, caller, method, params)
+        }
+
+        fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String> {
+            let host = crate::tools::Host {
+                store: self.turns.store(),
+                transcripts: self.turns.transcripts(),
+                on_created: &|_| {},
+                on_routines: &|| {},
+                toolbox: &self.turns.toolbox(),
+            };
+            crate::tools::handle_opencode(&host, caller, method, params)
+        }
+    }
+
     fn world() -> World {
         let turns = TurnHost::test_new();
         turns.test_agents().set_events(Arc::new(Fanout(turns.clone())));
@@ -2670,8 +2703,11 @@ while True:
                 })
             }),
         ));
-        // As the daemon has it: the sheet in a session's prompt names these.
+        // As the daemon has it: the sheet in a session's prompt names these,
+        // and the bridge answers `crew mcp` from the same toolbox. Without the
+        // handler a live CLI is told the server has no tools.
         turns.toolbox().register(tools.clone());
+        turns.test_bridge().set_handler(Arc::new(BridgeHost { turns: turns.clone() }));
         World { turns, tools, workspace, log, made, dir: dir_kept, fake }
     }
 
@@ -7830,6 +7866,9 @@ time.sleep(600)
         /// not yet sent anything.
         fn live_child(&self, parent: &Caller, provider: &str, model: &str, effort: &str, autonomy: &str) -> String {
             self.turns.override_binary(provider, real_binary(provider));
+            if provider == "grok" {
+                self.turns.override_mcp_exe(crewd_for_live_tests());
+            }
             let row = session::create_child(
                 self.turns.store(),
                 self.workspace.clone(),
@@ -7882,6 +7921,147 @@ time.sleep(600)
 
     fn says_one(report: &str) {
         assert!(report.to_lowercase().contains("one"), "the report was: {report:?}");
+    }
+
+    fn grok_live() -> bool {
+        std::env::var("GROK_LIVE").ok().as_deref() == Some("1")
+    }
+
+    /// Kills the process and deletes the grok session it opened.
+    struct GrokReap<'a>(&'a World, String);
+
+    impl Drop for GrokReap<'_> {
+        fn drop(&mut self) {
+            let bound = self.0.row(&self.1).provider_session_id.filter(|id| !id.is_empty());
+            self.0.turns.test_agents().kill(&self.1);
+            let Some(id) = bound else { return };
+            let Some(bin) = crate::shell_path::resolve("grok") else { return };
+            let status = std::process::Command::new(bin)
+                .args(["sessions", "delete", &id])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            if !status.as_ref().is_ok_and(|code| code.success()) {
+                eprintln!("grok sessions delete {id} exited {status:?}");
+            }
+        }
+    }
+
+    /// Prints what grok billed, read before the session is deleted.
+    struct GrokSpend {
+        label: &'static str,
+        session: Option<String>,
+    }
+
+    impl GrokSpend {
+        fn new(label: &'static str) -> Self {
+            Self { label, session: None }
+        }
+
+        fn see(&mut self, w: &World, id: &str) {
+            if self.session.is_none() {
+                self.session = w.row(id).provider_session_id.filter(|value| !value.is_empty());
+            }
+        }
+    }
+
+    impl Drop for GrokSpend {
+        fn drop(&mut self) {
+            let Some(id) = self.session.take() else { return };
+            let Some(path) = crate::provider_session::grok_transcript(&id) else {
+                eprintln!("GROK_LIVE_SPEND {} {id} no-log", self.label);
+                return;
+            };
+            let Ok(text) = std::fs::read_to_string(path) else { return };
+            let mut total = 0.0;
+            for line in text.lines() {
+                let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+                let Some(ticks) = value.pointer("/params/update/usage/costUsdTicks") else { continue };
+                let ticks = ticks.as_f64().or_else(|| ticks.as_u64().map(|n| n as f64)).unwrap_or(0.0);
+                total += ticks / 10_000_000_000.0;
+            }
+            eprintln!("GROK_LIVE_SPEND {} {total:.6}", self.label);
+        }
+    }
+
+    /// The session id is bound before the model answers, so a failed turn
+    /// still has a log to bill and delete.
+    fn live_report(w: &World, parent: &Caller, id: &str, text: &str, spend: &mut GrokSpend) -> String {
+        let sent = w.call(parent, "send_message", json!({ "to": id, "text": text })).expect("send");
+        assert_eq!(sent["delivery"], "started", "{sent}");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while spend.session.is_none() && Instant::now() < deadline {
+            spend.see(w, id);
+            if spend.session.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let out = w.wait(parent, id, json!({ "timeout_s": 180 }));
+        spend.see(w, id);
+        assert_eq!(out["result"], "event", "{out}");
+        let event = &out["sessions"][0];
+        assert_eq!(event["outcome"], "completed", "{out}");
+        event["report"].as_str().unwrap_or_default().to_string()
+    }
+
+    fn live_idle(w: &World, id: &str, spend: &mut GrokSpend) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(180) {
+            spend.see(w, id);
+            let status = w.row(id).status;
+            if !matches!(status.as_str(), "starting" | "working" | "needs-input")
+                && !w.turns.is_running(id)
+                && !w.turns.is_settling(id)
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        panic!("{id} never went idle: {}", w.row(id).status);
+    }
+
+    /// The unit-test binary does not speak `--mcp`. `crewd` from this build does.
+    fn crewd_for_live_tests() -> String {
+        let exe = std::env::current_exe().expect("exe");
+        let crewd = exe.parent().and_then(|deps| deps.parent()).map(|dir| dir.join("crewd")).expect("target dir");
+        assert!(crewd.is_file(), "build crewd before a live grok test: cargo build -p crewd ({crewd:?})");
+        crewd.to_string_lossy().into_owned()
+    }
+
+    fn live_grok_user(w: &World, autonomy: &str) -> Session {
+        w.turns.override_binary("grok", real_binary("grok"));
+        w.turns.override_mcp_exe(crewd_for_live_tests());
+        let mine = w.user_session("grok", "grok-4.5", autonomy);
+        session::set_options(
+            w.turns.store(),
+            mine.id.clone(),
+            "grok-4.5".into(),
+            "low".into(),
+            mine.service_tier,
+            autonomy.into(),
+        )
+        .expect("options");
+        w.row(&mine.id)
+    }
+
+    fn assistant_text(blocks: &[Block]) -> String {
+        blocks.iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text.as_str()).collect()
+    }
+
+    /// An 8×8 solid red PNG. The name must not say the colour.
+    const RED_PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 8, 0, 0, 0, 8, 8, 2, 0, 0, 0, 75, 109, 41, 220, 0,
+        0, 0, 17, 73, 68, 65, 84, 120, 218, 99, 248, 207, 192, 128, 21, 49, 12, 45, 9, 0, 40, 255, 63, 193, 206, 119, 200, 79, 0,
+        0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    fn grok_summary_field(provider_id: &str, key: &str) -> Option<String> {
+        let path = crate::provider_session::grok_transcript(provider_id)?;
+        let text = std::fs::read_to_string(path.parent()?.join("summary.json")).ok()?;
+        let summary: Value = serde_json::from_str(&text).ok()?;
+        summary.get(key).and_then(Value::as_str).map(str::to_string)
     }
 
     /// Runs the real `claude`: two haiku turns of a few tokens each (the
@@ -8413,7 +8593,7 @@ time.sleep(600)
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
-        let _reap = Reap(&w, id.clone());
+        let _reap = GrokReap(&w, id.clone());
         let report = w.live_say(&parent, &id, "Reply with just the word one.");
         says_one(&report);
         w.settle(&id);
@@ -8422,6 +8602,289 @@ time.sleep(600)
         w.settle(&id);
         assert!(report.to_lowercase().contains("two"), "the report was: {report:?}");
         assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
+    }
+
+    /// Crew's MCP server answers a child. The row is the real tool, not the
+    /// `use_tool` wrapper grok calls it through.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_mcp_list_peers`
+    #[test]
+    #[ignore]
+    fn live_grok_mcp_list_peers() {
+        use crew_protocol::ToolDetail;
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
+        let _reap = GrokReap(&w, id.clone());
+        let mut spend = GrokSpend::new("mcp");
+        let report =
+            live_report(&w, &parent, &id, "Call crew__list_peers once. Reply with just the other session's name.", &mut spend);
+        w.settle(&id);
+        let blocks = w.blocks(&id);
+        let tool = blocks
+            .iter()
+            .find_map(|block| {
+                block.tool.as_ref().filter(|tool| tool.name == "mcp__crew__list_peers" && tool.status == ToolStatus::Completed)
+            })
+            .unwrap_or_else(|| {
+                let shown: Vec<String> = blocks
+                    .iter()
+                    .filter_map(|block| block.tool.as_ref().map(|tool| format!("{} {:?}", tool.name, tool.status)))
+                    .collect();
+                panic!("no completed list_peers: {shown:?}");
+            });
+        assert_ne!(tool.name, "use_tool");
+        match &tool.detail {
+            Some(ToolDetail::Crew { verb, targets, text, .. }) => {
+                assert_eq!(verb, "list_peers");
+                assert!(targets.is_empty() && text.is_none(), "the call was not list_peers with no arguments: {tool:?}");
+            }
+            other => panic!("list_peers was not the unwrapped call: {other:?}"),
+        }
+        assert!(report.to_lowercase().contains("shell"), "the report did not reflect list_peers: {report:?}");
+    }
+
+    /// Ask to full relaunches. The new process loads the session, so the word
+    /// from the first turn is still there.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_autonomy_relaunches`
+    #[test]
+    #[ignore]
+    fn live_grok_autonomy_relaunches_and_remembers() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
+        let _reap = GrokReap(&w, id.clone());
+        let mut spend = GrokSpend::new("autonomy");
+        let report = live_report(&w, &parent, &id, "Remember the word mango. Reply with just the word ok.", &mut spend);
+        assert!(report.to_lowercase().contains("ok"), "{report:?}");
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let bound = w.row(&id).provider_session_id.clone();
+        let row = w.row(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "full".into())
+            .expect("options");
+        let report = live_report(&w, &parent, &id, "What word did I ask you to remember? Reply with just the word.", &mut spend);
+        w.settle(&id);
+        assert_ne!(w.live_pid(&id), pid, "full kept the ask process");
+        assert_eq!(w.row(&id).provider_session_id, bound, "the load opened a new grok session");
+        assert!(report.to_lowercase().contains("mango"), "the session was not loaded: {report:?}");
+    }
+
+    /// The model and the effort are set on the process already held.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_effort_change`
+    #[test]
+    #[ignore]
+    fn live_grok_effort_change_keeps_the_process() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
+        let _reap = GrokReap(&w, id.clone());
+        let mut spend = GrokSpend::new("effort");
+        live_report(&w, &parent, &id, "Reply with just the word one.", &mut spend);
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let row = w.row(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, "medium".into(), row.service_tier, row.autonomy)
+            .expect("options");
+        let report = live_report(&w, &parent, &id, "Reply with just the word two.", &mut spend);
+        w.settle(&id);
+        assert!(report.to_lowercase().contains("two"), "{report:?}");
+        assert_eq!(w.live_pid(&id), pid, "the effort change started another process");
+        let bound = w.row(&id).provider_session_id.clone().expect("bound");
+        let mut effort = None;
+        for _ in 0..20 {
+            effort = grok_summary_field(&bound, "reasoning_effort");
+            if effort.as_deref().is_some_and(|value| value.eq_ignore_ascii_case("medium")) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        assert_eq!(effort.as_deref().map(|value| value.to_ascii_lowercase()), Some("medium".into()), "summary.json");
+        let model = grok_summary_field(&bound, "current_model_id").unwrap_or_default();
+        assert!(model.contains("grok-4.5"), "the turn left {model}");
+    }
+
+    /// Ask mode stops a shell on the card. Allow is the same answer the UI
+    /// sends, and the command then runs in the session's folder.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_ask_approval`
+    #[test]
+    #[ignore]
+    fn live_grok_ask_approval_creates_the_file() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "ask");
+        let _reap = GrokReap(&w, id.clone());
+        let mut spend = GrokSpend::new("approval");
+        let sent = w
+            .call(
+                &parent,
+                "send_message",
+                json!({ "to": id, "text": "Run exactly this shell command, then reply with just the word done: printf ok > grok-asked.txt" }),
+            )
+            .expect("send");
+        assert_eq!(sent["delivery"], "started", "{sent}");
+        let asked = w.wait(&parent, &id, json!({ "timeout_s": 180 }));
+        spend.see(&w, &id);
+        assert_eq!(asked["result"], "event", "{asked}");
+        assert_eq!(asked["sessions"][0]["event"], "needs-input", "{asked}");
+        let request = &asked["sessions"][0]["request"];
+        assert_eq!(request["kind"], "approval", "{request}");
+        assert!(request.to_string().contains("grok-asked.txt"), "the approval was not the shell command: {request}");
+        assert_eq!(w.row(&id).status, "needs-input");
+        let card = w.blocks(&id).into_iter().find_map(|block| block.approval).expect("no approval card");
+        assert!(card.decided.is_none(), "the card was already decided: {card:?}");
+        w.turns.respond(&id, request["request_id"].as_u64().expect("request id"), ApprovalDecision::Allow).expect("allow");
+        let done = w.wait(&parent, &id, json!({ "timeout_s": 180 }));
+        assert_eq!(done["sessions"][0]["outcome"], "completed", "{done}");
+        w.settle(&id);
+        let path = w.dir.join("grok-asked.txt");
+        let body = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path:?} missing: {error}"));
+        assert!(body.contains("ok"), "{body:?}");
+    }
+
+    /// A file attached the way the composer attaches one is a path in the
+    /// prompt. The model reads it and names the colour.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_image`
+    #[test]
+    #[ignore]
+    fn live_grok_image_attachment_is_read() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let mine = live_grok_user(&w, "full");
+        let _reap = GrokReap(&w, mine.id.clone());
+        let mut spend = GrokSpend::new("image");
+        let path = w.dir.join("swatch.png");
+        std::fs::write(&path, RED_PNG).expect("png");
+        let file = crew_protocol::AttachedFile {
+            name: "swatch.png".into(),
+            path: path.to_string_lossy().into_owned(),
+            kind: Some(crew_protocol::AttachedFileKind::Image),
+            size: Some(RED_PNG.len() as u64),
+        };
+        let started = w.type_to(&mine, "What colour is the attached image? Reply with one word.", None, Some(vec![file]));
+        assert_eq!(started.delivery.as_deref(), Some("started"));
+        live_idle(&w, &mine.id, &mut spend);
+        let blocks = w.blocks(&mine.id);
+        let attached = blocks.iter().any(|block| {
+            block.role == BlockRole::User
+                && block.files.as_ref().is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|file| file.kind == Some(crew_protocol::AttachedFileKind::Image) && file.name == "swatch.png")
+                })
+        });
+        assert!(attached, "the image was not on the user message: {blocks:?}");
+        let said = assistant_text(&blocks);
+        assert!(said.to_lowercase().contains("red"), "the model did not see the image: {said:?}");
+    }
+
+    /// Stop kills the turn. The next one loads the same grok session and can
+    /// still answer from the turn that finished.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_stop_then_resume`
+    #[test]
+    #[ignore]
+    fn live_grok_stop_then_resume_keeps_the_session() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "grok", "grok-4.5", "low", "full");
+        let _reap = GrokReap(&w, id.clone());
+        let mut spend = GrokSpend::new("stop");
+        let report = live_report(&w, &parent, &id, "Remember the word kiwi. Reply with just the word ok.", &mut spend);
+        assert!(report.to_lowercase().contains("ok"), "{report:?}");
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.clone();
+        let tools_before = w.blocks(&id).iter().filter(|block| block.tool.is_some()).count();
+        let sent = w
+            .call(
+                &parent,
+                "send_message",
+                json!({ "to": id, "text": "Run the shell command sleep 30. Do not reply until it exits." }),
+            )
+            .expect("send");
+        assert_eq!(sent["delivery"], "started", "{sent}");
+        let deadline = Instant::now() + Duration::from_secs(45);
+        while Instant::now() < deadline && w.turns.is_running(&id) {
+            if w.blocks(&id).iter().filter(|block| block.tool.is_some()).count() > tools_before {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(w.turns.is_running(&id), "the turn ended before it could be stopped");
+        let stopped = w.call(&parent, "interrupt_session", json!({ "session": id })).expect("interrupt");
+        assert_eq!(stopped["interrupted"], true, "{stopped}");
+        w.settle(&id);
+        // The stopped turn is its own event. Mark it seen, or the next wait
+        // returns it and never reaches the turn that follows.
+        let ended = w.wait(&parent, &id, json!({ "timeout_s": 30 }));
+        assert_eq!(ended["sessions"][0]["outcome"], "stopped", "{ended}");
+        let report = live_report(&w, &parent, &id, "What word did I ask you to remember? Reply with just the word.", &mut spend);
+        w.settle(&id);
+        assert_eq!(w.row(&id).provider_session_id, bound, "the session id changed");
+        assert!(report.to_lowercase().contains("kiwi"), "the resumed session forgot the first turn: {report:?}");
+    }
+
+    /// The history decoder, on the session's own `updates.jsonl`, shows the
+    /// same user text, assistant text, and tool names the live turn stored.
+    /// `GROK_LIVE=1 cargo test -p crew-core --lib -- --ignored --test-threads=1 live_grok_history_matches`
+    #[test]
+    #[ignore]
+    fn live_grok_history_matches_the_live_transcript() {
+        if !grok_live() {
+            return;
+        }
+        let w = world();
+        let mine = live_grok_user(&w, "full");
+        let _reap = GrokReap(&w, mine.id.clone());
+        let mut spend = GrokSpend::new("history");
+        let prompt = "Run the shell command echo grok-live. Then reply with just the word done.";
+        let started = w.type_to(&mine, prompt, None, None);
+        assert_eq!(started.delivery.as_deref(), Some("started"));
+        live_idle(&w, &mine.id, &mut spend);
+        let live = transcript_view(&w.blocks(&mine.id));
+        let bound = w.row(&mine.id).provider_session_id.clone().expect("bound");
+        let path = crate::provider_session::grok_transcript(&bound).expect("updates.jsonl");
+        let mut history = crate::session_history::History::open(&path, crate::session_history::grok::GrokDecoder::default(), 64)
+            .expect("history");
+        while history.has_earlier() {
+            history.load_earlier(64).expect("earlier");
+        }
+        let decoded = transcript_view(history.blocks());
+        assert_eq!(decoded.0, live.0, "user text");
+        assert_eq!(decoded.1, live.1, "assistant text");
+        assert_eq!(decoded.2, live.2, "tool names");
+        assert!(live.2.iter().any(|name| name == "bash"), "no shell ran: {:?}", live.2);
+        assert!(live.1.to_lowercase().contains("done"), "assistant: {}", live.1);
+        assert_eq!(live.0, prompt);
+    }
+
+    /// User text, assistant text, and tool names, in transcript order.
+    fn transcript_view(blocks: &[Block]) -> (String, String, Vec<String>) {
+        let user = blocks
+            .iter()
+            .filter(|block| block.role == BlockRole::User && block.hidden != Some(true))
+            .map(|block| block.text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let assistant = assistant_text(blocks).trim().to_string();
+        let tools = blocks.iter().filter_map(|block| block.tool.as_ref().map(|tool| tool.name.clone())).collect();
+        (user, assistant, tools)
     }
 
     /// Runs the real `codex app-server`: one gpt-5.6-luna turn at low effort
