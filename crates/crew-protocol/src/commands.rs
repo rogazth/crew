@@ -72,6 +72,11 @@ pub struct SessionRestart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub force: Option<bool>,
+    /// The restart follows a provider's login: its note says so, and the
+    /// sign-in prompt above it is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub signed_in: Option<bool>,
 }
 
 /// Pushed as `commands-changed` when a session's catalog changes. It carries

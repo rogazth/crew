@@ -53,6 +53,9 @@ use grok::GrokLive;
 pub(crate) use opencode::fake_opencode_server;
 use opencode::OpencodeLive;
 
+/// The note a provider's login leaves; the client matches it to retire the sign-in prompt above.
+const SIGNED_IN_NOTE: &str = "Signed in. Send a message to continue.";
+
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1540,6 +1543,16 @@ impl TurnHost {
     /// 2026-10-09), and the binding is let go, taken up again by the next
     /// message. The server itself restarts only from Settings.
     pub fn session_restart(&self, session_id: &str, force: bool) -> Result<(), String> {
+        self.restart(session_id, force, false)
+    }
+
+    /// The restart a provider's login asks for: the CLI lets go of the
+    /// credentials it failed to refresh, and the one note says so.
+    pub fn session_signed_in(&self, session_id: &str) -> Result<(), String> {
+        self.restart(session_id, false, true)
+    }
+
+    fn restart(&self, session_id: &str, force: bool, signed_in: bool) -> Result<(), String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
         let running: Vec<String> = self
             .background
@@ -1577,7 +1590,9 @@ impl TurnHost {
             self.transcripts.append_system(session_id, &note);
             return Ok(());
         }
-        let note = if had {
+        let note = if signed_in {
+            SIGNED_IN_NOTE
+        } else if had {
             "Restarted. The CLI starts again with the next message."
         } else {
             "Nothing was running; the CLI starts with the next message."

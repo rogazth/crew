@@ -9,6 +9,7 @@ import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
 import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
 import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter, UserMessage } from "./Message";
+import { SIGNED_IN_NOTE } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
 
 type Props = {
@@ -21,6 +22,11 @@ type Props = {
   /** Inside a turn's fold: its groups lay their rows out instead of folding again. */
   flat?: boolean;
 };
+
+/** A login's note stands later in the rows: the sign-in prompt at `index` is answered. */
+function signedAfter(rows: Row[], index: number): boolean {
+  return rows.slice(index + 1).some((row) => row.kind === "message" && row.block.role === "system" && row.block.text === SIGNED_IN_NOTE);
+}
 
 /** The transcript's rows, in order. A fold holds rows of its own and draws them the same way. */
 export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false }: Props) {
@@ -135,7 +141,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
             {block.role === "user" ? (
               <UserMessage block={block} />
             ) : block.role === "system" ? (
-              <SystemLine block={block} />
+              <SystemLine block={block} signedIn={signedAfter(rows, index)} />
             ) : (
               <AssistantMessage block={block} />
             )}

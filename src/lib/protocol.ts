@@ -1337,7 +1337,12 @@ serviceTier: string, autonomy: string, };
  * while a turn runs; and while background work runs, unless `force` says it
  * may stop with the process.
  */
-export type SessionRestart = { sessionId: string, force?: boolean, };
+export type SessionRestart = { sessionId: string, force?: boolean, 
+/**
+ * The restart follows a provider's login: its note says so, and the
+ * sign-in prompt above it is done.
+ */
+signedIn?: boolean, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 

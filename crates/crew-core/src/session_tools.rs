@@ -3913,6 +3913,16 @@ time.sleep(600)
         assert!(w.turns.session_restart("nobody", false).is_err());
     }
 
+    /// A login's restart leaves the one note, whether or not a process was held.
+    #[test]
+    fn a_restart_after_sign_in_says_so() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.turns.session_signed_in(&mine.id).expect("restart");
+        assert!(says(&w, &mine.id, "Signed in. Send a message to continue."));
+        assert!(!says(&w, &mine.id, "Nothing was running; the CLI starts with the next message."));
+    }
+
     /// A turn is stopped first: restarting under it would take its process.
     #[test]
     fn a_restart_is_refused_while_a_turn_runs() {

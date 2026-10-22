@@ -249,6 +249,9 @@ export const commandsReload = (sessionId: string): Promise<CommandCatalog> =>
 export const sessionRestart = (sessionId: string, force = false): Promise<void> =>
   client.request("session_restart", force ? { sessionId, force } : { sessionId });
 
+/** Restarts the session's CLI after the provider's login, with the note that says so. */
+export const sessionSignedIn = (sessionId: string): Promise<void> => client.request("session_restart", { sessionId, signedIn: true });
+
 export const turnStart = (params: {
   sessionId: string;
   cwd: string;

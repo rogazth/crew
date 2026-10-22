@@ -1,4 +1,4 @@
-import { sessionRestart } from "./api";
+import { sessionSignedIn } from "./api";
 import { showToast } from "./toasts";
 
 const seen = new Set<string>();
@@ -12,7 +12,7 @@ export function restartAfterSignIn(tabId: string, sessionId: string, code: numbe
   if (seen.has(tabId)) return;
   seen.add(tabId);
   if (code !== 0) return;
-  void sessionRestart(sessionId).catch((error: unknown) => {
+  void sessionSignedIn(sessionId).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     showToast({
       title: "Could not restart the session",

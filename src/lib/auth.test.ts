@@ -12,6 +12,15 @@ describe("isAuthFailure", () => {
     expect(isAuthFailure('OAuth token has been revoked')).toBe(true);
   });
 
+  it("knows the other CLIs' sign-in failures", () => {
+    expect(isAuthFailure("Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.")).toBe(true);
+    expect(isAuthFailure("OAuth refresh token was rejected: invalid_grant")).toBe(true);
+    expect(isAuthFailure("Cursor Agent could not log in (run `cursor-agent login` in a terminal): Authentication required")).toBe(true);
+    expect(isAuthFailure("Authentication required: token expired")).toBe(true);
+    expect(isAuthFailure("Your team sign-in was rejected. It may have expired or lack access. Run `grok login` to sign in again.")).toBe(true);
+    expect(isAuthFailure("Grok did not start: auth refresh failed")).toBe(true);
+  });
+
   it("leaves an ordinary failure alone", () => {
     expect(isAuthFailure("Claude exited with code 1.")).toBe(false);
     expect(isAuthFailure("boom")).toBe(false);
@@ -27,8 +36,9 @@ describe("loginArgv", () => {
     expect(loginArgv("grok", false)).toEqual(["grok", "login"]);
   });
 
-  it("uses grok's device login on a remote machine, where a browser has nowhere to finish", () => {
+  it("uses the device login of grok and codex on a remote machine, where a browser has nowhere to finish", () => {
     expect(loginArgv("grok", true)).toEqual(["grok", "login", "--device-auth"]);
+    expect(loginArgv("codex", true)).toEqual(["codex", "login", "--device-auth"]);
   });
 
   it("has nothing for a provider without a login", () => {

@@ -203,10 +203,10 @@ export const AuthNote = memo(function AuthNote({ block, session }: { block: Bloc
   );
 });
 
-/** A system line. An auth failure asks for a login; anything else is the note it already was. */
-export function SystemLine({ block }: { block: Block }) {
+/** A system line. An auth failure asks for a login, until one has happened; anything else is the note it already was. */
+export function SystemLine({ block, signedIn = false }: { block: Block; signedIn?: boolean }) {
   const session = useChatSession();
-  if (session && isAuthFailure(block.text)) return <AuthNote block={block} session={session} />;
+  if (session && isAuthFailure(block.text)) return signedIn ? null : <AuthNote block={block} session={session} />;
   return <Note block={block} />;
 }
 

@@ -1894,9 +1894,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(block(move || turns.commands_reload(&session_id)).await?)
         }
         "session_restart" => {
-            let proto::SessionRestart { session_id, force } = parse(params)?;
+            let proto::SessionRestart { session_id, force, signed_in } = parse(params)?;
             let turns = hosts.turns.clone();
-            block(move || turns.session_restart(&session_id, force.unwrap_or(false))).await?;
+            block(move || {
+                if signed_in.unwrap_or(false) {
+                    turns.session_signed_in(&session_id)
+                } else {
+                    turns.session_restart(&session_id, force.unwrap_or(false))
+                }
+            })
+            .await?;
             Ok(Value::Null)
         }
         "background_output" => {
