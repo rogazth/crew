@@ -4,9 +4,7 @@ import type { McpServer, McpState, McpStatus } from "./protocol";
 const request = vi.fn();
 const on = vi.fn();
 const onReconnect = vi.fn();
-const announceSignIn = vi.fn();
 vi.mock("./client", () => ({ client: { request, on, onReconnect } }));
-vi.mock("./turnRuntime", () => ({ announceSignIn }));
 
 function server(name: string, state: McpState, extra: Partial<McpServer> = {}): McpServer {
   return { name, state, ...extra };
@@ -34,7 +32,6 @@ beforeEach(() => {
   request.mockReset();
   on.mockReset();
   onReconnect.mockReset();
-  announceSignIn.mockReset();
 });
 
 describe("the chip", () => {
@@ -86,17 +83,6 @@ describe("the sheet's rows", () => {
   });
 });
 
-describe("a server that newly needs a sign-in", () => {
-  it("is one that did not need it before", async () => {
-    const { newlyNeedingSignIn } = await mcp();
-    const was = status(server("a", "needs_auth"), server("b", "connected"));
-    const now = status(server("a", "needs_auth"), server("b", "needs_auth"), server("c", "needs_auth"), server("d", "failed"));
-    expect(newlyNeedingSignIn(was, now)).toEqual(["b", "c"]);
-    expect(newlyNeedingSignIn(undefined, was)).toEqual(["a"]);
-    expect(newlyNeedingSignIn(was, was)).toEqual([]);
-  });
-});
-
 describe("the store", () => {
   it("asks the daemon for a session's servers the first time it is watched", async () => {
     const { subscribeMcp, readMcp } = await mcp();
@@ -108,7 +94,7 @@ describe("the store", () => {
     expect(readMcp("s2")).toBeNull();
   });
 
-  it("keeps the newest push, tells the listener, and announces the servers that now need a sign-in", async () => {
+  it("keeps the newest push and tells the listener", async () => {
     const { subscribeMcp, readMcp } = await mcp();
     request.mockResolvedValue({ servers: [], reported: false });
     const listener = vi.fn();
@@ -117,17 +103,6 @@ describe("the store", () => {
     remote()({ sessionId: "s1", status: status(server("a", "needs_auth"), server("b", "connected")) });
     expect(readMcp("s1")?.servers.map((row) => row.name)).toEqual(["a", "b"]);
     expect(listener).toHaveBeenCalled();
-    expect(announceSignIn).toHaveBeenLastCalledWith("s1", ["a"]);
-    remote()({ sessionId: "s1", status: status(server("a", "needs_auth"), server("b", "needs_auth")) });
-    expect(announceSignIn).toHaveBeenLastCalledWith("s1", ["b"]);
-  });
-
-  it("does not announce a status it only read", async () => {
-    const { subscribeMcp } = await mcp();
-    request.mockResolvedValue(status(server("a", "needs_auth")));
-    subscribeMcp("s1", () => {});
-    await flush();
-    expect(announceSignIn).toHaveBeenCalledTimes(0);
   });
 
   it("does not let a status asked before a push overwrite that push", async () => {

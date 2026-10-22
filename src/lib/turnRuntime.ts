@@ -295,12 +295,6 @@ function announce(id: string, source: NotificationSource, body: string) {
   if (row) announceSession({ id, ...row }, source, body);
 }
 
-/** MCP servers of a session that now wait for the user to sign in: it is news of the kind that needs them. */
-export function announceSignIn(id: string, servers: string[]): void {
-  if (servers.length === 0) return;
-  announce(id, "needs-input", servers.length === 1 ? `${servers[0]} needs you to sign in` : `${servers.length} MCP servers need you to sign in`);
-}
-
 function whenSettled(id: string): Promise<boolean> {
   return new Promise((resolve) => {
     const list = waiters.get(id) ?? [];

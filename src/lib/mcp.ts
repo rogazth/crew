@@ -2,7 +2,6 @@ import { useCallback, useSyncExternalStore } from "react";
 import { mcpReconnect } from "./api";
 import { client } from "./client";
 import type { McpChanged, McpServer, McpState, McpStatus } from "./protocol";
-import { announceSignIn } from "./turnRuntime";
 
 /**
  * Which MCP servers each session has and how they stand (plan decision 20):
@@ -24,10 +23,7 @@ function ensureBridge() {
   hooked = true;
   client.on("mcp-changed", (payload) => {
     const change = payload as McpChanged;
-    // Only a push is news: a status read on opening a window is not.
-    const news = newlyNeedingSignIn(statuses.get(change.sessionId), change.status);
     set(change.sessionId, change.status);
-    announceSignIn(change.sessionId, news);
   });
   client.onReconnect((here = () => true) => {
     for (const id of listeners.keys()) if (here(id)) void fetchStatus(id);
@@ -92,12 +88,6 @@ export function chipLabel(status: McpStatus | null | undefined): string | null {
   if (auth > 0) parts.push(`${auth} ${auth === 1 ? "needs" : "need"} sign-in`);
   if (failed > 0) parts.push(`${failed} failed`);
   return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-/** The names that wait for a sign-in in `next` and did not in `last`. */
-export function newlyNeedingSignIn(last: McpStatus | undefined, next: McpStatus): string[] {
-  const before = new Set(last?.servers.filter((server) => server.state === "needs_auth").map((server) => server.name));
-  return next.servers.filter((server) => server.state === "needs_auth" && !before.has(server.name)).map((server) => server.name);
 }
 
 /** The state as a row says it. */
