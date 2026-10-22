@@ -95,7 +95,9 @@ impl GrokDecoder {
     }
 
     fn words(&mut self, update: &Map<String, Value>, at_ms: Option<i64>, thought: bool, out: &mut Vec<Decoded>) {
-        let Some(text) = chunk_text(update) else { return };
+        // Same cut as the live driver. A message keeps a chunk that is only a
+        // space or a blank line; a thought that is only whitespace is not words.
+        let Some(text) = chunk_text(update).filter(|text| !thought || !text.trim().is_empty()) else { return };
         let said = if thought { HarnessEvent::ReasoningDelta { text } } else { HarnessEvent::MessageDelta { text } };
         out.push(event(at_ms, said));
     }
@@ -207,6 +209,9 @@ fn usage_of(update: &Map<String, Value>) -> TurnUsage {
 fn user_prompt(update: &Map<String, Value>) -> Option<String> {
     let text = chunk_text(update)?;
     let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
     if let Some(body) = user_query_body(trimmed) {
         let body = body.trim();
         return (!body.is_empty()).then(|| body.to_string());
@@ -264,7 +269,7 @@ pub(crate) fn line_has_user_prompt(line: &str) -> bool {
 
 fn chunk_text(update: &Map<String, Value>) -> Option<String> {
     let text = content_text(update.get("content"))?;
-    (!text.trim().is_empty()).then_some(text)
+    (!text.is_empty()).then_some(text)
 }
 
 /// `"sessionUpdate":"<kind>"`. The closing quote keeps `tool_call` from
@@ -485,6 +490,28 @@ mod tests {
         let rows: Vec<&str> = blocks.iter().map(|block| block.text.as_str()).collect();
         assert_eq!(rows, ["Read hello", "ok"]);
         assert!(blocks.iter().all(|block| block.streaming != Some(true)));
+    }
+
+    #[test]
+    fn a_blank_chunk_stays_in_the_reply_and_a_blank_thought_does_not() {
+        let blocks = decode(concat!(
+            r#"{"timestamp":1700000000,"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Read hello"}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000001,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"La puerta"}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000002,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"\n\n"}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000003,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"a las"}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000004,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":" "}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000005,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"9"}}}}"#,
+            "\n",
+            r#"{"timestamp":1700000006,"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"  "}}}}"#,
+            "\n",
+        ));
+        let rows: Vec<&str> = blocks.iter().map(|block| block.text.as_str()).collect();
+        assert_eq!(rows, ["Read hello", "La puerta\n\na las 9"]);
     }
 
     #[test]

@@ -900,20 +900,24 @@ fn end_from(live: &mut GrokLive, answer: &Result<Value, String>) -> (Vec<Harness
 }
 
 fn grok_update(live: &mut GrokLive, update: &Map<String, Value>, events: &mut Vec<HarnessEvent>) {
-    let text = || content_text(update.get("content")).filter(|text| !text.trim().is_empty());
+    // A space or a blank line arrives as its own chunk: the space before a
+    // number, and the blank line under a heading. Dropping it joins the words
+    // on either side. A thought that is only whitespace is encrypted reasoning
+    // and does not count as the model having spoken.
+    let text = |keep_blank: bool| {
+        content_text(update.get("content")).filter(|text| if keep_blank { !text.is_empty() } else { !text.trim().is_empty() })
+    };
     match string_field(Some(update), "sessionUpdate").as_deref() {
         // The prompt's own text, replayed. Not a new message.
         Some("user_message_chunk") => {}
         Some("agent_message_chunk") => {
-            if let Some(text) = text() {
+            if let Some(text) = text(true) {
                 live.saw_output = true;
                 events.push(HarnessEvent::MessageDelta { text });
             }
         }
-        // Readable when grok sends it. An empty chunk is encrypted reasoning,
-        // and it does not count as the model having spoken.
         Some("agent_thought_chunk") => {
-            if let Some(text) = text() {
+            if let Some(text) = text(false) {
                 live.saw_output = true;
                 events.push(HarnessEvent::ReasoningDelta { text });
             }
@@ -1543,8 +1547,37 @@ mod tests {
         })
         .to_string();
         host.on_agent_lines("stdout", "s", vec![thought]);
+        let blank = json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "update": { "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "\n\n" } } }
+        })
+        .to_string();
+        host.on_agent_lines("stdout", "s", vec![blank]);
         let still = matches!(host.lock().get("s"), Some(Live::Grok(live)) if !live.saw_output);
         assert!(still, "an empty thought is not output");
+    }
+
+    #[test]
+    fn a_space_before_a_number_and_a_blank_line_stay_in_the_reply() {
+        let mut live = super::GrokLive::new(None, crate::providers::Autonomy::Ask);
+        let mut events = Vec::new();
+        for text in ["## La puerta", "\n\n", "Crear, cambiar o borrar", " a las", " ", "9"] {
+            let update = json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": text }
+            });
+            super::grok_update(&mut live, update.as_object().expect("update"), &mut events);
+        }
+        let said: String = events
+            .iter()
+            .filter_map(|event| match event {
+                HarnessEvent::MessageDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, "## La puerta\n\nCrear, cambiar o borrar a las 9");
+        assert!(live.saw_output);
     }
 
     /// The same recorded `use_tool` updates, through the live driver and the
