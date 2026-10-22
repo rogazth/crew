@@ -1065,8 +1065,33 @@ pub fn claude_fast_mode_cached() -> Option<FastMode> {
 }
 
 /// Feeds a reading Claude gave on a turn into the same cache. `state` and
-/// `reason` are its `fast_mode_state` and `fast_mode_disabled_reason`.
+/// `reason` are its `fast_mode_state` and `fast_mode_disabled_reason`. A turn
+/// is asked once, so its bare `on` or `off` could be the CLI's stray answer:
+/// it does not show a toggle that is hidden, and one not yet known is left
+/// to the probe, asked again.
 pub fn note_claude_fast_mode(state: Option<&str>, reason: Option<&str>) {
+    let last = claude_fast_mode_cached();
+    if !turn_may_show_fast(state, reason, last.as_ref()) {
+        if last.is_none_or(|mode| mode.availability == FastModeAvailability::Unknown) {
+            refresh_claude_fast_mode_in_background();
+        }
+        return;
+    }
+    note_probed_fast_mode(state, reason);
+}
+
+/// Whether a turn's reading may stand: anything but a bare `on` or `off`
+/// that would show a toggle the last reading does not.
+fn turn_may_show_fast(state: Option<&str>, reason: Option<&str>, last: Option<&FastMode>) -> bool {
+    let bare = state.is_some_and(|state| state != "cooldown") && reason.is_none();
+    let shown =
+        last.is_some_and(|mode| matches!(mode.availability, FastModeAvailability::Available | FastModeAvailability::Cooldown));
+    !bare || shown
+}
+
+/// Takes a reading as it stands into the cache, and tells the listener when
+/// it changes what Crew shows.
+fn note_probed_fast_mode(state: Option<&str>, reason: Option<&str>) {
     let (changed, mode) = {
         let mut cache = CLAUDE_FAST_MODE.lock().unwrap_or_else(|e| e.into_inner());
         let previous = cache.as_ref().map(|(_, mode)| mode.clone());
@@ -1099,9 +1124,9 @@ fn refresh_claude_fast_mode_in_background() {
 }
 
 /// How many times the CLI is asked. It now and then answers `on` with no
-/// reason for an account that cannot use fast mode (2.1.299: one in four), so
+/// reason for an account that cannot use fast mode (2.1.306: one in twelve), so
 /// an `on` is only believed when every answer says so.
-const FAST_MODE_PROBES: usize = 2;
+const FAST_MODE_PROBES: usize = 3;
 
 fn refresh_claude_fast_mode() {
     let Some(binary) = shell_path::resolve("claude") else { return };
@@ -1113,7 +1138,7 @@ fn refresh_claude_fast_mode() {
         }
     }
     if let Some((state, reason)) = believed_fast_mode(answers) {
-        note_claude_fast_mode(state.as_deref(), reason.as_deref());
+        note_probed_fast_mode(state.as_deref(), reason.as_deref());
     }
 }
 
@@ -2057,6 +2082,24 @@ note
         }
         assert_eq!(fast_mode_from(None, None, Some(&hidden("free"))), hidden("free"));
         assert_eq!(fast_mode_from(None, None, None), unknown);
+    }
+
+    /// A turn's bare `on` or `off` keeps a hidden or unknown toggle as it is;
+    /// a refusal, a cooldown, or one over a toggle already shown stands.
+    #[test]
+    fn a_turns_bare_state_does_not_show_a_hidden_toggle() {
+        let available = FastMode { availability: FastModeAvailability::Available, reason: None };
+        let unknown = FastMode { availability: FastModeAvailability::Unknown, reason: None };
+        let hidden = FastMode { availability: FastModeAvailability::Hidden, reason: Some("extra_usage_disabled".into()) };
+        for state in ["on", "off"] {
+            assert!(!turn_may_show_fast(Some(state), None, Some(&hidden)), "{state}");
+            assert!(!turn_may_show_fast(Some(state), None, Some(&unknown)), "{state}");
+            assert!(!turn_may_show_fast(Some(state), None, None), "{state}");
+            assert!(turn_may_show_fast(Some(state), None, Some(&available)), "{state}");
+        }
+        assert!(turn_may_show_fast(Some("cooldown"), None, Some(&hidden)));
+        assert!(turn_may_show_fast(Some("off"), Some("extra_usage_disabled"), Some(&available)));
+        assert!(turn_may_show_fast(Some("off"), Some("sdk_opt_in_required"), Some(&hidden)));
     }
 
     /// An `on` the CLI gave by mistake does not outweigh a refusal.
