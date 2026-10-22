@@ -40,6 +40,16 @@ describe("splitMentions", () => {
   });
 });
 
+describe("splitMentions in an email", () => {
+  it("leaves an at sign inside a word alone", () => {
+    expect(splitMentions("write to prueba@gmail.com")).toEqual([{ kind: "text", text: "write to prueba@gmail.com" }]);
+    expect(splitMentions("@src/a.ts, prueba@gmail.com")).toEqual([
+      { kind: "mention", path: "src/a.ts", text: "@src/a.ts" },
+      { kind: "text", text: ", prueba@gmail.com" },
+    ]);
+  });
+});
+
 describe("mentionedFiles", () => {
   it("resolves in order without repeats", () => {
     expect(mentionedFiles("@README.md then @src/lib/tabs.ts and @README.md", FILES).map((f) => f.name)).toEqual([
