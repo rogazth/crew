@@ -6,41 +6,18 @@ import { CHANNELS, type DownloadAction, type DownloadInfo, type DownloadState } 
 
 /**
  * Every download a page starts, reported to the window that shows the page:
- * where it is, how far along, and what it was saved as. Files go to
- * ~/Downloads under a name nothing there has, unless the person asked to be
- * asked, or chose "Save As…".
+ * where it is, how far along, and what it was saved as. Each one asks where
+ * to go, starting in ~/Downloads under a name nothing there has.
  */
 
 /** How often one download reports its progress, at most. */
 const PROGRESS_MS = 250;
 /** Finished downloads kept for the window's list, oldest dropped first. */
 const KEPT = 100;
-/** A "Save As…" waits this long for the download it asked for. */
-const SAVE_AS_MS = 30_000;
 
 type Entry = { host: WebContents; info: DownloadInfo; item: DownloadItem | null };
 
 const entries = new Map<string, Entry>();
-/** URLs the context menu asked to save with a dialog, by when that stops applying. */
-const saveAs = new Map<string, number>();
-let askWhere = false;
-
-export function setAskWhereToSave(ask: boolean): void {
-  askWhere = ask;
-}
-
-/** The next download of `url` opens a save dialog, whatever the setting says. */
-export function saveNextAs(url: string): void {
-  const now = Date.now();
-  for (const [key, until] of saveAs) if (until < now) saveAs.delete(key);
-  saveAs.set(url, now + SAVE_AS_MS);
-}
-
-function takeSaveAs(url: string): boolean {
-  const until = saveAs.get(url);
-  saveAs.delete(url);
-  return until !== undefined && until >= Date.now();
-}
 
 /** `name` in `dir`, or "name (1).ext" and up when it is taken. */
 export function uniquePath(dir: string, name: string, exists: (file: string) => boolean = existsSync): string {
@@ -86,16 +63,14 @@ function prune(): void {
 export type DownloadOwner = { host: WebContents; pageId: number | null };
 
 /**
- * Takes over one download: picks where it goes, then reports it to `owner`
+ * Takes over one download: asks where it goes, then reports it to `owner`
  * until it ends. A download no window's page started still lands on disk;
  * it just shows in no list.
  */
 export function trackDownload(item: DownloadItem, owner: DownloadOwner | null): void {
   const name = path.basename(item.getFilename()) || "download";
-  const target = uniquePath(app.getPath("downloads"), name);
   // Electron shows the save dialog itself when no path is set before this handler returns.
-  if (askWhere || takeSaveAs(item.getURL())) item.setSaveDialogOptions({ defaultPath: target });
-  else item.setSavePath(target);
+  item.setSaveDialogOptions({ defaultPath: uniquePath(app.getPath("downloads"), name) });
   if (!owner) return;
 
   const entry: Entry = {
@@ -106,7 +81,7 @@ export function trackDownload(item: DownloadItem, owner: DownloadOwner | null): 
       webContentsId: owner.pageId,
       filename: name,
       url: item.getURL(),
-      path: askWhere ? "" : target,
+      path: "",
       received: 0,
       total: item.getTotalBytes(),
       state: "progressing",

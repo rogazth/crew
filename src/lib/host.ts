@@ -154,7 +154,6 @@ export type BrowserHost = {
   onDownload(cb: (download: DownloadInfo) => void): () => void;
   /** Resolves why it could not be done ("the file is gone"), or "". */
   downloadAction(id: string, action: DownloadAction): Promise<string>;
-  setAskWhereToSave(ask: boolean): void;
   onPrompt(cb: (prompt: PagePrompt) => void): () => void;
   /** A prompt main took back: its page navigated or closed. */
   onPromptGone(cb: (id: string) => void): () => void;

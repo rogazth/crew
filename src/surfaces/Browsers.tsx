@@ -194,11 +194,6 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
     };
   }, []);
 
-  const askWhereToSave = prefs.askWhereToSave;
-  useEffect(() => {
-    browserHost()?.setAskWhereToSave(askWhereToSave);
-  }, [askWhereToSave]);
-
   return browsers.map((pane) => {
     // A page an agent drives while you look elsewhere stays laid out, under
     // the pane on screen and behind a cover. A hidden guest draws nothing:

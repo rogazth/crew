@@ -14,8 +14,6 @@ export type BrowserPrefs = {
   /** Docked DevTools' width beside the page and height below it, in CSS pixels. */
   devtoolsWidth: number;
   devtoolsHeight: number;
-  /** Each download opens a save dialog instead of going straight to Downloads. */
-  askWhereToSave: boolean;
 };
 
 export const SEARCH_ENGINES = [
@@ -41,7 +39,6 @@ export const DEFAULT_BROWSER_PREFS: BrowserPrefs = {
   devtoolsDock: "bottom",
   devtoolsWidth: 480,
   devtoolsHeight: 320,
-  askWhereToSave: false,
 };
 
 const size = (value: unknown, fallback: number) =>
@@ -53,7 +50,7 @@ export function parseBrowserPrefs(raw: string | null): BrowserPrefs {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return DEFAULT_BROWSER_PREFS;
-    const { searchTemplate, keep, openLinksInCrew, devtoolsDock, devtoolsWidth, devtoolsHeight, askWhereToSave } = parsed as Partial<
+    const { searchTemplate, keep, openLinksInCrew, devtoolsDock, devtoolsWidth, devtoolsHeight } = parsed as Partial<
       Record<keyof BrowserPrefs, unknown>
     >;
     return {
@@ -70,7 +67,6 @@ export function parseBrowserPrefs(raw: string | null): BrowserPrefs {
         : DEFAULT_BROWSER_PREFS.devtoolsDock,
       devtoolsWidth: size(devtoolsWidth, DEFAULT_BROWSER_PREFS.devtoolsWidth),
       devtoolsHeight: size(devtoolsHeight, DEFAULT_BROWSER_PREFS.devtoolsHeight),
-      askWhereToSave: typeof askWhereToSave === "boolean" ? askWhereToSave : DEFAULT_BROWSER_PREFS.askWhereToSave,
     };
   } catch {
     return DEFAULT_BROWSER_PREFS;

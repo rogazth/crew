@@ -5,7 +5,7 @@ import { CHANNELS, isIncognitoPartition, partitionFor } from "../../src/lib/brow
 import { isMachineAlias } from "../../src/lib/browser/machines";
 import { importCookies } from "./cookies";
 import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
-import { downloadAction, setAskWhereToSave } from "./downloads";
+import { downloadAction } from "./downloads";
 import {
   ownedGuest,
   pageSession,
@@ -78,7 +78,6 @@ export function registerBrowserIpc(): void {
 
   ipcMain.on(CHANNELS.answer, (event, id: unknown, value: unknown) => answer(event.sender, id, value));
   ipcMain.on(CHANNELS.sitePermissions, (_event, decisions: unknown) => setSitePermissions(decisions));
-  ipcMain.on(CHANNELS.downloadPrefs, (_event, ask: unknown) => setAskWhereToSave(ask === true));
   /** Resolves why the file could not open, or "" once it did. */
   ipcMain.handle(CHANNELS.downloadAction, (event, id: unknown, action: unknown) => downloadAction(event.sender, id, action));
 

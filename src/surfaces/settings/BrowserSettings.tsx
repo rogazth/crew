@@ -47,18 +47,6 @@ export function BrowserSettings() {
           />
         </SettingsRow>
       </SettingsSection>
-      <SettingsSection title="Downloads">
-        <Toggle
-          label="Ask where to save each file"
-          description={
-            prefs.askWhereToSave
-              ? "Every download opens a save dialog first."
-              : "Saves to Downloads. Right-click a link to choose."
-          }
-          checked={prefs.askWhereToSave}
-          onChange={(checked) => update({ ...prefs, askWhereToSave: checked })}
-        />
-      </SettingsSection>
       <SitePermissionsSettings />
     </>
   );

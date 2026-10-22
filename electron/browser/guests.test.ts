@@ -522,12 +522,13 @@ describe("downloads", () => {
   const reports = () =>
     host.sent.filter(([channel]) => channel === "browser:downloads").map(([, info]) => info as Record<string, unknown>);
 
-  it("reports a page's download to its window, saved under Downloads with a safe name", () => {
+  it("reports a page's download to its window, asking where to save it from Downloads with a safe name", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
     const item = downloadItem();
     electron.sessionHandlers.get("will-download")?.({}, item, guest);
-    expect(item.setSavePath).toHaveBeenCalledWith("/tmp/evil.sh");
+    expect(item.setSaveDialogOptions).toHaveBeenCalledWith({ defaultPath: "/tmp/evil.sh" });
+    expect(item.setSavePath).not.toHaveBeenCalled();
     item.finish("completed");
     const sent = reports();
     expect(sent[0]).toMatchObject({ webContentsId: guest.id, filename: "evil.sh", state: "progressing" });

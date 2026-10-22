@@ -1,6 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import { ArrowDownToLineIcon, FolderIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useDownloads } from "../../hooks/useBrowserSignals";
 import type { DownloadInfo } from "../../lib/browser/bridge";
@@ -20,6 +20,7 @@ export function DownloadsButton({ open, onOpenChange }: Props) {
   const list = useDownloads();
   // Why an open or a reveal failed, by download, until the list closes.
   const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
+  const popup = useRef<HTMLDivElement>(null);
   if (list.length === 0) return null;
   const running = list.some(isRunning);
   const progress = overallProgress(list);
@@ -53,8 +54,16 @@ export function DownloadsButton({ open, onOpenChange }: Props) {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
+          {/* A click into the page never reaches the window's DOM, and the page's element announces
+              no focus taken from here, so the list holds the focus and lets go once the page has it. */}
           <Popover.Popup
-            initialFocus={false}
+            ref={popup}
+            initialFocus={popup}
+            onBlur={() =>
+              setTimeout(() => {
+                if (document.activeElement?.tagName === "WEBVIEW") onOpenChange(false);
+              })
+            }
             className="flex max-h-[min(420px,70vh)] w-80 origin-(--transform-origin) flex-col overflow-hidden rounded-xl bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
           >
             <div className="flex h-9 shrink-0 items-center justify-between border-b border-hairline pr-1.5 pl-3">

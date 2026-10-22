@@ -81,6 +81,11 @@ async function shot(name: string): Promise<void> {
 test("a download shows in the toolbar, with its progress and where it went", async () => {
   const url = `${origin}/downloads`;
   await openPage(url);
+  // Every download asks where to go; the dialog is answered here, as a person would.
+  await crew.app.evaluate(({ webContents }, [target, dir]) => {
+    const guest = webContents.getAllWebContents().find((wc) => wc.getType() === "webview" && wc.getURL() === target)!;
+    guest.session.on("will-download", (_event, item) => item.setSavePath(`${dir}/${item.getFilename()}`));
+  }, [url, crew.home]);
   await inPage(url, `document.getElementById("report").click()`);
   const button = crew.window.getByRole("button", { name: "Downloads" });
   await button.waitFor();
@@ -92,6 +97,18 @@ test("a download shows in the toolbar, with its progress and where it went", asy
   assert.equal(await readFile(path.join(crew.home, "report.txt"), "utf8"), FILE);
   await crew.window.getByRole("button", { name: "Show in Finder" }).waitFor();
   await crew.window.keyboard.press("Escape");
+});
+
+test("the downloads list closes on a click into the page", async () => {
+  const button = crew.window.getByRole("button", { name: "Downloads" });
+  await button.click();
+  const list = crew.window.getByRole("dialog", { name: "Downloads" });
+  await list.waitFor();
+  const page = crew.window.locator("webview:visible").first();
+  const box = await page.boundingBox();
+  assert.ok(box, "the page is on screen");
+  await crew.window.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await list.waitFor({ state: "detached" });
 });
 
 test("a site's permission is asked over its page and a block is remembered", async () => {
@@ -165,11 +182,10 @@ test("a site's own sign-in is asked for over the page", async () => {
   await waitFor(() => inPage(url, `document.title === "Inside"`), { message: "the page loads signed in" });
 });
 
-test("Settings lists the site and the download choice", async () => {
+test("Settings lists the site", async () => {
   await crew.window.getByRole("button", { name: "More" }).click();
   await crew.window.getByRole("menuitem", { name: "Settings" }).click();
   await crew.window.getByRole("heading", { name: "Browser", level: 1 }).waitFor();
-  await crew.window.getByText("Ask where to save each file").waitFor();
   await crew.window.getByText("Blocked: Location").waitFor();
   await shot("settings");
 });

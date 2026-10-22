@@ -101,7 +101,6 @@ contextBridge.exposeInMainWorld("crewHost", {
     onOpenTab: (cb: (request: OpenTabRequest) => void) => listen(CHANNELS.openTab, cb),
     onDownload: (cb: (download: DownloadInfo) => void) => listen(CHANNELS.downloads, cb),
     downloadAction: (id: string, action: DownloadAction) => ipcRenderer.invoke(CHANNELS.downloadAction, id, action),
-    setAskWhereToSave: (ask: boolean) => ipcRenderer.send(CHANNELS.downloadPrefs, ask),
     onPrompt: (cb: (prompt: PagePrompt) => void) => listen(CHANNELS.prompt, cb),
     onPromptGone: (cb: (id: string) => void) => listen(CHANNELS.promptGone, cb),
     answer: (id: string, value: PromptAnswer) => ipcRenderer.send(CHANNELS.answer, id, value),

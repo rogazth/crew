@@ -61,7 +61,6 @@ export const CHANNELS = {
   /** window → main: cancel, open or show one of this window's downloads. */
   downloadAction: "browser:download-action",
   /** window → main: whether each download asks where to go. */
-  downloadPrefs: "browser:download-prefs",
   /** main → window: a page is waiting on the person (a permission, a sign-in, another app). */
   prompt: "browser:prompt",
   /** main → window: a prompt nobody needs any more: its page navigated or closed. */

@@ -34,7 +34,7 @@ import {
   type SitePermissions,
 } from "../../src/lib/browser/permissions";
 import { openExternal } from "../external";
-import { forgetHost, saveNextAs, trackDownload } from "./downloads";
+import { forgetHost, trackDownload } from "./downloads";
 import { followFile, serveFiles } from "./files";
 import { chromeUserAgent, firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
 import { ask, dropHost, dropPrompts, type PromptTarget } from "./prompts";
@@ -719,10 +719,7 @@ function contextMenu(
   const incognito = isIncognitoPartition(partition);
   const open = (inIncognito: boolean) => () =>
     openTab(host, { url: params.linkURL, background: true, openerId: guest.id, incognito: inIncognito });
-  const saveAs = (url: string) => () => {
-    saveNextAs(url);
-    guest.downloadURL(url);
-  };
+  const saveAs = (url: string) => () => guest.downloadURL(url);
   group(
     link
       ? [
