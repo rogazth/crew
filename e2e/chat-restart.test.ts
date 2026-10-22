@@ -14,6 +14,7 @@ import { test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
 import {
   addRemote,
+  chatLine,
   crewdPid,
   holdsFor,
   launchCrew,
@@ -26,6 +27,7 @@ import {
   sessionTab,
   storedStatus,
   waitFor,
+  workspaceMark,
   type ClaudeLaunch,
   type Crew,
   type RemoteDaemon,
@@ -86,11 +88,6 @@ function alive(pid: number): boolean {
   }
 }
 
-/** A line of the chat on screen, by the whole of its text. */
-function said(crew: Crew, text: string) {
-  return crew.window.locator("p:visible").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) });
-}
-
 test("quitting mid-turn: the relaunch resumes the CLI on the message it was carrying and runs that turn to its end, and Unread survives", async (t) => {
   let crew = await launchCrew();
   t.after(() => crew.close());
@@ -99,7 +96,7 @@ test("quitting mid-turn: the relaunch resumes the CLI on the message it was carr
 
   const a = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   // b finishes a turn out of sight: Unread.
   const b = await newSession(crew, workspace.id);
   await sendInChat(crew, "work 2");
@@ -124,13 +121,13 @@ test("quitting mid-turn: the relaunch resumes the CLI on the message it was carr
   await waitFor(async () => (await heard(crew, workspace.path, a)).filter((text) => text === "work 6").length === 2, {
     message: "the resumed CLI is handed the message the quit cut off",
   });
-  await said(crew, "Reply 1: work 6").waitFor({ timeout: 15_000 });
+  await chatLine(crew, "Reply 1: work 6").waitFor({ timeout: 15_000 });
   await reaches(crew, a, "Idle", "idle");
   assert.deepEqual(await state(crew, b), { light: "Unread", stored: "done" }, "b stopped reading Unread after the relaunch");
 
   // The conversation goes on on that CLI.
   await sendInChat(crew, "still there?");
-  await said(crew, "Reply 2: still there?").waitFor();
+  await chatLine(crew, "Reply 2: still there?").waitFor();
   const since = (await crew.claudeLaunches()).slice(before);
   assert.equal(since.filter((run) => run.argv.includes(a.id) && !run.argv.includes("--strict-mcp-config")).length, 1);
 });
@@ -144,10 +141,10 @@ test("crewd killed mid-turn: the app brings it back, every session keeps its nam
 
   const s1 = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   const s2 = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   await waitFor(async () => (await storedStatus(crew, s2.id)) === "idle", { message: "s2's turn ends" });
   await crew.request("session_rename", { id: s2.id, name: `Reconcile ${Date.now().toString(36)}` });
   const stored = (await crew.request<Session[]>("session_list", { workspaceId: workspace.id }))
@@ -187,7 +184,7 @@ test("crewd killed mid-turn: the app brings it back, every session keeps its nam
   await waitFor(async () => (await heard(crew, workspace.path, s1)).filter((text) => text === "work 6").length === 2, {
     message: "the resumed CLI is handed the message the crash cut off",
   });
-  await said(crew, "Reply 1: work 6").waitFor({ timeout: 15_000 });
+  await chatLine(crew, "Reply 1: work 6").waitFor({ timeout: 15_000 });
   await reaches(crew, s1, "Idle", "idle");
   await holdsFor(2000, async () => notWorking(await state(crew, s1)) || "Working again", `${s1.name} went back to Working`);
 });
@@ -201,7 +198,7 @@ test("a session whose machine's crewd restarted mid-turn resumes its CLI there, 
     const window = crew.window;
     const workspace = await remoteRequest<Workspace>(remote, "workspace_create", { name: "api", path: api });
     await crew.reload();
-    const mark = window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`);
+    const mark = workspaceMark(crew, "api");
     await mark.waitFor();
     await mark.click();
     await window.locator("[data-sidebar-panel]").getByText("api", { exact: true }).first().waitFor();

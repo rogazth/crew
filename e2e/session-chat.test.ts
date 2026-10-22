@@ -7,7 +7,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { holdsFor, launchCrew, MOD, newSession, sessions, waitFor, type Crew } from "./harness.ts";
+import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -30,19 +30,14 @@ async function newChat(workspaceId: string): Promise<Session> {
   return newSession(crew, workspaceId);
 }
 
-/**
- * The message box of the chat on screen, or of `session`'s, which is the one
- * once its tab is. A terminal's own input is an xterm's. Tabs that are not on
- * screen stay mounted, hidden.
- */
+/** The message box of the chat on screen, or of `session`'s, which is the one once its tab is. */
 function composer(session?: Session) {
-  if (session) return crew.window.locator(`form[data-session="${session.id}"] textarea:visible`);
-  return crew.window.locator("textarea:not(.xterm-helper-textarea):visible");
+  return composerOf(crew, session);
 }
 
-/** The terminals on screen. */
+/** The terminals the window's tabs hold, on screen or not. */
 function terminals() {
-  return crew.window.locator(".xterm:visible");
+  return terminalIn(crew.window.locator('[data-sheet="workspace"]'));
 }
 
 /** A line of the chat on screen, by the whole of its text. */
@@ -98,7 +93,7 @@ test("a new Claude session opens the chat with no terminal, and its reply stream
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const session = await newChat(workspace.id);
-  assert.equal(await crew.window.locator(".xterm").count(), 0, "a terminal is mounted");
+  assert.equal(await terminals().count(), 0, "a terminal is mounted");
   // Crew starts the CLI for the first turn, not before: nothing runs on open.
   assert.equal((await launchesOf(session)).length, 0, "the CLI started before anyone spoke");
 
@@ -238,7 +233,7 @@ test("a / in the chat lists the CLI's commands and skills with Crew's actions, a
     await field.fill(`/${name}`);
     await field.press("Enter");
     await opened.waitFor();
-    assert.equal(await field.inputValue(), "", `/${name} stayed in the draft`);
+    assert.equal(await editorText(field), "", `/${name} stayed in the draft`);
     await crew.window.keyboard.press("Escape");
     await opened.waitFor({ state: "detached" });
   }
@@ -249,15 +244,15 @@ test("a / in the chat lists the CLI's commands and skills with Crew's actions, a
   assert.equal(await entry("cold-run").count(), 0);
   await field.press("Enter");
   await menu.waitFor({ state: "detached" });
-  assert.equal(await field.inputValue(), "/writing-for-agents ");
+  assert.equal(await editorText(field), "/writing-for-agents ");
   // ...painted over the text like a mention.
-  await crew.window.locator(".crew-composer-overlay:visible mark", { hasText: "/writing-for-agents" }).waitFor();
+  await field.locator('[data-chip][data-kind="skill"]', { hasText: "writing-for-agents" }).waitFor();
 
   // One Backspace takes the space, the next the whole token.
   await field.press("Backspace");
-  assert.equal(await field.inputValue(), "/writing-for-agents");
+  assert.equal(await editorText(field), "/writing-for-agents");
   await field.press("Backspace");
-  assert.equal(await field.inputValue(), "");
+  assert.equal(await editorText(field), "");
   // The caret is put back on the next frame; text typed before it would be overtaken.
   await crew.window.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
 
@@ -296,7 +291,7 @@ test("/restart in the chat lets go of the CLI, and the next message launches it 
   await menu.getByRole("option").filter({ has: crew.window.getByText("/restart", { exact: true }) }).waitFor();
   await field.press("Enter");
   await said("Restarted. The CLI starts again with the next message.").waitFor();
-  assert.equal(await field.inputValue(), "", "/restart stayed in the draft");
+  assert.equal(await editorText(field), "", "/restart stayed in the draft");
   await waitFor(() => !alive(first.pid), { message: "the CLI was let go" });
 
   await send("what number?");
@@ -404,17 +399,17 @@ async function sendWhileWorking(text: string, how: "steer" | "queue"): Promise<v
 
 /** A user's bubble in the transcript (not the chips above the message box). */
 function bubble(text: string) {
-  return crew.window.locator(".crew-bubble:visible", { hasText: text });
+  return crew.window.locator("[data-bubble]:visible", { hasText: text });
 }
 
 /** The chips above the message box. */
 function chips() {
-  return crew.window.locator("form[data-composer]:visible span.rounded-full").filter({ hasText: /this turn|next turn/ });
+  return crew.window.locator("[data-composer]:visible [data-queue-chip]");
 }
 
 /** The chat on screen's reply paragraphs that start with `prefix` (earlier chats stay mounted, hidden). */
 function replies(prefix: RegExp) {
-  return crew.window.locator("p:visible").filter({ hasText: prefix });
+  return chatLine(crew, prefix);
 }
 
 /** The status line's "N waiting", which opens the queue's sheet. */
@@ -425,19 +420,19 @@ function waiting(count: number) {
 /** The queue's sheet, opened from the status line. */
 async function openQueue(count: number) {
   await waiting(count).click();
-  const sheet = crew.window.locator("div.absolute.shadow-float:has(div.group)");
+  const sheet = crew.window.locator("[data-queue-sheet]");
   await sheet.waitFor();
   return sheet;
 }
 
 /** The sheet's rows, first to go first, by their message. */
 async function queued(sheet: Rows): Promise<string[]> {
-  return (await sheet.locator("div.group span.truncate").allInnerTexts()).map((text) => text.trim());
+  return (await sheet.locator("[data-queued-text]").allInnerTexts()).map((text) => text.trim());
 }
 
 /** The row of the sheet with this message, whose buttons show on hover. */
 function row(sheet: Rows, text: string) {
-  return sheet.locator("div.group").filter({ hasText: text }).first();
+  return sheet.locator("[data-queued]").filter({ hasText: text }).first();
 }
 
 async function idle(session: Session): Promise<void> {
@@ -615,7 +610,7 @@ test("the first prompt from home is the chat session's first turn", async () => 
   });
   await said("say hi from home").waitFor();
   await said("Reply 1: say hi from home").waitFor();
-  assert.equal(await terminals().count(), 0, "a terminal is on screen");
+  assert.equal(await terminals().filter({ visible: true }).count(), 0, "a terminal is on screen");
   const [launch] = await launchesOf(session);
   assert.ok(launch);
   assert.equal(launch.cwd, home.path);

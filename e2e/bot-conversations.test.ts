@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
-import { launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
+import { composerOf, launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
@@ -28,7 +28,7 @@ test("a bot the chat wrote to is a conversation in the status line, and opens as
   const [main] = crew.workspaces;
   assert.ok(main);
   await newSession(crew, main.id);
-  await sendInChat(crew, `!'${CREW}' bots create Reviewer --description "Review the diffs you are sent"`);
+  await sendInChat(crew, `!'${CREW}' bots create Reviewer --effort low --description "Review the diffs you are sent"`);
   await waitFor(
     async () => (await crew.request<Session[]>("session_list", { workspaceId: main.id })).some((row) => row.kind === "bot" && row.name === "Reviewer"),
     { timeout: 20_000, message: "the bot exists" },
@@ -52,10 +52,10 @@ test("a bot the chat wrote to is a conversation in the status line, and opens as
   await view.waitFor();
   await view.getByText("please look at the diff on main").waitFor();
   assert.match(await view.locator("[data-thread-header]").innerText(), /Reviewer[\s\S]*Conversation · 1 letter/);
-  assert.equal(await crew.window.locator("textarea:not(.xterm-helper-textarea):visible").count(), 0, "no composer");
+  assert.equal(await composerOf(crew).count(), 0, "no composer");
   await shots(crew, "bot-conversation");
 
   await crew.window.keyboard.press("Escape");
   await view.waitFor({ state: "detached" });
-  await crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first().waitFor();
+  await composerOf(crew).waitFor();
 });

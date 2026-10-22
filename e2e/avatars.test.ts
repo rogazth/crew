@@ -15,7 +15,7 @@ function card(crew: Crew, name: string) {
 
 /** The face the card draws, once its style has loaded (a glyph holds the spot until then). */
 async function faceOf(crew: Crew, name: string): Promise<string> {
-  return waitFor(() => card(crew, name).locator("img").first().getAttribute("src", { timeout: 1000 }), {
+  return waitFor(() => card(crew, name).locator("[data-bot-face]").first().getAttribute("src", { timeout: 1000 }), {
     message: `${name}'s card draws a face`,
   });
 }
@@ -102,7 +102,7 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   const before = ((await stored(crew, "bot:faces")) ?? {}) as Faces;
   await settings.getByRole("button", { name: "Deal new faces" }).click();
   const choice = settings.getByRole("radio", { name: "Use this face" }).nth(2);
-  const chosen = await waitFor(() => choice.locator("img").getAttribute("src", { timeout: 1000 }), {
+  const chosen = await waitFor(() => choice.locator("[data-bot-face]").getAttribute("src", { timeout: 1000 }), {
     message: "the hand draws its faces",
   });
   await choice.click();

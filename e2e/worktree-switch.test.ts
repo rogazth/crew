@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Worktree } from "../src/lib/types.ts";
-import { currentWorktree, launchCrew, MOD, pressChord, returnToWindow, waitFor, worktreeHeader } from "./harness.ts";
+import { currentWorktree, launchCrew, MOD, pressChord, returnToWindow, waitFor, workspaceRail, worktreeHeader } from "./harness.ts";
 
 test("W7: ⇧⌘O lists another repo's worktrees; picking one switches workspace and worktree together", async (t) => {
   let crew = await launchCrew({ repos: ["app", "lib"] });
@@ -11,7 +11,7 @@ test("W7: ⇧⌘O lists another repo's worktrees; picking one switches workspace
   const [app, lib] = crew.workspaces;
   assert.ok(app && lib);
   const page = crew.window;
-  const rail = () => crew.window.locator('nav[aria-label="Workspaces"][data-sidebar-rail]');
+  const rail = () => workspaceRail(crew);
 
   // Each repo gets a worktree behind the window's back (W1 covers making one in it).
   await crew.request<Worktree>("worktree_add", { path: app.path, branch: "feat/app-side" });

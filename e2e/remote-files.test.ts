@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { addRemote, launchCrew, MOD, pressChord, waitFor, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
 
 const REPORT = [
   "<!doctype html>",
@@ -33,7 +33,7 @@ test("an HTML report on another machine runs its inline scripts", async () => {
     await field.waitFor();
     await field.fill(`${api}/`);
     await window.keyboard.press(`${MOD}+Enter`);
-    await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`).waitFor();
+    await workspaceMark(crew, "api").waitFor();
 
     await pressChord(crew, `${MOD}+p`);
     const palette = window.getByRole("dialog", { name: "Command palette" });

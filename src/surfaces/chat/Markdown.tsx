@@ -43,7 +43,7 @@ function Code({ className, children, node: _node, metastring, ...rest }: CodePro
   const text = codeText(children);
   if ("data-block" in rest) return <Fence code={text} className={className} meta={metastring} />;
   if (isPathLike(text) && extensionOf(text)) return <InlineFile path={text}>{children}</InlineFile>;
-  return <code className="crew-inline-code">{children}</code>;
+  return <code className="crew-inline-code" data-inline-code>{children}</code>;
 }
 
 /**
@@ -78,7 +78,7 @@ function InlineFile({ path, children }: { path: string; children: ReactNode }) {
       </>
     );
   return (
-    <code ref={ref} className="crew-inline-code">
+    <code ref={ref} className="crew-inline-code" data-inline-code>
       {children}
     </code>
   );

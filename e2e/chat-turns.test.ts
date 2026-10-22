@@ -11,6 +11,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
+  chatLine,
   composerOf,
   holdsFor,
   launchCrew,
@@ -32,12 +33,6 @@ const get = (crew: Crew, id: string) => crew.request<Session | null>("session_ge
 /** The row in the sidebar, by the session's id. */
 async function rowOf(crew: Crew, session: Session) {
   return sessionRow(crew, session);
-}
-
-/** A line of the chat on screen, by the whole of its text. */
-function said(crew: Crew, text: string | RegExp) {
-  const whole = typeof text === "string" ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) : text;
-  return crew.window.locator("p:visible").filter({ hasText: whole });
 }
 
 async function idle(crew: Crew, session: Session): Promise<void> {
@@ -126,7 +121,7 @@ test("a chat joins the sidebar with its first message; closing a tab deletes a b
   assert.ok(!(await drawn()).some((text) => text.includes(spoken.name)), "the blank session flashed in the sidebar");
   await sendInChat(crew, "hello");
   await sessionRow(crew, spoken.name).waitFor({ timeout: 5000 });
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   await idle(crew, spoken);
   await holdsFor(1000, async () => (await sessionRow(crew, spoken.name).count()) === 1, "the row left once the turn ended");
 
@@ -162,11 +157,11 @@ test("a turn reads Working across tab switches, Unread and rung when it ends out
 
   const s1 = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   await idle(crew, s1);
   const s2 = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   await idle(crew, s2);
 
   await sessionTab(crew, s1).click();
@@ -183,7 +178,7 @@ test("a turn reads Working across tab switches, Unread and rung when it ends out
 
   // It ends while s2 is on screen: Unread, and the window rings with the reply, as a banner or, in front, a toast.
   await becomes(crew, s1, "Unread", "done", 15_000);
-  const toasts = crew.window.locator(".fixed.right-4.bottom-4").filter({ hasText: "Reply 2: work 6" });
+  const toasts = crew.window.locator("[data-toaster]").filter({ hasText: "Reply 2: work 6" });
   await waitFor(async () => (await banners()).some((banner) => banner.body.includes("Reply 2: work 6")) || (await toasts.count()) > 0, {
     message: "the finished turn rings",
   });
@@ -262,7 +257,7 @@ test("/clear moves the session to the CLI's new conversation: what follows goes 
 
   const session = await newSession(crew, workspace.id);
   await sendInChat(crew, "remember 4817");
-  await said(crew, "Reply 1: remember 4817").waitFor();
+  await chatLine(crew, "Reply 1: remember 4817").waitFor();
   await idle(crew, session);
   assert.equal((await get(crew, session.id))?.providerSessionId, session.id, "the session is bound to the conversation it named");
 
@@ -277,7 +272,7 @@ test("/clear moves the session to the CLI's new conversation: what follows goes 
   await idle(crew, session);
 
   await sendInChat(crew, "after the clear");
-  await said(crew, /^Reply \d+: after the clear$/).waitFor();
+  await chatLine(crew, /^Reply \d+: after the clear$/).waitFor();
   await idle(crew, session);
   assert.deepEqual(await heard(crew, cwd, moved), ["after the clear"], "the message after /clear went to the new conversation");
   assert.ok(!(await heard(crew, cwd, session.id)).includes("after the clear"), "the old conversation took the message after /clear");
@@ -291,9 +286,9 @@ test("/clear moves the session to the CLI's new conversation: what follows goes 
     .filter({ has: crew.window.getByText("/restart", { exact: true }) })
     .waitFor();
   await field.press("Enter");
-  await said(crew, "Restarted. The CLI starts again with the next message.").waitFor();
+  await chatLine(crew, "Restarted. The CLI starts again with the next message.").waitFor();
   await sendInChat(crew, "where are we");
-  await said(crew, "Reply 1: where are we").waitFor();
+  await chatLine(crew, "Reply 1: where are we").waitFor();
   await idle(crew, session);
   // Crew's own launch that asks a CLI to name a session reads none of the user's servers; it is not the session's.
   const launches = (await crew.claudeLaunches()).filter(

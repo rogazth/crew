@@ -36,7 +36,7 @@ test("a session a session started is in the status line and the Work sheet, and 
   await installFakeOpencode(crew);
 
   const shell = await newSession(crew, main.id);
-  await sendInChat(crew, `!'${CREW}' sessions delegate --provider opencode --name "Lint pass" -- tidy the imports`);
+  await sendInChat(crew, `!'${CREW}' sessions delegate --provider opencode --effort none --name "Lint pass" -- tidy the imports`);
 
   const child = await waitFor(
     async () => (await sessions(crew, main.id)).find((row) => row.kind === "child"),

@@ -2,7 +2,7 @@
 // back to: its viewer stays where it was instead of loading the file again.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, pressChord, waitFor, webviewIn, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -75,5 +75,5 @@ test("a PDF is not loaded again when its tab is shown again", async () => {
   await tab("manual.pdf").click();
   await settle();
   assert.equal(await viewer(), first, "the same viewer is back");
-  assert.equal(await crew.window.locator("webview:visible").count(), 1, "only the PDF's guest is on screen");
+  assert.equal(await webviewIn(crew.window).filter({ visible: true }).count(), 1, "only the PDF's guest is on screen");
 });

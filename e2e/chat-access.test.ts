@@ -10,6 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
+  chatLine,
   composerOf,
   holdsFor,
   launchCrew,
@@ -46,14 +47,9 @@ async function asks(crew: Crew): Promise<string[]> {
   return log.split("\n").filter(Boolean);
 }
 
-/** A line of the chat on screen, by the whole of its text. */
-function said(crew: Crew, text: string) {
-  return crew.window.locator("p:visible").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) });
-}
-
 /** The approval card the chat on screen raised for the fake's `ask`. */
 function card(crew: Crew) {
-  return crew.window.locator(".crew-card:visible").filter({ hasText: "Run this command?" });
+  return crew.window.locator("[data-approval-card]:visible").filter({ hasText: "Run this command?" });
 }
 
 async function idle(crew: Crew, session: Session): Promise<void> {
@@ -88,7 +84,7 @@ test("a fresh install's chat runs its CLI with full access and Crew's tools, the
 
   const session = await newSession(crew, workspace.id);
   await sendInChat(crew, "ask");
-  await said(crew, "Reply 1: ask allowed").waitFor();
+  await chatLine(crew, "Reply 1: ask allowed").waitFor();
   const { argv } = await launchNo(crew, session, 1);
   assert.ok(argv.includes(SKIP), `a fresh install asks: ${argv.join(" ")}`);
   assert.equal(after(argv, "--permission-mode"), undefined, argv.join(" "));
@@ -114,7 +110,7 @@ test("a session that asks raises a card for its CLI's tool call, its row reads N
 
   const other = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   const session = await newSession(crew, workspace.id);
   await sendInChat(crew, "ask");
   await card(crew).waitFor();
@@ -140,14 +136,14 @@ test("a session that asks raises a card for its CLI's tool call, its row reads N
   // Back to it: Allow lets the CLI run the tool, and the turn ends.
   await sessionTab(crew, session).click();
   await card(crew).getByRole("button", { name: /^Allow/ }).click();
-  await said(crew, "Reply 1: ask allowed").waitFor();
+  await chatLine(crew, "Reply 1: ask allowed").waitFor();
   await idle(crew, session);
   assert.equal(await lightIn(row), "Idle");
 
   // Deny says no to the CLI.
   await sendInChat(crew, "ask");
   await card(crew).getByRole("button", { name: "Deny" }).click();
-  await said(crew, "Reply 2: ask denied").waitFor();
+  await chatLine(crew, "Reply 2: ask denied").waitFor();
   await idle(crew, session);
   assert.equal((await launchesOf(crew, session)).length, 1, "answering a card launched the CLI again");
 });
@@ -165,7 +161,7 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
 
   const session = await newSession(crew, workspace.id);
   await sendInChat(crew, "remember 4817");
-  await said(crew, "Reply 1: remember 4817").waitFor();
+  await chatLine(crew, "Reply 1: remember 4817").waitFor();
   await idle(crew, session);
   const first = await launchNo(crew, session, 1);
   assert.ok(!first.argv.includes(SKIP), first.argv.join(" "));
@@ -177,7 +173,7 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
 
   // The kept CLI cannot take the flag: the next turn launches another, on the same conversation.
   await sendInChat(crew, "ask");
-  await said(crew, "Reply 1: ask allowed").waitFor();
+  await chatLine(crew, "Reply 1: ask allowed").waitFor();
   const second = await launchNo(crew, session, 2);
   assert.ok(second.argv.includes(SKIP), `the CLI asks under Bypass permissions: ${second.argv.join(" ")}`);
   assert.equal(after(second.argv, "--resume"), session.id, second.argv.join(" "));
@@ -188,7 +184,7 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
   // A new session starts that way.
   const fresh = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   assert.ok((await launchNo(crew, fresh, 1)).argv.includes(SKIP), "a new session asks under Bypass permissions");
   await idle(crew, fresh);
 
@@ -202,7 +198,7 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
   assert.ok(!third.argv.includes(SKIP), `the CLI still skips permissions: ${third.argv.join(" ")}`);
   assert.equal(after(third.argv, "--permission-mode"), "default", third.argv.join(" "));
   await card(crew).getByRole("button", { name: "Deny" }).click();
-  await said(crew, "Reply 1: ask denied").waitFor();
+  await chatLine(crew, "Reply 1: ask denied").waitFor();
   await idle(crew, session);
 });
 
@@ -219,7 +215,7 @@ test("Full access from the Access chip relaunches the CLI without asking, and As
 
   const session = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
-  await said(crew, "Reply 1: hello").waitFor();
+  await chatLine(crew, "Reply 1: hello").waitFor();
   await idle(crew, session);
 
   const pickAccess = async (label: string, autonomy: string) => {
@@ -232,7 +228,7 @@ test("Full access from the Access chip relaunches the CLI without asking, and As
 
   await pickAccess("Full access", "full");
   await sendInChat(crew, "ask");
-  await said(crew, "Reply 1: ask allowed").waitFor();
+  await chatLine(crew, "Reply 1: ask allowed").waitFor();
   const full = await launchNo(crew, session, 2);
   assert.ok(full.argv.includes(SKIP), full.argv.join(" "));
   assert.equal(after(full.argv, "--resume"), session.id, full.argv.join(" "));
@@ -245,6 +241,6 @@ test("Full access from the Access chip relaunches the CLI without asking, and As
   const asking = await launchNo(crew, session, 3);
   assert.ok(!asking.argv.includes(SKIP), `leaving Full access kept the flag: ${asking.argv.join(" ")}`);
   await card(crew).getByRole("button", { name: /^Allow/ }).click();
-  await said(crew, "Reply 1: ask allowed").waitFor();
+  await chatLine(crew, "Reply 1: ask allowed").waitFor();
   await idle(crew, session);
 });

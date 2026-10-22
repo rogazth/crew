@@ -227,6 +227,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
       <div ref={panel} data-devtools-view className="relative min-h-0 flex-1 overflow-hidden">
         {still && (
           <img
+            data-devtools-still
             src={still.url}
             alt=""
             draggable={false}

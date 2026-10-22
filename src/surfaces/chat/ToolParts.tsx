@@ -77,7 +77,7 @@ export function Result({ head, text, danger }: { head: string; text: string; dan
 
 export function Prose({ text }: { text: string }) {
   return (
-    <div className="my-1 rounded-xl px-3 py-2 ring-1 ring-hairline">
+    <div data-prose className="my-1 rounded-xl px-3 py-2 ring-1 ring-hairline">
       <Suspense fallback={<p className="whitespace-pre-wrap text-[13px] leading-[19px]">{text}</p>}>
         <Markdown text={splitClip(text).body} />
       </Suspense>

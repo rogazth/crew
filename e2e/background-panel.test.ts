@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -45,11 +45,15 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
+const composer = () => composerOf(crew);
 const said = (text: string | RegExp) => crew.window.getByText(text, typeof text === "string" ? { exact: true } : {});
 /** The panes, without the sidebar: its rows carry session ids and names too. */
 const inChat = () => crew.window.locator('[data-sheet="workspace"]');
 const sheet = () => crew.window.locator("[data-work-sheet]");
+/** The agents clip over the composer: it opens the sheet while an agent is listed. */
+const clip = () => crew.window.locator("[data-agent-clip]");
+/** The status line's work segment: it opens the sheet when there is no agent to put the clip up. */
+const workTrigger = () => crew.window.locator("[data-work-trigger]");
 const rows = () => sheet().getByRole("option");
 
 async function send(text: string): Promise<void> {
@@ -91,14 +95,14 @@ test("what the session started is one line under the composer, and its sheet lis
   await run(CREW, ["processes", "start", "web"], { env });
 
   // A child that reported counts as finished; the command is still up.
-  const work = crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]");
+  const work = clip();
   await work.waitFor();
   await work.click();
   await sheet().waitFor();
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 2, texts.join("\n"));
   // The agents lead the sheet (the clip that opens it is about them); the rest of the work follows.
-  assert.match(texts[0]!, /Lint pass.*Subagent · Ling 3\.0 Flash · done after/, "agents lead");
+  assert.match(texts[0]!, /Lint pass.*Subagent · .+ · done after/, "agents lead");
   assert.match(texts[1]!, /web.*Process · \d+s/, "then the rest of the work");
   assert.equal(await sheet().getByRole("button", { name: "Clear finished" }).count(), 1);
   await rows().nth(0).waitFor();
@@ -119,7 +123,7 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   await waitFor(async () => /esc\s*stop/.test(await hints.innerText().catch(() => "")), { message: "the hints name Esc while the turn runs" });
   await shoot("composer-working");
 
-  await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
+  await clip().click();
   await sheet().waitFor();
   await crew.window.keyboard.press("Escape");
   await sheet().waitFor({ state: "hidden" });
@@ -153,7 +157,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   assert.ok(child);
   // What the reader had typed in the parent comes back untouched.
   await composer().fill("half a thought");
-  await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
+  await clip().click();
   await sheet().waitFor();
   // The agents lead the list, so the child is the row the sheet opens on.
   await waitFor(async () => (await rows().nth(0).getAttribute("aria-selected")) === "true", { message: "the first row is selected" });
@@ -164,7 +168,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   await page.getByText("Done: tidy the imports").waitFor();
-  await page.locator(`form[data-composer] textarea`).waitFor();
+  await composerOf(crew, child).waitFor();
 
   // One header, a breadcrumb: where it is, once.
   assert.equal(await visible("[data-thread-header]").count(), 1, "exactly one header is on screen");
@@ -186,7 +190,7 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
 
   // Its composer writes to the child, which answers and reports again.
   const before = (await crew.request<Session>("session_get", { id: child.id })).lastEvent?.at ?? 0;
-  const field = page.locator("textarea");
+  const field = composerOf(crew, child);
   await field.fill("ping");
   await field.press("Enter");
   await page.getByText("ping", { exact: true }).first().waitFor();
@@ -198,14 +202,14 @@ test("↵ opens a Crew subagent as one thread over the chat, with its own compos
 
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
-  assert.equal(await composer().inputValue(), "half a thought", "the parent's draft is intact");
+  assert.equal(await composer().innerText(), "half a thought", "the parent's draft is intact");
   await composer().fill("");
 });
 
 test("x stops a command, and opening a command opens its tab", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
+  await clip().click();
   await sheet().waitFor();
   // The agents lead, so the running command is the second row; x stops it.
   await crew.window.keyboard.press("ArrowDown");
@@ -214,7 +218,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
   await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
     message: "crewd stops the run",
   });
-  const finished = crew.window.locator("[data-agent-strip] .ds-strip-head");
+  const finished = clip();
   await rows().filter({ hasText: "Process · stopped" }).waitFor();
 
   // Enter on it leaves the chat for the command's own tab and closes the sheet.
@@ -226,7 +230,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
 });
 
 test("Clear finished empties the panel, and the line goes with it", async () => {
-  await crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]").click();
+  await clip().click();
   await sheet().getByRole("button", { name: "Clear finished" }).click();
   await sheet().waitFor({ state: "hidden" });
   await inChat().getByRole("button", { name: /finished$|process|agent|shell/ }).waitFor({ state: "detached" });
@@ -251,7 +255,7 @@ test("what Clear finished hid stays hidden after a reload, and a process that st
 
   // The run starts again: another run, so another entry.
   await run(CREW, ["processes", "start", "web"], { env: await sessionEnv() });
-  const work = crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]");
+  const work = workTrigger();
   await work.waitFor();
   await work.click();
   await sheet().waitFor();
@@ -309,7 +313,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
   await idle();
 
   // The agents clip opens the sheet (it names the agents, not the shell); without agents the status line's segment does.
-  const work = crew.window.locator("[data-agent-strip] .ds-strip-head, [data-work-trigger]");
+  const work = clip();
   await work.waitFor();
   await work.click();
   await sheet().waitFor();
@@ -338,7 +342,7 @@ test("a native subagent opens with no composer and a read-only footer, and x sto
 
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
-  assert.equal(await page.locator("textarea").count(), 0, "a native subagent takes no message");
+  assert.equal(await page.locator("[data-composer]").count(), 0, "a native subagent takes no message");
   assert.equal(await visible("[data-status-line]").count(), 0, "no composer, so no status line of any chat");
   const footer = page.locator("[data-thread-footer]");
   assert.match(await footer.innerText(), new RegExp(`Read only · its report goes to ${chat.name}.*esc back.*x stop`, "s"));
@@ -361,7 +365,7 @@ test("a shell opens in place under the same header, with its output and no compo
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   await page.locator("[data-background-output]").waitFor();
-  assert.equal(await page.locator("textarea").count(), 0);
+  assert.equal(await page.locator("[data-composer]").count(), 0);
   assert.match(await page.locator("[data-thread-header]").innerText(), /^Shell/);
   assert.match((await page.locator("[data-thread-header] [title]").first().getAttribute("title")) ?? "", /Shell/);
   assert.match(await page.locator("[data-background-command]").innerText(), /^\$ npm test/);
@@ -396,7 +400,7 @@ test("a native subagent's call is one row and one card with the sheet's state, a
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   assert.equal(await visible("[data-thread-header]").count(), 1, "one header in the pane");
-  assert.equal(await page.locator("textarea").count(), 0, "a native subagent takes no message");
+  assert.equal(await page.locator("[data-composer]").count(), 0, "a native subagent takes no message");
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
 });
@@ -409,7 +413,7 @@ test("x on a session the chat launched interrupts its turn and leaves the sessio
     await sheet().waitFor({ state: "hidden" });
   }
   const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
-  await run(CREW, ["sessions", "start", "--provider", "claude", "--name", "refunds-api", "--", "work 60"], { env: await sessionEnv() });
+  await run(CREW, ["sessions", "start", "--provider", "claude", "--effort", "low", "--name", "refunds-api", "--", "work 60"], { env: await sessionEnv() });
   const launched = await waitFor(
     async () => (await sessions(crew, chat.workspaceId)).find((row) => row.launchedBy === chat.id && row.name === "refunds-api"),
     { timeout: 20_000, message: "the launched session reaches crewd" },

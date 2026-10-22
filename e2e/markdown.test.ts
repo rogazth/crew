@@ -6,7 +6,18 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { holdsFor, launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import {
+  editorIn,
+  editorLines,
+  editorScrollerIn,
+  holdsFor,
+  launchCrew,
+  MOD,
+  noteEditor,
+  pressChord,
+  waitFor,
+  type Crew,
+} from "./harness.ts";
 
 /** A 2×2 PNG, as a clipboard would hold a screenshot. */
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEUlEQVR4nGP4zwAEUOL/fwYAIu0E/FEgFfUAAAAASUVORK5CYII=";
@@ -30,18 +41,13 @@ async function openFile(crew: Crew, query: string, relative: string): Promise<vo
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();
   await palette.waitFor({ state: "detached" });
-  await editor(crew).waitFor();
+  await noteEditor(crew).waitFor();
 }
 
 /** A note opens to read: its header's pencil turns it to editing. */
 async function startEditing(crew: Crew): Promise<void> {
   await crew.window.getByRole("button", { name: "Edit", exact: true }).filter({ visible: true }).click();
-  await editor(crew).and(crew.window.locator('[contenteditable="true"]')).waitFor();
-}
-
-/** The note editor on screen. */
-function editor(crew: Crew) {
-  return crew.window.locator(".cm-content").filter({ visible: true });
+  await noteEditor(crew).and(crew.window.locator('[contenteditable="true"]')).waitFor();
 }
 
 /** The file header's "Unsaved" mark. */
@@ -57,7 +63,7 @@ function changedOnDisk(crew: Crew) {
 /** Waits for the editor's text to hold `text` (or, with `present` false, to lose it). */
 async function shows(crew: Crew, text: string, message: string, present = true): Promise<void> {
   let last = "";
-  const ok = await waitFor(async () => (last = await editor(crew).innerText()).includes(text) === present, {
+  const ok = await waitFor(async () => (last = await noteEditor(crew).innerText()).includes(text) === present, {
     timeout: 5000,
   }).catch(() => false);
   assert.ok(ok, `${message}: ${JSON.stringify(last.slice(-300))}`);
@@ -98,7 +104,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
 
   // Typing marks the note unsaved; ⌘S writes exactly what was typed.
   const typed = `Typed by the test ${stamp}`;
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(typed);
   await unsaved(crew).waitFor();
@@ -108,7 +114,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
   await diskReads(plan, expected, "the save writes the note as typed");
 
   // The task's box flips the source; the save writes it.
-  const box = editor(crew).locator('.cm-md-task[role="checkbox"]');
+  const box = noteEditor(crew).getByRole("checkbox");
   assert.equal(await box.getAttribute("aria-checked"), "false");
   await box.click();
   await unsaved(crew).waitFor();
@@ -119,7 +125,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
   // A link to a note nobody wrote makes it, next to this one, and opens it.
   const missing = path.join(workspace.path, "notes/missing-note.md");
   assert.ok(!existsSync(missing));
-  await editor(crew).locator('[data-wikilink="missing-note"]').click();
+  await noteEditor(crew).locator('[data-wikilink="missing-note"]').click();
   await waitFor(() => existsSync(missing), { message: "the linked note is created on disk" });
   assert.equal(await readFile(missing, "utf8"), "", "the new note starts empty");
   await fileTab(crew, missing).and(page.locator('[aria-selected="true"]')).waitFor();
@@ -127,8 +133,8 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
 
   // A pasted image lands in attachments/ beside the note, byte for byte, and the note links it.
   await fileTab(crew, plan).click();
-  await editor(crew).waitFor();
-  await editor(crew).evaluate((element, base64) => {
+  await noteEditor(crew).waitFor();
+  await noteEditor(crew).evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const clipboard = new DataTransfer();
     clipboard.items.add(new File([bytes], "image.png", { type: "image/png" }));
@@ -149,14 +155,14 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
 
   // An unsaved edit survives a trip to another tab and back, still unsaved.
   const pending = ` and more ${stamp}`;
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(pending);
   await unsaved(crew).waitFor();
   await fileTab(crew, missing).click();
   await page.getByText("notes/missing-note.md", { exact: true }).filter({ visible: true }).waitFor();
   await fileTab(crew, plan).click();
-  await editor(crew).filter({ hasText: pending.trim() }).waitFor({ timeout: 5000 });
+  await noteEditor(crew).filter({ hasText: pending.trim() }).waitFor({ timeout: 5000 });
   await unsaved(crew).waitFor();
   assert.equal(await readFile(plan, "utf8"), expected, "the trip did not save the edit");
 
@@ -165,7 +171,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
   const mine = `${expected}${pending}`;
   let outside = `${expected}Written outside Crew ${stamp}\n`;
   await writeFile(plan, outside);
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+s`);
   await changedOnDisk(crew).waitFor({ timeout: 5000 });
   await holdsFor(1000, async () => (await readFile(plan, "utf8")) === outside, "the save wrote over the change made on disk");
@@ -183,7 +189,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
 
   // Again, and Reload: the disk wins, and nothing is left unsaved.
   const dropped = ` dropped ${stamp}`;
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(dropped);
   await unsaved(crew).waitFor();
@@ -201,7 +207,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
   // An unsaved edit, and the disk changes while its tab is away: back on the
   // tab, the edit is still there, the bar asks, and the disk is untouched.
   const away = ` edited while away ${stamp}`;
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(away);
   await unsaved(crew).waitFor();
@@ -210,7 +216,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
   outside = `${expected}Written outside Crew again ${stamp}\n`;
   await writeFile(plan, outside);
   await fileTab(crew, plan).click();
-  await editor(crew).waitFor();
+  await noteEditor(crew).waitFor();
   await changedOnDisk(crew).waitFor({ timeout: 5000 });
   await shows(crew, away.trim(), "the edit made before the tab went away is still in the editor");
   await unsaved(crew).waitFor();
@@ -244,7 +250,7 @@ const GUIDE = [section("# Guide", 4), section("## Setup"), section("## Usage"), 
 
 /** The outline's entry marked as the current section, or null when none is. */
 async function currentSection(crew: Crew): Promise<string | null> {
-  const marked = crew.window.locator('nav[aria-label="Outline"] [aria-current="location"]');
+  const marked = crew.window.getByRole("navigation", { name: "Outline" }).locator('[aria-current="location"]');
   return (await marked.count()) === 0 ? null : (await marked.first().innerText()).trim();
 }
 
@@ -291,7 +297,7 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   await openFile(crew, "guide", "notes/guide.md");
   const toggle = page.getByRole("button", { name: "Outline", exact: true });
   assert.equal(await toggle.getAttribute("aria-pressed"), "true", "notes open with their outline");
-  const outline = page.locator('nav[aria-label="Outline"]');
+  const outline = page.getByRole("navigation", { name: "Outline" });
   await outline.waitFor();
   assert.deepEqual(
     (await outline.getByRole("button").allInnerTexts()).map((text) => text.trim()),
@@ -301,8 +307,8 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   // The outline marks the section at the top of the pane: as soon as the note
   // opens, then as the note moves (Q4).
   await sectionIs(crew, "Guide", "opened, the outline marks the section at the top of the pane");
-  const scroller = page.locator(".cm-scroller").filter({ visible: true });
-  const heading = editor(crew).locator(".cm-line").filter({ hasText: /^Usage$/ });
+  const scroller = editorScrollerIn(page.locator("[data-note-editor]")).filter({ visible: true });
+  const heading = editorLines(noteEditor(crew)).filter({ hasText: /^Usage$/ });
   await scroller.hover();
   await waitFor(
     async () => {
@@ -321,7 +327,7 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   );
   await sectionIs(crew, "Usage", "scrolled to Usage, the outline marks Usage");
   await startEditing(crew);
-  await editor(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await sectionIs(crew, "Troubleshooting", "at the end of the note, the outline marks the last section");
   await page.keyboard.press(`${MOD}+Home`);
@@ -346,13 +352,13 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   const page2 = crew.window;
   assert.equal(await crew.request("state_get", { key: "markdown:outline" }), "false");
   await fileTab(crew, guide).click();
-  await editor(crew).waitFor();
+  await noteEditor(crew).waitFor();
   const reopened = page2.getByRole("button", { name: "Outline", exact: true });
   await waitFor(async () => (await reopened.getAttribute("aria-pressed")) === "false", {
     timeout: 5000,
     message: "the reopened note has its outline off",
   });
-  assert.equal(await page2.locator('nav[aria-label="Outline"]').count(), 0, "and shows none");
+  assert.equal(await page2.getByRole("navigation", { name: "Outline" }).count(), 0, "and shows none");
   assert.ok(
     (await paletteRows(crew, "vendored", "vendor-docs/vendored-api.md")).includes("vendor-docs/vendored-api.md"),
     "after the restart ⌘P still finds it",
@@ -411,14 +417,14 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // Opened, the note reads: nothing takes typing, and both tables are drawn.
   await openFile(crew, "tables", "notes/tables.md");
-  assert.equal(await editor(crew).getAttribute("contenteditable"), "false", "a note opens to read");
-  const tables = editor(crew).locator(".cm-md-table-wrap");
+  assert.equal(await noteEditor(crew).getAttribute("contenteditable"), "false", "a note opens to read");
+  const tables = noteEditor(crew).locator("[data-md-table]");
   await waitFor(async () => (await tables.count()) === 2, { message: "both tables render" });
-  assert.equal(await editor(crew).locator(".cm-md-table-wrap[data-editable]").count(), 0, "reading, the tables take no edits");
+  assert.equal(await noteEditor(crew).locator("[data-md-table][data-editable]").count(), 0, "reading, the tables take no edits");
 
   // A cell wraps between words, never inside one; the wide table scrolls.
   const layout = await page.evaluate((word) => {
-    const cells = [...document.querySelectorAll<HTMLElement>(".cm-md-cell")];
+    const cells = [...document.querySelectorAll<HTMLElement>("[data-md-cell]")];
     const overflowing = cells.filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.textContent);
     const holder = cells.find((cell) => cell.textContent?.includes(word))!;
     const text = [...holder.childNodes].find((node) => node.textContent?.includes(word))!;
@@ -426,7 +432,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
     const at = text.textContent!.indexOf(word);
     range.setStart(text, at);
     range.setEnd(text, at + word.length);
-    const scrolls = [...document.querySelectorAll<HTMLElement>(".cm-md-table-scroll")].map(
+    const scrolls = [...document.querySelectorAll<HTMLElement>("[data-md-table-scroll]")].map(
       (box) => box.scrollWidth > box.clientWidth,
     );
     return { overflowing, wordLines: range.getClientRects().length, scrolls };
@@ -436,15 +442,16 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
   assert.deepEqual(layout.scrolls, [false, true], "only the table wider than the note scrolls");
 
   // ⌘E turns it to editing; the tables stay tables.
-  await editor(crew).click({ position: { x: 5, y: 5 } });
+  await noteEditor(crew).click({ position: { x: 5, y: 5 } });
   await pressChord(crew, `${MOD}+e`);
-  await editor(crew).and(page.locator('[contenteditable="true"]')).waitFor();
-  await waitFor(async () => (await editor(crew).locator(".cm-md-table-wrap[data-editable]").count()) === 2, {
+  await noteEditor(crew).and(page.locator('[contenteditable="true"]')).waitFor();
+  await waitFor(async () => (await noteEditor(crew).locator("[data-md-table][data-editable]").count()) === 2, {
     message: "editing, the tables take edits",
   });
   const first = tables.first();
-  const cell = (text: string) => first.locator("td, th").filter({ hasText: text });
-  const cellEditor = first.locator(".cm-md-cell-editing .cm-content");
+  // A cell is the <td> or <th> the table keeps its row and column on.
+  const cell = (text: string) => first.locator("[data-row][data-col]").filter({ hasText: text });
+  const cellEditor = editorIn(first.locator("[data-editing]"));
 
   // A click opens the cell; Tab goes on to the next, a typed pipe is escaped, Escape leaves.
   await cell("alpha").click();
@@ -482,7 +489,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // The column's grip sorts it.
   await cell("Name").hover();
-  await first.locator(".cm-md-hot-col .cm-md-grip-col").click();
+  await cell("Name").getByRole("button", { name: "Column actions" }).click();
   await page.getByRole("menuitem", { name: "Sort A to Z" }).click();
   await save(crew);
   assert.deepEqual((await savedRows(file, "Name")).map((row) => row[0]), ["Name", "alpha-one", "beta"], "sorted by name");
@@ -495,7 +502,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // The add button makes a row and opens its first cell.
   await first.hover();
-  await first.locator(".cm-md-table-add-row").click();
+  await first.getByRole("button", { name: "Add row" }).click();
   await cellEditor.waitFor();
   await page.keyboard.type("gamma");
   await page.keyboard.press("Escape");
@@ -504,7 +511,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // A column dragged by its grip moves, alignment and all.
   await cell("Notes").hover();
-  const grip = first.locator(".cm-md-hot-col .cm-md-grip-col");
+  const grip = cell("Notes").getByRole("button", { name: "Column actions" });
   const from = (await grip.boundingBox())!;
   const to = (await cell("Name").boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -515,26 +522,26 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
   assert.deepEqual((await savedRows(file, "Notes"))[0], ["Notes", "Name"], "the column moved first");
 
   // The arrow keys walk from the text into the table, and out below it.
-  await editor(crew).locator(".cm-line").filter({ hasText: /^Tables$/ }).click();
+  await editorLines(noteEditor(crew)).filter({ hasText: /^Tables$/ }).click();
   await page.keyboard.press("End");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
-  await first.locator("th.cm-md-editing").filter({ hasText: "Notes" }).waitFor();
+  await first.locator('[data-row="0"][data-editing]').filter({ hasText: "Notes" }).waitFor();
   await page.keyboard.press("Escape");
 
   // Edit as Markdown shows its source, pipes and all.
   await cell("gamma").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Edit as Markdown" }).click();
-  await editor(crew).locator(".cm-line").filter({ hasText: /^\| -+ \| -+ \|$/ }).waitFor();
+  await editorLines(noteEditor(crew)).filter({ hasText: /^\| -+ \| -+ \|$/ }).waitFor();
 
   // A table from the command palette, at the end of the note.
-  await editor(crew).locator(".cm-line").filter({ hasText: /^End of note\.$/ }).click();
+  await editorLines(noteEditor(crew)).filter({ hasText: /^End of note\.$/ }).click();
   await pressChord(crew, `${MOD}+Shift+p`);
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("Insert Table");
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
-  await editor(crew).locator(".cm-md-cell-editing .cm-content").waitFor();
+  await editorIn(noteEditor(crew).locator("[data-editing]")).waitFor();
   await page.keyboard.type("made");
   await page.keyboard.press("Escape");
   await save(crew);
@@ -543,7 +550,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
   // ⌘E back to reading writes nothing.
   const before = await readFile(file, "utf8");
   await pressChord(crew, `${MOD}+e`);
-  await editor(crew).and(page.locator('[contenteditable="false"]')).waitFor();
+  await noteEditor(crew).and(page.locator('[contenteditable="false"]')).waitFor();
   assert.equal(await unsaved(crew).count(), 0);
   assert.equal(await readFile(file, "utf8"), before);
 });

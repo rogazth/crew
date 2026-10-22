@@ -4,6 +4,18 @@
 // short temporary directory: crewd's Unix socket sits in userData, and a long
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
+//
+// A spec finds what it checks by role and accessible name (getByRole,
+// getByLabel, getByText) or by a `data-*` hook the component sets for it
+// (`[data-composer]`, `[data-work-trigger]`), never by a style class (`.ds-*`,
+// `.crew-*`, Tailwind's), a bare tag (`textarea`, `p`, `img`) or the DOM's
+// shape (xpath, `..`, a sibling): those change with the look, and the test
+// breaks though what it checks did not. A tag may narrow a hook
+// (`button[data-nav]`), never stand in for one. A hook names one thing: no
+// selector lists (`a, b`), and two controls each carry their own. What a
+// third-party widget draws (CodeMirror's `.cm-*`, xterm's `.xterm*`, Electron's
+// `webview`) is reached through the helpers below, and so is a locator more
+// than one spec needs.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { appendFile, chmod, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -316,7 +328,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
 
 /** The window is up once the rail and the panel beside it have painted. */
 async function ready(page: Page): Promise<void> {
-  await page.locator('nav[aria-label="Workspaces"][data-sidebar-rail]').waitFor({ state: "visible" });
+  await page.locator(RAIL).waitFor({ state: "visible" });
   await page.locator("[data-sidebar-panel]").waitFor({ state: "visible" });
 }
 
@@ -736,7 +748,7 @@ export async function savedStrip(
 
 /** The texts the kit paints as errors (a field's, a dialog's failure) inside `scope`. */
 export async function errorsIn(scope: Locator): Promise<string[]> {
-  const texts = await scope.locator(".text-danger").allInnerTexts();
+  const texts = await scope.locator("[data-error]").allInnerTexts();
   return texts.map((text) => text.trim()).filter(Boolean);
 }
 
@@ -826,7 +838,7 @@ export async function startChat(
 /** ⌘N: the start screen, not a session. */
 export async function startScreen(crew: Crew): Promise<Locator> {
   await pressChord(crew, `${MOD}+n`);
-  const field = crew.window.locator("[data-workspace-start] .cm-content");
+  const field = editorIn(crew.window.locator("[data-workspace-start]"));
   await field.waitFor();
   return field;
 }
@@ -868,6 +880,87 @@ export async function openShell(crew: Crew): Promise<void> {
 export function composerOf(crew: Crew, session?: Session): Locator {
   if (session) return crew.window.locator(`form[data-session="${session.id}"] .cm-content:visible`);
   return crew.window.locator("form[data-composer] .cm-content:visible");
+}
+
+/** The editable text of the CodeMirror editor inside `scope`. */
+export function editorIn(scope: Page | Locator): Locator {
+  return scope.locator(".cm-content");
+}
+
+/** The lines CodeMirror draws inside `scope`, one element per line of text. */
+export function editorLines(scope: Page | Locator): Locator {
+  return scope.locator(".cm-line");
+}
+
+/**
+ * The text of the document a CodeMirror editor holds, from its `editorIn` or
+ * `composerOf`: what was typed, a chip as the text it stands for. The lines
+ * on screen draw a chip as its label, so `innerText` cannot say.
+ */
+export function editorText(field: Locator): Promise<string> {
+  return field.evaluate((content) => {
+    type Tile = { root?: { view?: { state: { doc: { toString(): string } } } } };
+    const view = (content as HTMLElement & { cmTile?: Tile }).cmTile?.root?.view;
+    if (!view) throw new Error("not a CodeMirror editor's content");
+    return view.state.doc.toString();
+  });
+}
+
+/** The box a CodeMirror editor inside `scope` scrolls in. */
+export function editorScrollerIn(scope: Page | Locator): Locator {
+  return scope.locator(".cm-scroller");
+}
+
+/** The note (markdown) editor on screen. */
+export function noteEditor(crew: Crew): Locator {
+  return editorIn(crew.window.locator("[data-note-editor]")).filter({ visible: true });
+}
+
+/** The box a code file scrolls in: the CodeView's own root, inside the code editor's host. */
+export function codeScrollerIn(scope: Page | Locator): Locator {
+  return scope.locator("[data-code-editor] > :first-child");
+}
+
+/** The xterm terminals inside `scope`. */
+export function terminalIn(scope: Page | Locator): Locator {
+  return scope.locator(".xterm");
+}
+
+/** The cells xterm paints inside `scope`, without its scrollbar and padding. */
+export function terminalScreenIn(scope: Page | Locator): Locator {
+  return scope.locator(".xterm-screen");
+}
+
+/** What xterm marks inside `scope` while a link is under the pointer: it shows the hand over it. */
+export function terminalOnLinkIn(scope: Page | Locator): Locator {
+  return scope.locator(".xterm-cursor-pointer");
+}
+
+/** The web pages (Electron `webview`s) inside `scope`. */
+export function webviewIn(scope: Page | Locator): Locator {
+  return scope.locator("webview");
+}
+
+const RAIL = 'nav[aria-label="Workspaces"][data-sidebar-rail]';
+
+/** The rail of workspaces down the window's left edge. */
+export function workspaceRail(crew: Crew): Locator {
+  return crew.window.locator(RAIL);
+}
+
+/** A workspace's mark in the rail, by its name. */
+export function workspaceMark(crew: Crew, name: string): Locator {
+  return workspaceRail(crew).locator(`button[data-nav][aria-label="${name}"]`);
+}
+
+/**
+ * A line of the chat on screen (a paragraph of a reply, a note, what was sent),
+ * by the whole of its text when `text` is a string. Tabs that are not on screen
+ * stay mounted, hidden.
+ */
+export function chatLine(crew: Crew, text: string | RegExp): Locator {
+  const whole = typeof text === "string" ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) : text;
+  return crew.window.locator("[data-message]:visible").getByText(whole);
 }
 
 /** Types `text` in the chat on screen and sends it. */

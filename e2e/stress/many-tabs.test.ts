@@ -8,7 +8,7 @@
 //   STRESS_TABS=30 npm run e2e -- --stress many-tabs
 import assert from "node:assert/strict";
 import { after, before, test, type TestContext } from "node:test";
-import { launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "../harness.ts";
+import { composerOf, launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "../harness.ts";
 
 const COUNT = Number(process.env.STRESS_TABS ?? 100);
 
@@ -40,10 +40,10 @@ async function record(crew: Crew) {
     }).observe({ type: "longtask", buffered: false });
     const tick = (t: number) => {
       let shown = "none";
-      for (const area of document.querySelectorAll("textarea:not(.xterm-helper-textarea)")) {
-        if ((area as HTMLElement).offsetParent === null) continue;
-        if (!ids.has(area)) ids.set(area, next++);
-        shown = String(ids.get(area));
+      for (const form of document.querySelectorAll("[data-composer]")) {
+        if ((form as HTMLElement).offsetParent === null) continue;
+        if (!ids.has(form)) ids.set(form, next++);
+        shown = String(ids.get(form));
         break;
       }
       frames.push({ t, shown });
@@ -130,12 +130,7 @@ test(`${COUNT} sessions opened with ⌘N, timed`, { timeout: 15 * 60_000 }, asyn
   assert.deepEqual(flickered, [], "presses that showed a frame with no composer");
 
   // Typing in the last chat, with every other one mounted behind it.
-  await crew.window.evaluate(() => {
-    const area = [...document.querySelectorAll("textarea:not(.xterm-helper-textarea)")].find(
-      (a) => (a as HTMLElement).offsetParent !== null,
-    ) as HTMLTextAreaElement;
-    area.focus();
-  });
+  await composerOf(crew).focus();
   const typing: number[] = [];
   for (const ch of "the quick brown fox jumps over") {
     const t0 = await crew.window.evaluate(() => performance.now());

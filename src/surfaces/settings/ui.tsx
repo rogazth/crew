@@ -2,7 +2,7 @@
 // soft status chips, a progress bar, a copy button, toasts, and the jump that
 // lands the nav's search on a single row.
 import { CheckIcon, CopyIcon, type LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, Button, Card, IconButton, Toggle } from "../../chrome/kit";
 
 /** The raised level: a hairline and a soft drop, the chat cards' recipe. */
@@ -64,12 +64,18 @@ export function Group({
   id?: string;
   children: ReactNode;
 }) {
+  // Named by its title, the section is a region a screen reader (or a test) can find.
+  const heading = useId();
   return (
-    <section className="flex flex-col gap-2" data-setting={id}>
+    <section className="flex flex-col gap-2" data-setting={id} aria-labelledby={title ? heading : undefined}>
       {(title || action) && (
         <div className="flex min-h-6 items-end gap-3 px-2.5">
           <div className="flex min-w-0 flex-1 flex-col">
-            {title && <h2 className="text-[12px] font-medium text-text-muted">{title}</h2>}
+            {title && (
+              <h2 id={heading} className="text-[12px] font-medium text-text-muted">
+                {title}
+              </h2>
+            )}
             {description && <p className="text-[12px] text-text-muted">{description}</p>}
           </div>
           {action}

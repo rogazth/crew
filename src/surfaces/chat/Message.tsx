@@ -34,7 +34,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
     <div className="flex flex-col items-end gap-1.5">
       {block.text ? (
         <div className="crew-md-row is-user">
-          <div className="crew-bubble">
+          <div className="crew-bubble" data-bubble>
             <p className="whitespace-pre-wrap">
               <MentionText text={block.text} />
             </p>

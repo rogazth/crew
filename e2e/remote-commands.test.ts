@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, waitFor, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
 
 const ASK = String.raw`
 process.stdin.setRawMode(true);
@@ -35,7 +35,7 @@ test("a command on another machine shows its output and hears the terminal while
     await field.waitFor();
     await field.fill(`${api}/`);
     await window.keyboard.press(`${MOD}+Enter`);
-    await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`).waitFor();
+    await workspaceMark(crew, "api").waitFor();
     const [workspace] = await remoteRequest<Workspace[]>(remote, "workspace_list");
     assert.ok(workspace);
 

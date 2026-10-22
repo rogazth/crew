@@ -20,11 +20,12 @@ import {
   sessions,
   storedStatus,
   waitFor,
+  workspaceRail,
   type Crew,
 } from "./harness.ts";
 
 function rail(crew: Crew): Locator {
-  return crew.window.locator('nav[aria-label="Workspaces"][data-sidebar-rail] [data-rail-marks]');
+  return workspaceRail(crew).locator("[data-rail-marks]");
 }
 
 function mark(crew: Crew, name: string): Locator {

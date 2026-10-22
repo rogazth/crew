@@ -75,7 +75,7 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
           <span className="truncate font-mono text-[11px]" title={workspace.path}>
             {shortenPath(preview(workspace, branch))}
           </span>
-          {failure && <span className="text-danger">{failure}</span>}
+          {failure && <span data-error className="text-danger">{failure}</span>}
         </div>
       </div>
       <Footer

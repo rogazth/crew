@@ -9,16 +9,11 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import type { Locator } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, startChat, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
-
-function mark(crew: Crew, name: string): Locator {
-  return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
-}
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, startChat, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 function badge(crew: Crew, name: string): Promise<string | null> {
-  return mark(crew, name)
+  return workspaceMark(crew, name)
     .locator("[data-remote-badge]")
     .getAttribute("data-remote-badge", { timeout: 1_000 })
     .catch(() => null);
@@ -28,7 +23,7 @@ function badge(crew: Crew, name: string): Promise<string | null> {
 async function peekOf(crew: Crew, name: string): Promise<{ machine: string; text: string }> {
   await crew.window.mouse.move(600, 400);
   await crew.window.locator("[data-workspace-peek]").waitFor({ state: "detached" });
-  await mark(crew, name).hover();
+  await workspaceMark(crew, name).hover();
   const card = crew.window.locator("[data-workspace-peek]");
   await card.waitFor();
   const machine = (await card.locator("[data-peek-machine]").getAttribute("data-peek-machine")) ?? "";
@@ -60,7 +55,7 @@ test("a workspace on another machine opens from ⌘O, runs a session there, and 
     await window.keyboard.press(`${MOD}+Enter`);
 
     // The workspace lives in the remote's database, not this Mac's, and the rail badges it.
-    await mark(crew, "api").waitFor();
+    await workspaceMark(crew, "api").waitFor();
     const remoteList = await remoteRequest<Workspace[]>(remote, "workspace_list");
     assert.deepEqual(
       remoteList.map((row) => row.path),
@@ -87,13 +82,13 @@ test("a workspace on another machine opens from ⌘O, runs a session there, and 
     await remote.stop();
     await waitFor(async () => (await badge(crew, "api")) === "offline", { message: "the rail marks the machine offline", timeout: 20_000 });
     await window.locator('[data-machine-banner="offline"]').waitFor();
-    await mark(crew, "app").click();
+    await workspaceMark(crew, "app").click();
     await window.locator("[data-sidebar-panel]").getByText("app", { exact: true }).first().waitFor();
 
     // It comes back on the same port: the badge follows without a reload.
     await remote.start();
     await waitFor(async () => (await badge(crew, "api")) === "online", { message: "the rail marks the machine online again", timeout: 20_000 });
-    await mark(crew, "api").click();
+    await workspaceMark(crew, "api").click();
     await window.locator("[data-machine-banner]").waitFor({ state: "detached" });
 
     // Settings › Environments lists it; its menu closes on a click outside.
@@ -122,12 +117,12 @@ test("a machine that is off when Crew opens keeps its workspaces on the rail, an
 
     // A workspace made on the machine behind the window's back shows once the machine is reached again.
     await crew.reload();
-    await mark(crew, "web").waitFor({ timeout: 15_000 });
+    await workspaceMark(crew, "web").waitFor({ timeout: 15_000 });
 
     // Off at launch: the rail still has it, offline, from what it saw last.
     await remote.stop();
     await crew.reload();
-    await mark(crew, "web").waitFor();
+    await workspaceMark(crew, "web").waitFor();
     await waitFor(async () => (await badge(crew, "web")) === "offline", { message: "offline from the cache", timeout: 20_000 });
     assert.match((await peekOf(crew, "web")).text, /homepc[\s\S]*Offline/, "the card tells the machine is down");
 

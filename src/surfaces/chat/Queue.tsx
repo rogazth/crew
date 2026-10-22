@@ -28,7 +28,7 @@ export function QueueChips({ queue }: { queue: QueueScope }) {
       {queue.items
         .filter((message) => !message.steering)
         .map((message) => (
-          <span key={message.id} className="flex h-7 max-w-full items-center gap-1.5 rounded-full bg-card pr-1 pl-2.5 text-[12px]">
+          <span key={message.id} data-queue-chip className="flex h-7 max-w-full items-center gap-1.5 rounded-full bg-card pr-1 pl-2.5 text-[12px]">
             <span className="shrink-0 text-[11px] text-text-muted">next turn</span>
             {message.files.length > 0 && <PaperclipIcon className="size-3 shrink-0 text-icon" />}
             <span className="max-w-[260px] truncate">{message.text}</span>
@@ -92,6 +92,7 @@ export function QueueSegment({
       {shown && (
         <div
           ref={sheet}
+          data-queue-sheet
           className="absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border"
         >
           {queue.items.map((message, index) => (
@@ -113,7 +114,7 @@ function QueuedRow({ message, index, working, queue }: { message: QueuedMessage;
     else setText(message.text);
   };
   return (
-    <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-hover">
+    <div data-queued className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-hover">
       <span className="mt-0.5 grid size-4 shrink-0 place-items-center text-[10.5px] text-text-muted tabular-nums">{index + 1}</span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {editing ? (
@@ -133,7 +134,7 @@ function QueuedRow({ message, index, working, queue }: { message: QueuedMessage;
             className="w-full rounded bg-canvas px-1.5 py-0.5 text-[13px] ring-1 ring-border outline-none"
           />
         ) : (
-          <span className="truncate text-[13px]">{message.text}</span>
+          <span data-queued-text className="truncate text-[13px]">{message.text}</span>
         )}
         <span className="flex items-center gap-1 text-[11px] text-text-muted">
           {message.steering ? "Into this turn" : "Next turn"} · {when(message, working)}

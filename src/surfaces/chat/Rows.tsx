@@ -136,6 +136,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
           <div
             key={block.id}
             data-block={block.id}
+            data-message={block.role}
             className={`${className}${block.id === focusId ? " crew-found" : ""}`}
           >
             {block.role === "user" ? (

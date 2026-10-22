@@ -40,7 +40,7 @@ async function tryWorktree(branch: string) {
   await input.fill(branch);
   await input.press("Enter");
   // The dialog is the input's nearest container that also holds its messages.
-  const dialog = page.locator("[role=dialog]").filter({ has: input });
+  const dialog = page.getByRole("dialog").filter({ has: input });
   const errors = await waitFor(async () => {
     const shown = await errorsIn(dialog);
     return shown.length > 0 && shown;

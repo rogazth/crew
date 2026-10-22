@@ -43,7 +43,7 @@ test("a session in the main checkout hands its task to a new session on a worktr
   const task = "Build the login form.";
   await sendInChat(
     crew,
-    `!'${crewCli}' sessions start --worktree feat/handoff --name feat/handoff --json -- '${task}' > '${out}' 2>&1`,
+    `!'${crewCli}' sessions start --effort low --worktree feat/handoff --name feat/handoff --json -- '${task}' > '${out}' 2>&1`,
   );
   const answer = await waitFor(() => readFile(out, "utf8").catch(() => ""), {
     timeout: 30_000,

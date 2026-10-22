@@ -46,7 +46,7 @@ test("C1: the crew command installs from Settings, runs, and uninstalls", async 
 
   await pressChord(crew, `${MOD}+,`);
   await page.getByRole("button", { name: "General", exact: true }).click();
-  const section = page.locator("section", { has: page.getByRole("heading", { name: "Command line" }) });
+  const section = page.getByRole("region", { name: "Command line" });
   await section.getByText(`It links into ${dir}.`).waitFor();
 
   await section.getByRole("button", { name: "Install" }).click();

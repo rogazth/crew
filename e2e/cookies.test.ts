@@ -9,7 +9,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, pressChord, stripTabIds, waitFor, workspaceMark, type Crew } from "./harness.ts";
 import { partitionFor } from "../src/lib/browser/bridge.ts";
 import type { CookieSource, ImportedCookie } from "../src/lib/protocol.ts";
 
@@ -130,11 +130,8 @@ test("imported cookies reach every workspace's pages", async () => {
   });
 
   // So does beta's.
-  await crew.window
-    .locator('nav[aria-label="Workspaces"][data-sidebar-rail]')
-    // The mark names the workspace; its path is on the hover card now, not a title.
-    .locator(`button[data-nav][aria-label="${beta.name}"]`)
-    .click();
+  // The mark names the workspace; its path is on the hover card now, not a title.
+  await workspaceMark(crew, beta.name).click();
   await openPage(`${origin}/beta`);
   const visit = await waitFor(() => visits.find((v) => v.path === "/beta"), { message: "beta's page loads" });
   assert.match(visit.cookie, /sid=the-user/);

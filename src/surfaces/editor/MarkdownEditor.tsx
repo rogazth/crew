@@ -607,7 +607,7 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
   return (
     <div className="flex h-full min-h-0">
       <div className="relative min-w-0 flex-1">
-        <div ref={host} className="h-full min-h-0" />
+        <div ref={host} data-note-editor className="h-full min-h-0" />
         {find && (
           <FindBar
             label="Find in note"

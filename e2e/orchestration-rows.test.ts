@@ -12,7 +12,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -38,7 +38,7 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
+const composer = () => composerOf(crew);
 // innerText puts a break after an inline-flex name; the window draws "billing-ui's" as one word.
 const flat = (text: string) => text.replace(/\s+/g, " ").replace(/ 's\b/g, "'s").trim();
 
@@ -91,8 +91,8 @@ test("Crew calls draw as rows and cards: subagents, a report, sessions started, 
   const message = row(/Message to refunds-api/);
   assert.match(flat(await message.innerText()), /Message to refunds-api · read mid-turn/);
   // A session is never drawn with the bot's face, even when the chat does not know which CLI it runs.
-  assert.equal(await message.locator("svg.lucide-bot").count(), 0);
-  assert.equal(await crew.window.locator("[data-block] button svg.lucide-bot").count(), 0);
+  assert.equal(await message.locator('[data-face="unknown"]').count(), 0);
+  assert.equal(await crew.window.locator("[data-block]").getByRole("button").locator('[data-face="unknown"]').count(), 0);
   assert.match(flat(await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").innerText()), /90-day limit/);
 
   // The control rows: one line each, a card only for the redirect.
@@ -106,7 +106,7 @@ test("Crew calls draw as rows and cards: subagents, a report, sessions started, 
   ]) {
     assert.ok(text.includes(sentence), `${sentence}\n${text}`);
   }
-  assert.ok(flat(await crew.window.locator("main, body").first().innerText()).includes("Stop the illustration work: copy only."), "the redirect is in a card");
+  assert.ok((await crew.window.getByText("Stop the illustration work: copy only.").count()) > 0, "the redirect is in a card");
   // The checkpoint row is gone: no "wrote to" arrows.
   assert.equal(await crew.window.getByLabel("to", { exact: true }).count(), 0);
 

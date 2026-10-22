@@ -287,7 +287,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         <Kbd keys={commandKeys("open-launcher")} />
       </div>
 
-      <div ref={list} className="max-h-[420px] overflow-y-auto p-1.5">
+      <div ref={list} data-launcher-list className="max-h-[420px] overflow-y-auto p-1.5">
         {groups.map((group, g) => {
           const start = groups.slice(0, g).reduce((n, prev) => n + prev.items.length, 0);
           if (group.items.length === 0) return null;
@@ -363,13 +363,14 @@ function Row({ item, active, onHover, onPick }: { item: Item; active: boolean; o
   return (
     <button
       type="button"
+      data-launcher-row
       data-active={active}
       onMouseMove={onHover}
       onClick={onPick}
       className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left ${active ? "bg-hover" : ""}`}
     >
       <span className="grid size-5 shrink-0 place-items-center">{item.icon}</span>
-      <span className="min-w-0 truncate">{item.label}</span>
+      <span data-launcher-label className="min-w-0 truncate">{item.label}</span>
       {item.meta && (
         <span className="flex min-w-0 shrink items-center gap-1 text-[12px] text-text-muted">
           <GitBranchIcon className="size-3 shrink-0 text-icon" />

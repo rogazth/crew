@@ -51,14 +51,14 @@ for (const provider of ["claude", "codex", "opencode"]) {
     await field.fill(words);
     await field.press("Enter");
 
-    const bubble = crew.window.locator(".crew-bubble").filter({ hasText: words });
+    const message = crew.window.locator('[data-message="user"]').filter({ hasText: words });
+    const bubble = message.locator("[data-bubble]");
     await bubble.waitFor();
     await waitFor(async () => (await crew.request<{ status: string }>("session_get", { id: session.id })).status !== "working", {
       message: "the turn is over",
     });
     assert.equal((await bubble.innerText()).trim(), words, "the bubble holds the words alone");
-    const row = bubble.locator("xpath=ancestor::div[contains(@class,'items-end')][1]");
-    await row.getByRole("button", { name: /^Open .*\.png$/ }).waitFor();
+    await message.getByRole("button", { name: /^Open .*\.png$/ }).waitFor();
     await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS ?? crew.root, `sent-${provider}.png`) });
   });
 }

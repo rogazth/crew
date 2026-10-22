@@ -36,7 +36,7 @@ export function FindBar({ label, query, results, focusToken, onQuery, onStep, on
   const count = results.count > 0 ? `${results.index + 1} of ${results.count}` : "";
 
   return (
-    <div className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-surface p-1 shadow-float">
+    <div data-find-bar className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-surface p-1 shadow-float">
       <input
         ref={input}
         value={query}
@@ -47,7 +47,7 @@ export function FindBar({ label, query, results, focusToken, onQuery, onStep, on
         onKeyDown={onKeyDown}
         className="h-7 w-48 bg-transparent px-2 text-[13px] text-text caret-text outline-none"
       />
-      <span className="min-w-12 px-1 text-right text-[11px] tabular-nums text-text-muted">
+      <span data-find-count className="min-w-12 px-1 text-right text-[11px] tabular-nums text-text-muted">
         {count}
       </span>
       <Step label="Previous match" onClick={() => onStep(-1)}>

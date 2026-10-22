@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { holdsFor, launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import { codeScrollerIn, holdsFor, launchCrew, MOD, noteEditor, pressChord, waitFor, type Crew } from "./harness.ts";
 
 const APP = ["export function answer(): number {", "  return 42;", "}", ""].join("\n");
 const UTIL = ["export const twice = (n: number) => n * 2;", ""].join("\n");
@@ -25,11 +25,6 @@ async function openFile(crew: Crew, query: string, relative: string, shown = edi
 /** The code editor on screen, by the file name it is labelled with. */
 function editor(crew: Crew, name: string) {
   return crew.window.getByRole("textbox", { name, exact: true }).filter({ visible: true });
-}
-
-/** The note editor on screen, for a markdown file. */
-function note(crew: Crew) {
-  return crew.window.locator(".cm-content").filter({ visible: true });
 }
 
 /** The prompt a close asks before it loses something. */
@@ -229,10 +224,10 @@ test("C3: closing other tabs asks once for every unsaved file, and confirming dr
   await openFile(crew, "app.ts", "src/app.ts");
   await typeAtEnd(crew, "app.ts", `// app edit ${stamp}`);
   await unsaved(crew).waitFor();
-  await openFile(crew, "NOTES.md", "NOTES.md", note(crew));
+  await openFile(crew, "NOTES.md", "NOTES.md", noteEditor(crew));
   // A note opens to read; its pencil turns it to editing.
   await page.getByRole("button", { name: "Edit", exact: true }).filter({ visible: true }).click();
-  await note(crew).click();
+  await noteEditor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(`note edit ${stamp}`);
   await unsaved(crew).waitFor();
@@ -252,9 +247,9 @@ test("C3: closing other tabs asks once for every unsaved file, and confirming dr
   assert.equal(await readFile(notes, "utf8"), NOTES);
 
   // Both open again as the disk has them.
-  await openFile(crew, "NOTES.md", "NOTES.md", note(crew));
-  await waitFor(async () => (await note(crew).innerText()).includes("Nothing yet."), { timeout: 5000 });
-  assert.ok(!(await note(crew).innerText()).includes(`note edit ${stamp}`), "the note's edit is gone");
+  await openFile(crew, "NOTES.md", "NOTES.md", noteEditor(crew));
+  await waitFor(async () => (await noteEditor(crew).innerText()).includes("Nothing yet."), { timeout: 5000 });
+  assert.ok(!(await noteEditor(crew).innerText()).includes(`note edit ${stamp}`), "the note's edit is gone");
   await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened note reads Unsaved");
   await openFile(crew, "app.ts", "src/app.ts");
   await shows(crew, "app.ts", "return 42;", "the reopened file shows the disk");
@@ -271,7 +266,7 @@ test("C4: find scrolls to a match off screen, and the file still scrolls after",
   const crew = await launchCrew({ repos: [{ name: "app", files: { "src/big.ts": `${lines.join("\n")}\n` } }] });
   t.after(() => crew.close());
   const page = crew.window;
-  const pane = page.locator(".overflow-auto").filter({ has: editor(crew, "big.ts") });
+  const pane = codeScrollerIn(page).filter({ has: editor(crew, "big.ts") });
 
   await openFile(crew, "big.ts", "src/big.ts");
   await editor(crew, "big.ts").click({ position: { x: 80, y: 10 } });

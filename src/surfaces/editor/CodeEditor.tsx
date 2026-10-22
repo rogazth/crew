@@ -114,7 +114,7 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // The `overflow-auto` is on the root itself: the library listens for `scroll`
   // there but never styles it.
   return (
-    <div ref={host} className="contents" onMouseDown={focusEnd}>
+    <div ref={host} data-code-editor className="contents" onMouseDown={focusEnd}>
       <EditProvider
         createEditor={(options) => {
           // The options carry this CodeView's change listener.

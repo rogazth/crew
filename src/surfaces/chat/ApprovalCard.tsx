@@ -63,7 +63,7 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   if (requestId == null) return null;
 
   return (
-    <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none">
+    <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none" data-approval-card>
       <div className="flex items-center gap-2.5">
         <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
           <ShieldCheckIcon className="size-4" />

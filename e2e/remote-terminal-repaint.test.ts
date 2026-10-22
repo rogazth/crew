@@ -8,7 +8,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, openLauncher, pressChord, remoteRequest, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openLauncher, pressChord, remoteRequest, typeInTerminal, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 // Draws a frame, then rewrites one line in place, padded so the ring wraps
 // within a second. On SIGWINCH it clears and draws the whole frame, as Ink does.
@@ -33,7 +33,8 @@ async function found(crew: Crew, text: string): Promise<number> {
   await field.fill("");
   await field.fill(text);
   await new Promise((resolve) => setTimeout(resolve, 150));
-  const count = (await field.locator("xpath=following-sibling::span[1]").textContent()) ?? "";
+  const bar = crew.window.locator("[data-find-bar]").filter({ has: field });
+  const count = (await bar.locator("[data-find-count]").textContent()) ?? "";
   return Number(/of (\d+)/.exec(count)?.[1] ?? 0);
 }
 
@@ -55,7 +56,7 @@ test("a TUI that draws by difference shows its whole frame after the window relo
     await field.waitFor();
     await field.fill(`${api}/`);
     await window.keyboard.press(`${MOD}+Enter`);
-    await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`).waitFor();
+    await workspaceMark(crew, "api").waitFor();
     const workspaces = await remoteRequest<Workspace[]>(remote, "workspace_list");
     assert.equal(workspaces.length, 1);
 

@@ -27,17 +27,13 @@ async function openLauncher(crew: Crew) {
 
 /** The launcher's rows as [group heading, label], in order; ungrouped rows head with "". */
 async function launcherRows(crew: Crew): Promise<[string, string][]> {
-  const search = crew.window.getByRole("textbox", { name: "Open a tab" });
-  // The search sits in the launcher's header; the rows are the block after it.
-  const list = search.locator("xpath=../following-sibling::div[1]");
-  return list.evaluate((element) => {
+  return crew.window.locator("[data-launcher-list]").evaluate((element) => {
     const rows: [string, string][] = [];
     let heading = "";
     for (const child of element.children) {
-      if (child instanceof HTMLButtonElement) {
-        rows.push([heading, child.querySelector(".truncate")?.textContent?.trim() ?? ""]);
-      } else {
-        heading = child.textContent?.trim() ?? "";
+      if (child.matches("[data-group-header]")) heading = child.textContent?.trim() ?? "";
+      else if (child.matches("[data-launcher-row]")) {
+        rows.push([heading, child.querySelector("[data-launcher-label]")?.textContent?.trim() ?? ""]);
       }
     }
     return rows;

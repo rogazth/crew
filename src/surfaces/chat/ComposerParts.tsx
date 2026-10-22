@@ -97,7 +97,7 @@ export function AgentClip({
   return (
     <div data-agent-strip data-state={clip.state} className="ds-strip" {...(open ? { "data-open": "" } : {})}>
       {children}
-      <button type="button" className="ds-strip-head" aria-expanded={open} onClick={onToggle}>
+      <button type="button" data-agent-clip className="ds-strip-head" aria-expanded={open} onClick={onToggle}>
         <span className="ds-strip-glyph">
           {clip.state === "working" ? (
             <span className="crew-bg-dot" aria-hidden />

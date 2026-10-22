@@ -38,11 +38,11 @@ test("a bare file name is a chip when the folder the reply names holds it, and p
   await newSession(crew, workspace.id);
 
   await sendInChat(crew, `shots in \`${shots}/\`: \`a.png\` and \`missing.png\``);
-  const reply = crew.window.locator(".crew-md").filter({ hasText: "Reply 1:" });
-  const chip = reply.locator(".crew-file-ref").filter({ hasText: "a.png" });
+  const reply = crew.window.locator('[data-message="assistant"]').filter({ hasText: "Reply 1:" });
+  const chip = reply.locator("[data-file-ref]").filter({ hasText: "a.png" });
   await chip.waitFor();
-  await reply.locator("code.crew-inline-code").filter({ hasText: "missing.png" }).waitFor();
-  assert.equal(await reply.locator(".crew-file-ref").count(), 1, "only the file that is there is a chip");
+  await reply.locator("[data-inline-code]").filter({ hasText: "missing.png" }).waitFor();
+  assert.equal(await reply.locator("[data-file-ref]").count(), 1, "only the file that is there is a chip");
 
   // An image opens in the lightbox, from the folder the reply named.
   await chip.click();
@@ -61,13 +61,13 @@ test("`@` offers a folder git ignores, and the message sends it", async () => {
   await folder.waitFor();
   // Tab goes into the folder: the mention stays `@reference/`, with no space after it.
   await field.press("Tab");
-  assert.equal(await field.inputValue(), "look at @reference/");
+  assert.equal(await field.textContent(), "look at @reference/");
   // Into the folder: what it holds, read from disk.
   await menu.getByRole("option").filter({ hasText: "t3code/" }).first().waitFor();
   await field.press("End");
   await field.pressSequentially(" please");
   await waitFor(async () => (await menu.count()) === 0, { message: "the menu closes past the mention" });
-  await sendInChat(crew, await field.inputValue());
+  await sendInChat(crew, "look at @reference/ please");
 
   const cwd = workspace.path;
   const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${session.id}.jsonl`);
@@ -82,9 +82,9 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
   await field.fill("look at @refer");
   await crew.window.getByRole("listbox", { name: "Files" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
   await field.pressSequentially(" now");
-  await sendInChat(crew, await field.inputValue());
+  await sendInChat(crew, "look at @reference/ now");
 
-  await crew.window.locator('.crew-file-ref[title="reference/"]').filter({ visible: true }).last().click();
+  await crew.window.locator('[data-file-ref="reference/"]').filter({ visible: true }).last().click();
   const explorer = crew.window.getByRole("complementary", { name: "Explorer" });
   await explorer.getByText("t3code", { exact: true }).waitFor();
   await explorer.getByText("zeron", { exact: true }).waitFor();

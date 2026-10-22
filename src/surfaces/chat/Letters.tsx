@@ -19,7 +19,7 @@ export function Face({ party, sessions, className = "size-4" }: { party: Party; 
     return <BotAvatar seed={party.id} bare className={`${className} shrink-0`} />;
   }
   if (session) return <ProviderIcon provider={session.provider} className={`${className} shrink-0`} />;
-  return <BotIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
+  return <BotIcon aria-hidden data-face="unknown" className={`${className} shrink-0 text-icon`} />;
 }
 
 /** A send Crew refused: the call failed, nothing was delivered, and the row says why. */

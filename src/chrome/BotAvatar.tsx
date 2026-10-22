@@ -54,6 +54,7 @@ export function BotAvatar({
       src={avatarUri(id, loaded.style, drawn, animated)}
       alt=""
       aria-hidden
+      data-bot-face
       draggable={false}
       className={`${className} shrink-0 ${bare ? "" : "rounded-full bg-fill"}`}
     />

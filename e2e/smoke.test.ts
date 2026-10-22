@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, sessions, startChat, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, sessions, startChat, waitFor, workspaceRail, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -27,7 +27,7 @@ test("opens the seeded workspace from dist/ on the sandbox's data", async () => 
 
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const rail = crew.window.locator('nav[aria-label="Workspaces"][data-sidebar-rail]');
+  const rail = workspaceRail(crew);
   await rail.getByRole("button", { name: workspace.name, exact: true }).and(crew.window.locator('[aria-current="true"]')).waitFor();
 });
 

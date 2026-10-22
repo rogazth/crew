@@ -3,7 +3,7 @@
 // tabs answer ⌘F with the find bar, which counts and steps through their matches.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import { codeScrollerIn, launchCrew, MOD, pressChord, waitFor, webviewIn, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -59,12 +59,10 @@ async function openFile(query: string, relative: string): Promise<void> {
 const editor = () => crew.window.getByRole("textbox", { name: "long.ts", exact: true }).filter({ visible: true });
 
 /** Whether the line reading `text` is painted inside the code editor's scrolled box. */
-function lineOnScreen(text: string): Promise<boolean> {
-  return crew.window.evaluate((text) => {
-    const scroller = [...document.querySelectorAll<HTMLElement>("[data-selectable] .overflow-auto")].find(
-      (el) => el.offsetParent !== null,
-    );
-    if (!scroller) return false;
+async function lineOnScreen(text: string): Promise<boolean> {
+  const scrollers = codeScrollerIn(crew.window).filter({ visible: true });
+  if ((await scrollers.count()) === 0) return false;
+  return scrollers.first().evaluate((scroller, text) => {
     const box = scroller.getBoundingClientRect();
     const roots: ParentNode[] = [scroller];
     while (roots.length) {
@@ -132,16 +130,16 @@ async function findsIn(relative: string, query: string, first: string, second: s
   await crew.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await openFile(relative.split("/").pop()!.split(".")[0]!, relative);
   if (relative.endsWith(".html")) await crew.window.getByRole("button", { name: "Open in Browser" }).click();
-  await waitFor(async () => (await crew.window.locator("webview:visible").count()) > 0, {
+  await waitFor(async () => (await webviewIn(crew.window).filter({ visible: true }).count()) > 0, {
     message: `${relative} opens in its page`,
   });
   await new Promise((resolve) => setTimeout(resolve, 1500));
-  await crew.window.locator("webview:visible").focus();
+  await webviewIn(crew.window).filter({ visible: true }).focus();
   await pressChord(crew, `${MOD}+f`);
   const field = crew.window.getByRole("textbox", { name: "Find in page" }).filter({ visible: true });
   await field.waitFor({ timeout: 3000 });
   await field.fill(query);
-  const bar = field.locator("..");
+  const bar = crew.window.locator("[data-find-bar]").filter({ has: field });
   await bar.getByText(first, { exact: true }).waitFor({ timeout: 5000 });
   await field.press("Enter");
   await bar.getByText(second, { exact: true }).waitFor({ timeout: 5000 });

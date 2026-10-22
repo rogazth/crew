@@ -55,7 +55,7 @@ export function Field({
       <span className="text-[12px] font-medium text-text-muted">{label}</span>
       {children}
       {error ? (
-        <span className="text-[12px] text-danger">{error}</span>
+        <span data-error className="text-[12px] text-danger">{error}</span>
       ) : (
         hint && <span className="text-[12px] text-text-muted">{hint}</span>
       )}
@@ -306,7 +306,7 @@ export function Footer({ hints, children }: { hints: [string, string][]; childre
 
 /** A quiet heading over a group of rows in a list surface. */
 export function GroupHeader({ children }: { children: ReactNode }) {
-  return <div className="px-2.5 pt-2 pb-1 text-[11px] text-text-muted">{children}</div>;
+  return <div data-group-header className="px-2.5 pt-2 pb-1 text-[11px] text-text-muted">{children}</div>;
 }
 
 /** A button that is only its glyph; `label` is its name, since there is no text to read. */
@@ -371,7 +371,7 @@ export function Alert({
                 {description}
               </AlertDialog.Description>
             )}
-            {error && <div className="text-[12px] break-words text-danger">{error}</div>}
+            {error && <div data-error className="text-[12px] break-words text-danger">{error}</div>}
           </div>
           {children}
         </AlertDialog.Popup>

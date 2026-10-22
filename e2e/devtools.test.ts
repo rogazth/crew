@@ -9,7 +9,7 @@
 // back in, and a tab closed with DevTools docked takes them along.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { launchCrew, MOD, servePages, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, servePages, stripTabIds, waitFor, webviewIn, type Crew } from "./harness.ts";
 
 type Rect = { x: number; y: number; width: number; height: number };
 type Frontend = { id: number; docked: boolean; inspects: string; bounds: Rect | null; visible: boolean };
@@ -103,7 +103,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   );
   assert.equal(await devtools.getAttribute("aria-pressed"), "true", "the toolbar shows them open");
   const bottom = await box(crew, panel("bottom"));
-  const pane = await box(crew, '[data-devtools="bottom"] >> xpath=..');
+  const pane = await box(crew, '[data-browser-body]:has([data-devtools="bottom"])');
   assert.ok(Math.abs(bottom.y + bottom.height - (pane.y + pane.height)) <= 1, "the panel sits on the pane's bottom edge");
   assert.ok(Math.abs(bottom.width - pane.width) <= 1, "it spans the pane");
   near((await frontends(crew))[0]?.bounds ?? null, bottom, "the view covers the panel");
@@ -156,11 +156,11 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   await page.getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: "Developer Tools Position" }).click();
   await frontend(crew, (it) => !it.visible, "the view hides under the menu");
-  await page.locator(`${panel("right")} img`).waitFor();
+  await page.locator(`${panel("right")} [data-devtools-still]`).waitFor();
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await frontend(crew, (it) => it.visible, "the view comes back once the menu goes");
-  await waitFor(async () => (await page.locator(`${panel("right")} img`).count()) === 0, {
+  await waitFor(async () => (await page.locator(`${panel("right")} [data-devtools-still]`).count()) === 0, {
     message: "the still goes with it",
   });
 
@@ -171,7 +171,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   });
   assert.ok(Math.abs(left.x - pane.x) <= 1, "the panel sits on the pane's left edge");
   await frontend(crew, (it) => it.visible && it.bounds?.x === Math.round(left.x), "the view follows");
-  await page.locator("webview").first().focus();
+  await webviewIn(page).first().focus();
   await page.keyboard.press(`${MOD}+Alt+KeyI`);
   await waitFor(async () => (await page.locator("[data-devtools]").count()) === 0, { message: "the panel goes" });
   await waitFor(async () => (await frontends(crew)).length === 0, { message: "and its frontend with it" });

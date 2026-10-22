@@ -9,7 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Page } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 type Trace = { t: number; kind: "send" | "recv" | "frame"; url: string; id?: number | undefined; method?: string | undefined; ok?: boolean | undefined; stream?: number };
 
@@ -176,7 +176,7 @@ async function openOnMachine(crew: Crew, machine: string, dir: string, name: str
   await field.waitFor();
   await field.fill(`${dir}/`);
   await window.keyboard.press(`${MOD}+Enter`);
-  await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`).waitFor();
+  await workspaceMark(crew, name).waitFor();
 }
 
 /** ⌘T ↵ (a shell tab), timed to the first byte from `dialPort`. */
@@ -255,8 +255,8 @@ for (const latencyMs of [0, 60]) {
       await remote.start();
       await waitFor(
         () =>
-          crew.window
-            .locator('nav[aria-label="Workspaces"] button[data-nav][aria-label="api"] [data-remote-badge]')
+          workspaceMark(crew, "api")
+            .locator("[data-remote-badge]")
             .getAttribute("data-remote-badge")
             .then((state) => state === "online"),
         { message: "the machine is back", timeout: 20_000 },

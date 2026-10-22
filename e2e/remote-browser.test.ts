@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
 import { partitionFor } from "../src/lib/browser/bridge.ts";
-import { addRemote, launchCrew, remoteRequest, stripTabIds, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, remoteRequest, stripTabIds, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 /**
  * A dev server: `/page` opens a websocket back to itself and titles itself
@@ -81,10 +81,6 @@ async function devServer(): Promise<{ port: number; requests: string[]; server: 
   return { port: (server.address() as AddressInfo).port, requests, server };
 }
 
-function mark(crew: Crew, name: string) {
-  return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
-}
-
 /** How pages would reach `url`, as their session's proxy settles it; `incognito` asks the in-memory one. */
 function route(crew: Crew, url: string, incognito = false): Promise<string> {
   return crew.app.evaluate(
@@ -139,7 +135,7 @@ test("a remote workspace's pages open the machine's localhost at its name, webso
     const web = await crew.makeRepo("web");
     await remoteRequest<Workspace>(remote, "workspace_create", { name: "web", path: web });
     await crew.reload();
-    await mark(crew, "web").waitFor({ timeout: 15_000 });
+    await workspaceMark(crew, "web").waitFor({ timeout: 15_000 });
 
     // Once a machine is known, every page's loopback goes to the relay; names that cannot be loopback skip it.
     await waitFor(async () => (await route(crew, "http://localhost:3000/")).startsWith("PROXY 127.0.0.1:"), {
@@ -159,7 +155,7 @@ test("a remote workspace's pages open the machine's localhost at its name, webso
     assert.equal(await route(crew, "https://example.com/", true), "DIRECT");
 
     // Typed as the terminal prints it, a dev server page opens at the machine's name, and its HMR socket follows.
-    await mark(crew, "web").click();
+    await workspaceMark(crew, "web").click();
     await openPage(crew, `http://localhost:${dev.port}/page`);
     const page = `http://devbox.localhost:${dev.port}/page`;
     await waitFor(async () => (await pageTitle(crew, page)) === "hmr ok", {
@@ -195,13 +191,13 @@ test("a remote workspace's pages open the machine's localhost at its name, webso
     });
     assert.ok(!dev.requests.includes("/while-gone"), "nothing reached the dev server without the machine");
     const apiHits = dev.requests.filter((at) => at === "/api").length;
-    await mark(crew, "web").click();
+    await workspaceMark(crew, "web").click();
     await inPage(crew, fetching, "hit()");
     await waitFor(async () => (await pageTitle(crew, fetching)) === "fetch failed", { message: "the page's own fetch fails with the machine" });
     assert.equal(dev.requests.filter((at) => at === "/api").length, apiHits);
 
     // This Mac's workspace opens the same server at plain localhost, relay or not.
-    await mark(crew, "app").click();
+    await workspaceMark(crew, "app").click();
     const direct = `http://localhost:${dev.port}/from-mac`;
     await openPage(crew, direct);
     await waitFor(async () => (await pageTitle(crew, direct)) === "/from-mac", { message: "this Mac's workspace loads its own localhost" });
@@ -209,10 +205,10 @@ test("a remote workspace's pages open the machine's localhost at its name, webso
     // It comes back: the remote workspace's pages load again.
     await remote.start();
     await waitFor(
-      async () => (await mark(crew, "web").locator("[data-remote-badge]").getAttribute("data-remote-badge", { timeout: 1_000 })) === "online",
+      async () => (await workspaceMark(crew, "web").locator("[data-remote-badge]").getAttribute("data-remote-badge", { timeout: 1_000 })) === "online",
       { message: "the machine answers again", timeout: 20_000 },
     );
-    await mark(crew, "web").click();
+    await workspaceMark(crew, "web").click();
     await openPage(crew, `http://localhost:${dev.port}/back`);
     await waitFor(async () => (await pageTitle(crew, `http://devbox.localhost:${dev.port}/back`)) === "/back", {
       message: "pages load once the machine is back",

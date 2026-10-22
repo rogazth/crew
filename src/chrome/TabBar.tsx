@@ -792,7 +792,7 @@ function PageIcon({
   // Pages of both kinds share the strip, so the private one wears its mark instead of the site's.
   if (tab.incognito) return <IncognitoIcon />;
   if (tab.file) return <FileTypeIcon name={tab.file.relative} className="size-3.5" />;
-  if (icon) return <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />;
+  if (icon) return <img src={icon} alt="" data-favicon className="size-3.5" onError={() => setBroken(icon)} />;
   return <GlobeIcon className="size-3.5 text-icon" />;
 }
 

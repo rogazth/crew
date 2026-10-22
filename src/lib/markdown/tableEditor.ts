@@ -113,10 +113,12 @@ class TableView {
     this.grid = gridOf(parseTable(source)!);
     this.dom = document.createElement("div");
     this.dom.className = "cm-md-table-wrap";
+    this.dom.dataset.mdTable = "";
     // Outside the note's editing host, so a cell's editor is a host of its own and takes focus.
     this.dom.contentEditable = "false";
     const scroll = document.createElement("div");
     scroll.className = "cm-md-table-scroll";
+    scroll.dataset.mdTableScroll = "";
     this.frame = document.createElement("div");
     this.frame.className = "cm-md-table-frame";
     this.drop = document.createElement("div");
@@ -204,6 +206,7 @@ class TableView {
   private fill(td: HTMLTableCellElement, text: string) {
     const content = document.createElement("div");
     content.className = "cm-md-cell";
+    content.dataset.mdCell = "";
     renderInline(text, content);
     // The grip stays; the text is what changes.
     const grips = [...td.querySelectorAll(":scope > .cm-md-grip")];
@@ -564,10 +567,12 @@ class TableView {
   private mountEditor(td: HTMLTableCellElement, editor: EditorView) {
     const content = document.createElement("div");
     content.className = "cm-md-cell cm-md-cell-editing";
+    content.dataset.mdCell = "";
     content.append(editor.dom);
     const grips = [...td.querySelectorAll(":scope > .cm-md-grip")];
     td.replaceChildren(content, ...grips);
     td.classList.add("cm-md-editing");
+    td.dataset.editing = "";
   }
 
   /** Closes the cell editor; `format` re-aligns the pipes of an edited cell, which writes to the note. */
@@ -580,6 +585,7 @@ class TableView {
     editing.editor.destroy();
     if (td) {
       td.classList.remove("cm-md-editing");
+      delete td.dataset.editing;
       this.fill(td, this.text(editing.spot));
     }
     if (format) this.format();

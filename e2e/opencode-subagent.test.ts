@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew } from "./harness.ts";
+import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew, composerOf } from "./harness.ts";
 
 let crew: Crew;
 let chat: Session;
@@ -33,7 +33,7 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
+const composer = () => composerOf(crew);
 const sheet = () => crew.window.locator("[data-work-sheet]");
 const page = () => crew.window.locator("[data-agent-view]");
 const card = () => crew.window.locator("[data-agent-card]").last();
@@ -151,7 +151,8 @@ test("a second call that continues the same subagent is its own card and opens t
   assert.ok(text.indexOf("Reply with the single word pong.") < text.indexOf("Again, reply"), text);
   assert.ok(text.indexOf("Again, reply") < text.indexOf("pong again"), text);
   // No wrapper card around the answers: they are chat messages.
-  assert.equal(await thread.locator(".ring-1.ring-hairline").count(), 0);
+  assert.equal(await thread.locator("[data-prose]").count(), 0);
+  assert.equal(await thread.locator("[data-hang]").count(), 0);
   await shoot("thread");
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });

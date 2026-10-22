@@ -15,6 +15,8 @@ import {
   savedStrip,
   servePages,
   stripTabIds,
+  terminalOnLinkIn,
+  terminalScreenIn,
   typeInTerminal,
   waitFor,
   type Crew,
@@ -23,7 +25,7 @@ import {
 
 /** The terminal on screen. */
 function screen(crew: Crew) {
-  return crew.window.locator(".xterm-screen").filter({ visible: true });
+  return terminalScreenIn(crew.window).filter({ visible: true });
 }
 
 /**
@@ -41,7 +43,7 @@ async function clickLink(crew: Crew, url: string, modifiers: Modifier[] = []): P
       // Off the link and back on: xterm looks links up as the pointer moves.
       await page.mouse.move(box.x + box.width / 2, box.y + box.height - 4);
       await page.mouse.move(box.x + 4, box.y + 4, { steps: 2 });
-      return page.locator(".xterm-cursor-pointer").filter({ visible: true }).count();
+      return terminalOnLinkIn(page).filter({ visible: true }).count();
     },
     { interval: 100, message: "xterm finds a link under the pointer" },
   );
@@ -87,7 +89,7 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
   const page = crew.window;
   await pressChord(crew, `${MOD}+,`);
   await page.getByRole("button", { name: "Browser", exact: true }).click();
-  const toggle = page.locator("label").filter({ hasText: "Open links in Crew" }).getByRole("switch");
+  const toggle = page.locator('[data-setting="links-in-crew"]').getByRole("switch");
   assert.equal(await toggle.getAttribute("aria-checked"), "false", "links start out leaving the app");
   await toggle.click();
   await waitFor(

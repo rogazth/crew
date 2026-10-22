@@ -8,7 +8,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, withSystemClipboard, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, withSystemClipboard, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 /** A 2×2 PNG, as a clipboard would hold a screenshot. */
 const PNG = Buffer.from(
@@ -64,7 +64,7 @@ test("⌘V pastes a screenshot as a path, here and on another machine", async ()
     await field.waitFor();
     await field.fill(`${api}/`);
     await window.keyboard.press(`${MOD}+Enter`);
-    await window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`).waitFor();
+    await workspaceMark(crew, "api").waitFor();
 
     await openShell(crew);
     await pasteImageInto(crew, path.join(crew.root, "remote.png"));

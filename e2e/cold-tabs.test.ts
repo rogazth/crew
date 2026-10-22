@@ -65,7 +65,7 @@ const pill = (id: string) => crew.window.locator(`[data-tab-strip] [role="tab"][
 async function face(id: string) {
   return {
     text: (await pill(id).innerText()).trim(),
-    icon: await pill(id).locator("img").count(),
+    icon: await pill(id).locator("[data-favicon]").count(),
   };
 }
 

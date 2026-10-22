@@ -81,6 +81,7 @@ class ChipWidget extends WidgetType {
   toDOM() {
     const chip = document.createElement("span");
     chip.className = "cm-chip";
+    chip.dataset.chip = "";
     chip.dataset.kind = this.kind;
     chip.title = this.text;
     const icon = document.createElement("span");

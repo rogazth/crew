@@ -19,6 +19,7 @@ import {
   startChat,
   sessionTab,
   waitFor,
+  workspaceMark,
   worktreeHeader,
   type RemoteDaemon,
 } from "./harness.ts";
@@ -83,7 +84,7 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     await field.waitFor();
     await field.fill(`${api}/`);
     await page.keyboard.press(`${MOD}+Enter`);
-    await page.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="api"]`).waitFor();
+    await workspaceMark(crew, "api").waitFor();
 
     await worktreeHeader(crew, "feat/pics").waitFor();
     await goToWorktree(crew, "feat/pics");
@@ -120,10 +121,10 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     ] as const) {
       // A chip opens the image in the lightbox over the chat; Esc puts it away.
       await sessionTab(crew, chat).click();
-      await page.locator(`.crew-file-ref[title="${chip}"]`).last().click();
+      await page.locator(`[data-file-ref="${chip}"]`).last().click();
       const lightbox = page.getByRole("dialog", { name: path.basename(file) });
       await lightbox.waitFor();
-      const opened = lightbox.locator("img");
+      const opened = lightbox.getByRole("img");
       await waitFor(() => opened.evaluate((img: HTMLImageElement) => img.naturalWidth === 2), { message: `${chip} loads` });
       // The lightbox reads the file itself, not through devbox's proxy: only the palette's image does.
       await page.keyboard.press("Escape");
