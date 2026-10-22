@@ -177,6 +177,7 @@ export function controlOf(block: Block): Control | null {
       return { icon: "stop", before: "Stopped", ...at, after: detail.count ? ` and its ${plural(detail.count, "subagent")}` : "" };
     case "update_session":
       if (detail.note === "rename") return { icon: "rename", before: "Renamed", ...at, after: detail.text ? ` to ${detail.text}` : "" };
+      if (detail.note === "effort") return { icon: "rename", before: "Set the effort of", ...at, after: detail.text ? ` to ${detail.text}` : "" };
       if (detail.note === "delete") {
         const also = detail.count ? ` and its ${plural(detail.count, "subagent")}` : "";
         return { icon: "delete", before: "Deleted", ...at, after: `${also} · its worktree stays` };

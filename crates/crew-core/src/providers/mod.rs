@@ -201,8 +201,10 @@ fn control_detail(verb: &str, input: &Map<String, Value>) -> crew_protocol::Tool
         }
         "update_session" => {
             note = string_field(Some(input), "action");
-            if note.as_deref() == Some("rename") {
-                text = string_field(Some(input), "name");
+            match note.as_deref() {
+                Some("rename") => text = string_field(Some(input), "name"),
+                Some("effort") => text = string_field(Some(input), "effort"),
+                _ => {}
             }
             session().into_iter().collect()
         }

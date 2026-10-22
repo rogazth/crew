@@ -131,7 +131,7 @@ async function sessionEnv(): Promise<NodeJS.ProcessEnv> {
 
 test("a message to a child opens its thread at the letter, lit", async () => {
   const env = await sessionEnv();
-  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
+  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--effort", "none", "--name", "Lint pass", "--", "tidy the imports"], { env });
   const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((one) => one.parentId === chat.id), {
     timeout: 20_000,
     message: "the child reaches crewd",
@@ -171,7 +171,7 @@ test("a message to a child opens its thread at the letter, lit", async () => {
 async function askingChild(name: string, prompt: string) {
   const env = await sessionEnv();
   const known = new Set((await sessions(crew, chat.workspaceId)).map((one) => one.id));
-  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", name, "--", prompt], { env });
+  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--effort", "none", "--name", name, "--", prompt], { env });
   return waitFor(async () => (await sessions(crew, chat.workspaceId)).find((one) => one.parentId === chat.id && one.name === name && !known.has(one.id)), {
     timeout: 20_000,
     message: "the child reaches crewd",

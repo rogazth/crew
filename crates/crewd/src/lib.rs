@@ -2570,7 +2570,7 @@ mod tests {
         let payload = serde_json::json!({
             "token": bridge.mint(&session_id),
             "method": "tools/call",
-            "params": { "name": "create_bot", "arguments": { "name": "B", "description": "does B" } }
+            "params": { "name": "create_bot", "arguments": { "name": "B", "description": "does B", "effort": "low" } }
         });
         let reply = unix_call(&info.socket_path, &payload);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");

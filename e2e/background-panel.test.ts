@@ -79,7 +79,7 @@ const processes = (workspaceId: string) => crew.request<Process[]>("process_list
 
 test("what the session started is one line under the composer, and its sheet lists running work before what ended", async () => {
   const env = await sessionEnv();
-  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
+  await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--effort", "none", "--name", "Lint pass", "--", "tidy the imports"], { env });
   const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((row) => row.parentId === chat.id), {
     timeout: 20_000,
     message: "the child reaches crewd",
@@ -297,7 +297,7 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
 
 test("the sheet lists a native subagent, a Crew subagent, a session and a shell as one work list", async () => {
   const env = await sessionEnv();
-  await run(CREW, ["sessions", "start", "--provider", "opencode", "--name", "billing-ui", "--", "wire the billing page"], { env });
+  await run(CREW, ["sessions", "start", "--provider", "opencode", "--effort", "none", "--name", "billing-ui", "--", "wire the billing page"], { env });
   await waitFor(async () => (await sessions(crew, chat.workspaceId)).some((row) => row.launchedBy === chat.id), {
     timeout: 20_000,
     message: "the launched session reaches crewd",

@@ -866,6 +866,7 @@ impl SessionTools {
                 None => crate::tools::unnamed_model(&provider),
             },
         };
+        let effort = crate::tools::named_effort(&provider, args)?;
         // Never more than the caller has: a parent that has to ask before a
         // command could otherwise start a child that does not, and hand it
         // the command.
@@ -915,6 +916,15 @@ impl SessionTools {
             )?,
             Start::Launch => self.make_launched(caller, &workspace, &name, &provider, &model, &autonomy, &worktree)?,
         };
+        session::set_options(
+            &self.store,
+            row.id.clone(),
+            row.model.clone(),
+            effort.clone(),
+            row.service_tier.clone(),
+            row.autonomy.clone(),
+        )?;
+        let row = session::get(&self.store, row.id.clone())?.unwrap_or(row);
         (self.on_created)(&row);
         // The prompt is the first letter between the two: the pair's thread
         // starts with it.
@@ -959,6 +969,7 @@ impl SessionTools {
             "name": name,
             "provider": provider,
             "model": model,
+            "effort": effort,
             "autonomy": autonomy,
             "worktree": worktree.as_deref().unwrap_or("main checkout"),
             "kind": if how == Start::Delegate { "subagent" } else { "session" },
@@ -1676,10 +1687,10 @@ impl SessionTools {
         }
     }
 
-    /// `update_session`: rename or delete.
+    /// `update_session`: rename, change the effort, or delete.
     fn update(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
         let id = text(args.get("session")).ok_or("session is required")?;
-        let action = text(args.get("action")).ok_or("action is required: rename or delete")?;
+        let action = text(args.get("action")).ok_or("action is required: rename, effort or delete")?;
         let row = self.visible(caller, &id)?;
         if row.kind == "bot" {
             return Err(format!(
@@ -1708,7 +1719,39 @@ impl SessionTools {
                 }
                 self.delete(&row)
             }
-            other => Err(format!("action is rename or delete, not \"{other}\"")),
+            "effort" => {
+                let wanted = text(args.get("effort")).ok_or("effort is required to change the effort")?;
+                if !Self::started_by(caller, &row) {
+                    self.may_write(caller, &row).map_err(|why| {
+                        format!("{} ({}) is not yours to change: you did not start it, and {why}", row.name, row.id)
+                    })?;
+                }
+                let allowed = crate::tools::efforts(&row.provider);
+                if allowed.is_empty() {
+                    return Err(format!(
+                        "{} runs on {}, whose effort is part of the model id, not a setting of its own.",
+                        row.name, row.provider
+                    ));
+                }
+                if !allowed.contains(&wanted.as_str()) {
+                    return Err(format!("effort for {} is one of {}, not \"{wanted}\"", row.provider, allowed.join(", ")));
+                }
+                session::set_options(
+                    &self.store,
+                    row.id.clone(),
+                    row.model.clone(),
+                    wanted.clone(),
+                    row.service_tier.clone(),
+                    row.autonomy.clone(),
+                )?;
+                self.store.session_changed(&row.id);
+                Ok(json!({
+                    "session": row.id,
+                    "effort": wanted,
+                    "note": "Applies from its next turn. It may invalidate the prompt cache, except on Anthropic models from the 5 family on."
+                }))
+            }
+            other => Err(format!("action is rename, effort or delete, not \"{other}\"")),
         }
     }
 
@@ -2061,7 +2104,8 @@ fn start_schema(wait: bool) -> Value {
         properties["wait"] = json!({ "type": "boolean", "description": "Block until its turn ends and return its report." });
         properties["timeout_s"] = json!({ "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "With wait: seconds to wait, 600 by default, 3600 at most." });
     }
-    json!({ "type": "object", "properties": properties, "required": ["prompt"] })
+    properties["effort"] = crate::tools::effort_property();
+    json!({ "type": "object", "properties": properties, "required": ["prompt", "effort"] })
 }
 
 /// The session tools. They need no host to be described, so the CLI builds
@@ -2110,7 +2154,7 @@ pub fn catalog() -> Vec<Tool> {
             ),
             schema: start_schema(true),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex fix the failing login test\n  crew sessions delegate --wait --timeout-s 300 -- what does the billing webhook do?")],
+            cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex --effort medium fix the failing login test\n  crew sessions delegate --effort low --wait --timeout-s 300 -- what does the billing webhook do?")],
         },
         Tool {
             name: "start_session",
@@ -2122,12 +2166,12 @@ pub fn catalog() -> Vec<Tool> {
             ),
             schema: start_schema(false),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --name Reviewer review the diff on main")],
+            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --effort high --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --effort medium --name Reviewer review the diff on main")],
         },
         Tool {
             name: "start_sessions",
             description: concat!(
-                "Start several separate sessions in one call: sessions is a list of 1 to 20 entries, each what start_session takes (prompt, provider, model, worktree, name, autonomy), each with its own prompt. Each is the user's, like one start_session makes: it shows in the sidebar, reports to nobody and is not capped. ",
+                "Start several separate sessions in one call: sessions is a list of 1 to 20 entries, each what start_session takes (prompt, effort, provider, model, worktree, name, autonomy), each with its own prompt. Each is the user's, like one start_session makes: it shows in the sidebar, reports to nobody and is not capped. ",
                 "Each entry succeeds or fails on its own, and the result lists both: sessions has one result per entry, in order, with ok, and on a failure the error. A worktree made for an entry that then failed is kept and named in its result. More than 20 entries is refused whole, before anything starts. ",
                 "request_id makes the whole call safe to retry. Use it for independent jobs that each need a session of their own; for one, use start_session."
             ),
@@ -2146,9 +2190,10 @@ pub fn catalog() -> Vec<Tool> {
                                 "model": { "type": "string", "description": "As in start_session." },
                                 "worktree": { "type": "string" },
                                 "name": { "type": "string" },
-                                "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"] }
+                                "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"] },
+                                "effort": crate::tools::effort_property()
                             },
-                            "required": ["prompt"]
+                            "required": ["prompt", "effort"]
                         },
                         "description": "One entry per session to start."
                     },
@@ -2157,7 +2202,7 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["sessions"]
             }),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"provider\": \"codex\"}'")],
+            cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"effort\": \"medium\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"effort\": \"low\", \"provider\": \"codex\"}'")],
         },
         Tool {
             name: "read_session",
@@ -2211,7 +2256,8 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "update_session",
             description: concat!(
-                "Rename or delete a session (a bot is the user's to rename or remove). action: rename (name is the new name; allowed for whoever started the session and whoever send_message reaches); ",
+                "Rename, change the effort of, or delete a session (a bot is the user's to rename or remove). action: rename (name is the new name; allowed for whoever started the session and whoever send_message reaches); ",
+                "effort (effort is the new level, from its next turn; same reach as rename; there is no action for the model, which stays what it started with). Changing effort can invalidate the prompt cache; it does not on Anthropic models from the 5 family on. ",
                 "delete (removes the session, its subagents and their transcripts, and never a worktree; refused while a worktree they work in has uncommitted changes). ",
                 "Delete is only for sessions you started (your subagents, or a session you launched with start_session); the user may delete any."
             ),
@@ -2219,14 +2265,16 @@ pub fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "session": session_arg(),
-                    "action": { "type": "string", "enum": ["rename", "delete"] },
-                    "name": { "type": "string", "description": "With rename: the new name." }
+                    "action": { "type": "string", "enum": ["rename", "effort", "delete"] },
+                    "name": { "type": "string", "description": "With rename: the new name." },
+                    "effort": { "type": "string", "description": "With effort: low, medium, high, xhigh or max for claude; minimal to max for codex; low to xhigh for grok. cursor and opencode carry it in the model id and refuse." }
                 },
                 "required": ["session", "action"]
             }),
             audience: Audience::PARENTS,
             cli: vec![
                 cli("sessions", "rename").sets("action", "rename").rest(&["session", "name"]).eg("crew sessions rename 3f2a… Auth refactor"),
+                cli("sessions", "effort").sets("action", "effort").pos(&["session", "effort"]).eg("crew sessions effort 3f2a… medium"),
                 cli("sessions", "delete").sets("action", "delete").pos(&["session"]).eg("crew sessions delete 3f2a…"),
             ],
         },
@@ -2737,6 +2785,11 @@ while True:
         }
 
         fn call(&self, caller: &Caller, name: &str, args: Value) -> Result<Value, String> {
+            self.call_bare(caller, name, crate::tools::with_effort(caller, name, args))
+        }
+
+        /// As written, with no effort filled in.
+        fn call_bare(&self, caller: &Caller, name: &str, args: Value) -> Result<Value, String> {
             match self.tools.run(caller, name, &args)? {
                 ToolOutput::Value(value) => Ok(value),
                 ToolOutput::Content(_) => Err("content".into()),
@@ -9078,7 +9131,7 @@ time.sleep(600)
             .run(
                 &user,
                 "start_sessions",
-                &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "worktree": "new" })] }),
+                &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "effort": "none", "worktree": "new" })] }),
             )
             .expect("a batch")
         {
@@ -9398,6 +9451,50 @@ time.sleep(600)
     }
 
     #[test]
+    fn the_tools_that_start_a_session_require_an_effort() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        for tool in ["delegate", "start_session"] {
+            let out = w.call_bare(&shell, tool, json!({ "provider": "claude", "prompt": "x" }));
+            assert!(out.is_err_and(|e| e.contains("effort is required")), "{tool}");
+        }
+        let out = w.call_bare(&shell, "delegate", json!({ "provider": "claude", "prompt": "x", "effort": "ludicrous" }));
+        assert!(out.is_err_and(|e| e.contains("one of low, medium, high, xhigh, max")));
+        let out = w.call_bare(&shell, "delegate", json!({ "provider": "opencode", "prompt": "x", "effort": "high" }));
+        assert!(out.is_err_and(|e| e.contains("Pass effort \"none\"")));
+        let made =
+            w.call_bare(&shell, "delegate", json!({ "provider": "opencode", "prompt": "x", "effort": "none" })).expect("none");
+        assert_eq!(made["effort"], "");
+        let many = w
+            .call_bare(&shell, "start_sessions", json!({ "sessions": [{ "provider": "opencode", "prompt": "y" }] }))
+            .expect("batch");
+        assert_eq!(many["sessions"][0]["ok"], false);
+    }
+
+    #[test]
+    fn update_session_changes_the_effort_of_a_session_whose_cli_takes_one() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let careful = w.session("bot", "Careful", "ask");
+        let id = w.start(&shell, "x");
+        w.settle(&id);
+        let provider = w.row(&id).provider;
+        let valid = crate::tools::efforts(&provider);
+        if let Some(level) = valid.first() {
+            let out =
+                w.call(&shell, "update_session", json!({ "session": id, "action": "effort", "effort": level })).expect("effort");
+            assert_eq!(out["effort"], *level);
+            assert_eq!(w.row(&id).effort, *level);
+            assert!(out["note"].as_str().unwrap().contains("prompt cache"));
+            let bad = w.call(&shell, "update_session", json!({ "session": id, "action": "effort", "effort": "ludicrous" }));
+            assert!(bad.is_err_and(|e| e.contains("one of")));
+            let out = w.call(&careful, "update_session", json!({ "session": id, "action": "effort", "effort": level }));
+            assert!(out.is_err_and(|e| e.contains("not yours to change")));
+        }
+        assert!(w.call(&shell, "update_session", json!({ "session": id, "action": "effort" })).is_err());
+    }
+
+    #[test]
     fn delete_is_for_the_starter_and_the_user() {
         let w = world();
         let (_, gone) = recorded(&w);
@@ -9420,7 +9517,7 @@ time.sleep(600)
         }
         // Archiving is not an action any more.
         let out = w.call(&bot, "update_session", json!({ "session": launched, "action": "archive" }));
-        assert!(out.is_err_and(|e| e.contains("rename or delete")));
+        assert!(out.is_err_and(|e| e.contains("rename, effort or delete")));
         // Launching is enough to delete.
         let out = w.call(&bot, "update_session", json!({ "session": theirs, "action": "delete" })).expect("delete");
         assert_eq!(out["deleted"], json!([theirs]));

@@ -518,13 +518,20 @@ mod tests {
 
     #[test]
     fn a_rest_positional_joins_its_words() {
-        let (group, verb, matches) = parse(&["sessions", "start", "--provider", "codex", "run", "the", "-e2e"]);
+        let (group, verb, matches) =
+            parse(&["sessions", "start", "--provider", "codex", "--effort", "low", "run", "the", "-e2e"]);
         assert_eq!((group.as_str(), verb.as_str()), ("sessions", "start"));
         let (verb, tool) = find("sessions", "start");
-        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "run the -e2e", "provider": "codex" }));
-        let (_, _, matches) = parse(&["sessions", "delegate", "--wait", "--timeout-s", "30", "--", "go"]);
+        assert_eq!(
+            arguments(&matches, &tool, &verb).expect("args"),
+            json!({ "prompt": "run the -e2e", "provider": "codex", "effort": "low" })
+        );
+        let (_, _, matches) = parse(&["sessions", "delegate", "--effort", "low", "--wait", "--timeout-s", "30", "--", "go"]);
         let (verb, tool) = find("sessions", "delegate");
-        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "go", "wait": true, "timeout_s": 30 }));
+        assert_eq!(
+            arguments(&matches, &tool, &verb).expect("args"),
+            json!({ "prompt": "go", "effort": "low", "wait": true, "timeout_s": 30 })
+        );
     }
 
     /// A list of objects is given as one JSON flag per item.

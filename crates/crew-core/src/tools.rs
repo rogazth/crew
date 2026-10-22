@@ -92,6 +92,78 @@ pub fn default_effort(provider: &str) -> &'static str {
     }
 }
 
+/// The `effort` argument of every tool that starts a session or a bot.
+pub fn effort_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "Required. How hard it thinks: low, medium, high, xhigh or max for claude; minimal to max for codex; low to xhigh for grok; \"none\" for cursor and opencode, whose model id carries it. Choose it for the job; nothing defaults it."
+    })
+}
+
+/// For tests: the effort a call would have to name, filled in where it names
+/// none, so a test about something else need not say it.
+#[cfg(test)]
+pub fn with_effort(caller: &Caller, name: &str, mut args: Value) -> Value {
+    fn fill(caller: &Caller, entry: &mut Value) {
+        let Some(map) = entry.as_object_mut() else { return };
+        if map.contains_key("effort") {
+            return;
+        }
+        let provider = map
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| caller.session().map(|me| me.provider.clone()))
+            .unwrap_or_else(|| "claude".into());
+        map.insert("effort".into(), json!(if efforts(&provider).is_empty() { "none" } else { "low" }));
+    }
+    match name {
+        "delegate" | "start_session" | "create_bot" => fill(caller, &mut args),
+        "start_sessions" => {
+            if let Some(entries) = args.get_mut("sessions").and_then(Value::as_array_mut) {
+                entries.iter_mut().for_each(|entry| fill(caller, entry));
+            }
+        }
+        _ => {}
+    }
+    args
+}
+
+/// The efforts a provider's CLI takes as a setting of its own. Empty for a CLI
+/// whose model ids carry the effort (cursor, opencode). Grok's model-by-model
+/// list is the CLI's, so this is the widest it offers.
+pub fn efforts(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "claude" => &["low", "medium", "high", "xhigh", "max"],
+        "codex" => &["minimal", "low", "medium", "high", "xhigh", "max"],
+        "grok" => &["low", "medium", "high", "xhigh"],
+        _ => &[],
+    }
+}
+
+/// The effort a call that starts a session or a bot names. It is required: a
+/// default would run a job at an effort nobody chose. A CLI that takes none as
+/// a setting (cursor, opencode) is told `none`, and the session keeps the
+/// effort its model id carries. Returns what the session stores.
+pub fn named_effort(provider: &str, args: &Value) -> Result<String, String> {
+    let allowed = efforts(provider);
+    let hint = if allowed.is_empty() { "none".to_string() } else { allowed.join(", ") };
+    let wanted = text(args.get("effort"))
+        .ok_or_else(|| format!("effort is required: how hard the {provider} model thinks. One of: {hint}."))?;
+    if allowed.is_empty() {
+        return if wanted == "none" {
+            Ok(String::new())
+        } else {
+            Err(format!("{provider} has no effort of its own: its model id carries it. Pass effort \"none\", not \"{wanted}\"."))
+        };
+    }
+    if allowed.contains(&wanted.as_str()) {
+        Ok(wanted)
+    } else {
+        Err(format!("effort for {provider} is one of {hint}, not \"{wanted}\"."))
+    }
+}
+
 /// A session's model when the caller named none. Cursor, Codex, opencode and
 /// Grok use whatever their CLI has selected; the rest use `default_model`.
 pub fn unnamed_model(provider: &str) -> String {
@@ -485,12 +557,13 @@ pub(crate) fn catalog() -> Vec<Tool> {
                              What there is:\n{}",
                             model_sheet()
                         )
-                    }
+                    },
+                    "effort": effort_property()
                 },
-                "required": ["name", "description"]
+                "required": ["name", "description", "effort"]
             }),
             audience: Audience::SESSIONS,
-            cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --description \"Review every diff on main\"")],
+            cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --effort medium --description \"Review every diff on main\"")],
         },
         Tool {
             name: "update_description",
@@ -983,6 +1056,7 @@ fn create_bot(
         }
     }
     let model = requested.unwrap_or_else(|| if provider == me.provider { me.model.clone() } else { unnamed_model(&provider) });
+    let effort = named_effort(&provider, args)?;
     // Inherited, never asked for. A session that has to stop at every command
     // could otherwise build one that does not, and then send it the command.
     let autonomy = me.autonomy.clone();
@@ -999,6 +1073,15 @@ fn create_bot(
         autonomy.clone(),
         me.worktree.clone(),
     )?;
+    session::set_options(
+        store,
+        session.id.clone(),
+        model.clone(),
+        effort.clone(),
+        session.service_tier.clone(),
+        autonomy.clone(),
+    )?;
+    let session = session::get(store, session.id.clone())?.unwrap_or(session);
     on_created(&session);
     transcripts.append_system(&session.id, &format!("Created by {}", me.name));
     // The creator's own chat, so the roster growing is something the user reads
@@ -1011,6 +1094,7 @@ fn create_bot(
         "name": name,
         "provider": provider,
         "model": model,
+        "effort": effort,
         "autonomy": autonomy,
         "status": "idle"
     }))
@@ -1307,6 +1391,7 @@ mod tests {
     }
 
     fn call_as(store: &Store, transcripts: &TranscriptHub, caller: &Caller, name: &str, args: Value) -> Result<Value, String> {
+        let args = with_effort(caller, name, args);
         let toolbox = Toolbox::default();
         let host = Host { store, transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         handle(&host, caller, "tools/call", json!({ "name": name, "arguments": args }))

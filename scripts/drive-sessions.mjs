@@ -36,11 +36,13 @@ const BOT = process.env.BOT_PROVIDER ?? "claude";
 const BINARIES = { claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor-agent" };
 const ALL = ["claude", "codex", "opencode", "cursor"];
 const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boolean);
-const SCENARIOS = (process.env.SCENARIOS ?? "a,b,w,c,d,e,f,q,p,g,h,i,j,k,m,s").split(",").filter(Boolean);
+const SCENARIOS = (process.env.SCENARIOS ?? "a,b,w,c,d,u,e,f,q,p,g,h,i,j,k,m,s").split(",").filter(Boolean);
 const KEEP = process.env.KEEP === "1";
 // The effort every Claude and Codex session of the run thinks at: the bots it
 // makes, the sessions `delegate` and `start_session` start, and the parents. Low, to keep a run cheap.
 const EFFORT = process.env.EFFORT ?? "low";
+// What a start call must name: an effort for the CLIs that take one, `none` for the rest.
+const effortFor = (provider) => (["claude", "codex", "grok"].includes(provider) ? EFFORT : "none");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...args);
@@ -81,8 +83,8 @@ const events = [];
 async function startDaemon(env = {}) {
   daemon = spawn(CREWD, [`--data-dir=${dataDir}`], {
     stdio: ["pipe", "pipe", "pipe"],
-    // `delegate` and `start_session` take no effort, so a session that names
-    // none starts at what the daemon's environment says (`CREW_DEFAULT_EFFORT`).
+    // A session the window or a parent makes without naming an effort starts at
+    // what the daemon's environment says (`CREW_DEFAULT_EFFORT`).
     env: { ...process.env, CREW_SOCKET: "", CREW_TOKEN: "", CREW_DEFAULT_EFFORT: EFFORT, ...env },
   });
   daemon.stderr.on("data", (chunk) => {
@@ -310,7 +312,7 @@ function assert(ok, message) {
 const word = (base) => `${base}${Math.floor(1000 + Math.random() * 9000)}`;
 
 async function start(token, provider, prompt, extra = {}) {
-  const out = await must(token, "delegate", { provider, model: MODELS[provider], prompt, ...extra });
+  const out = await must(token, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt, ...extra });
   return out.id;
 }
 
@@ -508,7 +510,7 @@ const scenarios = {
     const job = `Create a file named greeting.txt containing exactly the word ${secret}, and commit it to git with the message 'add greeting'. Report the commit hash.`;
     const prompt = [
       "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__delegate, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
-      `1. delegate with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}", wait true, and prompt: ${JSON.stringify(job)}`,
+      `1. delegate with provider "${provider}", model "${MODELS[provider]}", effort "${effortFor(provider)}", worktree "new", name "a-${provider}", wait true, and prompt: ${JSON.stringify(job)}`,
       "2. If its status is not \"reported\", call read_session on its id every 30 seconds until the transcript shows the turn ended.",
       `3. Write the report it gave (the report field of delegate's answer, or its last message) into the file ${out}, then stop.`,
     ].join("\n");
@@ -607,12 +609,35 @@ const scenarios = {
   async d(provider) {
     const shell = await terminal(`d-${provider}`);
     const out = await must(shell.token, "delegate", {
-      provider, model: MODELS[provider], prompt: "Run the shell command `sleep 25`, then reply with the word DONE.", wait: true, timeout_s: 5,
+      provider, model: MODELS[provider], effort: effortFor(provider), prompt: "Run the shell command `sleep 25`, then reply with the word DONE.", wait: true, timeout_s: 5,
     });
     assert(out.status === "running" && /wake you/.test(out.note), `the first wait answered ${JSON.stringify(out)}`);
     const first = await waitEvent(shell.token, out.id, 600);
     assert(/DONE/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
     return "running after 5 s, then reported";
+  },
+
+  // The effort named at the start is the session's; `update_session` changes it
+  // for the next turn, on the same conversation, and refuses a level the CLI lacks.
+  async u(provider) {
+    if (!["claude", "codex"].includes(provider)) return "skipped: no effort of its own";
+    const shell = await terminal(`u-${provider}`);
+    const out = await must(shell.token, "delegate", {
+      provider, model: MODELS[provider], effort: "low", prompt: "Reply with the word ONE.", wait: true, timeout_s: 300,
+    });
+    assert(out.effort === "low" && (await row(out.id)).effort === "low", `it did not start at low: ${JSON.stringify(out)}`);
+    const none = await tool(shell.token, "delegate", { provider, model: MODELS[provider], prompt: "x" });
+    assert(!none.ok && /effort is required/.test(none.text), `a start without effort went through: ${JSON.stringify(none)}`);
+    const set = await must(shell.token, "update_session", { session: out.id, action: "effort", effort: "medium" });
+    assert(set.effort === "medium" && /prompt cache/.test(set.note), `update_session answered ${JSON.stringify(set)}`);
+    assert((await row(out.id)).effort === "medium", "the row did not take the new effort");
+    const bad = await tool(shell.token, "update_session", { session: out.id, action: "effort", effort: "ludicrous" });
+    assert(!bad.ok && /one of/.test(bad.text), `a bad effort went through: ${JSON.stringify(bad)}`);
+    const seen = (await row(out.id)).cursor;
+    await must(shell.token, "send_message", { to: out.id, text: "Reply with the word TWO." });
+    const second = await waitEvent(shell.token, out.id, 600, seen);
+    assert(/TWO/i.test(second.sessions[0].report), `the turn after the change reported ${second.sessions[0].report}`);
+    return "started at low, set to medium, answered on the same conversation";
   },
 
   // A message queues behind a busy turn; an idle session takes a new turn in
@@ -775,7 +800,7 @@ const scenarios = {
     const shell = await terminal(`q-${provider}`);
     const ask = provider === "claude" ? "your AskUserQuestion tool" : "your request_user_input tool";
     const out = await must(shell.token, "delegate", {
-      provider, model: MODELS[provider], wait: true, timeout_s: 300,
+      provider, model: MODELS[provider], effort: effortFor(provider), wait: true, timeout_s: 300,
       prompt: `Use ${ask} to ask me which color I prefer, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by my answer.`,
     });
     assert(out.status === "question", `it did not stop on a question: ${JSON.stringify(out)}`);
@@ -923,17 +948,17 @@ const scenarios = {
     const names = listed.result.tools.map((t) => t.name);
     assert(names.includes("send_message") && names.includes("list_peers"), `a child is listed: ${names}`);
     assert(!names.includes("delegate") && !names.includes("start_session"), `a child is offered the start tools: ${names}`);
-    const call = await tool(childToken, "delegate", { provider, model: MODELS[provider], prompt: "x" });
+    const call = await tool(childToken, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt: "x" });
     assert(!call.ok && /Unknown tool|yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.
     const more = [];
     for (let n = 0; n < 3; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
-    const fifth = await tool(shell.token, "delegate", { provider, model: MODELS[provider], prompt: "Reply with OK." });
+    const fifth = await tool(shell.token, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt: "Reply with OK." });
     assert(!fifth.ok && /4 live subagents/.test(fifth.text), `a fifth started: ${fifth.text}`);
     // Autonomy never grows.
     const careful = await terminal(`h-ask-${provider}`);
     await setAutonomy(careful, "ask");
-    const full = await tool(careful.token, "delegate", { provider, model: MODELS[provider], prompt: "x", autonomy: "full" });
+    const full = await tool(careful.token, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt: "x", autonomy: "full" });
     assert(!full.ok && /cannot have full/.test(full.text), `an ask parent made a full child: ${full.text}`);
     // Anyone in the workspace reads it (plan decision 24); nobody else drives it.
     const stranger = await terminal(`h-stranger-${provider}`);
@@ -992,11 +1017,11 @@ const scenarios = {
     const peers = await must(shell.token, "list_peers", {});
     assert(Array.isArray(peers), "list_peers");
     const branch = word("k-branch-");
-    const handed = await must(shell.token, "start_session", { worktree: branch, prompt: "Nothing to do; this is a test." });
+    const handed = await must(shell.token, "start_session", { effort: EFFORT, worktree: branch, prompt: "Nothing to do; this is a test." });
     assert(handed.kind === "session" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
     const made = await row(handed.id);
     assert(made.kind === "terminal" && made.worktree === handed.worktree && made.launchedBy === shell.id && !made.parentId, JSON.stringify(made));
-    const waited = await tool(shell.token, "start_session", { wait: true, prompt: "x" });
+    const waited = await tool(shell.token, "start_session", { effort: EFFORT, wait: true, prompt: "x" });
     assert(!waited.ok, `start_session took wait: ${waited.text}`);
     await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
     await must(shell.token, "control_process", { process: "k-proc", action: "start" });
