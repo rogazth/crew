@@ -9,7 +9,7 @@ import { Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useDefaultAgent } from "../../hooks/useDefaultAgent";
 import * as api from "../../lib/api";
-import { BYPASS_KEY } from "../../lib/permissions";
+import { READS, useRead } from "../../lib/settingsReads";
 import {
   ACCESSES,
   EFFORT_LABELS,
@@ -156,20 +156,9 @@ const ACCESS_HINTS: Record<Access, string> = {
 function Permissions() {
   const { preferred, update } = useDefaultAgent();
   // Bypass lives in General; it is read here only to say it overrides the tiles.
-  const [bypass, setBypass] = useState(false);
+  const bypass = useRead(READS.bypass)?.trim() === "on";
   const supported = accessesOf(preferred.provider);
   const name = PROVIDER_META[preferred.provider].name;
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .stateGet(BYPASS_KEY)
-      .then((raw) => !cancelled && setBypass(raw?.trim() === "on"))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   return (
     <section className="flex flex-col gap-2" data-setting="access">

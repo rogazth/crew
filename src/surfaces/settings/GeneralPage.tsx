@@ -1,60 +1,57 @@
 // General: cards of rows, all on real state. Retention and bypass live in the
 // daemon's state, Open at login in the app's login item, Reopen in a preference
 // the workspace list reads at launch, and the `crew` command in the app's link.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button, Select } from "../../chrome/kit";
 import * as api from "../../lib/api";
-import { describeCli, type CliResult, type CliStatus } from "../../lib/cli";
-import { cliHost, homeDir, loginItemHost } from "../../lib/host";
-import type { LoginItemState } from "../../lib/loginItem";
+import { describeCli, type CliResult } from "../../lib/cli";
+import { cliHost, loginItemHost } from "../../lib/host";
 import { BYPASS_KEY } from "../../lib/permissions";
 import { RETENTION_CHOICES, RETENTION_KEY, parseRetention, type Retention } from "../../lib/retention";
+import { READS, keep, useRead, type Read } from "../../lib/settingsReads";
 import { REOPEN_KEY, parseReopen } from "../../lib/startup";
 import { Chip, ConfirmDialog, CopyButton, Group, Row, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+// The shown value moves only once the daemon has kept it.
+async function keepState(read: Read<string | null>, key: string, value: string | null) {
+  if (value === null) await api.stateDelete(key);
+  else await api.stateSet(key, value);
+  keep(read, value);
+}
+
+const saveLogin = (enabled: boolean) =>
+  loginItemHost()
+    ?.set(enabled)
+    .then((state) => keep(READS.login, state), (error) => toast(`Could not change it: ${reason(error)}`, "danger"));
+
+const saveRetention = async (next: Retention) => {
+  try {
+    await keepState(READS.retention, RETENTION_KEY, next === "never" ? null : next);
+    if (next !== "never") await api.expireSessions(Number(next));
+  } catch (error) {
+    toast(`Could not save: ${reason(error)}`, "danger");
+  }
+};
+
+const saveBypass = (next: boolean) =>
+  keepState(READS.bypass, BYPASS_KEY, next ? "on" : null).catch(
+    (error: unknown) => toast(`Could not save: ${reason(error)}`, "danger"),
+  );
+
+const saveReopen = (next: boolean) =>
+  keepState(READS.reopen, REOPEN_KEY, next ? null : "off").catch(
+    (error: unknown) => toast(`Could not save: ${reason(error)}`, "danger"),
+  );
+
 export function GeneralPage() {
-  const [retention, setRetention] = useState<Retention>("never");
-  const [bypass, setBypass] = useState(false);
-  const [reopen, setReopen] = useState(true);
-  const [login, setLogin] = useState<LoginItemState | null>(null);
+  // Read ahead as Settings opened (lib/settingsReads), so the page paints with what is saved.
+  const retention = parseRetention(useRead(READS.retention) ?? null);
+  const bypass = useRead(READS.bypass)?.trim() === "on";
+  const reopen = parseReopen(useRead(READS.reopen) ?? null);
+  const login = useRead(READS.login) ?? null;
   const [ask, setAsk] = useState<ConfirmAsk | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const read = (key: string, apply: (raw: string | null) => void) =>
-      api
-        .stateGet(key)
-        .then((raw) => !cancelled && apply(raw))
-        .catch(() => {});
-    read(RETENTION_KEY, (raw) => setRetention(parseRetention(raw)));
-    read(BYPASS_KEY, (raw) => setBypass(raw?.trim() === "on"));
-    read(REOPEN_KEY, (raw) => setReopen(parseReopen(raw)));
-    loginItemHost()
-      ?.get()
-      .then((state) => !cancelled && setLogin(state))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // The shown value moves only once the daemon has kept it.
-  const keep = async (key: string, value: string | null) => {
-    if (value === null) await api.stateDelete(key);
-    else await api.stateSet(key, value);
-  };
-
-  const saveRetention = async (next: Retention) => {
-    try {
-      await keep(RETENTION_KEY, next === "never" ? null : next);
-      setRetention(next);
-      if (next !== "never") await api.expireSessions(Number(next));
-    } catch (error) {
-      toast(`Could not save: ${reason(error)}`, "danger");
-    }
-  };
 
   const chooseRetention = async (next: Retention) => {
     if (next === retention) return;
@@ -70,23 +67,6 @@ export function GeneralPage() {
       onConfirm: () => void saveRetention(next),
     });
   };
-
-  const saveBypass = (next: boolean) =>
-    keep(BYPASS_KEY, next ? "on" : null).then(
-      () => setBypass(next),
-      (error) => toast(`Could not save: ${reason(error)}`, "danger"),
-    );
-
-  const saveReopen = (next: boolean) =>
-    keep(REOPEN_KEY, next ? null : "off").then(
-      () => setReopen(next),
-      (error) => toast(`Could not save: ${reason(error)}`, "danger"),
-    );
-
-  const saveLogin = (enabled: boolean) =>
-    loginItemHost()
-      ?.set(enabled)
-      .then(setLogin, (error) => toast(`Could not change it: ${reason(error)}`, "danger"));
 
   return (
     <SettingsPage title="General">
@@ -151,22 +131,10 @@ export function GeneralPage() {
 /** The `crew` command for the user's own terminal. Only in the app: a browser has no PATH to link into. */
 function CommandLine() {
   const host = cliHost();
-  const [status, setStatus] = useState<CliStatus | null>(null);
-  const [home, setHome] = useState("");
+  const status = useRead(READS.cli) ?? null;
+  const home = useRead(READS.home) ?? "";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    host
-      ?.status()
-      .then((next) => !cancelled && setStatus(next))
-      .catch(() => {});
-    void homeDir().then((dir) => !cancelled && setHome(dir));
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
 
   if (!host || !status) return null;
   const act = (run: () => Promise<CliResult>) => {
@@ -174,7 +142,7 @@ function CommandLine() {
     setError(null);
     run()
       .then((result) => {
-        setStatus(result.status);
+        keep(READS.cli, result.status);
         setError(result.error ?? null);
       })
       .catch((failure: unknown) => setError(reason(failure)))

@@ -1,11 +1,11 @@
 import { Slider } from "@base-ui/react/slider";
 import { PlayIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Button, IconButton, Select, Switch, Toggle } from "../chrome/kit";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useNow } from "../hooks/useNow";
 import { useNotificationPrefs } from "../hooks/useNotificationPrefs";
-import { notificationStatus, notificationsHost, open } from "../lib/host";
+import { notificationsHost, open } from "../lib/host";
 import {
   isPaused,
   NOTIFICATION_KINDS,
@@ -17,7 +17,8 @@ import {
 } from "../lib/notificationPrefs";
 import { dispatchNotification, type SkipReason } from "../lib/notifications";
 import { forgetCustomSound, playSound } from "../lib/notificationSound";
-import { isSoundFile, type BannerState } from "../lib/notify";
+import { isSoundFile } from "../lib/notify";
+import { READS, refresh, useRead } from "../lib/settingsReads";
 import { clock, dayName } from "../lib/time";
 
 const TEST_REASONS: Partial<Record<SkipReason, string>> = {
@@ -25,26 +26,21 @@ const TEST_REASONS: Partial<Record<SkipReason, string>> = {
   unsupported: "This system shows no notifications.",
 };
 
+const rereadBanners = () => void refresh(READS.banners);
+
 export function NotificationSettings() {
   const { prefs, update } = useNotificationPrefs();
-  const [status, setStatus] = useState<BannerState>("unknown");
+  const status = useRead(READS.banners) ?? "unknown";
   const [tested, setTested] = useState<string | null>(null);
   const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => update({ ...prefs, [key]: value });
   const setKind = (kind: NotificationKind, change: Partial<NotificationPrefs["kinds"][NotificationKind]>) =>
     set("kinds", { ...prefs.kinds, [kind]: { ...prefs.kinds[kind], ...change } });
 
-  const refresh = useCallback(() => {
-    void notificationStatus()
-      .then(setStatus)
-      .catch(() => {});
-  }, []);
-  useEffect(refresh, [refresh]);
-
   const test = () => {
     setTested(null);
     void dispatchNotification({ source: "test", title: "Crew", body: "Notifications are working." }).then((result) => {
       setTested(result.delivered ? "Sent. No banner? Check Focus and System Settings." : (TEST_REASONS[result.reason] ?? null));
-      refresh();
+      rereadBanners();
     });
   };
 

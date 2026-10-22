@@ -1,25 +1,30 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { appInfo, updateHost } from "../lib/host";
+import { updateHost } from "../lib/host";
 import type { AppInfo } from "../lib/appInfo";
 import { autoDownload, loadAutoDownload, saveAutoDownload, subscribeAutoDownload } from "../lib/updatePrefs";
 import type { SettingsSectionId } from "../lib/settings";
+import { READS, keep, peek, refresh, useRead } from "../lib/settingsReads";
 import type { ReleaseList, UpdateState } from "../lib/update";
 
 const IDLE: UpdateState = { phase: "idle", checkedAt: null };
 
 /** Follows the updater in main; a window opened mid-update picks up where it is. */
 export function useUpdateState(): UpdateState {
-  const [state, setState] = useState<UpdateState>(IDLE);
+  // The last state read (Settings reads it ahead), so a surface opens on it rather than on idle.
+  const [state, setState] = useState<UpdateState>(() => peek(READS.update) ?? IDLE);
   useEffect(() => {
     const host = updateHost();
     if (!host) return;
     let heard = false;
     const unlisten = host.onState((next) => {
       heard = true;
+      keep(READS.update, next);
       setState(next);
     });
     void host.current().then((next) => {
-      if (!heard) setState(next);
+      if (heard) return;
+      keep(READS.update, next);
+      setState(next);
     });
     return () => {
       heard = true;
@@ -48,40 +53,18 @@ export function useAutoDownload(): [boolean, (on: boolean) => void] {
 
 /** The build About describes; null until read, and outside Electron. */
 export function useAppInfo(): AppInfo | null {
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  useEffect(() => {
-    let live = true;
-    void appInfo()
-      .then((next) => live && setInfo(next))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-  return info;
+  return useRead(READS.appInfo) ?? null;
 }
 
 /** The published releases; `null` while loading. A feed that cannot be reached answers from the cache. */
 export function useReleases(): { list: ReleaseList | null; reload: () => void } {
-  const [list, setList] = useState<ReleaseList | null>(null);
-  const [tries, setTries] = useState(0);
-  useEffect(() => {
-    let live = true;
-    const host = updateHost();
-    if (!host) return;
-    void host
-      .releases()
-      .then((next) => live && setList(next))
-      .catch(() => live && setList({ releases: [], stale: true }));
-    return () => {
-      live = false;
-    };
-  }, [tries]);
+  const [reloading, setReloading] = useState(false);
+  const list = useRead(READS.releases) ?? null;
   return {
-    list,
+    list: reloading ? null : list,
     reload: () => {
-      setList(null);
-      setTries((n) => n + 1);
+      setReloading(true);
+      void refresh(READS.releases).finally(() => setReloading(false));
     },
   };
 }

@@ -37,6 +37,7 @@ import { PROVIDERS } from "../../lib/providers";
 import type { MachineSample } from "../../lib/protocol";
 import { INSTALL_STEPS, compareVersions, errorText as message, type Tailnet } from "../../lib/remotes";
 import { openWorkspaceOn, subscribeAdd, takeAddRequest, WAKE_ON, WARN_RELAY } from "../../lib/remoteUi";
+import { READS, keep, useKept, useRead } from "../../lib/settingsReads";
 import type { Workspace } from "../../lib/types";
 import { AddMachineFlow } from "./AddMachineFlow";
 import { manageProviders } from "./route";
@@ -57,24 +58,25 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   // "Add a machine…" from the machine picker lands here, as on the shipped page.
   const [adding, setAdding] = useState(() => takeAddRequest());
   useEffect(() => subscribeAdd(() => setAdding(true)), []);
-  const [tailnet, setTailnet] = useState<Tailnet | null>(null);
-  const [warnRelay, setWarnRelay] = useState(true);
-  const [wake, setWake] = useState(true);
+  const kept = useKept(READS.tailnet) ?? null;
+  const [failed, setFailed] = useState<Tailnet | null>(null);
+  const tailnet = failed ?? kept;
+  const warnRelay = useRead(READS.warnRelay) !== "off";
+  const wake = useRead(READS.wake) !== "off";
   const [busy, setBusy] = useState<Record<string, Busy>>({});
   const [notice, setNotice] = useState<Notice | null>(null);
   const [editing, setEditing] = useState<EnvLink | null>(null);
   const [removing, setRemoving] = useState<EnvLink | null>(null);
   const [logs, setLogs] = useState<EnvLink | null>(null);
 
-  useEffect(() => {
-    void api.stateGet(WARN_RELAY).then((value) => setWarnRelay(value !== "off"), () => {});
-    void api.stateGet(WAKE_ON).then((value) => setWake(value !== "off"), () => {});
-  }, []);
-
   const readTailnet = useCallback(() => {
     if (!host) return;
-    void host.tailnet().then(setTailnet, (reason: unknown) =>
-      setTailnet({ state: "error", account: null, message: message(reason), devices: [] }),
+    void host.tailnet().then(
+      (next) => {
+        setFailed(null);
+        keep(READS.tailnet, next);
+      },
+      (reason: unknown) => setFailed({ state: "error", account: null, message: message(reason), devices: [] }),
     );
   }, [host]);
   useEffect(readTailnet, [readTailnet]);
@@ -210,7 +212,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           description="Flag machines reached only through a relay."
           checked={warnRelay}
           onChange={(checked) => {
-            setWarnRelay(checked);
+            keep(READS.warnRelay, checked ? "on" : "off");
             void api.stateSet(WARN_RELAY, checked ? "on" : "off");
           }}
         />
@@ -220,7 +222,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           description="Reconnect as soon as this Mac wakes."
           checked={wake}
           onChange={(checked) => {
-            setWake(checked);
+            keep(READS.wake, checked ? "on" : "off");
             void api.stateSet(WAKE_ON, checked ? "on" : "off");
           }}
         />
@@ -364,7 +366,7 @@ function MachineCard({
         <Stat label="Connection" sub={<Version link={link} newer={newer} busy={busy !== null} onUpdate={onUpdate} />}>
           <Connection link={link} relay={relay} busy={busy} />
         </Stat>
-        <Stat label="CPU" sub={live && info ? `${info.load.toFixed(2)} on ${plural(info.cpus, "core")}` : null}>
+        <Stat label="CPU" sub={live && info ? `${info.load.toFixed(2)} on ${plural(info.cpus, "core")}` : null} chart>
           {live && samples.length > 0 ? (
             <Sparkline
               samples={samples}
@@ -375,7 +377,7 @@ function MachineCard({
             dash
           )}
         </Stat>
-        <Stat label="Memory" sub={live ? memorySub(last, info) : null}>
+        <Stat label="Memory" sub={live ? memorySub(last, info) : null} chart>
           {live && samples.length > 0 ? (
             <Sparkline
               samples={samples}
@@ -403,12 +405,12 @@ function MachineCard({
   );
 }
 
-/** A label over its value, with at most one muted line under it. */
-function Stat({ label, sub, children }: { label: string; sub?: ReactNode; children: ReactNode }) {
+/** A label over its value, with at most one muted line under it. A `chart` keeps the sparkline's height before its first sample. */
+function Stat({ label, sub, chart = false, children }: { label: string; sub?: ReactNode; chart?: boolean; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-[12px] text-text-muted">{label}</dt>
-      <dd className="flex min-h-5 min-w-0 flex-wrap items-center gap-1.5 text-[13px]">{children}</dd>
+      <dd className={`flex ${chart ? "min-h-8" : "min-h-5"} min-w-0 flex-wrap items-center gap-1.5 text-[13px]`}>{children}</dd>
       {sub && <dd className="flex min-w-0 items-center gap-1.5 truncate text-[12px] text-text-muted">{sub}</dd>}
     </div>
   );

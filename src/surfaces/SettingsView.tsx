@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { PAGES, PENDING } from "./settings/pages";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
+import { settingsWarm, warmSettings } from "../lib/settingsReads";
 import type { Workspace } from "../lib/types";
 import { AboutPage } from "./settings/AboutPage";
 import { AppearancePage } from "./settings/AppearancePage";
@@ -29,9 +30,14 @@ type Props = {
 export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
   // A page that is still pending has no nav entry; a stale request for it lands on General.
   const shown = PENDING.includes(section) ? settingsSection("general").id : section;
+  // The first open waits for the pages' reads, so the first page paints whole, its switches already set.
+  const [warm, setWarm] = useState(settingsWarm);
+  useEffect(() => {
+    if (!warm) void warmSettings().then(() => setWarm(true));
+  }, [warm]);
   return (
     <>
-      <Page key={shown} section={shown} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />
+      {warm && <Page key={shown} section={shown} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />}
       <Toasts />
     </>
   );
