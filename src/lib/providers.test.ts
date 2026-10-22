@@ -182,6 +182,13 @@ describe("searchModels", () => {
     expect(cursor.map((hit) => hit.model.label)).toEqual(["Grok 4.7", "Grok 4.6", "Grok 4.5"]);
   });
 
+  it("does not stitch a query together from separate fields of one model", () => {
+    setListedModels("opencode", [{ id: "opencode/nemotron-3.5-super-vl-free", label: "Nemotron 3.5 Super VL Free" }]);
+    const hits = searchModels(PROVIDERS, "sonn");
+    expect(hits.some((hit) => hit.model.label.includes("Nemotron"))).toBe(false);
+    expect(hits[0]?.model.label).toContain("Sonnet");
+  });
+
   it("matches nothing for a blank query", () => {
     expect(searchModels(PROVIDERS, "   ")).toEqual([]);
   });

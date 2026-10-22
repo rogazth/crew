@@ -242,21 +242,36 @@ export function modelsOf(providerId: string): Model[] {
   return listed.get(providerId) ?? providerOf(providerId)?.models ?? [];
 }
 
+/** A query that appears whole in a field beats one whose letters are merely in order. */
+const CONTIGUOUS = 40;
+
 export type ModelMatch = { provider: ProviderId; model: Model };
 
 /** Models across these providers that match the query, best first. A blank query matches nothing. */
 export function searchModels(providers: readonly ProviderDef[], query: string): ModelMatch[] {
   if (!query.trim()) return [];
+  // fuzzyMatch charges the length once per word of the query.
+  const words = query.trim().split(/\s+/).length;
   const scored: { match: ModelMatch; score: number }[] = [];
   for (const provider of providers) {
     for (const model of modelsOf(provider.id)) {
       const variants = model.variants ? Object.values(model.variants).join(" ") : "";
       const fast = [model.fastId, ...(model.fastVariants ? Object.values(model.fastVariants) : [])].filter(Boolean).join(" ");
-      const text = `${provider.label} ${model.label} ${model.id} ${variants} ${fast} ${model.note ?? ""}`;
-      const hit = fuzzyMatch(query, text);
-      // fuzzyMatch charges for length, which would rank a model below an older
-      // one for a longer id or a note; only how well the query fits counts here.
-      if (hit) scored.push({ match: { provider: provider.id, model }, score: hit.score + text.length });
+      // Each field is matched alone: over one joined string a query like "sonn"
+      // finds its letters scattered across the provider, id and note of a model
+      // that has nothing to do with it, and sparse segment starts outscore a real run.
+      const fields = [`${provider.label} ${model.label}`, model.id, variants, fast, model.note ?? ""];
+      let best: number | null = null;
+      for (const text of fields) {
+        const hit = text ? fuzzyMatch(query, text) : null;
+        if (!hit) continue;
+        // fuzzyMatch charges for length, which would rank a model below an older
+        // one for a longer id or a note; only how well the query fits counts here.
+        const contiguous = text.toLowerCase().includes(query.trim().toLowerCase()) ? CONTIGUOUS : 0;
+        const score = hit.score + text.length * words + contiguous;
+        if (best === null || score > best) best = score;
+      }
+      if (best !== null) scored.push({ match: { provider: provider.id, model }, score: best });
     }
   }
   // Equal matches of one family (Grok 4.5, Grok 4.7) go newest first: cursor's
