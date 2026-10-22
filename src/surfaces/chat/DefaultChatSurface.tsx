@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { awaitsUser } from "../../lib/blocks";
 import { ChatSessionContext } from "./context";
 import { Composer } from "./Composer";
@@ -44,8 +45,12 @@ export function DefaultChatSurface({
     onDraft(text);
     field.current?.focus();
   };
+  const chatSession = useMemo(
+    () => ({ id: session.id, provider: session.provider }),
+    [session.id, session.provider],
+  );
   return (
-    <ChatSessionContext value={{ id: session.id, provider: session.provider }}>
+    <ChatSessionContext value={chatSession}>
       <div className="relative flex min-h-0 flex-1 flex-col">
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
