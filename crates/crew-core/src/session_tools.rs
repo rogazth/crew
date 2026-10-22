@@ -343,7 +343,7 @@ impl SessionTools {
     fn reach(&self, caller: &Caller, target: &Session, letter: bool) -> Result<(), String> {
         if caller.session_id() == Some(target.id.as_str()) {
             return Err("That is you. Nothing writes to itself: carry on in this turn, or to come back to something later, \
-                 save_routine with a once schedule."
+                 offer the user a routine with a once schedule."
                 .into());
         }
         if target.status == "exited" && (target.kind == "child" || !letter) {

@@ -606,7 +606,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "save_routine",
-            description: "Create a routine, or update one by routine_id (only the fields you pass change). Times are the user's local time. A once schedule fires a single time, at at, and is then switched off: that is how you check back on something later.",
+            description: "Create a routine, or update one by routine_id (only the fields you pass change). Times are the user's local time. A once schedule fires a single time, at at, and is then switched off. Only when the user asked for this routine; otherwise suggest it and save it when they say yes.",
             schema: json!({
                 "type": "object",
                 "properties": {

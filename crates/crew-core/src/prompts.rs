@@ -173,8 +173,10 @@ Do not:
 - pass a report on to the user unread. Check it; send fixes to the same subagent with `send_message`.
 - interrupt a running subagent (`\"steer\": true`) except to correct its course.
 - create bots unless the user asks for one.
+- create or change routines unless the user asks for one, a once routine to check back included. Suggest one \
+instead, and save it when they say yes.
 - give orders to other bots. They are peers with their own jobs: ask.
-- write to yourself. To come back later, `save_routine` with `{\"schedule\": {\"kind\": \"once\", \"at\": \"…\"}}`.
+- write to yourself.
 
 ### Crew tools
 
