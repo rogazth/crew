@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { requestRoute, routeAgent } from "../lib/agentRoute";
 import * as api from "../lib/api";
 import { fileView } from "../lib/browser/files";
+import { providerOf } from "../lib/providers";
 import { fileTabId, newBrowserTab, newFileBrowserTab, newSignInTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
@@ -145,6 +146,20 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, route, sessions, tabs],
   );
 
+  /** The provider's own login, in a terminal tab of the session's worktree. A clean exit restarts its CLI. */
+  const openLogin = useCallback(
+    (sessionId: string, provider: string, command: string[]) => {
+      const session = sessions.find((row) => row.id === sessionId);
+      if (!session) return;
+      closePage();
+      const label = providerOf(provider)?.label ?? provider;
+      const tab = newSignInTab(session.worktree, { sessionId, command }, `Sign in to ${label}`);
+      route(session);
+      tabs.open(tab);
+    },
+    [closePage, route, sessions, tabs],
+  );
+
   /** A command's run, in a tab; the same run again comes back to its tab. */
   const openProcessRun = useCallback(
     (process: Process, worktree: string | null) => {
@@ -221,6 +236,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openTerminal,
     openTerminalIn,
     openSignIn,
+    openLogin,
     openBrowser,
     openProcessRun,
     closeTab,

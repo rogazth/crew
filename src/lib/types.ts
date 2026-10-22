@@ -115,7 +115,9 @@ export type Tab = (
     }
   /**
    * A terminal keeps the worktree it was opened in; null or absent is the main checkout.
-   * `signIn` makes it run an MCP server's login in place of the shell, and have the session connect the server when it ends.
+   * `signIn` runs a login in place of the shell. With `server`, the session
+   * reconnects that MCP server when it ends; without one, a clean exit
+   * restarts the session's CLI.
    */
   | {
       id: string;
@@ -123,7 +125,7 @@ export type Tab = (
       stub: StubKind;
       title: string;
       worktree?: string | null;
-      signIn?: { sessionId: string; server: string; command: string[] };
+      signIn?: { sessionId: string; command: string[]; server?: string };
       /** Typed into the shell once it is up, then Enter: a command someone asked Crew to start for them. Never written to disk. */
       input?: string;
     }

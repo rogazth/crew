@@ -13,6 +13,20 @@ function block(role: Block["role"], text: string, extra: Partial<Block> = {}): B
 const kinds = (rows: Row[]) => rows.map((row) => row.kind);
 
 describe("groupRows", () => {
+  it("shows a hidden duplicate of an error once, under the note that kept its cost", () => {
+    const text = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    const rows = groupRows([
+      block("user", "hi"),
+      block("assistant", text, { hidden: true }),
+      block("system", text, { usage: { durationMs: 1000 } }),
+    ]);
+    expect(rows.map((row) => (row.kind === "message" ? row.block.role : row.kind))).toEqual(["user", "system", "footer"]);
+    expect(rows.filter((row) => row.kind === "message").map((row) => (row.kind === "message" ? row.block.text : ""))).toEqual([
+      "hi",
+      text,
+    ]);
+  });
+
   it("collapses everything the agent did into one group", () => {
     const rows = groupRows([
       block("user", "fix it"),

@@ -1,4 +1,5 @@
 import { awaitsUser } from "../../lib/blocks";
+import { ChatSessionContext } from "./context";
 import { Composer } from "./Composer";
 import { IntroHead, IntroWays } from "./SessionIntro";
 import { Transcript } from "./Transcript";
@@ -44,7 +45,7 @@ export function DefaultChatSurface({
     field.current?.focus();
   };
   return (
-    <>
+    <ChatSessionContext value={{ id: session.id, provider: session.provider }}>
       <div className="relative flex min-h-0 flex-1 flex-col">
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
@@ -104,6 +105,6 @@ export function DefaultChatSurface({
         )}
         {overlay}
       </div>
-    </>
+    </ChatSessionContext>
   );
 }

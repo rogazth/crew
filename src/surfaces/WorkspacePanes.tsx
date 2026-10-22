@@ -52,6 +52,8 @@ type Props = {
   onOpenProcessRun: (process: Process, worktree: string | null) => void;
   /** A session's MCP server login, run in a terminal tab. */
   onOpenSignIn: (sessionId: string, server: string, command: string[]) => void;
+  /** The provider's own login, run in a terminal tab. */
+  onOpenLogin: (sessionId: string, provider: string, command: string[]) => void;
 };
 
 /** Active surface plus the mounted turn chat, terminal and page overlays, of every workspace. */
@@ -81,6 +83,7 @@ export function WorkspacePanes({
   processes,
   onOpenProcessRun,
   onOpenSignIn,
+  onOpenLogin,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -133,9 +136,10 @@ export function WorkspacePanes({
       processes,
       openProcessRun: onOpenProcessRun,
       openSignIn: onOpenSignIn,
+      openLogin: onOpenLogin,
       confirm: onConfirm,
     }),
-    [cwd, onOpenFile, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onConfirm],
+    [cwd, onOpenFile, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onOpenLogin, onConfirm],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

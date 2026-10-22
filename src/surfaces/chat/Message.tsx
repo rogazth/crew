@@ -8,7 +8,10 @@ import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
 import { attachedFrom, imageMime } from "../../lib/attachments";
 import { AttachmentStrip, Lightbox } from "./Attachments";
-import { useChatActions } from "./context";
+import { isAuthFailure, loginArgv } from "../../lib/auth";
+import { LOCAL, envOfSession } from "../../lib/client/registry";
+import { providerOf } from "../../lib/providers";
+import { useChatActions, useChatSession, type ChatSession } from "./context";
 import { CopyButton } from "./CopyButton";
 import { clock, duration } from "../../lib/time";
 
@@ -171,6 +174,41 @@ export const Note = memo(function Note({ block }: { block: Block }) {
     </p>
   );
 });
+
+/**
+ * A turn that stopped because the CLI is signed out. One line, and the login
+ * that fixes it. The CLI's own sentence stays on the line, for the hover.
+ */
+export const AuthNote = memo(function AuthNote({ block, session }: { block: Block; session: ChatSession }) {
+  const { openLogin } = useChatActions();
+  const remote = envOfSession(session.id) !== LOCAL;
+  const command = loginArgv(session.provider, remote);
+  const label = providerOf(session.provider)?.label ?? session.provider;
+  return (
+    <p className="flex items-start gap-2 text-[13px] leading-[19px] text-text-muted">
+      <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-icon" />
+      <span className="min-w-0" title={block.text}>
+        {label} needs you to sign in again.
+      </span>
+      {command && (
+        <button
+          type="button"
+          onClick={() => openLogin(session.id, session.provider, command)}
+          className="flex h-6 shrink-0 items-center rounded-md px-2 text-[11.5px] text-text ring-1 ring-hairline hover:bg-selected"
+        >
+          Sign in
+        </button>
+      )}
+    </p>
+  );
+});
+
+/** A system line. An auth failure asks for a login; anything else is the note it already was. */
+export function SystemLine({ block }: { block: Block }) {
+  const session = useChatSession();
+  if (session && isAuthFailure(block.text)) return <AuthNote block={block} session={session} />;
+  return <Note block={block} />;
+}
 
 /** A day turning over: a hairline with the date on it, as chat apps mark one. */
 export const DateBreak = memo(function DateBreak({ label }: { label: string }) {

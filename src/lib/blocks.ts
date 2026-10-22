@@ -259,8 +259,14 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         },
       });
     }
-    case "session.error":
-      return [...settleTurn(blocks, "interrupted"), newBlock("system", event.message)];
+    case "session.error": {
+      // The CLI says a failed turn twice: once as the assistant's text and
+      // once as this error. Hiding the reply leaves the note. The block stays
+      // put, because a transcript only grows at the end, and search skips it.
+      const settled = settleTurn(blocks, "interrupted");
+      const { blocks: kept, usage } = hideDuplicateReply(settled, event.message);
+      return [...kept, { ...newBlock("system", event.message), ...(usage ? { usage } : {}) }];
+    }
     case "session.ended":
       return settleTurn(blocks, "interrupted");
     case "session.note":
@@ -325,6 +331,31 @@ function stepEvent(event: HarnessEvent): HarnessEvent | null {
 
 export function isQuestionTool(name: string): boolean {
   return /^askuserquestion$/i.test(name);
+}
+
+/**
+ * The reply of the turn now ending, when it says exactly what the error says.
+ * Its cost moves onto the note, so "Worked" stays under the one line left.
+ */
+function hideDuplicateReply(blocks: Block[], message: string): { blocks: Block[]; usage?: TurnUsage } {
+  const trimmed = message.trim();
+  if (!trimmed) return { blocks };
+  let start = 0;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index]!.role === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  for (let index = blocks.length - 1; index >= start; index -= 1) {
+    const block = blocks[index]!;
+    if (block.role !== "assistant" || block.text.trim() !== trimmed) continue;
+    const { usage, ...rest } = block;
+    const next = blocks.slice();
+    next[index] = { ...rest, hidden: true };
+    return { blocks: next, ...(usage ? { usage } : {}) };
+  }
+  return { blocks };
 }
 
 function appendStreaming(blocks: Block[], role: "assistant" | "reasoning", text: string): Block[] {

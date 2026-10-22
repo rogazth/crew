@@ -582,6 +582,7 @@ export function App() {
               processes={processes.processes ?? NO_PROCESSES}
               onOpenProcessRun={nav.openProcessRun}
               onOpenSignIn={nav.openSignIn}
+              onOpenLogin={nav.openLogin}
             />
             </PanePlaceContext>
             </div>

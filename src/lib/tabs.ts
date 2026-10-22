@@ -69,9 +69,20 @@ export function newTerminalTab(worktree: string | null, input?: string): Tab {
   return input ? { ...tab, input } : tab;
 }
 
-/** A terminal that runs an MCP server's login for a session, in the worktree it was asked from. */
-export function newSignInTab(worktree: string | null, signIn: { sessionId: string; server: string; command: string[] }): Tab {
-  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: `Sign in to ${signIn.server}`, worktree, signIn };
+/** A terminal that runs a login for a session, in the worktree it was asked from. */
+export function newSignInTab(
+  worktree: string | null,
+  signIn: { sessionId: string; command: string[]; server?: string },
+  title?: string,
+): Tab {
+  return {
+    id: `stub:terminal:${crypto.randomUUID()}`,
+    kind: "stub",
+    stub: "terminal",
+    title: title ?? (signIn.server ? `Sign in to ${signIn.server}` : "Sign in"),
+    worktree,
+    signIn,
+  };
 }
 
 /** A login ends with the session that asked for it, not with the app: it is never written to disk. */

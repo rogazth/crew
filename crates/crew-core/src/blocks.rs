@@ -310,8 +310,15 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next
         }
         HarnessEvent::SessionError { message } => {
+            // The CLI says a failed turn twice: once as the assistant's text and
+            // once as this error. Hiding the reply leaves the note. The block
+            // stays put, because a transcript only grows at the end, and search
+            // skips a hidden row.
             let mut next = settle_turn(blocks, ToolStatus::Interrupted);
-            next.push(new_block(BlockRole::System, message));
+            let usage = hide_duplicate_reply(&mut next, &message);
+            let mut block = new_block(BlockRole::System, message);
+            block.usage = usage;
+            next.push(block);
             next
         }
         HarnessEvent::SessionEnded { .. } => settle_turn(blocks, ToolStatus::Interrupted),
@@ -417,6 +424,22 @@ pub fn step_event(event: HarnessEvent) -> Option<HarnessEvent> {
         }
         _ => return None,
     })
+}
+
+/// The reply of the turn now ending, when it says exactly what the error says.
+/// Its cost moves onto the note, so "Worked" stays under the one line left.
+fn hide_duplicate_reply(blocks: &mut [Block], message: &str) -> Option<crew_protocol::TurnUsage> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let start = blocks.iter().rposition(|block| block.role == BlockRole::User).map_or(0, |index| index + 1);
+    let at = (start..blocks.len())
+        .rev()
+        .find(|index| blocks[*index].role == BlockRole::Assistant && blocks[*index].text.trim() == trimmed)?;
+    let usage = blocks[at].usage.take();
+    blocks[at].hidden = Some(true);
+    usage
 }
 
 fn append_streaming(blocks: Vec<Block>, role: BlockRole, text: String) -> Vec<Block> {
@@ -618,6 +641,73 @@ mod tests {
         assert_eq!(blocks[0].hidden, Some(true));
         assert_eq!(blocks[1].role, BlockRole::System);
         assert_eq!(blocks[1].text, "Stopped");
+    }
+
+    fn user(text: &str) -> HarnessEvent {
+        HarnessEvent::UserMessage {
+            text: text.into(),
+            files: None,
+            hidden: None,
+            from_bot: None,
+            letter_id: None,
+            letter_kind: None,
+        }
+    }
+
+    #[test]
+    fn a_reply_that_repeats_the_error_is_hidden_and_its_cost_stays_on_the_note() {
+        let text = "Failed to authenticate: OAuth session expired and could not be refreshed";
+        let blocks = run(
+            vec![
+                user("hi"),
+                HarnessEvent::MessageDelta { text: text.into() },
+                HarnessEvent::TurnCompleted {
+                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: None, duration_ms: Some(1000) }),
+                },
+                HarnessEvent::SessionError { message: format!("{text}\n") },
+            ],
+            vec![],
+        );
+        let reply = blocks.iter().find(|block| block.role == BlockRole::Assistant).unwrap();
+        assert_eq!(reply.hidden, Some(true));
+        assert!(reply.usage.is_none());
+        let note = blocks.last().unwrap();
+        assert_eq!(note.role, BlockRole::System);
+        assert_eq!(note.text, format!("{text}\n"));
+        assert_eq!(note.usage.as_ref().and_then(|usage| usage.duration_ms), Some(1000));
+    }
+
+    #[test]
+    fn a_reply_that_is_not_the_error_stays() {
+        let blocks = run(
+            vec![
+                user("hi"),
+                HarnessEvent::MessageDelta { text: "on it".into() },
+                HarnessEvent::SessionError { message: "boom".into() },
+            ],
+            vec![],
+        );
+        let reply = blocks.iter().find(|block| block.role == BlockRole::Assistant).unwrap();
+        assert_eq!(reply.hidden, None);
+        assert_eq!(blocks.last().unwrap().text, "boom");
+        assert!(blocks.last().unwrap().usage.is_none());
+    }
+
+    #[test]
+    fn an_earlier_turns_identical_reply_stays() {
+        let blocks = run(
+            vec![
+                user("first"),
+                HarnessEvent::MessageDelta { text: "boom".into() },
+                HarnessEvent::MessageCompleted {},
+                user("second"),
+                HarnessEvent::SessionError { message: "boom".into() },
+            ],
+            vec![],
+        );
+        let reply = blocks.iter().find(|block| block.role == BlockRole::Assistant).unwrap();
+        assert_eq!(reply.hidden, None);
+        assert_eq!(blocks.last().unwrap().role, BlockRole::System);
     }
 
     #[test]

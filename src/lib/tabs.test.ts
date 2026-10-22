@@ -384,6 +384,14 @@ describe("a sign-in terminal", () => {
     expect(newSignInTab(null, signIn).id).not.toBe(tab.id);
   });
 
+  it("titles a provider's login on its own, and keeps it off disk too", () => {
+    const tab = newSignInTab("/w", { sessionId: "s1", command: ["claude", "auth", "login"] }, "Sign in to Claude");
+    expect(tab).toMatchObject({ title: "Sign in to Claude", signIn: { sessionId: "s1", command: ["claude", "auth", "login"] } });
+    expect(tab.kind === "stub" && tab.signIn?.server).toBeUndefined();
+    expect(isSignInTab(tab)).toBe(true);
+    expect(persistedTabs(openTab(opened("a"), tab)).tabs.map((row) => row.id)).toEqual([sessionTabId("a")]);
+  });
+
   it("is never written to disk, while the tabs around it are", () => {
     const login = newSignInTab(null, signIn);
     const state = openTab(opened("a"), login);

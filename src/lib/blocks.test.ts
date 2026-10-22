@@ -147,6 +147,46 @@ describe("turn end", () => {
     expect(blocks.find((b) => b.role === "assistant")?.usage).toBeUndefined();
   });
 
+  it("hides a reply that repeats the turn's error and keeps its cost on the note", () => {
+    const text = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    const blocks = run([
+      { type: "user.message", text: "hi" },
+      { type: "message.delta", text },
+      { type: "turn.completed", usage: { durationMs: 1000 } },
+      { type: "session.error", message: `${text}\n` },
+    ]);
+    const reply = blocks.find((block) => block.role === "assistant");
+    expect(reply?.hidden).toBe(true);
+    expect(reply?.usage).toBeUndefined();
+    const note = blocks.at(-1);
+    expect(note?.role).toBe("system");
+    expect(note?.text).toBe(`${text}\n`);
+    expect(note?.usage).toEqual({ durationMs: 1000 });
+  });
+
+  it("keeps a reply that is not the error", () => {
+    const blocks = run([
+      { type: "user.message", text: "hi" },
+      { type: "message.delta", text: "on it" },
+      { type: "session.error", message: "boom" },
+    ]);
+    expect(blocks.find((block) => block.role === "assistant")?.hidden).toBeUndefined();
+    expect(blocks.at(-1)?.text).toBe("boom");
+    expect(blocks.at(-1)?.usage).toBeUndefined();
+  });
+
+  it("leaves an earlier turn's identical reply where it is", () => {
+    const blocks = run([
+      { type: "user.message", text: "first" },
+      { type: "message.delta", text: "boom" },
+      { type: "message.completed" },
+      { type: "user.message", text: "second" },
+      { type: "session.error", message: "boom" },
+    ]);
+    expect(blocks.find((block) => block.role === "assistant")?.hidden).toBeUndefined();
+    expect(blocks.at(-1)?.role).toBe("system");
+  });
+
   it("keeps quiet when the turn brought no usage with it", () => {
     const blocks = run([{ type: "message.delta", text: "ok" }, { type: "turn.completed" }], [
       newBlock("user", "hi"),

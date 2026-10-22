@@ -8,7 +8,7 @@ import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
 import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
-import { AssistantMessage, DateBreak, Note, SharedFiles, TurnFooter, UserMessage } from "./Message";
+import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter, UserMessage } from "./Message";
 import { agentDetail } from "../../lib/subagent";
 
 type Props = {
@@ -135,7 +135,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
             {block.role === "user" ? (
               <UserMessage block={block} />
             ) : block.role === "system" ? (
-              <Note block={block} />
+              <SystemLine block={block} />
             ) : (
               <AssistantMessage block={block} />
             )}

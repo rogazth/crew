@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback } from 'react';
 import { useCommands } from '../hooks/useCommand';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import { reconnectAfterSignIn } from '../lib/mcp';
+import { restartAfterSignIn } from '../lib/providerSignIn';
 import { isTerminalTab, relativeTo } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
@@ -73,9 +74,16 @@ export function Terminals({ panes, onOpenFile, onInputSent }: Props) {
             {...(tab.input !== undefined && { initialInput: tab.input })}
             {...(tab.input !== undefined && onInputSent && { onInputSent: () => onInputSent(pane.workspaceId, tab.id) })}
             active={visible}
-            // A login leaves the shell behind to read what it said, and its end has the session connect the server.
+            // A login leaves the shell behind to read what it said. An MCP login
+            // then connects the server; the provider's own login restarts the CLI.
             shellOnExit={signIn !== undefined}
-            onExit={signIn && (() => void reconnectAfterSignIn(pane.id, signIn.sessionId, signIn.server))}
+            onExit={
+              signIn &&
+              ((code) => {
+                if (signIn.server) void reconnectAfterSignIn(pane.id, signIn.sessionId, signIn.server);
+                else restartAfterSignIn(pane.id, signIn.sessionId, code);
+              })
+            }
             onOpenPath={(path) => openPath(cwd, path)}
           />
         </Suspense>

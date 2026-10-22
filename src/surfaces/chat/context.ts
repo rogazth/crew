@@ -30,6 +30,8 @@ export type ChatActions = {
   openProcessRun: (process: Process, worktree: string | null) => void;
   /** Runs an MCP server's login for a session in a terminal tab; its end has the session connect the server. */
   openSignIn: (sessionId: string, server: string, command: string[]) => void;
+  /** Runs the provider's own login in a terminal tab; a clean exit restarts the session's CLI. */
+  openLogin: (sessionId: string, provider: string, command: string[]) => void;
   /** Asks the shell's dialog before something that costs the session work: a restart over running background work. */
   confirm: Ask;
 };
@@ -44,8 +46,18 @@ export const ChatContext = createContext<ChatActions>({
   processes: [],
   openProcessRun: () => undefined,
   openSignIn: () => undefined,
+  openLogin: () => undefined,
   confirm: () => undefined,
 });
+
+/** The session whose chat is on screen, so a note in it can ask that session to sign in. */
+export type ChatSession = { id: string; provider: string };
+
+export const ChatSessionContext = createContext<ChatSession | null>(null);
+
+export function useChatSession(): ChatSession | null {
+  return useContext(ChatSessionContext);
+}
 
 export function useChatActions(): ChatActions {
   return useContext(ChatContext);
