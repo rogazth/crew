@@ -16,6 +16,7 @@ import type { AttachedFile } from "../../lib/blocks";
 import { composerHints } from "../../lib/composerHints";
 import { effortsOf, fitChoice, selectedEffort, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextEffort } from "../../lib/sessionOptions";
+import { agentMentionAt, completeAgentMention, searchAgents } from "../../lib/agentMentions";
 import {
   completeMention,
   rememberMention,
@@ -37,8 +38,10 @@ import { McpSegment } from "./Mcp";
 import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
-import { MentionPicker } from "./MentionPicker";
+import { AgentPicker, MentionPicker } from "./MentionPicker";
+import { useAgentIcons } from "../../hooks/useAgentIcons";
 import { useMentionMenu } from "./useMentionMenu";
+import { usePickerAnchor } from "./usePickerAnchor";
 import { SlashPicker } from "./SlashPicker";
 import { continueList, indentList, onIndentedListLine, onListLine, removeListMarker, type TextEdit } from "../../lib/composerFormat";
 import { PromptEditor, type PromptHandle } from "./PromptEditor";
@@ -104,6 +107,7 @@ const choiceOf = (session: Session): AgentChoice => ({
 
 /** The menu before the daemon has answered: nothing to list or to paint. */
 const NO_ENTRIES: CommandEntry[] = [];
+const NO_AGENTS: readonly Session[] = [];
 
 /** A control well in the chrome's dialect: hairline, radius 16, plus and model left, send right. */
 export function Composer({
@@ -137,8 +141,9 @@ export function Composer({
     read: () => field.current?.read() ?? { value: draft, from: draft.length, to: draft.length },
     select: (at: number) => field.current?.select(at),
     apply: (edit: TextEdit) => field.current?.apply(edit),
+    coordsAt: (at: number) => field.current?.coordsAt(at) ?? null,
   }));
-  const { files: projectFiles, confirm, resolvePath } = useChatActions();
+  const { files: projectFiles, agents = NO_AGENTS, confirm, resolvePath } = useChatActions();
   // A file still travelling has no path to send yet.
   const uploading = uploads.some((upload) => upload.error === undefined);
   const canSend = ready && !uploading && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
@@ -150,15 +155,28 @@ export function Composer({
   const [picked, setPicked] = useState<readonly string[]>([]);
   const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...picked]), [indexed, picked]);
 
+  // A `#` names a bot or a session of the workspace instead of a file; its chip wears the menu's icon.
+  const agentIcons = useAgentIcons(agents);
+  const chipAgents = useMemo(() => agents.map((agent) => ({ name: agent.name, icon: agentIcons.get(agent.id) })), [agents, agentIcons]);
+  const agentMention = mention ? null : agentMentionAt(draft, cursor);
+  const agentResults = useMemo(
+    () => (agentMention ? searchAgents(agentMention.query, agents) : []),
+    [agentMention?.query, agents], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
   const entries = useCommands(session.id)?.entries ?? NO_ENTRIES;
-  const slash = mention ? null : slashAt(draft, cursor);
+  const slash = mention || agentMention ? null : slashAt(draft, cursor);
   const slashStarts = slash ? opensMessage(draft, slash.start) : false;
   const slashResults = useMemo(
     () => (slash ? searchCommands(entries, slash.query, slashStarts) : []),
     [slash?.query, slashStarts, entries], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const choices = mention ? results.length : slashResults.length;
+  const choices = mention ? results.length : agentMention ? agentResults.length : slashResults.length;
+  // The open picker hangs from the character that opened it, and stays there as the query is typed.
+  const well = useRef<HTMLFormElement>(null);
+  const trigger = mention?.start ?? agentMention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null;
+  const pickerLeft = usePickerAnchor(field, well, trigger);
   // The daemon answers from its cache and reads again once that is stale: a menu opened late is current.
   const typingSlash = slash !== null;
   useEffect(() => {
@@ -193,6 +211,16 @@ export function Composer({
     if (!next) return;
     rememberMention(file.path);
     setPicked((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
+    onDraft(next.text);
+    setActive(0);
+    place(next.cursor);
+  };
+
+  const pickAgent = (agent: Session) => {
+    const el = field.current;
+    if (!el) return;
+    const next = completeAgentMention(draft, el.read().from, agent);
+    if (!next) return;
     onDraft(next.text);
     setActive(0);
     place(next.cursor);
@@ -243,6 +271,7 @@ export function Composer({
         event.preventDefault();
         const at = Math.min(active, choices - 1);
         if (mention) pick(results[at]!, event.key === "Tab");
+        else if (agentMention) pickAgent(agentResults[at]!);
         else pickSlash(slashResults[at]!);
         return;
       }
@@ -347,12 +376,33 @@ export function Composer({
         )}
       </AgentClip>
       <UsageWarning provider={session.provider} />
-      <form onSubmit={submit} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
+      <form ref={well} onSubmit={submit} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
-          <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
+          <MentionPicker
+            results={results}
+            active={Math.min(active, Math.max(0, results.length - 1))}
+            onHover={setActive}
+            onPick={pick}
+            left={pickerLeft}
+          />
+        )}
+        {agentMention && (
+          <AgentPicker
+            results={agentResults}
+            active={Math.min(active, Math.max(0, agentResults.length - 1))}
+            onHover={setActive}
+            onPick={pickAgent}
+            left={pickerLeft}
+          />
         )}
         {slashResults.length > 0 && (
-          <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
+          <SlashPicker
+            results={slashResults}
+            active={Math.min(active, slashResults.length - 1)}
+            onHover={setActive}
+            onPick={pickSlash}
+            left={pickerLeft}
+          />
         )}
         {queued && (
           <div className="px-1.5">
@@ -372,6 +422,7 @@ export function Composer({
             placeholder={placeholder}
             label={`Message ${session.name}`}
             known={known}
+            agents={chipAgents}
             entries={entries}
             onChange={(value, caret) => {
               onDraft(value);

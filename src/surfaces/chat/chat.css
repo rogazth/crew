@@ -675,3 +675,42 @@
   margin-top: 0.5rem;
   margin-bottom: 0;
 }
+
+/* A `#name` in the composer: a bot or a session of the workspace. It wears the
+   bot's face or the session's provider logo, with no square behind it. */
+.ds-prompt .cm-chip[data-kind="agent"] {
+  --chip-ink: light-dark(oklch(55% 0.13 200), oklch(64% 0.12 200));
+}
+.ds-prompt .cm-chip[data-face] .cm-chip-icon {
+  background: none;
+}
+.ds-prompt .cm-chip-face {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.ds-prompt span.cm-chip-face {
+  background: var(--color-icon);
+}
+
+/* The `@`, `#` and `/` pickers: a card of their own width that hangs from the
+   character that opened them (its `left` is set inline), not a sheet across the well. */
+.crew-picker {
+  --picker-w: min(360px, 100%);
+  position: absolute;
+  bottom: 100%;
+  z-index: 20;
+  width: var(--picker-w);
+  margin-bottom: 0.5rem;
+}
+.crew-picker-wide {
+  --picker-w: min(460px, 100%);
+}
+/* An even inset on every side, and rows that round inside it rather than
+   running edge to edge: the card's radius less the inset. */
+.crew-popover.crew-picker {
+  padding: 4px;
+}
+.crew-picker [role="option"] {
+  border-radius: 8px;
+}

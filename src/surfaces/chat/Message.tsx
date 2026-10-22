@@ -1,10 +1,12 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Tooltip } from "../../chrome/kit";
 import { ChevronRightIcon, ImagesIcon, InfoIcon } from "lucide-react";
+import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { BotAvatar } from "../../chrome/BotAvatar";
-import { lazy, memo, Suspense, useState } from "react";
+import { lazy, memo, Suspense, useState, type ReactNode } from "react";
 import { FileRef } from "../../chrome/FileRef";
 import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
+import { agentRuns, splitAgentNote, type AgentRef } from "../../lib/agentMentions";
 import { splitMentions } from "../../lib/mentions";
 import { attachedFrom, imageMime } from "../../lib/attachments";
 import { AttachmentStrip, Lightbox } from "./Attachments";
@@ -30,16 +32,18 @@ const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markd
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
   if (block.fromBot) return <Letter block={block} from={block.fromBot} />;
   // One still queued is drawn with the rest of the queue, under one label (`QueuedGroup`).
+  // The note naming the agents it mentions is for the agent; the bubble shows what you wrote.
+  const { body, agents } = splitAgentNote(block.text ?? "");
   return (
     <div className="flex flex-col items-end gap-1.5">
-      {block.text ? (
+      {body ? (
         <div className="crew-md-row is-user">
           <div className="crew-bubble" data-bubble>
             <p className="whitespace-pre-wrap">
-              <MentionText text={block.text} />
+              <MentionText text={body} agents={agents} />
             </p>
           </div>
-          <CopyButton text={block.text} className="crew-copy crew-copy-aside" />
+          <CopyButton text={body} className="crew-copy crew-copy-aside" />
         </div>
       ) : null}
       {block.files && block.files.length > 0 ? (
@@ -109,9 +113,12 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
   );
 }
 
-/** `@path` runs become pills that open the file, an image in the viewer; the rest is the text as typed. */
-function MentionText({ text }: { text: string }) {
-  const { openPath, openFolder, resolvePath } = useChatActions();
+/**
+ * `@path` runs become pills that open the file, an image in the viewer; `#name` runs of the agents the
+ * message's note names become pills that open that session. The rest is the text as typed.
+ */
+function MentionText({ text, agents }: { text: string; agents: AgentRef[] }) {
+  const { openPath, openFolder, resolvePath, openSession } = useChatActions();
   const [image, setImage] = useState<string | null>(null);
   const segments = splitMentions(text);
   const open = (path: string) => {
@@ -126,12 +133,42 @@ function MentionText({ text }: { text: string }) {
           // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
           <FileRef key={index} path={segment.path} onOpen={open} />
         ) : (
-          <span key={index}>{segment.text}</span>
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
+          <AgentText key={index} text={segment.text} agents={agents} onOpen={openSession} />
         ),
       )}
       {image && <Lightbox images={[attachedFrom(image)]} index={0} onIndex={() => {}} onClose={() => setImage(null)} />}
     </>
   );
+}
+
+function AgentText({ text, agents, onOpen }: { text: string; agents: AgentRef[]; onOpen: (id: string) => void }) {
+  if (agents.length === 0) return <span>{text}</span>;
+  const parts: ReactNode[] = [];
+  let at = 0;
+  for (const run of agentRuns(text, agents)) {
+    if (run.from > at) parts.push(text.slice(at, run.from));
+    parts.push(
+      <button
+        key={run.from}
+        type="button"
+        onClick={() => onOpen(run.agent.id)}
+        title={`${run.agent.kind} ${run.agent.id}`}
+        className="crew-file-ref"
+        data-agent-ref={run.agent.id}
+      >
+        {run.agent.kind === "bot" ? (
+          <BotAvatar seed={run.agent.id} bare className="size-3.5 self-center" />
+        ) : (
+          <ProviderIcon provider={run.agent.provider} className="size-3 self-center" />
+        )}
+        <span className="crew-file-ref-name">{run.agent.name}</span>
+      </button>,
+    );
+    at = run.to;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return <span>{parts}</span>;
 }
 
 export const AssistantMessage = memo(function AssistantMessage({ block }: { block: Block }) {

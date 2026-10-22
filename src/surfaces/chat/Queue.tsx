@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { splitAgentNote } from "../../lib/agentMentions";
 import { ArrowDownIcon, ArrowUpIcon, CornerDownLeftIcon, PaperclipIcon, PencilIcon, Trash2Icon, XIcon } from "lucide-react";
 import type { QueuedMessage } from "../../lib/queue";
 
@@ -31,7 +32,7 @@ export function QueueChips({ queue }: { queue: QueueScope }) {
           <span key={message.id} data-queue-chip className="flex h-7 max-w-full items-center gap-1.5 rounded-full bg-card pr-1 pl-2.5 text-[12px]">
             <span className="shrink-0 text-[11px] text-text-muted">next turn</span>
             {message.files.length > 0 && <PaperclipIcon className="size-3 shrink-0 text-icon" />}
-            <span className="max-w-[260px] truncate">{message.text}</span>
+            <span className="max-w-[260px] truncate">{splitAgentNote(message.text).body}</span>
             <button
               type="button"
               aria-label="Remove from the queue"
@@ -107,11 +108,14 @@ export function QueueSegment({
 /** One queued message: what it is, when it lands, and what can be done with it. */
 function QueuedRow({ message, index, working, queue }: { message: QueuedMessage; index: number; working: boolean; queue: QueueScope }) {
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(message.text);
+  // The note naming the agents it mentions stays under it through an edit; only what you wrote is shown.
+  const body = splitAgentNote(message.text).body;
+  const note = message.text.slice(body.length);
+  const [text, setText] = useState(body);
   const save = () => {
     setEditing(false);
-    if (text.trim() && text !== message.text) queue.onEdit(message.id, text);
-    else setText(message.text);
+    if (text.trim() && text !== body) queue.onEdit(message.id, text + note);
+    else setText(body);
   };
   return (
     <div data-queued className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-hover">
@@ -127,14 +131,14 @@ function QueuedRow({ message, index, working, queue }: { message: QueuedMessage;
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
               if (event.key === "Escape") {
-                setText(message.text);
+                setText(body);
                 setEditing(false);
               }
             }}
             className="w-full rounded bg-canvas px-1.5 py-0.5 text-[13px] ring-1 ring-border outline-none"
           />
         ) : (
-          <span data-queued-text className="truncate text-[13px]">{message.text}</span>
+          <span data-queued-text className="truncate text-[13px]">{body}</span>
         )}
         <span className="flex items-center gap-1 text-[11px] text-text-muted">
           {message.steering ? "Into this turn" : "Next turn"} · {when(message, working)}

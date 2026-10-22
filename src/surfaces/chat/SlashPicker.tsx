@@ -1,15 +1,18 @@
 import { useEffect, useRef } from "react";
 import type { CommandEntry } from "../../lib/protocol";
+import { pickerStyle } from "./usePickerAnchor";
 
 type Props = {
   results: CommandEntry[];
   active: number;
   onHover: (index: number) => void;
   onPick: (entry: CommandEntry) => void;
+  /** Where its trigger sits, from the well's left edge. */
+  left?: number | null;
 };
 
 /** Sits above the well while a `/` is being typed. The keyboard lives in the composer. */
-export function SlashPicker({ results, active, onHover, onPick }: Props) {
+export function SlashPicker({ results, active, onHover, onPick, left }: Props) {
   const list = useRef<HTMLDivElement>(null);
 
   // The arrows walk a list longer than the popover shows.
@@ -18,7 +21,7 @@ export function SlashPicker({ results, active, onHover, onPick }: Props) {
   }, [active]);
 
   return (
-    <div role="listbox" aria-label="Commands" className="crew-popover absolute inset-x-0 bottom-full z-20 mb-2">
+    <div role="listbox" aria-label="Commands" className="crew-popover crew-picker crew-picker-wide" style={pickerStyle(left)}>
       <div ref={list} className="max-h-72 overflow-y-auto">
         {results.map((entry, index) => (
           <button

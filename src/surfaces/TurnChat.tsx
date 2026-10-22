@@ -20,6 +20,7 @@ import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgro
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
 import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPrompt, takeCarried } from "../lib/firstPrompt";
+import { agentNote, mentionedAgents } from "../lib/agentMentions";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -146,7 +147,11 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     takeRequest();
     return onAgentRequest(takeRequest);
   }, [takeRequest]);
-  const chatActions = useMemo(() => ({ ...actions, openAgent }), [actions, openAgent]);
+  const agents = useMemo(
+    () => sessions.filter((row) => row.workspaceId === session.workspaceId && row.id !== session.id),
+    [sessions, session.workspaceId, session.id],
+  );
+  const chatActions = useMemo(() => ({ ...actions, openAgent, agents }), [actions, openAgent, agents]);
   const openOutput = useCallback(
     (commandId: string) => {
       closeThread();
@@ -270,13 +275,15 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       }
       const { command, skills } = dispatchOf(text, menu?.entries ?? []);
       const asked = { mentions, ...(command ? { command } : {}), skills };
+      // The agents it names go under it with their ids, which the agent acts on; a command's arguments take none.
+      const sent = command ? text : text + agentNote(mentionedAgents(text, agents));
       setDraft("");
       setFiles([]);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
-      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", asked);
-      else void send(session, cwd, text, attached, asked);
+      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
+      else void send(session, cwd, sent, attached, asked);
     },
-    [actions, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
+    [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);

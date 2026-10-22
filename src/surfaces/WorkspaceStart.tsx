@@ -29,6 +29,7 @@ import { AttachMenu, SendButton } from "./chat/ComposerParts";
 import { MentionPicker } from "./chat/MentionPicker";
 import { PromptEditor, type PromptHandle } from "./chat/PromptEditor";
 import { SlashPicker } from "./chat/SlashPicker";
+import { usePickerAnchor } from "./chat/usePickerAnchor";
 import { useMentionMenu } from "./chat/useMentionMenu";
 import { EmptyHead, Fact, IntroWaysFrame, StarterCard } from "./chat/SessionIntro";
 
@@ -115,6 +116,8 @@ export function StartScreen({
     [slash?.query, actions], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const choices = mention ? results.length : slashResults.length;
+  const well = useRef<HTMLFormElement>(null);
+  const pickerLeft = usePickerAnchor(field, well, mention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null);
   // The draft has just changed: the caret goes where the change left it once the field has the new text.
   const place = (at: number, then?: () => void) => {
     requestAnimationFrame(() => {
@@ -240,6 +243,7 @@ export function StartScreen({
       </div>
       <div className="ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 py-1">
         <form
+          ref={well}
           className="ds-composer"
           data-roomy=""
           onSubmit={(event) => {
@@ -248,10 +252,22 @@ export function StartScreen({
           }}
         >
           {mention && (
-            <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pickMention} />
+            <MentionPicker
+              results={results}
+              active={Math.min(active, Math.max(0, results.length - 1))}
+              onHover={setActive}
+              onPick={pickMention}
+              left={pickerLeft}
+            />
           )}
           {slashResults.length > 0 && (
-            <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
+            <SlashPicker
+              results={slashResults}
+              active={Math.min(active, slashResults.length - 1)}
+              onHover={setActive}
+              onPick={pickSlash}
+              left={pickerLeft}
+            />
           )}
           {(files.length > 0 || uploads.length > 0) && (
             <div className="px-1.5">

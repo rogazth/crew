@@ -24,6 +24,8 @@ export type ChatActions = {
   openAgent: (target: string, options?: { focus?: string }) => void;
   /** The workspace index, for `@` mentions. */
   files: ProjectFile[];
+  /** The workspace's other bots and sessions, for `#` mentions; absent outside a session's chat. */
+  agents?: readonly Session[];
   /** The workspace's commands, whose runs a session started are in its background panel. */
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */

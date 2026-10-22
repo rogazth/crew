@@ -16,6 +16,8 @@ import {
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { fileTypeIconElement } from "../../chrome/fileIconSprite";
 import type { TextEdit } from "../../lib/composerFormat";
+import type { AgentIcon } from "../../hooks/useAgentIcons";
+import { agentRuns } from "../../lib/agentMentions";
 import { splitMentions } from "../../lib/mentions";
 import type { CommandEntry } from "../../lib/protocol";
 import { splitTokens } from "../../lib/slashCommands";
@@ -29,6 +31,8 @@ export type PromptHandle = {
   select: (at: number) => void;
   /** One edit, undone as one by ⌘Z. */
   apply: (edit: TextEdit) => void;
+  /** Where the character at `at` starts on screen, in viewport pixels; null when it is not drawn. */
+  coordsAt: (at: number) => { left: number; top: number } | null;
 };
 
 type Props = {
@@ -38,6 +42,8 @@ type Props = {
   label: string;
   /** Files the draft may name: an `@path` among them becomes a chip. */
   known: ReadonlySet<string>;
+  /** Bots and sessions the draft may name: a `#name` among them becomes a chip. */
+  agents?: readonly ChipAgent[];
   /** Commands and skills: a `/name` among them becomes a chip. */
   entries: readonly CommandEntry[];
   onChange: (value: string, caret: number) => void;
@@ -50,13 +56,17 @@ type Props = {
   roomy?: boolean;
 };
 
+/** A bot or session a `#name` chip can stand for, with the icon it wears. */
+type ChipAgent = { name: string; icon?: AgentIcon | undefined };
+const NO_AGENTS: readonly ChipAgent[] = [];
+
 /** A change the composer made to the draft, not the user typing: it is not reported back. */
 const fromOutside = Annotation.define<boolean>();
 
-type ChipSource = { known: ReadonlySet<string>; entries: readonly CommandEntry[] };
+type ChipSource = { known: ReadonlySet<string>; agents: readonly ChipAgent[]; entries: readonly CommandEntry[] };
 const setSource = StateEffect.define<ChipSource>();
 const source = StateField.define<ChipSource>({
-  create: () => ({ known: new Set(), entries: [] }),
+  create: () => ({ known: new Set(), agents: [], entries: [] }),
   update: (value, tr) => tr.effects.reduce((next, effect) => (effect.is(setSource) ? effect.value : next), value),
 });
 
@@ -65,6 +75,8 @@ const ICONS: Record<string, string> = {
   skill:
     '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
   command: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  agent:
+    '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
 };
 
 /** An `@path`, a command or a skill as one thing: its icon (the explorer's, for a file), then its name. */
@@ -72,11 +84,12 @@ class ChipWidget extends WidgetType {
   constructor(
     readonly text: string,
     readonly kind: string,
+    readonly icon?: AgentIcon,
   ) {
     super();
   }
   eq(other: ChipWidget) {
-    return other.text === this.text && other.kind === this.kind;
+    return other.text === this.text && other.kind === this.kind && other.icon?.src === this.icon?.src;
   }
   toDOM() {
     const chip = document.createElement("span");
@@ -88,7 +101,15 @@ class ChipWidget extends WidgetType {
     icon.className = "cm-chip-icon";
     const path = this.text.slice(1);
     if (this.kind === "file" || this.kind === "folder") icon.append(fileTypeIconElement(path, this.kind === "folder"));
-    else
+    else if (this.icon) {
+      // A bot's face or a session's provider logo, as the `#` menu shows them.
+      chip.dataset.face = "";
+      const face = document.createElement(this.icon.mask ? "span" : "img");
+      face.className = "cm-chip-face";
+      if (face instanceof HTMLImageElement) face.src = this.icon.src;
+      else face.style.mask = face.style.webkitMask = `url("${this.icon.src}") center / contain no-repeat`;
+      icon.append(face);
+    } else
       icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${ICONS[this.kind] ?? ""}</svg>`;
     const label = document.createElement("span");
     label.className = "cm-chip-label";
@@ -103,8 +124,8 @@ class ChipWidget extends WidgetType {
 }
 
 /** Where every chip-worthy run of the text is, and what it is. */
-function chipRuns(text: string, { known, entries }: ChipSource) {
-  const runs: { from: number; to: number; text: string; kind: string }[] = [];
+function chipRuns(text: string, { known, agents, entries }: ChipSource) {
+  const runs: { from: number; to: number; text: string; kind: string; icon?: AgentIcon | undefined }[] = [];
   let at = 0;
   for (const part of splitTokens(text, entries)) {
     if (part.kind === "token") {
@@ -120,6 +141,11 @@ function chipRuns(text: string, { known, entries }: ChipSource) {
       }
     }
     at += part.text.length;
+  }
+  // A `#name` is a chip where nothing else already is.
+  for (const run of agentRuns(text, agents)) {
+    if (runs.some((other) => other.from < run.to && run.from < other.to)) continue;
+    runs.push({ from: run.from, to: run.to, text: text.slice(run.from, run.to), kind: "agent", icon: run.agent.icon });
   }
   return runs;
 }
@@ -142,11 +168,12 @@ const chips = StateField.define<DecorationSet>({
     const byFrom = new Map(runs.map((run) => [run.from, run]));
     mapped.between(0, doc.length, (from, to, deco) => {
       const run = byFrom.get(from);
-      if (run && run.to === to && (deco.spec.widget as ChipWidget).text === run.text) kept.set(from, deco.range(from, to));
+      const widget = deco.spec.widget as ChipWidget;
+      if (run && run.to === to && widget.text === run.text && widget.icon?.src === run.icon?.src) kept.set(from, deco.range(from, to));
     });
     for (const run of runs) {
       if (kept.has(run.from) || (head >= run.from && head <= run.to)) continue;
-      kept.set(run.from, Decoration.replace({ widget: new ChipWidget(run.text, run.kind) }).range(run.from, run.to));
+      kept.set(run.from, Decoration.replace({ widget: new ChipWidget(run.text, run.kind, run.icon) }).range(run.from, run.to));
     }
     return Decoration.set([...kept.values()], true);
   },
@@ -235,7 +262,7 @@ const markdown = ViewPlugin.fromClass(
  * The composer's field: a CodeMirror editor over the plain-markdown draft. Mentions, commands and skills
  * show as chips and list items as real list lines, while the text underneath stays exactly what is sent.
  */
-export function PromptEditor({ ref, value, placeholder, label, known, entries, onChange, onCaret, onKeyDown, onPasteFiles, roomy = false }: Props) {
+export function PromptEditor({ ref, value, placeholder, label, known, agents = NO_AGENTS, entries, onChange, onCaret, onKeyDown, onPasteFiles, roomy = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -301,8 +328,8 @@ export function PromptEditor({ ref, value, placeholder, label, known, entries, o
   }, [prompt, placeholder, label]);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: setSource.of({ known, entries }) });
-  }, [known, entries]);
+    view.current?.dispatch({ effects: setSource.of({ known, agents, entries }) });
+  }, [known, agents, entries]);
 
   // A draft the composer set (a pick, a send, a starter) replaces only what differs, so the caret and undo keep their place.
   useEffect(() => {
@@ -386,6 +413,12 @@ export function PromptEditor({ ref, value, placeholder, label, known, entries, o
         if (!editor) return;
         editor.focus();
         editor.dispatch({ selection: { anchor: Math.min(at, editor.state.doc.length) }, scrollIntoView: true });
+      },
+      coordsAt: (at) => {
+        const editor = view.current;
+        if (!editor) return null;
+        const rect = editor.coordsAtPos(Math.min(at, editor.state.doc.length), 1);
+        return rect && { left: rect.left, top: rect.top };
       },
       apply: (edit) => {
         const editor = view.current;
