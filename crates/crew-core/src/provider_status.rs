@@ -61,11 +61,15 @@ fn with_cache<R>(id: &'static str, f: impl FnOnce(&mut Cached) -> R) -> R {
     f(guard.get_or_insert_with(HashMap::new).entry(id).or_default())
 }
 
-/// The CLIs, looked up concurrently. `refresh` skips the caches.
-pub fn all(refresh: bool) -> Vec<ProviderStatus> {
+/// The CLIs named in `only` (all of them when None), looked up concurrently.
+/// `refresh` skips the caches. A job that ended asks again for its own CLI
+/// only, without waiting on slow ones (cursor-agent's take seconds).
+pub fn some(only: Option<&[String]>, refresh: bool) -> Vec<ProviderStatus> {
+    let specs: Vec<&'static Spec> =
+        SPECS.iter().filter(|spec| only.is_none_or(|ids| ids.iter().any(|id| id == spec.id))).collect();
     thread::scope(|scope| {
-        let handles: Vec<_> = SPECS.iter().map(|spec| scope.spawn(move || one(spec, refresh))).collect();
-        handles.into_iter().zip(SPECS).map(|(handle, spec)| handle.join().unwrap_or_else(|_| bare(spec))).collect()
+        let handles: Vec<_> = specs.iter().map(|&spec| scope.spawn(move || one(spec, refresh))).collect();
+        handles.into_iter().zip(specs).map(|(handle, spec)| handle.join().unwrap_or_else(|_| bare(spec))).collect()
     })
 }
 
@@ -82,11 +86,12 @@ fn bare(spec: &Spec) -> ProviderStatus {
 
 fn one(spec: &Spec, refresh: bool) -> ProviderStatus {
     let mut status = bare(spec);
+    // What it could be (re)installed with, installed or not: a first install needs it most.
+    status.methods = crate::provider_job::available_methods(spec.id);
     match resolve(spec) {
         Ok(Some(path)) => {
             status.installed = true;
             status.path = Some(path.to_string_lossy().into_owned());
-            status.methods = crate::provider_job::available_methods(spec.id);
             fill(spec, &path, refresh, &mut status);
         }
         Ok(None) => {}
@@ -223,7 +228,7 @@ fn npm_latest(package: &str) -> Option<String> {
 /// stdout of `path args`, or stderr when stdout is empty (some CLIs print
 /// their status there). The exit code is ignored: a signed-out CLI says so and
 /// exits 1. None when it does not start or does not answer in time.
-fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+pub(crate) fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     let mut command = Command::new(path);
     command
         .args(args)

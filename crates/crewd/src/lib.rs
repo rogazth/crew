@@ -1772,8 +1772,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
         "provider_status" => {
-            let proto::ProviderStatusRequest { refresh } = parse(params)?;
-            json(block(move || Ok::<_, String>(crew_core::provider_status::all(refresh))).await?)
+            let proto::ProviderStatusRequest { refresh, providers } = parse(params)?;
+            json(block(move || Ok::<_, String>(crew_core::provider_status::some(providers.as_deref(), refresh))).await?)
         }
         "provider_job_start" => {
             let request: proto::ProviderJobStart = parse(params)?;

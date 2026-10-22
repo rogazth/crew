@@ -1125,9 +1125,9 @@ note?: string, };
 
 /**
  * Asks a daemon for its agent CLIs' state. `refresh` skips the cached
- * latest-version and account lookups.
+ * latest-version and account lookups; `providers` limits the answer to those ids.
  */
-export type ProviderStatusRequest = { refresh: boolean, };
+export type ProviderStatusRequest = { refresh: boolean, providers?: Array<string>, };
 
 export type PtyAck = { id: string, processed: number, };
 

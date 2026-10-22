@@ -47,6 +47,8 @@ fn dirs_for(login_first: bool, sandboxed: bool) -> Vec<PathBuf> {
         fixed.push(home.join(".local/bin"));
         fixed.push(home.join(".claude/local"));
         fixed.push(home.join(".opencode/bin"));
+        // Grok's installer links into ~/.local/bin only when that is on its PATH.
+        fixed.push(home.join(".grok/bin"));
         fixed.push(home.join(".cargo/bin"));
         fixed.push(home.join(".npm-global/bin"));
     }

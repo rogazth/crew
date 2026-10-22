@@ -29,7 +29,7 @@ import { Button, IconButton, PANEL, ROW, Segmented } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useEnvLinks } from "../../hooks/useEnvLinks";
 import { useProviderJobs } from "../../hooks/useProviderJobs";
-import { useProviderStatus } from "../../hooks/useProviderStatus";
+import { refreshProvider, useProviderStatus } from "../../hooks/useProviderStatus";
 import { LOCAL, reconnect, type EnvLink } from "../../lib/client/registry";
 import { filesHost, openUrl, remotesHost } from "../../lib/host";
 import type { ProviderJob, ProviderJobMethod, ProviderStatus } from "../../lib/protocol";
@@ -45,7 +45,17 @@ type Props = {
   onSettled: () => void;
 };
 
-type Status = "installing" | "updating" | "removing" | "failed" | "can't-run" | "not-installed" | "signed-out" | "update" | "ok";
+type Status =
+  | "installing"
+  | "updating"
+  | "removing"
+  | "checking"
+  | "failed"
+  | "can't-run"
+  | "not-installed"
+  | "signed-out"
+  | "update"
+  | "ok";
 
 const STATUS: Record<Status, { tone: Tone; label: string }> = {
   ok: { tone: "success", label: "Up to date" },
@@ -57,6 +67,7 @@ const STATUS: Record<Status, { tone: Tone; label: string }> = {
   installing: { tone: "accent", label: "Installing" },
   updating: { tone: "accent", label: "Updating" },
   removing: { tone: "accent", label: "Working" },
+  checking: { tone: "neutral", label: "Checking" },
 };
 
 /** What a card does on its machine: everything, or only look while it is unreachable. */
@@ -64,6 +75,8 @@ type Ctx = {
   link: EnvLink;
   live: boolean;
   jobs: ReturnType<typeof useProviderJobs>;
+  /** CLIs whose job ended and whose new state the machine has not answered with yet. */
+  settling: ReadonlySet<string>;
   /** The way each card will install, when it was not set before. */
   chosen: Partial<Record<string, ProviderJobMethod>>;
   choose: (provider: string, method: ProviderJobMethod) => void;
@@ -75,13 +88,15 @@ type Ctx = {
 /** "this Mac" or the machine's name, for sentences. */
 const hereOf = (link: EnvLink) => (link.id === LOCAL ? "this Mac" : link.name);
 
-function statusOf(p: ProviderStatus, job: ProviderJob | undefined): Status {
+function statusOf(p: ProviderStatus, job: ProviderJob | undefined, settling: boolean): Status {
   if (job?.phase === "running") {
     if (job.action === "install" || job.action === "reinstall") return "installing";
     if (job.action === "update") return "updating";
     return "removing";
   }
   if (job?.phase === "failed") return "failed";
+  // The card still shows the state from before the job: no "Update" to press twice.
+  if (settling) return "checking";
   if (!p.installed) return "not-installed";
   if (p.note) return "can't-run";
   if (p.account?.signedIn === false) return "signed-out";
@@ -101,25 +116,35 @@ function Machine({ link, links, onOpenTerminal, onSettled }: Props & { link: Env
   const status = useProviderStatus(link.id);
   const [ask, setAsk] = useState<ConfirmAsk | null>(null);
   const [chosen, setChosen] = useState<Partial<Record<string, ProviderJobMethod>>>({});
+  const [settling, setSettling] = useState<ReadonlySet<string>>(new Set());
   const live = link.status === "online" && !link.mismatch;
   const { refresh } = status;
 
   const jobs = useProviderJobs(link.id, (job) => {
     onSettled();
-    void refresh();
-    const known = PROVIDER_META[job.provider as ProviderId];
-    const name = known?.name ?? job.provider;
+    // Only this CLI is asked again; the card says it is checking until the answer lands.
+    const provider = job.provider;
+    setSettling((all) => new Set(all).add(provider));
+    void refreshProvider(link.id, provider).finally(() =>
+      setSettling((all) => {
+        const rest = new Set(all);
+        rest.delete(provider);
+        return rest;
+      }),
+    );
+    const known = PROVIDER_META[provider as ProviderId];
+    const name = known?.name ?? provider;
     if (job.phase === "done") toast(DONE[job.action](name));
   });
   const { loginEnd } = jobs;
 
-  // A sign-in that ended in the device-code flow, or a login typed in a terminal, changes the account.
+  // A sign-in that ended in the device-code flow (Codex's) changes the account.
   useEffect(() => {
     if (!loginEnd) return;
-    void refresh();
+    void refreshProvider(link.id, "codex");
     if (loginEnd.phase === "done") toast("Signed in");
     else if (loginEnd.phase === "failed") toast(loginEnd.error ?? "Sign-in failed", "danger");
-  }, [loginEnd, refresh]);
+  }, [loginEnd, link.id]);
   useEffect(() => {
     if (!live) return;
     const again = () => void refresh();
@@ -131,6 +156,7 @@ function Machine({ link, links, onOpenTerminal, onSettled }: Props & { link: Env
     link,
     live,
     jobs,
+    settling,
     chosen,
     choose: (provider, method) => setChosen((all) => ({ ...all, [provider]: method })),
     ask: setAsk,
@@ -301,7 +327,8 @@ function Unreachable({ link }: { link: EnvLink }) {
 function ProviderCard({ id, p, ctx }: { id: ProviderId; p: ProviderStatus; ctx: Ctx }) {
   const meta = PROVIDER_META[id];
   const job = ctx.jobs.jobs[id];
-  const status = statusOf(p, job);
+  const settling = ctx.settling.has(id);
+  const status = statusOf(p, job, settling);
   const chip = STATUS[status];
   const running = job?.phase === "running";
   const failed = job?.phase === "failed" ? job : undefined;
@@ -321,7 +348,7 @@ function ProviderCard({ id, p, ctx }: { id: ProviderId; p: ProviderStatus; ctx: 
           <p className="truncate text-[12px] text-text-muted">{meta.vendor}</p>
         </div>
         {ctx.live && !running && !failed && !codexFlow && <HeaderAction id={id} p={p} status={status} ctx={ctx} />}
-        {p.installed && <MoreMenu id={id} p={p} ctx={ctx} busy={running} />}
+        {p.installed && <MoreMenu id={id} p={p} ctx={ctx} busy={running || settling} />}
       </header>
       {codexFlow && <DeviceCode flow={codexFlow} ctx={ctx} />}
       {running && <JobStrip id={id} job={job} ctx={ctx} />}
@@ -334,7 +361,7 @@ function ProviderCard({ id, p, ctx }: { id: ProviderId; p: ProviderStatus; ctx: 
       )}
       {p.installed ? (
         <Details p={p} ctx={ctx} />
-      ) : running || failed ? null : (
+      ) : running || failed || settling ? null : (
         <InstallPanel id={id} p={p} ctx={ctx} />
       )}
     </article>
@@ -549,16 +576,23 @@ function CommandLine({ link, command }: { link: EnvLink; command: string }) {
   );
 }
 
+/** The tool on the machine each method runs. */
+const TOOL_OF: Record<ProviderJobMethod, string> = { npm: "npm", brew: "Homebrew", script: "curl", native: "itself" };
+
+const orList = (items: string[]) => (items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`);
+
 /** How it would install: the command, and the way to run it when there are several. The Install button is in the header. */
 function InstallPanel({ id, p, ctx }: { id: ProviderId; p: ProviderStatus; ctx: Ctx }) {
   const methods = p.methods.filter((m): m is "npm" | "brew" | "script" => m !== "native");
   const method = methodFor(id, p, ctx);
-  if (!method)
+  if (!method) {
+    const tools = Object.keys(PROVIDER_META[id].install).map((m) => TOOL_OF[m as ProviderJobMethod]);
     return (
       <p className="pl-[52px] text-[12px] text-text-muted">
-        Nothing to install it with on {hereOf(ctx.link)}: it needs npm, Homebrew or curl.
+        Nothing to install it with on {hereOf(ctx.link)}: it needs {orList(tools)}.
       </p>
     );
+  }
   return (
     <div className="flex items-center gap-2 pl-[52px]">
       <div className="min-w-0 flex-1">

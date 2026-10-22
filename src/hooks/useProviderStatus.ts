@@ -22,6 +22,39 @@ function remember(envId: string, found: ProviderStatus[]) {
   watchers.forEach((watcher) => watcher());
 }
 
+function watch(watcher: () => void) {
+  watchers.add(watcher);
+  return () => {
+    watchers.delete(watcher);
+  };
+}
+
+// One CLI being asked about again, per machine, so the page and the nav share a request.
+const asking = new Map<string, Promise<ProviderStatus | null>>();
+
+/**
+ * Asks machine `envId` about one CLI again, past the daemon's caches, and
+ * folds the answer into what is known of that machine. Quick: a job that ended
+ * does not wait on the other CLIs (cursor-agent's lookups take seconds).
+ */
+export function refreshProvider(envId: string, provider: string): Promise<ProviderStatus | null> {
+  const key = `${envId}\n${provider}`;
+  const pending = asking.get(key);
+  if (pending) return pending;
+  const ask = api
+    .providerStatus(envId, true, [provider])
+    .then((found) => {
+      const fresh = found.find((p) => p.id === provider) ?? null;
+      const have = known.get(envId);
+      if (fresh && have) remember(envId, have.map((p) => (p.id === provider ? fresh : p)));
+      return fresh;
+    })
+    .catch(() => null)
+    .finally(() => asking.delete(key));
+  asking.set(key, ask);
+  return ask;
+}
+
 /** The agent CLIs on machine `envId`: installed, version, update, account. */
 export function useProviderStatus(envId: string): ProviderStatusState {
   const [providers, setProviders] = useState<ProviderStatus[] | null>(known.get(envId) ?? null);
@@ -49,8 +82,14 @@ export function useProviderStatus(envId: string): ProviderStatusState {
     let alive = true;
     setProviders(known.get(envId) ?? null);
     void load(false, () => alive);
+    // One CLI asked about again (`refreshProvider`) lands here too.
+    const off = watch(() => {
+      const found = known.get(envId);
+      if (alive && found) setProviders(found);
+    });
     return () => {
       alive = false;
+      off();
     };
   }, [envId, load]);
 
@@ -68,13 +107,7 @@ export type Attention = {
 /** What the nav's Providers row counts, across every connected machine. */
 export function useProviderAttention(): Attention {
   const links = useEnvStates();
-  useSyncExternalStore(
-    (listener) => {
-      watchers.add(listener);
-      return () => watchers.delete(listener);
-    },
-    () => version,
-  );
+  useSyncExternalStore(watch, () => version);
   const reachable = links.filter((link) => link.status === "online" && !link.mismatch).map((link) => link.id);
   const key = reachable.join("|");
   // A failed read is tried again the next time the machine comes back (its key changes).
@@ -87,13 +120,10 @@ export function useProviderAttention(): Attention {
         .then((found) => remember(envId, found))
         .catch(() => {});
     }
-    // A job that ends changes what the CLIs report (installed, update, account): the counts follow.
+    // A job that ends changes what its CLI reports (installed, update, account): the counts follow.
     const offJob = api.onProviderJob((job, envId) => {
       if (job.phase === "running" || !ids.includes(envId)) return;
-      api
-        .providerStatus(envId, true)
-        .then((found) => remember(envId, found))
-        .catch(() => {});
+      void refreshProvider(envId, job.provider);
     });
     return offJob;
   }, [key]);

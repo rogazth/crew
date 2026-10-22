@@ -8,9 +8,11 @@
 //! the command that failed and the tail of its output as it was.
 
 use std::collections::VecDeque;
+use std::ffi::CString;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,6 +33,8 @@ const EMIT_EVERY: Duration = Duration::from_millis(150);
 const KILL_AFTER: Duration = Duration::from_secs(3);
 /// Finished jobs remembered for `list`.
 const KEEP_FINISHED: usize = 20;
+/// `npm prefix -g` is a Node start-up, not a network call.
+const NPM_PREFIX_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub type Listener = Arc<dyn Fn(&ProviderJob) + Send + Sync>;
 
@@ -98,7 +102,9 @@ pub fn available_methods(provider: &str) -> Vec<ProviderJobMethod> {
     if spec.npm.is_some() && shell_path::resolve("npm").is_some() {
         methods.push(ProviderJobMethod::Npm);
     }
-    if brew_package(provider).is_some() && shell_path::resolve("brew").is_some() {
+    // Casks are macOS only; Linuxbrew has formulae.
+    let brewable = brew_package(provider).is_some_and(|(cask, _)| !cask || cfg!(target_os = "macos"));
+    if brewable && shell_path::resolve("brew").is_some() {
         methods.push(ProviderJobMethod::Brew);
     }
     methods
@@ -127,11 +133,52 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-fn install_command(spec: &Spec, method: ProviderJobMethod) -> Result<String, String> {
-    match method {
-        ProviderJobMethod::Npm => {
-            spec.npm.map(|pkg| format!("npm install -g {pkg}")).ok_or_else(|| format!("{} has no npm package", spec.binary))
+/// Where npm's global installs go: its own prefix, or `~/.local` when that
+/// prefix is not the user's to write (`/usr` from a Linux package, a system
+/// Node on macOS), where `npm -g` fails without sudo. `~/.local/bin` is
+/// searched for CLIs either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum NpmPrefix {
+    #[default]
+    Global,
+    Home,
+}
+
+impl NpmPrefix {
+    fn npm(self) -> &'static str {
+        match self {
+            NpmPrefix::Global => "npm",
+            NpmPrefix::Home => "npm --prefix \"$HOME/.local\"",
         }
+    }
+
+    /// Asks this machine's npm where `-g` writes, and whether the user may write there.
+    pub fn detect() -> NpmPrefix {
+        let Some(npm) = shell_path::resolve("npm") else { return NpmPrefix::Global };
+        let Some(out) = provider_status::run(&npm, &["prefix", "-g"], NPM_PREFIX_TIMEOUT) else { return NpmPrefix::Global };
+        let prefix = PathBuf::from(out.lines().next().unwrap_or("").trim());
+        if prefix.as_os_str().is_empty() || writable_on_the_way(&prefix.join("lib/node_modules")) {
+            NpmPrefix::Global
+        } else {
+            NpmPrefix::Home
+        }
+    }
+}
+
+/// Whether the nearest folder of `target` that exists (the one a write would
+/// create the rest in) is writable by this process.
+fn writable_on_the_way(target: &Path) -> bool {
+    let Some(dir) = target.ancestors().find(|dir| dir.exists()) else { return false };
+    let Ok(dir) = CString::new(dir.as_os_str().as_bytes()) else { return false };
+    unsafe { libc::access(dir.as_ptr(), libc::W_OK) == 0 }
+}
+
+fn install_command(spec: &Spec, method: ProviderJobMethod, npm: NpmPrefix) -> Result<String, String> {
+    match method {
+        ProviderJobMethod::Npm => spec
+            .npm
+            .map(|pkg| format!("{} install -g {pkg}", npm.npm()))
+            .ok_or_else(|| format!("{} has no npm package", spec.binary)),
         ProviderJobMethod::Brew => brew_package(spec.id)
             .map(|(cask, name)| format!("brew install {}{name}", if cask { "--cask " } else { "" }))
             .ok_or_else(|| format!("{} is not in Homebrew", spec.binary)),
@@ -142,26 +189,32 @@ fn install_command(spec: &Spec, method: ProviderJobMethod) -> Result<String, Str
     }
 }
 
-fn update_command(spec: &Spec, method: ProviderJobMethod) -> Result<String, String> {
+fn update_command(spec: &Spec, method: ProviderJobMethod, npm: NpmPrefix) -> Result<String, String> {
     match method {
         ProviderJobMethod::Native => Ok(native_update(spec)),
         ProviderJobMethod::Npm => spec
             .npm
-            .map(|pkg| format!("npm install -g {pkg}@latest"))
+            .map(|pkg| format!("{} install -g {pkg}@latest", npm.npm()))
             .ok_or_else(|| format!("{} has no npm package", spec.binary)),
         ProviderJobMethod::Brew => brew_package(spec.id)
             .map(|(cask, name)| format!("brew upgrade {}{name}", if cask { "--cask " } else { "" }))
             .ok_or_else(|| format!("{} is not in Homebrew", spec.binary)),
-        ProviderJobMethod::Script => install_command(spec, method),
+        ProviderJobMethod::Script => install_command(spec, method, npm),
     }
 }
 
 /// `home` is where a script install may be removed from: a binary outside it
 /// is left to the user.
-fn uninstall_command(spec: &Spec, method: ProviderJobMethod, path: &Path, home: Option<&str>) -> Result<String, String> {
+fn uninstall_command(
+    spec: &Spec,
+    method: ProviderJobMethod,
+    path: &Path,
+    home: Option<&str>,
+    npm: NpmPrefix,
+) -> Result<String, String> {
     match method {
         ProviderJobMethod::Npm => {
-            spec.npm.map(|pkg| format!("npm rm -g {pkg}")).ok_or_else(|| format!("{} has no npm package", spec.binary))
+            spec.npm.map(|pkg| format!("{} rm -g {pkg}", npm.npm())).ok_or_else(|| format!("{} has no npm package", spec.binary))
         }
         ProviderJobMethod::Brew => brew_package(spec.id)
             .map(|(cask, name)| {
@@ -216,11 +269,12 @@ pub fn plan(
     method: Option<ProviderJobMethod>,
     installed: Option<&Path>,
     home: Option<&str>,
+    npm: NpmPrefix,
 ) -> Result<Plan, String> {
     let spec = spec(provider)?;
     if action == ProviderJobAction::Install {
         let method = method.unwrap_or_else(|| default_install(provider));
-        let command = install_command(spec, method)?;
+        let command = install_command(spec, method, npm)?;
         return Ok(Plan { method: Some(method), steps: vec![Step { label: "Installing", command }] });
     }
     let Some(path) = installed else { return Err(format!("{} is not installed", spec.binary)) };
@@ -235,11 +289,14 @@ pub fn plan(
         }
         ProviderJobAction::Update => {
             let method = method.unwrap_or(ProviderJobMethod::Native);
-            Ok(Plan { method: Some(method), steps: vec![Step { label: "Updating", command: update_command(spec, method)? }] })
+            Ok(Plan {
+                method: Some(method),
+                steps: vec![Step { label: "Updating", command: update_command(spec, method, npm)? }],
+            })
         }
         ProviderJobAction::Uninstall => {
             let method = method.unwrap_or_else(from_path);
-            let command = uninstall_command(spec, method, path, home)?;
+            let command = uninstall_command(spec, method, path, home, npm)?;
             Ok(Plan { method: Some(method), steps: vec![Step { label: "Uninstalling", command }] })
         }
         ProviderJobAction::Reinstall => {
@@ -247,8 +304,8 @@ pub fn plan(
                 ProviderJobMethod::Native => default_install(provider),
                 chosen => chosen,
             };
-            let remove = uninstall_command(spec, method, path, home)?;
-            let add = install_command(spec, method)?;
+            let remove = uninstall_command(spec, method, path, home, npm)?;
+            let add = install_command(spec, method, npm)?;
             Ok(Plan {
                 method: Some(method),
                 steps: vec![Step { label: "Uninstalling", command: remove }, Step { label: "Installing", command: add }],
@@ -371,7 +428,8 @@ impl ProviderJobs {
         let installed =
             if spec.binary == "opencode" { shell_path::resolve_opencode().ok() } else { shell_path::resolve(spec.binary) };
         let home = shell_path::home_dir();
-        let plan = plan(&request.provider, request.action, request.method, installed.as_deref(), home.as_deref())?;
+        let npm = if spec.npm.is_some() { NpmPrefix::detect() } else { NpmPrefix::Global };
+        let plan = plan(&request.provider, request.action, request.method, installed.as_deref(), home.as_deref(), npm)?;
         self.start_plan(&request.provider, request.action, plan)
     }
 
@@ -555,7 +613,7 @@ mod tests {
         method: Option<ProviderJobMethod>,
         path: Option<&str>,
     ) -> Result<Plan, String> {
-        plan(provider, action, method, path.map(Path::new), Some("/Users/me"))
+        plan(provider, action, method, path.map(Path::new), Some("/Users/me"), NpmPrefix::Global)
     }
     fn commands(plan: &Plan) -> Vec<&str> {
         plan.steps.iter().map(|step| step.command.as_str()).collect()
@@ -605,6 +663,23 @@ mod tests {
             ["curl https://cursor.com/install -fsS | bash"]
         );
         assert_eq!(start("claude", Update, None, None).unwrap_err(), "claude is not installed");
+    }
+
+    #[test]
+    fn npm_writes_under_home_when_its_global_folder_is_not_the_users() {
+        use ProviderJobAction::*;
+        use ProviderJobMethod::Npm;
+        let home = |action, path: Option<&str>| {
+            plan("codex", action, Some(Npm), path.map(Path::new), Some("/home/me"), NpmPrefix::Home).unwrap()
+        };
+        let at = Some("/home/me/.local/lib/node_modules/@openai/codex/bin/codex");
+        assert_eq!(commands(&home(Install, None)), [r#"npm --prefix "$HOME/.local" install -g @openai/codex"#]);
+        assert_eq!(commands(&home(Update, at)), [r#"npm --prefix "$HOME/.local" install -g @openai/codex@latest"#]);
+        assert_eq!(commands(&home(Uninstall, at)), [r#"npm --prefix "$HOME/.local" rm -g @openai/codex"#]);
+        let dir = std::env::temp_dir().join(format!("crew-npm-prefix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("folder");
+        assert!(writable_on_the_way(&dir.join("lib/node_modules")));
+        assert!(!writable_on_the_way(Path::new("/nonexistent-root-crew/lib/node_modules")) || unsafe { libc::geteuid() } == 0);
     }
 
     #[test]
@@ -679,21 +754,38 @@ mod tests {
         let home = "/Users/me";
         let spec = super::spec("codex").unwrap();
         for method in [ProviderJobMethod::Script, ProviderJobMethod::Native] {
-            let err = uninstall_command(&spec, method, Path::new(at.unwrap()), Some(home)).unwrap_err();
+            let err = uninstall_command(&spec, method, Path::new(at.unwrap()), Some(home), NpmPrefix::Global).unwrap_err();
             assert!(err.contains("by hand"), "{err}");
         }
         let cursor = super::spec("cursor").unwrap();
-        let command =
-            uninstall_command(&cursor, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/cursor-agent"), Some(home))
-                .unwrap();
+        let command = uninstall_command(
+            &cursor,
+            ProviderJobMethod::Script,
+            Path::new("/Users/me/.local/bin/cursor-agent"),
+            Some(home),
+            NpmPrefix::Global,
+        )
+        .unwrap();
         assert!(command.contains("cursor-agent\"") && command.contains("readlink"), "{command}");
         let claude = super::spec("claude").unwrap();
-        let command =
-            uninstall_command(&claude, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/claude"), Some(home)).unwrap();
+        let command = uninstall_command(
+            &claude,
+            ProviderJobMethod::Script,
+            Path::new("/Users/me/.local/bin/claude"),
+            Some(home),
+            NpmPrefix::Global,
+        )
+        .unwrap();
         assert!(!command.contains("cursor-agent") && !command.contains("agent\""), "{command}");
         let grok = super::spec("grok").unwrap();
-        let command =
-            uninstall_command(grok, ProviderJobMethod::Script, Path::new("/Users/me/.local/bin/grok"), Some(home)).unwrap();
+        let command = uninstall_command(
+            grok,
+            ProviderJobMethod::Script,
+            Path::new("/Users/me/.local/bin/grok"),
+            Some(home),
+            NpmPrefix::Global,
+        )
+        .unwrap();
         assert!(command.contains("$HOME/.grok/downloads") && command.contains("$HOME/.grok/bin"), "{command}");
         assert!(command.contains(".local/bin/grok") && command.contains(".local/bin/agent"), "{command}");
         assert!(!command.contains("auth.json"), "{command}");

@@ -168,13 +168,16 @@ pub struct MachineMetricsQuery {
 }
 
 /// Asks a daemon for its agent CLIs' state. `refresh` skips the cached
-/// latest-version and account lookups.
+/// latest-version and account lookups; `providers` limits the answer to those ids.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct ProviderStatusRequest {
     #[serde(default)]
     pub refresh: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub providers: Option<Vec<String>>,
 }
 
 /// Who a CLI is signed in as. `signed_in` is None when the CLI did not say.

@@ -519,10 +519,11 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
 
 /**
  * The agent CLIs on one machine, as that machine's daemon sees them: path,
- * version, newest release and account. `refresh` skips the daemon's caches.
+ * version, newest release and account. `refresh` skips the daemon's caches;
+ * `providers` asks about those ids only.
  */
-export const providerStatus = (envId: string, refresh = false): Promise<ProviderStatus[]> =>
-  client.request("provider_status", { refresh }, envId);
+export const providerStatus = (envId: string, refresh = false, providers?: string[]): Promise<ProviderStatus[]> =>
+  client.request("provider_status", providers ? { refresh, providers } : { refresh }, envId);
 
 /**
  * Starts a job on that machine's CLI (install, update, reinstall, uninstall,
