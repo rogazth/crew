@@ -13,13 +13,21 @@ describe("parseNotificationPrefs", () => {
 
   it("keeps what was saved and fills in what was not", () => {
     const parsed = parseNotificationPrefs(
-      JSON.stringify({ enabled: false, volume: 30, kinds: { done: { banner: false, sound: "tap" } } }),
+      JSON.stringify({ enabled: false, volume: 30, kinds: { done: { banner: false, sound: "bubble" } } }),
     );
     expect(parsed.enabled).toBe(false);
     expect(parsed.volume).toBe(30);
-    expect(parsed.kinds.done).toEqual({ banner: false, sound: "tap" });
+    expect(parsed.kinds.done).toEqual({ banner: false, sound: "bubble" });
     expect(parsed.kinds["needs-input"]).toEqual(DEFAULT_NOTIFICATION_PREFS.kinds["needs-input"]);
     expect(parsed.onlyWhenUnfocused).toBe(true);
+  });
+
+  it("keeps a sound saved under its old name as the pop that replaced it", () => {
+    const parsed = parseNotificationPrefs(
+      JSON.stringify({ kinds: { done: { banner: true, sound: "ping" }, error: { banner: true, sound: "tap" } } }),
+    );
+    expect(parsed.kinds.done.sound).toBe("pop-up");
+    expect(parsed.kinds.error.sound).toBe("bubble");
   });
 
   it("drops what it does not know", () => {

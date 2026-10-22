@@ -23,14 +23,14 @@ export const NOTIFICATION_KINDS: { id: NotificationKind; label: string; descript
 ];
 
 /** `system` is the OS's own banner sound; `custom` is the file the user picked. */
-export type SoundId = "none" | "system" | "chime" | "ping" | "alert" | "tap" | "custom";
+export type SoundId = "none" | "system" | "pop-up" | "pop-down" | "thud" | "bubble" | "custom";
 
 export const SOUNDS: { id: SoundId; label: string }[] = [
   { id: "none", label: "None" },
-  { id: "chime", label: "Chime" },
-  { id: "ping", label: "Ping" },
-  { id: "alert", label: "Alert" },
-  { id: "tap", label: "Tap" },
+  { id: "pop-up", label: "Pop up" },
+  { id: "pop-down", label: "Pop down" },
+  { id: "thud", label: "Thud" },
+  { id: "bubble", label: "Bubble" },
   { id: "system", label: "System" },
   { id: "custom", label: "Custom" },
 ];
@@ -62,14 +62,14 @@ export const NOTIFICATION_PREFS_KEY = "notifications:prefs";
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   enabled: true,
   kinds: {
-    "needs-input": { banner: true, sound: "ping" },
-    approval: { banner: true, sound: "ping" },
-    done: { banner: true, sound: "chime" },
-    error: { banner: true, sound: "alert" },
-    process: { banner: true, sound: "alert" },
+    "needs-input": { banner: true, sound: "pop-up" },
+    approval: { banner: true, sound: "pop-up" },
+    done: { banner: true, sound: "pop-down" },
+    error: { banner: true, sound: "thud" },
+    process: { banner: true, sound: "thud" },
     // Bots that work together write to each other often; each turn still ends with its own news.
     mailbox: { banner: false, sound: "none" },
-    bell: { banner: true, sound: "tap" },
+    bell: { banner: true, sound: "bubble" },
     connection: { banner: true, sound: "none" },
   },
   onlyWhenUnfocused: true,
@@ -83,12 +83,20 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
 
 const SOUND_IDS = new Set(SOUNDS.map((sound) => sound.id));
 
+/** The sounds Crew shipped before the pops, each saved choice kept as the pop that took its place. */
+const RENAMED: Record<string, SoundId> = { ping: "pop-up", chime: "pop-down", alert: "thud", tap: "bubble" };
+
 function kindPrefs(raw: unknown, fallback: KindPrefs): KindPrefs {
   if (!raw || typeof raw !== "object") return fallback;
   const value = raw as Partial<KindPrefs>;
   return {
     banner: typeof value.banner === "boolean" ? value.banner : fallback.banner,
-    sound: typeof value.sound === "string" && SOUND_IDS.has(value.sound) ? value.sound : fallback.sound,
+    sound:
+      typeof value.sound !== "string"
+        ? fallback.sound
+        : SOUND_IDS.has(value.sound)
+          ? value.sound
+          : (RENAMED[value.sound] ?? fallback.sound),
   };
 }
 

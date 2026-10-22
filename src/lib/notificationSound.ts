@@ -1,11 +1,16 @@
-import alertUrl from "../assets/sounds/alert.wav";
-import chimeUrl from "../assets/sounds/chime.wav";
-import pingUrl from "../assets/sounds/ping.wav";
-import tapUrl from "../assets/sounds/tap.wav";
+import bubbleUrl from "../assets/sounds/bubble.wav";
+import popDownUrl from "../assets/sounds/pop-down.wav";
+import popUpUrl from "../assets/sounds/pop-up.wav";
+import thudUrl from "../assets/sounds/thud.wav";
 import { beep, readSound } from "./host";
 import type { SoundId } from "./notificationPrefs";
 
-const BUNDLED: Partial<Record<SoundId, string>> = { chime: chimeUrl, ping: pingUrl, alert: alertUrl, tap: tapUrl };
+const BUNDLED: Partial<Record<SoundId, string>> = {
+  "pop-up": popUpUrl,
+  "pop-down": popDownUrl,
+  thud: thudUrl,
+  bubble: bubbleUrl,
+};
 
 /** The custom file, read once per path and kept as a blob URL. */
 const custom = new Map<string, Promise<string | null>>();
@@ -65,7 +70,7 @@ export function unlockNotificationAudio(): () => void {
   };
   const unlock = () => {
     stop();
-    const audio = new Audio(tapUrl);
+    const audio = new Audio(popUpUrl);
     audio.volume = 0;
     void audio.play().catch(() => {});
   };

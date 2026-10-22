@@ -74,7 +74,7 @@ describe("dispatchNotification", () => {
       target: { workspaceId: "w1", sessionId: "s1" },
       silent: true,
     });
-    expect(playSound).toHaveBeenCalledWith("chime", 70, null);
+    expect(playSound).toHaveBeenCalledWith("pop-down", 70, null);
   });
 
   it("leaves the system sound to the banner", async () => {
@@ -157,7 +157,7 @@ describe("dispatchNotification", () => {
     await dispatchNotification(test);
     expect(await dispatchNotification(test)).toEqual({ delivered: true });
     expect(notify).toHaveBeenCalledTimes(2);
-    expect(playSound).toHaveBeenCalledWith("ping", 70, null);
+    expect(playSound).toHaveBeenCalledWith("pop-up", 70, null);
   });
 
   it("reports macOS blocking it", async () => {

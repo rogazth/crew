@@ -6,32 +6,49 @@ import { fileURLToPath } from 'node:url'
 // under its license. Run `node scripts/sounds.mjs` after changing one.
 const out = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'assets', 'sounds')
 
-const RATE = 22050
+const RATE = 44100
 
 /**
- * One struck note: a sine with a few quieter partials, a short attack so it
- * does not click, and an exponential decay. `at` and `length` are seconds.
+ * One pop: a sine whose pitch glides from `from` to `to` (Hz) over `glide`
+ * seconds, a 2 ms attack so it does not click, and an exponential decay of
+ * `decay` seconds. Partials are [ratio, weight]; a higher one dies sooner.
+ * A one-pole low-pass takes the edge off. `at` and `length` are seconds.
  */
-function note(samples, { at, freq, length, gain, decay, partials = [] }) {
+function pop(samples, { at = 0, from, to, glide, decay, length, partials = [[1, 1]], gain = 1, smooth = 0.35 }) {
   const start = Math.round(at * RATE)
   const count = Math.round(length * RATE)
-  const attack = Math.round(0.004 * RATE)
+  const attack = 0.002
+  const phases = partials.map(() => 0)
+  let filtered = 0
   for (let i = 0; i < count && start + i < samples.length; i += 1) {
     const t = i / RATE
-    const envelope = Math.min(1, i / attack) * Math.exp(-t * decay)
-    let value = Math.sin(2 * Math.PI * freq * t)
-    for (const [ratio, weight] of partials) value += weight * Math.sin(2 * Math.PI * freq * ratio * t)
-    samples[start + i] += gain * envelope * value
+    const freq = from * (to / from) ** Math.min(1, t / glide)
+    let envelope = t < attack ? 0.5 - 0.5 * Math.cos((Math.PI * t) / attack) : 1
+    envelope *= Math.exp(-t / decay) * Math.min(1, (length - t) / 0.01)
+    let value = 0
+    partials.forEach(([ratio, weight], j) => {
+      phases[j] += (2 * Math.PI * freq * ratio) / RATE
+      value += weight * Math.sin(phases[j]) * Math.exp(-t / (decay / Math.sqrt(ratio)))
+    })
+    filtered += smooth * (value * envelope - filtered)
+    samples[start + i] += gain * filtered
   }
 }
 
-function sound(seconds, notes) {
+/** The pops laid over one another, then scaled so the loudest point is at `peak`. */
+function sound(seconds, pops, peak = 0.5) {
   const samples = new Float32Array(Math.round(seconds * RATE))
-  for (const each of notes) note(samples, each)
+  for (const each of pops) pop(samples, each)
   // The last few milliseconds fade to nothing, so no sound ends in a click.
-  const tail = Math.round(0.02 * RATE)
+  const tail = Math.round(0.01 * RATE)
   for (let i = 0; i < tail; i += 1) samples[samples.length - 1 - i] *= i / tail
-  return samples
+  const loudest = samples.reduce((max, value) => Math.max(max, Math.abs(value)), 0) || 1
+  return samples.map((value) => (value / loudest) * peak)
+}
+
+/** The same pop again, quieter, as if it bounced. */
+function echoed(one) {
+  return [one, { ...one, at: 0.11, gain: 0.38 }, { ...one, at: 0.22, gain: 0.14 }]
 }
 
 function wav(samples) {
@@ -54,28 +71,26 @@ function wav(samples) {
   return Buffer.concat([header, data])
 }
 
-const BELL = [[2, 0.18], [3, 0.06]]
+const KNOCK = [[1, 1], [2.01, 0.25]]
 
 const SOUNDS = {
-  // A turn ended: two soft notes falling a fourth, over in half a second.
-  chime: sound(0.6, [
-    { at: 0, freq: 880, length: 0.6, gain: 0.22, decay: 7, partials: BELL },
-    { at: 0.11, freq: 659.25, length: 0.49, gain: 0.22, decay: 6, partials: BELL },
+  // A turn ended: two soft pops falling, a close.
+  "pop-down": sound(0.23, [
+    { from: 640, to: 420, glide: 0.03, decay: 0.026, length: 0.12 },
+    { at: 0.09, from: 480, to: 260, glide: 0.03, decay: 0.03, length: 0.14 },
   ]),
-  // Waiting on you: brighter, rising, twice, so it is heard over music.
-  ping: sound(0.7, [
-    { at: 0, freq: 987.77, length: 0.3, gain: 0.3, decay: 10, partials: BELL },
-    { at: 0.09, freq: 1318.51, length: 0.3, gain: 0.3, decay: 9, partials: BELL },
-    { at: 0.32, freq: 987.77, length: 0.38, gain: 0.26, decay: 9, partials: BELL },
-    { at: 0.41, freq: 1318.51, length: 0.29, gain: 0.26, decay: 8, partials: BELL },
+  // Waiting on you: two bubbles rising, a question.
+  "pop-up": sound(0.205, [
+    { from: 380, to: 700, glide: 0.035, decay: 0.026, length: 0.12 },
+    { at: 0.085, from: 520, to: 980, glide: 0.035, decay: 0.026, length: 0.12 },
   ]),
-  // Something failed: low and falling, with an edge the others lack.
-  alert: sound(0.55, [
-    { at: 0, freq: 523.25, length: 0.25, gain: 0.26, decay: 9, partials: [[3, 0.25], [5, 0.1]] },
-    { at: 0.16, freq: 392, length: 0.39, gain: 0.28, decay: 7, partials: [[3, 0.25], [5, 0.1]] },
+  // Something failed: two low pops falling, heard without alarm.
+  thud: sound(0.31, [
+    { from: 320, to: 200, glide: 0.03, decay: 0.045, length: 0.16, partials: KNOCK },
+    { at: 0.11, from: 250, to: 150, glide: 0.03, decay: 0.055, length: 0.2, partials: KNOCK },
   ]),
-  // A bell from a terminal: one short tap.
-  tap: sound(0.25, [{ at: 0, freq: 1174.66, length: 0.25, gain: 0.28, decay: 22, partials: BELL }]),
+  // A bell from a terminal: one bubble and its bounces, soft enough to ring often.
+  bubble: sound(0.42, echoed({ from: 320, to: 820, glide: 0.05, decay: 0.04, length: 0.2 })),
 }
 
 mkdirSync(out, { recursive: true })
