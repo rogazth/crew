@@ -38,7 +38,7 @@ test("claude resolves to the fake, and a new session launches it in the workspac
 
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  // ⌘N is the start screen; the session is made by its first send.
+  // ⌘N makes the session and opens its chat; claude starts on the first send.
   const session = await startChat(crew, "hello", () => sessions(crew, workspace.id));
   const launch = await waitFor(async () => (await crew.claudeLaunches()).find((row) => row.argv.includes(session.id)), {
     message: "the fake claude starts",

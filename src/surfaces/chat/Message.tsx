@@ -85,7 +85,7 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
         <div className="flex flex-col items-start gap-1.5 pt-2">
           {block.text ? (
             <div className="crew-md-row">
-              <div className="crew-bubble is-from-bot">
+              <div className="crew-bubble is-from-bot" data-bubble>
                 <p className="whitespace-pre-wrap">{block.text}</p>
               </div>
               <CopyButton text={block.text} className="crew-copy crew-copy-aside" />

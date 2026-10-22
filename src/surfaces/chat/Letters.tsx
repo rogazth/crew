@@ -70,7 +70,7 @@ export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block
           <div key={block.id} className="flex flex-col items-end gap-1.5 self-stretch">
             {block.text ? (
               <div className="crew-md-row is-user">
-                <div className="crew-bubble">
+                <div className="crew-bubble" data-bubble>
                   <p className="whitespace-pre-wrap">{block.text}</p>
                 </div>
               </div>

@@ -817,9 +817,9 @@ export async function newSession(crew: Crew, workspaceId: string, worktree: stri
 }
 
 /**
- * ⌘N, `text` typed on the start screen and sent: the session is made by that
- * first send, in the folder on screen. Returns the session `find` reads from crewd
- * (default: the workspace's one not in `known`).
+ * ⌘N, then `text` typed in the new session's chat and sent. ⌘N makes the
+ * session in the folder on screen and opens its chat; its CLI starts on the
+ * send. Returns the session `list` gains.
  */
 export async function startChat(
   crew: Crew,
@@ -827,20 +827,14 @@ export async function startChat(
   list: () => Promise<Session[]>,
 ): Promise<Session> {
   const known = new Set((await list()).map((row) => row.id));
-  const field = await startScreen(crew);
+  await pressChord(crew, `${MOD}+n`);
+  const session = await waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
+    message: "⌘N makes the session",
+  });
+  const field = composerOf(crew, session);
   await field.fill(text);
   await field.press("Enter");
-  return waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "the first send makes the session",
-  });
-}
-
-/** ⌘N: the start screen, not a session. */
-export async function startScreen(crew: Crew): Promise<Locator> {
-  await pressChord(crew, `${MOD}+n`);
-  const field = editorIn(crew.window.locator("[data-workspace-start]"));
-  await field.waitFor();
-  return field;
+  return session;
 }
 
 /**
