@@ -285,6 +285,11 @@ function markIdle(id: string) {
   void api.markSessionRead(id).catch(() => {});
 }
 
+/** The list as it stands: a title written after the first send, or a switch flipped, reaches the next banner. */
+export function rememberSessions(sessions: Session[]): void {
+  for (const session of sessions) remember(session);
+}
+
 function remember(session: Session) {
   known.set(session.id, { name: session.name, workspaceId: session.workspaceId, notifications: session.notifications });
 }

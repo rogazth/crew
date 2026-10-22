@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { rememberBots } from '../lib/botNames';
-import { dispose, onSessionPatch, reconcile } from '../lib/turnRuntime';
+import { dispose, onSessionPatch, reconcile, rememberSessions } from '../lib/turnRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
 import { applyUpdated, droppedOnReload, mergeReloaded } from '../lib/sessionList';
@@ -67,6 +67,7 @@ export function useSessions(workspaceId: string | null) {
   // The backstop, for the ways a session is made or renamed that do not go
   // through the load above.
   useEffect(() => rememberBots(all), [all]);
+  useEffect(() => rememberSessions(all), [all]);
 
   /** A session is edited by id, whichever workspace holds it. */
   const patchSession = useCallback((id: string, change: (session: Session) => Session) => {
