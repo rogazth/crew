@@ -3,6 +3,7 @@ import { PUNCTUATION_CODE_MAP, parseHotkey, rawHotkeyToParsedHotkey, type Parsed
 import {
   COMMAND_IDS,
   allKeysFor,
+  defaultKeysFor,
   keysFor,
   liveCommands,
   onCommandsChange,
@@ -89,17 +90,19 @@ const ev = (key: string, mods: Partial<ChordInput> = {}): ChordInput => ({
   ...mods,
 });
 
-/** Every command that has a binding; the rest are reached from the palette. */
-const BOUND = COMMAND_IDS.flatMap((id) => {
-  const keys = keysFor(id);
-  return keys ? [{ id, keys }] : [];
-});
+/** Every command that has a binding on the platform; the rest are reached from the palette. */
+const boundOn = (isMac: boolean) =>
+  COMMAND_IDS.flatMap((id) => {
+    const keys = defaultKeysFor(id, isMac)[0];
+    return keys ? [{ id, keys }] : [];
+  });
 
 describe("every command's chord", () => {
   for (const [platform, isMac] of PLATFORMS) {
-    it.each(BOUND)(`the canonical ${platform} event runs $id and nothing else`, ({ id, keys }) => {
+    const bound = boundOn(isMac);
+    it.each(bound)(`the canonical ${platform} event runs $id and nothing else`, ({ id, keys }) => {
       const event = canonical(keys, isMac);
-      expect(BOUND.filter((other) => matchChord(other.keys, event, isMac)).map((other) => other.id)).toEqual([id]);
+      expect(bound.filter((other) => matchChord(other.keys, event, isMac)).map((other) => other.id)).toEqual([id]);
     });
 
   }
@@ -405,6 +408,12 @@ describe("live commands", () => {
     bind("open-routines");
     bind("close");
     expect(liveCommands().map((c) => c.id)).toEqual(["close"]);
+  });
+
+  it("takes Chrome's History and DevTools chords off macOS, where ⌘Y's Ctrl+Y is Redo", () => {
+    expect(defaultKeysFor("open-history", true)).toEqual(["Mod+Y"]);
+    expect(defaultKeysFor("open-history", false)).toEqual(["Mod+H"]);
+    expect(defaultKeysFor("browser-devtools", false)).toEqual(["Mod+Shift+I"]);
   });
 
   it("gives ⌘⇧R to the page's hard reload, not to Routines", () => {

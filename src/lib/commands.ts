@@ -1,9 +1,19 @@
 import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotkeys";
 import { parseChord, toHotkey } from "./chords";
+import { IS_MAC } from "./hotkey";
 import type { LiveCommand } from "./keymap";
 
-/** `also` are further chords for the same command, for keys that sit elsewhere on other layouts. */
-type Command = { label: string; keys?: RegisterableHotkey; also?: RegisterableHotkey[]; repeat?: boolean };
+/**
+ * `also` are further chords for the same command, for keys that sit elsewhere on other layouts.
+ * `offMac` replaces `keys` and `also` off macOS, where the platform's own chord for it is another.
+ */
+type Command = {
+  label: string;
+  keys?: RegisterableHotkey;
+  also?: RegisterableHotkey[];
+  offMac?: RegisterableHotkey;
+  repeat?: boolean;
+};
 
 /**
  * App commands. The id is what handlers, menus, and settings share.
@@ -80,8 +90,9 @@ export const COMMANDS = {
   "browser-focus-address": { label: "Focus Address Bar", keys: "Mod+L" },
   "browser-reload": { label: "Reload Page", keys: "Mod+R" },
   "browser-hard-reload": { label: "Hard Reload Page", keys: "Mod+Shift+R" },
-  "browser-devtools": { label: "Toggle Developer Tools", keys: "Mod+Alt+I" },
-  "open-history": { label: "History", keys: "Mod+Y" },
+  // Chrome's chords off macOS: Ctrl+Y is Redo there, and Ctrl+Alt+I is no one's DevTools.
+  "browser-devtools": { label: "Toggle Developer Tools", keys: "Mod+Alt+I", offMac: "Mod+Shift+I" },
+  "open-history": { label: "History", keys: "Mod+Y", offMac: "Mod+H" },
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   // VS Code's chords: the explorer beside the tabs, and search in the workspace's files.
@@ -154,9 +165,10 @@ export function onKeyOverridesChange(cb: () => void): () => void {
   };
 }
 
-/** The chords the command ships with, whatever the user changed. */
-export function defaultKeysFor(id: CommandId): RegisterableHotkey[] {
+/** The chords the command ships with on the platform, whatever the user changed. */
+export function defaultKeysFor(id: CommandId, isMac = IS_MAC): RegisterableHotkey[] {
   const command: Command = COMMANDS[id];
+  if (!isMac && command.offMac) return [command.offMac];
   return command.keys ? [command.keys, ...(command.also ?? [])] : [];
 }
 

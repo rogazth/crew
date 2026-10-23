@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { Kbd } from "./Kbd";
 import { Overlay } from "./kit";
 import { commandKeys, type CommandId } from "../lib/commands";
+import { IS_MAC } from "../lib/hotkey";
 
 type Row = [keys: string, label: string];
 
@@ -52,6 +53,13 @@ function sections(): { group: string; rows: Row[] }[] {
         ["⇧F10", "Actions menu"],
         ["⌘⌫", "Delete a session, remove a worktree"],
         ["/", "Find"],
+      ],
+    },
+    {
+      group: "Prompt",
+      rows: [
+        [IS_MAC ? "⌥P" : "Alt+P", "Choose model"],
+        ["⇧Tab", "Step effort"],
       ],
     },
     {

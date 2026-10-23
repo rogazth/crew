@@ -312,6 +312,12 @@ export function Composer({
         }
       }
     }
+    // ⌥P opens the model picker, as in Claude Code. By the key under it: on macOS ⌥P types π.
+    if (event.code === "KeyP" && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      event.preventDefault();
+      model.current?.open();
+      return;
+    }
     // ⇧Tab steps the effort levels; access stays a deliberate pick.
     if (event.key === "Tab" && event.shiftKey && onOptions) {
       event.preventDefault();
