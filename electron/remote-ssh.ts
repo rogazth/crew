@@ -3,10 +3,11 @@
 import { spawn } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import { connect } from "node:net";
-import path from "node:path";
 import type { InstallFailure } from "../src/lib/remotes.ts";
 import { classifyInstallFailure } from "./install-errors.ts";
 import { resolveSsh } from "./ssh-config.ts";
+import { BASE_OPTIONS, controlPath, options, PERSIST_S, who, type SshTarget } from "./ssh-options.ts";
+import { isLoopback, Tunnels } from "./ssh-tunnel.ts";
 
 export type StepId = "reach" | "ssh" | "existing" | "upload" | "service" | "pair" | "clis";
 
@@ -26,7 +27,7 @@ export type StepUpdate = {
  * when the one the config (or the Mac's login) would pick is not it, and a
  * port only when ssh should not use the one the config (or 22) gives.
  */
-export type SshTarget = { destination: string; user?: string; port?: number };
+export type { SshTarget };
 
 /** A target an install can abort: ending it kills the ssh runs under it. */
 type Link = SshTarget & { signal?: AbortSignal };
@@ -95,16 +96,23 @@ export function linuxArch(uname: string): "x64" | "arm64" | null {
  * cgroup. systemd's default `OOMPolicy=stop` takes the whole unit down when
  * the kernel kills any one of them for memory, and every session with it: the
  * OOM killer ends the one process, and crewd and the other sessions go on.
+ *
+ * A crewd that crashes comes back, waiting longer each time up to a minute,
+ * and systemd never gives up on it: its default start limit (five in ten
+ * seconds) would leave the machine down for good after a bad boot.
  */
 export function serviceUnit(ip: string, port: number, layout: RemoteLayout = RELEASE): string {
   return `[Unit]
 Description=Crew daemon${layout.unit === RELEASE.unit ? "" : ` (${layout.unit})`}
 After=tailscaled.service
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=%h/${layout.home}/bin/crewd serve --listen ${ip}:${port} --data-dir %h/${layout.home}/data
 Restart=on-failure
 RestartSec=1
+RestartSteps=6
+RestartMaxDelaySec=60
 OOMPolicy=continue
 
 [Install]
@@ -163,13 +171,19 @@ export async function installDaemon(opts: {
   /** Before anything is written: may refuse the machine by its tailnet address, as one already added. */
   check?: (ip: string) => Promise<void>;
   layout?: RemoteLayout;
+  /**
+   * Leave crewd running when pairing fails. An update does: the machine was
+   * in use, and a crewd systemd keeps restarting can still come back, while a
+   * stopped one leaves it down until someone starts it.
+   */
+  keepOnFailure?: boolean;
 }): Promise<Paired> {
   const layout = opts.layout ?? RELEASE;
   const port = opts.port ?? layout.port;
   const { unit, home } = layout;
   const signal = opts.signal;
   const target: Link = { ...opts.target, ...(signal ? { signal } : {}) };
-  const control = controlPath(target.destination);
+  const control = controlPath(target);
   const emit = opts.onStep ?? (() => {});
   // A step that fails says what it means; one cancelled says nothing.
   const report = (update: StepUpdate) => {
@@ -181,6 +195,12 @@ export async function installDaemon(opts: {
       ...(target.port ? { sshPort: target.port } : {}),
     };
     emit(update.state === "error" ? { ...update, failure: classifyInstallFailure(update.detail ?? "", context, update.id) } : update);
+  };
+  // Pairing with a crewd on the machine's loopback goes through a tunnel of the install's own.
+  const tunnels = new Tunnels();
+  const dial = async (ip: string, port: number) => {
+    if (!isLoopback(ip)) return { host: ip, port };
+    return { host: LOOPBACK, port: (await tunnels.ensure("install", opts.target, port)).port };
   };
   try {
     let route: Route = { hostname: target.destination, port: target.port ?? 22, proxied: false };
@@ -196,16 +216,20 @@ export async function installDaemon(opts: {
     let ip = "";
     let running: Paired | null = null;
     await step(report, "existing", async () => {
-      ip = await tailnetIp(target, control, route.hostname);
+      // Without Tailscale there, crewd listens on the machine's loopback and is reached over ssh.
+      ip = (await tailnetIp(target, control, route.hostname)) ?? LOOPBACK;
       await opts.check?.(ip);
-      if (opts.reuseProtocol === undefined) return ip;
+      const via = isLoopback(ip) ? "over SSH" : `at ${ip}`;
+      if (opts.reuseProtocol === undefined) return `Reached ${via}`;
       // A crewd already listening here, at a protocol this app speaks, only needs pairing.
       const token = (await ssh(target, `cat "$HOME/${home}/data/token"`, control).catch(() => "")).trim();
       if (token) {
-        const found = await pair(ip, port, token, 5_000).catch(() => null);
-        if (found && found.protocol === opts.reuseProtocol) running = found;
+        const found = await dial(ip, port)
+          .then((at) => pair(at.host, at.port, token, 5_000))
+          .catch(() => null);
+        if (found && found.protocol === opts.reuseProtocol) running = { ...found, ip };
       }
-      return running ? `crewd ${(running as Paired).version} already runs` : "Not installed yet";
+      return running ? `crewd ${(running as Paired).version} already runs ${via}` : `Not installed yet; reached ${via}`;
     });
     if (running) {
       report({ id: "upload", state: "skipped", detail: "Not needed" });
@@ -261,11 +285,14 @@ export async function installDaemon(opts: {
       "pair",
       async () => {
         try {
-          return await pair(ip, port, token);
+          const at = await dial(ip, port);
+          return { ...(await pairOnceUp(at.host, at.port, token, signal)), ip };
         } catch (error) {
           if (signal?.aborted) throw error;
           const logs = await ssh(target, userctl(`journalctl --user -u ${unit} -n 40 --no-pager`), control).catch(() => "");
-          await ssh(target, userctl(`systemctl --user stop ${unit} 2>/dev/null || true`), control).catch(() => {});
+          if (!opts.keepOnFailure) {
+            await ssh(target, userctl(`systemctl --user stop ${unit} 2>/dev/null || true`), control).catch(() => {});
+          }
           if (logs.includes("Address already in use")) {
             throw new Error(`Port ${port} is already in use on that machine`);
           }
@@ -288,7 +315,8 @@ export async function installDaemon(opts: {
     await ssh({ ...opts.target }, `rm -f "$HOME/${home}/bin/crewd.new"`, control).catch(() => {});
     throw new InstallCancelled();
   } finally {
-    await closeControl(opts.target, control);
+    // The connection stays for the next command; only the install's own tunnel goes.
+    tunnels.closeAll();
   }
 }
 
@@ -306,17 +334,27 @@ export function sshDestination(target: SshTarget): string {
 }
 
 export async function restartDaemon(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<void> {
-  const control = controlPath(target.destination);
-  try {
-    await ssh(target, userctl(`systemctl --user restart ${layout.unit}`), control);
-  } finally {
-    await closeControl(target, control);
-  }
+  const control = controlPath(target);
+  await ssh(target, userctl(`systemctl --user restart ${layout.unit}`), control);
+}
+
+/**
+ * Starts crewd when systemd has it stopped, and says whether it had to. One
+ * that is running, or restarting after a crash, is left alone.
+ */
+export async function reviveDaemon(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<"running" | "started"> {
+  const control = controlPath(target);
+  const said = await ssh(target, userctl(reviveCommand(layout)), control);
+  return said.trim() === "started" ? "started" : "running";
+}
+
+export function reviveCommand({ unit }: RemoteLayout): string {
+  return `if systemctl --user is-active --quiet ${unit} || systemctl --user is-active ${unit} | grep -qx activating; then echo running; else systemctl --user start ${unit} && echo started; fi`;
 }
 
 export async function removeDaemon(target: SshTarget, wipe: boolean, layout: RemoteLayout = RELEASE): Promise<void> {
   const { unit, home } = layout;
-  const control = controlPath(target.destination);
+  const control = controlPath(target);
   try {
     await ssh(
       target,
@@ -327,17 +365,14 @@ export async function removeDaemon(target: SshTarget, wipe: boolean, layout: Rem
     );
     if (wipe) await ssh(target, `rm -rf "$HOME/${home}"`, control);
   } finally {
+    // The machine leaves Crew: its connection goes too, and a tunnel riding it with it.
     await closeControl(target, control);
   }
 }
 
 export async function daemonLogs(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<string> {
-  const control = controlPath(target.destination);
-  try {
-    return await ssh(target, userctl(`journalctl --user -u ${layout.unit} -n 200 --no-pager`), control);
-  } finally {
-    await closeControl(target, control);
-  }
+  const control = controlPath(target);
+  return ssh(target, userctl(`journalctl --user -u ${layout.unit} -n 200 --no-pager`), control);
 }
 
 /**
@@ -410,23 +445,24 @@ export function isTailnetIp(ip: string): boolean {
   return !!match && Number(match[1]) >= 64 && Number(match[1]) <= 127;
 }
 
+const LOOPBACK = "127.0.0.1";
+
 /**
- * The address crewd listens on. Never a public one: crewd speaks plain
- * WebSocket, and only the tailnet's WireGuard keeps that private.
+ * The machine's tailnet address, where crewd listens when it has one; null
+ * when it has none (no Tailscale there, or signed out), and crewd listens on
+ * the machine's loopback, reached through an ssh tunnel. Never a public
+ * address: crewd speaks plain WebSocket, and only the tailnet's WireGuard or
+ * ssh keeps that private.
  */
-async function tailnetIp(target: Link, control: string, hostname: string): Promise<string> {
-  try {
-    const text = await ssh(target, "tailscale ip -4", control);
-    const ip = text
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => /^\d+\.\d+\.\d+\.\d+$/.test(line));
-    if (ip) return ip;
-  } catch {
-    // A machine without the CLI can still be reached by the address we were given.
-  }
-  if (isTailnetIp(hostname)) return hostname;
-  throw new Error("The machine is not on your tailnet. Crew reaches crewd over Tailscale: install it there and sign in");
+async function tailnetIp(target: Link, control: string, hostname: string): Promise<string | null> {
+  const said = await ssh(target, "tailscale ip -4", control).catch(() => "");
+  const ip = said
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => /^\d+\.\d+\.\d+\.\d+$/.test(line));
+  if (ip) return ip;
+  // A machine without the CLI can still be reached by the tailnet address we were given.
+  return isTailnetIp(hostname) ? hostname : null;
 }
 
 async function readToken(target: Link, control: string, layout: RemoteLayout): Promise<string> {
@@ -442,6 +478,23 @@ async function readToken(target: Link, control: string, layout: RemoteLayout): P
     await delay(250);
   }
   throw new Error(last);
+}
+
+/**
+ * Pairs with a crewd systemd has just started. It takes a moment to listen,
+ * and until it does the port refuses: that is tried again, not a failure.
+ */
+async function pairOnceUp(ip: string, port: number, token: string, signal?: AbortSignal, timeout = 20_000): Promise<Paired> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      return await pair(ip, port, token, Math.max(1_000, Math.min(5_000, deadline - Date.now())));
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+    }
+    await delay(500);
+  }
 }
 
 export function pair(ip: string, port: number, token: string, timeout = 20_000): Promise<Paired> {
@@ -501,27 +554,58 @@ export function rpc<T>(ip: string, port: number, token: string, method: string, 
   });
 }
 
-function controlPath(host: string): string {
-  const safe = host.replace(/[^A-Za-z0-9]/g, "").slice(0, 24) || "host";
-  return path.join("/tmp", `crewssh-${safe}-${process.pid}`);
+/**
+ * What a machine's crewd is and how many of its sessions are mid-turn or
+ * waiting on an answer, without `daemon_info`, which runs the provider CLIs
+ * to see what is installed. The hello says the version; a new client is sent
+ * each busy session's status before anything else, so the reply to a ping
+ * comes after the last of them.
+ */
+export function peek(ip: string, port: number, token: string, timeout = 8_000): Promise<{ version: string; agentsRunning: number }> {
+  const url = `ws://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    let version = "";
+    const busy = new Set<string>();
+    const timer = setTimeout(() => finish(new Error(`No answer from ${url}`)), timeout);
+    function finish(error?: Error) {
+      clearTimeout(timer);
+      ws.close();
+      if (error) reject(error);
+      else resolve({ version, agentsRunning: busy.size });
+    }
+    ws.onopen = () => ws.send(JSON.stringify({ auth: token }));
+    ws.onerror = () => finish(new Error(`Could not reach ${url}`));
+    ws.onmessage = (event) => {
+      if (typeof event.data !== "string") return;
+      let message: { event?: string; id?: number; payload?: { version?: string; sessionId?: string; status?: string } };
+      try {
+        message = JSON.parse(event.data) as typeof message;
+      } catch {
+        return;
+      }
+      if (message.event === "hello") {
+        version = message.payload?.version ?? "";
+        ws.send(JSON.stringify({ id: 1, method: "ping", params: {} }));
+      } else if (message.event === "session-status" && message.payload?.sessionId) {
+        const status = message.payload.status;
+        if (status === "working" || status === "needs-input") busy.add(message.payload.sessionId);
+        else busy.delete(message.payload.sessionId);
+      } else if (message.id === 1) {
+        finish();
+      }
+    };
+  });
 }
 
 export function sshArgs(target: SshTarget, control: string): string[] {
   return [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=8",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "ControlMaster=auto",
-    "-o",
-    `ControlPath=${control}`,
-    "-o",
-    "ControlPersist=30",
-    ...(target.user ? ["-l", target.user] : []),
-    ...(target.port ? ["-p", String(target.port)] : []),
+    ...options(BASE_OPTIONS),
+    // Rides the machine's open connection, or opens one that waits for the next command.
+    ...options(["ControlMaster=auto", `ControlPath=${control}`, `ControlPersist=${PERSIST_S}`]),
+    // A LocalForward or RemoteForward in ~/.ssh/config has no business on these.
+    ...options(["ClearAllForwardings=yes"]),
+    ...who(target),
     "--",
     target.destination,
   ];
@@ -584,7 +668,7 @@ function collect(child: ReturnType<typeof spawn>, resolve: (stdout: string) => v
 
 async function closeControl(target: SshTarget, control: string) {
   await new Promise<void>((resolve) => {
-    const child = spawn("ssh", ["-o", `ControlPath=${control}`, "-O", "exit", ...(target.user ? ["-l", target.user] : []), ...(target.port ? ["-p", String(target.port)] : []), "--", target.destination], {
+    const child = spawn("ssh", ["-o", `ControlPath=${control}`, "-O", "exit", ...who(target), "--", target.destination], {
       stdio: "ignore",
     });
     child.on("error", () => resolve());

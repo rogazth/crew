@@ -1,6 +1,7 @@
 import { daemonInfo, remotesHost } from "../host";
 import { dispatchNotification } from "../notifications";
 import type { MachineInfo, RemoteEnv, Workspace } from "../protocol";
+import { isLoopback } from "../remotes";
 import { RETENTION_KEY } from "../retention";
 import { Connection, EnvDown, type ConnStatus } from "./connection";
 import { LOCAL, envForPane, envForPath, routeEnv, type RouteMaps } from "./route";
@@ -243,7 +244,8 @@ async function adoptRemote(row: RemoteEnv, host: NonNullable<ReturnType<typeof r
       const token = await host.token(row.id).catch(() => null);
       if (!token) throw new Error("No token for this machine. Remove it and add it again.");
       const now = rows.get(row.id) ?? row;
-      return { url: wsUrl(now), token };
+      // A machine without Tailscale is reached through an ssh tunnel main opens on this dial.
+      return { url: isLoopback(now.host) ? await host.endpoint(row.id) : wsUrl(now), token };
     },
     true,
   );
@@ -316,9 +318,26 @@ function wire(conn: Connection) {
         void dispatchNotification({ source: "connection", title: name, body: "Back online", key: `${conn.envId}:online` });
       }
     }
+    if (conn.envId !== LOCAL && now === "offline") revive(conn);
     before = now;
     publish();
   };
+}
+
+/**
+ * A machine that does not answer may be up with its crewd stopped: main
+ * checks over ssh, starts it, and the link tries again at once. Main keeps
+ * this to once a minute per machine, so every failed retry can ask.
+ */
+function revive(conn: Connection) {
+  const host = remotesHost();
+  if (!host?.revive) return;
+  void host
+    .revive(conn.envId)
+    .then((started) => {
+      if (started) conn.wake();
+    })
+    .catch(() => {});
 }
 
 function checkProtocol(conn: Connection) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
-import { LOCAL, envOf, linkOf, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
+import { LOCAL, envOf, linkOf, reconnect, refreshRemotes, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
+import { dispatchNotification } from "../lib/notifications";
 import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, remotesHost } from "../lib/host";
 import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, WAKE_ON } from "../lib/remoteUi";
@@ -108,6 +109,26 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
     return host.onWake(() => {
       void api.stateGet(WAKE_ON).then((value) => {
         if (value !== "off") wakeAll();
+      });
+    });
+  }, []);
+
+  // An update main ran on its own (or that waited for the sessions): the link
+  // comes back on the new crewd, and the user hears how it went.
+  useEffect(() => {
+    const host = remotesHost();
+    if (!host) return;
+    return host.onAutoUpdated((result) => {
+      if (result.ok) {
+        void refreshRemotes().then(() => reconnect(result.id));
+      }
+      void dispatchNotification({
+        source: "connection",
+        title: result.name,
+        body: result.ok
+          ? `Updated crewd to ${result.version}${result.message ? `. ${result.message}` : ""}`
+          : `Could not update crewd to ${result.version}: ${result.message ?? "unknown error"}`,
+        key: `${result.id}:update`,
       });
     });
   }, []);

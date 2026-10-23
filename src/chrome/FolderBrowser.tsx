@@ -244,7 +244,7 @@ function Offline({ env }: { env: EnvLink }) {
       <p className="max-w-72 text-[12px] text-text-muted">
         {env.mismatch
           ? "Incompatible crewd. Update it in Settings › Environments."
-          : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and Tailscale is running.`)}
+          : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and that this Mac can reach it.`)}
       </p>
       {!connecting && !env.mismatch && (
         <Button variant="secondary" onClick={() => reconnect(env.id)}>

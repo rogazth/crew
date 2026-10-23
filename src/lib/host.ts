@@ -17,7 +17,7 @@ import type { LoginItemState } from "./loginItem";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { Banner, BannerResult, BannerState, DockBadge, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
-import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
+import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState, SshHost, Tailnet } from "./remotes";
 import type { AppInfo } from "./appInfo";
 import type { ReleaseList, UpdateState } from "./update";
 
@@ -91,8 +91,24 @@ export type RemotesHost = {
   onProgress(cb: (step: InstallStep) => void): () => void;
   /** `warning`: crewd was updated and runs, but lingering is off, so it may stop at logout. */
   update(id: string): Promise<{ warning: string | null }>;
+  /** Its sessions mid-turn or waiting on an answer, which an update now would cut off. */
+  busySessions(id: string): Promise<number>;
+  /** Updates the machine as soon as no session works there. */
+  queueUpdate(id: string): Promise<void>;
+  /** Drops a waiting update; an automatic one leaves that version alone for a few hours. */
+  cancelUpdate(id: string): Promise<void>;
+  /** The machines main's updater is waiting on or updating. */
+  updateStates(): Promise<Record<string, RemoteUpdateState>>;
+  onUpdateStates(cb: (states: Record<string, RemoteUpdateState>) => void): () => void;
+  /** An update main started on its own (or queued by the user) ended. */
+  onAutoUpdated(cb: (result: RemoteUpdateResult) => void): () => void;
   /** `id` is a remote's, or `"local"` for this Mac's crewd (its window reloads once it is back). */
   restart(id: string): Promise<void>;
+  /**
+   * Over ssh, starts a remote's crewd if systemd has it stopped; true when it
+   * did. At most once a minute per machine, and never during an update, restart or removal.
+   */
+  revive(id: string): Promise<boolean>;
   /**
    * `wipe` deletes `~/.crew` on the machine. Leaving it is the ordinary answer.
    * The machine leaves Crew even when SSH fails; `warning` says what was left running.
@@ -101,6 +117,8 @@ export type RemotesHost = {
   /** The tail of the daemon's log: a remote's, or `"local"` for this Mac's `crewd.log`. */
   logs(id: string): Promise<string>;
   token(id: string): Promise<string | null>;
+  /** The ws:// URL that reaches its crewd from here: its tailnet address, or this Mac's end of an ssh tunnel. */
+  endpoint(id: string): Promise<string>;
   /** A daemon that is already running, for tests and a second local `crewd serve`. */
   add(input: ManualRemote): Promise<RemoteEnv>;
   onWake(cb: () => void): () => void;

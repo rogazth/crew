@@ -15,7 +15,7 @@ import { FILE_CHANNELS } from "../src/lib/browser/files";
 import { NOTIFY_CHANNELS, type Banner, type DockBadge, type NotificationTarget } from "../src/lib/notify";
 import { CLI_CHANNELS } from "../src/lib/cli";
 import { LOGIN_ITEM_CHANNELS } from "../src/lib/loginItem";
-import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
+import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
 import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
@@ -57,10 +57,18 @@ contextBridge.exposeInMainWorld("crewHost", {
     cancelInstall: () => ipcRenderer.invoke("remotes:cancel-install"),
     onProgress: (cb: (step: InstallStep) => void) => listen("remotes:progress", cb),
     update: (id: string) => ipcRenderer.invoke("remotes:update", id),
+    busySessions: (id: string) => ipcRenderer.invoke("remotes:busy-sessions", id),
+    queueUpdate: (id: string) => ipcRenderer.invoke("remotes:queue-update", id),
+    cancelUpdate: (id: string) => ipcRenderer.invoke("remotes:cancel-update", id),
+    updateStates: () => ipcRenderer.invoke("remotes:update-states"),
+    onUpdateStates: (cb: (states: Record<string, RemoteUpdateState>) => void) => listen("remotes:update-states", cb),
+    onAutoUpdated: (cb: (result: RemoteUpdateResult) => void) => listen("remotes:auto-updated", cb),
     restart: (id: string) => ipcRenderer.invoke("remotes:restart", id),
+    revive: (id: string) => ipcRenderer.invoke("remotes:revive", id),
     remove: (id: string, wipe: boolean) => ipcRenderer.invoke("remotes:remove", id, wipe),
     logs: (id: string) => ipcRenderer.invoke("remotes:logs", id),
     token: (id: string) => ipcRenderer.invoke("remotes:token", id),
+    endpoint: (id: string) => ipcRenderer.invoke("remotes:endpoint", id),
     add: (input: ManualRemote) => ipcRenderer.invoke("remotes:add", input),
     onWake: (cb: () => void) => listen("remotes:wake", cb),
   },

@@ -9,7 +9,7 @@ import type { LoginItemState } from "./loginItem";
 import type { BannerState } from "./notify";
 import { BYPASS_KEY } from "./permissions";
 import { RETENTION_KEY } from "./retention";
-import type { Tailnet } from "./remotes";
+import { AUTO_UPDATE, type Tailnet } from "./remotes";
 import { WAKE_ON, WARN_RELAY } from "./remoteUi";
 import { REOPEN_KEY } from "./startup";
 import type { ReleaseList, UpdateState } from "./update";
@@ -75,6 +75,7 @@ export const READS = {
   reopen: state(REOPEN_KEY),
   warnRelay: state(WARN_RELAY),
   wake: state(WAKE_ON),
+  autoUpdate: state(AUTO_UPDATE),
   login: { key: "login", load: (): Promise<LoginItemState | null> => loginItemHost()?.get() ?? none() },
   cli: { key: "cli", load: (): Promise<CliStatus | null> => cliHost()?.status() ?? none() },
   home: { key: "home", load: homeDir },

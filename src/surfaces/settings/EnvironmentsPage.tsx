@@ -13,6 +13,7 @@ import {
   CopyIcon,
   EllipsisIcon,
   FolderOpenIcon,
+  HourglassIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -35,7 +36,7 @@ import { whereOf } from "../../lib/envText";
 import { remotesHost } from "../../lib/host";
 import { PROVIDERS } from "../../lib/providers";
 import type { MachineSample } from "../../lib/protocol";
-import { INSTALL_STEPS, compareVersions, errorText as message, type Tailnet } from "../../lib/remotes";
+import { AUTO_UPDATE, INSTALL_STEPS, compareVersions, errorText as message, type RemoteUpdateState, type Tailnet } from "../../lib/remotes";
 import { openWorkspaceOn, subscribeAdd, takeAddRequest, WAKE_ON, WARN_RELAY } from "../../lib/remoteUi";
 import { READS, keep, useKept, useRead } from "../../lib/settingsReads";
 import type { Workspace } from "../../lib/types";
@@ -63,7 +64,12 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   const tailnet = failed ?? kept;
   const warnRelay = useRead(READS.warnRelay) !== "off";
   const wake = useRead(READS.wake) !== "off";
+  const autoUpdate = useRead(READS.autoUpdate) !== "off";
   const [busy, setBusy] = useState<Record<string, Busy>>({});
+  /** Updates main's updater waits on or runs, and the step each running one is on. */
+  const [pending, setPending] = useState<Record<string, RemoteUpdateState>>({});
+  const [autoSteps, setAutoSteps] = useState<Record<string, string>>({});
+  const [confirming, setConfirming] = useState<{ link: EnvLink; working: number } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [editing, setEditing] = useState<EnvLink | null>(null);
   const [removing, setRemoving] = useState<EnvLink | null>(null);
@@ -85,13 +91,26 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   useEffect(() => {
     if (!host) return;
     return host.onProgress((step) => {
+      const label = INSTALL_STEPS.find((item) => item.id === step.id)?.label ?? null;
       setBusy((current) => {
         const job = current[step.job];
         if (!job) return current;
-        const label = INSTALL_STEPS.find((item) => item.id === step.id)?.label ?? null;
         return { ...current, [step.job]: { ...job, step: step.state === "running" ? label : job.step } };
       });
+      // One main started on its own has no job here: its steps are kept beside it.
+      if (step.state === "running" && label) setAutoSteps((current) => ({ ...current, [step.job]: label }));
     });
+  }, [host]);
+
+  useEffect(() => {
+    if (!host) return;
+    const take = (states: Record<string, RemoteUpdateState>) => {
+      setPending(states);
+      // The next update starts with no step shown, not the last one's.
+      setAutoSteps((current) => Object.fromEntries(Object.entries(current).filter(([id]) => states[id]?.state === "updating")));
+    };
+    void host.updateStates().then(take, () => {});
+    return host.onUpdateStates(take);
   }, [host]);
 
   const local = links.find((link) => link.id === LOCAL) ?? null;
@@ -116,7 +135,17 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
     }
   }
 
-  const update = (link: EnvLink) =>
+  /** Asks first when sessions are working there: the update breaks off their turns. */
+  async function update(link: EnvLink) {
+    setNotice(null);
+    const working = (await host?.busySessions(link.id).catch(() => 0)) ?? 0;
+    if (working > 0) setConfirming({ link, working });
+    else void updateNow(link);
+  }
+  const queue = (link: EnvLink) =>
+    host?.queueUpdate(link.id).catch((reason: unknown) => setNotice({ tone: "error", text: `${link.name}: ${message(reason)}` }));
+  const cancelQueued = (link: EnvLink) => void host?.cancelUpdate(link.id).catch(() => {});
+  const updateNow = (link: EnvLink) =>
     run(link, "Updating", async () => {
       const warning = (await host?.update(link.id))?.warning ?? null;
       await refreshRemotes();
@@ -135,7 +164,9 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   function cardFor(link: EnvLink) {
     const isLocal = link.id === LOCAL;
     const newer = isLocal ? null : updateFor(link, local);
-    const job = busy[link.id] ?? null;
+    const waiting = pending[link.id] ?? null;
+    const job =
+      busy[link.id] ?? (waiting?.state === "updating" ? { label: "Updating", step: autoSteps[link.id] ?? null } : null);
     const up = link.status === "online" && !link.mismatch && !job;
     const manage = { label: "Manage providers", icon: BotIcon, run: () => manageProviders(link.id) };
     const actions: Action[] = isLocal
@@ -169,6 +200,8 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
         newer={newer}
         relay={isLocal ? false : relayed(link)}
         busy={job}
+        pending={waiting?.state === "waiting" ? waiting : null}
+        onCancelUpdate={() => cancelQueued(link)}
         actions={actions}
         up={up}
         onTerminal={() => void terminal(link)}
@@ -227,6 +260,35 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           }}
         />
       </Group>
+
+      <Group title="Updates">
+        <ToggleRow
+          id="auto-update"
+          label="Update machines automatically"
+          description="Bring each machine's crewd up to this Mac's once no session there has worked for two minutes."
+          checked={autoUpdate}
+          onChange={(checked) => {
+            keep(READS.autoUpdate, checked ? "on" : "off");
+            void api.stateSet(AUTO_UPDATE, checked ? "on" : "off");
+          }}
+        />
+      </Group>
+
+      {confirming && (
+        <UpdateDialog
+          link={confirming.link}
+          working={confirming.working}
+          onClose={() => setConfirming(null)}
+          onNow={() => {
+            setConfirming(null);
+            void updateNow(confirming.link);
+          }}
+          onLater={() => {
+            setConfirming(null);
+            void queue(confirming.link);
+          }}
+        />
+      )}
 
       {logs && <LogsDialog link={logs} onClose={() => setLogs(null)} />}
       {editing && (
@@ -303,6 +365,8 @@ function MachineCard({
   newer,
   relay,
   busy,
+  pending,
+  onCancelUpdate,
   actions,
   up,
   onTerminal,
@@ -314,6 +378,9 @@ function MachineCard({
   newer: string | null;
   relay: boolean;
   busy: Busy | null;
+  /** An update waiting for the machine's sessions to finish. */
+  pending: RemoteUpdateState | null;
+  onCancelUpdate: () => void;
   actions: Action[];
   up: boolean;
   onTerminal: () => void;
@@ -361,9 +428,20 @@ function MachineCard({
           <MachineMenu link={link} actions={actions} />
         </span>
       </header>
-      <Notice link={link} relay={relay} busy={busy !== null} onUpdate={onUpdate} onReconnect={onReconnect} />
+      <Notice
+        link={link}
+        relay={relay}
+        busy={busy !== null}
+        pending={pending}
+        onUpdate={onUpdate}
+        onCancelUpdate={onCancelUpdate}
+        onReconnect={onReconnect}
+      />
       <dl className="mx-4 grid grid-cols-1 gap-x-8 gap-y-3 border-t border-hairline py-3 @[560px]:grid-cols-[1.2fr_1fr_1fr]">
-        <Stat label="Connection" sub={<Version link={link} newer={newer} busy={busy !== null} onUpdate={onUpdate} />}>
+        <Stat
+          label="Connection"
+          sub={<Version link={link} newer={newer} busy={busy !== null || pending !== null} onUpdate={onUpdate} />}
+        >
           <Connection link={link} relay={relay} busy={busy} />
         </Stat>
         <Stat label="CPU" sub={live && info ? `${info.load.toFixed(2)} on ${plural(info.cpus, "core")}` : null} chart>
@@ -462,17 +540,38 @@ function Notice({
   link,
   relay,
   busy,
+  pending,
   onUpdate,
+  onCancelUpdate,
   onReconnect,
 }: {
   link: EnvLink;
   relay: boolean;
   busy: boolean;
+  pending: RemoteUpdateState | null;
   onUpdate: (() => void) | undefined;
+  onCancelUpdate: () => void;
   onReconnect: () => void;
 }) {
   if (busy || link.status === "connecting") return null;
   const box = "mx-4 mb-3";
+  if (pending)
+    return (
+      <Callout
+        className={box}
+        tone="info"
+        icon={HourglassIcon}
+        title={`Updates to ${pending.version} when idle`}
+        description={
+          pending.agentsRunning > 0
+            ? `${plural(pending.agentsRunning, "session")} working there. crewd updates once ${pending.agentsRunning === 1 ? "it finishes" : "they finish"}.`
+            : pending.queued
+              ? "Starting the update."
+              : "Nothing is working there; it updates once it has stayed idle for two minutes."
+        }
+        action={<Button onClick={onCancelUpdate}>Cancel</Button>}
+      />
+    );
   if (link.mismatch)
     return (
       <Callout
@@ -750,6 +849,40 @@ function EditDialog({ link, onClose, onSave }: { link: EnvLink; onClose: () => v
         </Button>
         <Button variant="primary" loading={saving} onClick={() => void save()}>
           Save
+        </Button>
+      </Footer>
+    </Alert>
+  );
+}
+
+/** An update asked for while sessions work there: now breaks off their turns, later waits for them. */
+function UpdateDialog({
+  link,
+  working,
+  onClose,
+  onNow,
+  onLater,
+}: {
+  link: EnvLink;
+  working: number;
+  onClose: () => void;
+  onNow: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <Alert
+      open
+      onDismiss={onClose}
+      title={`Update ${link.name} now?`}
+      description={`${plural(working, "session")} ${working === 1 ? "is" : "are"} working there. Updating restarts crewd, which breaks off ${working === 1 ? "its turn" : "their turns"}.`}
+    >
+      <Footer hints={[["esc", "Cancel"]]}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={onNow}>Update now</Button>
+        <Button variant="primary" onClick={onLater}>
+          When {working === 1 ? "it finishes" : "they finish"}
         </Button>
       </Footer>
     </Alert>

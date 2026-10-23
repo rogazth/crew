@@ -9,6 +9,7 @@ import {
   lingerWarning,
   linuxArch,
   remoteLayout,
+  reviveCommand,
   serviceUnit,
   sshArgs,
   sshDestination,
@@ -33,6 +34,23 @@ describe("linux installer", () => {
   // One CLI or build killed for memory must not stop the unit, and every session in it.
   it("keeps the daemon up when the kernel kills one of its processes for memory", () => {
     expect(serviceUnit("100.127.204.79", 17877)).toContain("\nOOMPolicy=continue\n");
+  });
+
+  // A crewd that keeps crashing at boot is retried, slower each time, and never left down for good.
+  it("restarts a crashed daemon without ever giving up", () => {
+    const unit = serviceUnit("100.127.204.79", 17877);
+    expect(unit).toContain("\nStartLimitIntervalSec=0\n");
+    expect(unit).toContain("\nRestart=on-failure\n");
+    expect(unit).toContain("\nRestartMaxDelaySec=60\n");
+  });
+
+  // Reviving starts a stopped unit and leaves one that runs, or waits to restart, alone.
+  it("only starts a crewd systemd has stopped", () => {
+    const revive = reviveCommand(remoteLayout("dev"));
+    expect(revive).toContain("systemctl --user is-active --quiet crewd-dev");
+    expect(revive).toContain("grep -qx activating");
+    expect(revive).toContain("systemctl --user start crewd-dev && echo started");
+    expect(revive).not.toContain("restart");
   });
 
   // A dev or local build adding the machine the release runs on gets a crewd of its own.

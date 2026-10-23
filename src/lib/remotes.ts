@@ -88,6 +88,34 @@ export type ManualRemote = {
 /** 7777 is Orca's. crewd listens here, and SOCKS on the port after it. */
 export const DEFAULT_PORT = 17877;
 
+/**
+ * A machine kept at its loopback: crewd there never listens beyond it (no
+ * Tailscale on that machine), and this Mac reaches it through an ssh tunnel.
+ */
+export function isLoopback(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+/** The state key of "Update machines automatically": on unless it says "off". */
+export const AUTO_UPDATE = "remote:auto-update";
+
+/**
+ * A machine whose crewd is behind this Mac's, as main's updater holds it:
+ * `waiting` for its sessions to finish (or to stay idle a while), `updating`
+ * now. A machine that is up to date has none.
+ */
+export type RemoteUpdateState = {
+  state: "waiting" | "updating";
+  /** The version it is brought to. */
+  version: string;
+  /** The user asked for it, rather than the automatic setting. */
+  queued: boolean;
+  agentsRunning: number;
+};
+
+/** How an update main started on its own ended, for the window to say. */
+export type RemoteUpdateResult = { id: string; name: string; version: string; ok: boolean; message: string | null };
+
 export function compareVersions(left: string, right: string): number {
   const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10) || 0);
   const a = parse(left);
