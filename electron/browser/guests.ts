@@ -370,14 +370,17 @@ function openApp(contents: WebContents, url: string): void {
 
 /**
  * Google's sign-in turns away embedded Chromium, so on its pages a page or a
- * popup goes by Firefox's name, and by Chrome's again once it leaves.
+ * popup goes by Firefox's name, and by Chrome's again once it leaves. Most
+ * arrive there by a redirect, from the site that asked for the sign-in.
  */
 function followSignIn(contents: WebContents): void {
-  contents.on("did-start-navigation", (details) => {
+  const follow = (details: { url: string; isMainFrame: boolean; isSameDocument: boolean }) => {
     if (!details.isMainFrame || details.isSameDocument) return;
     const agent = isGoogleSignIn(details.url) ? firefoxUserAgent() : contents.session.getUserAgent();
     if (contents.getUserAgent() !== agent) contents.setUserAgent(agent);
-  });
+  };
+  contents.on("did-start-navigation", follow);
+  contents.on("did-redirect-navigation", follow);
 }
 
 /** Only local dev servers get past a bad certificate; everything else keeps Chromium's refusal. */

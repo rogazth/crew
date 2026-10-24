@@ -5,11 +5,15 @@
  * hints and `window.chrome` would give the disguise away and the sign-in
  * would refuse the browser.
  *
+ * `agent` is Firefox's user agent. A page reached by a redirect, or a tab's
+ * first load, commits with Chrome's in `navigator.userAgent` while its
+ * requests say Firefox, and that mismatch is refused too.
+ *
  * The preload hands this function to `executeInMainWorld`, which copies its
  * source into the page. It must not close over imports: only its arguments
  * and globals arrive there.
  */
-export function passForFirefoxOnSignIn(target?: { location: { hostname: string; protocol: string } }): boolean {
+export function passForFirefoxOnSignIn(agent: string, target?: { location: { hostname: string; protocol: string } }): boolean {
   // No argument when the preload runs it in the page. A test passes its own object.
   const scope = (target ?? globalThis) as unknown as {
     location: { hostname: string; protocol: string };
@@ -27,6 +31,10 @@ export function passForFirefoxOnSignIn(target?: { location: { hostname: string; 
   };
   hide(scope.Navigator?.prototype, "userAgentData", undefined);
   hide(scope.Navigator?.prototype, "vendor", "");
+  hide(scope.Navigator?.prototype, "userAgent", agent);
+  // Firefox's appVersion is the platform alone: "5.0 (Macintosh)".
+  const platform = /\((Macintosh|Windows|X11)/.exec(agent)?.[1];
+  if (platform) hide(scope.Navigator?.prototype, "appVersion", `5.0 (${platform})`);
   try {
     delete scope.chrome;
   } catch {
