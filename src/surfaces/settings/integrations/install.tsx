@@ -21,7 +21,7 @@ import { Dialog, DialogBody, DialogFooter, DialogGroup, DialogHeader, DialogRow 
 import { hostOf, ui } from "./lib";
 import { ServiceMark } from "./mark";
 import { PROVIDER_ORDER, providerName } from "./servers";
-import { accountOf, actions, connectorOf, refusalOf, useIntegrations, type FlowStage } from "./store";
+import { accountOfFlow, actions, connectorOf, refusalOf, useIntegrations, type FlowStage } from "./store";
 
 const STAGE: Record<"opening" | "waiting" | "redeeming", string> = {
   opening: "Opening the sign-in window…",
@@ -38,7 +38,7 @@ function useCrewRun(server: RegistryServer) {
   const connector = connectorOf(s, made?.connectorId);
   const brand: Brand = connector ? brandOf(connector) : brandOfServer(server);
   const flow = s.flows.find((f) => f.id === made?.flowId);
-  const account = accountOf(s, flow?.accountId ?? undefined);
+  const account = accountOfFlow(s, made?.flowId);
   const connected = account?.state === "connected" && (!flow || flow.stage === "done") ? account : null;
   const stage: FlowStage | "idle" = !asked ? "idle" : connected ? "done" : error || flow?.stage === "failed" ? "failed" : (flow?.stage ?? "opening");
   const start = async () => {

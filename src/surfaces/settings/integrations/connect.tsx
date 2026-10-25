@@ -10,7 +10,7 @@ import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./di
 import { hostOf, ui } from "./lib";
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
-import { accountOf, actions, connectorOf, useIntegrations, type Account, type FlowStage, type Source } from "./store";
+import { accountOfFlow, actions, connectorOf, useIntegrations, type Account, type FlowStage, type Source } from "./store";
 
 const STAGE: Record<Exclude<FlowStage, "done" | "failed">, string> = {
   opening: "Opening the sign-in window…",
@@ -40,7 +40,7 @@ export function ConnectDialog({ source }: { source: Source }) {
   const connector = connectorOf(s, made?.connectorId);
   const brand = connector ? brandOf(connector) : brandOfSource(source);
   const flow = s.flows.find((f) => f.id === made?.flowId);
-  const account = accountOf(s, flow?.accountId ?? undefined);
+  const account = accountOfFlow(s, made?.flowId);
   const connected = account?.state === "connected" && (!flow || flow.stage === "done") ? account : null;
   const stage: FlowStage = connected ? "done" : error || flow?.stage === "failed" ? "failed" : (flow?.stage ?? "opening");
   const why = error ?? flow?.error;

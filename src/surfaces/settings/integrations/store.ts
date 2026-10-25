@@ -157,6 +157,9 @@ function stage(id: number, patch: Partial<Flow>) {
 /** The states of the sign-ins in flight, so closing the page's sheet can't orphan one. */
 const running = new Map<number, string>();
 
+/** The account each finished sign-in landed on, kept after its flow is let go. */
+const landed = new Map<number, string>();
+
 /**
  * A sign-in, start to end: a new account of the connector, or `accountId`
  * again. Resolves the flow's id at once; the flow itself moves on in the store.
@@ -188,6 +191,7 @@ function signIn(connectorId: string, accountId: string | null, label?: string): 
       stage(id, { stage: "redeeming" });
       const account = await vaultCallback(started.state, url);
       putAccount(account);
+      landed.set(id, account.id);
       stage(id, { stage: "done", accountId: account.id });
       window.setTimeout(() => set((s) => ({ ...s, flows: s.flows.filter((f) => f.id !== id) })), 1400);
     } catch (error) {
@@ -340,6 +344,9 @@ export const actions = {
 
 export const connectorOf = (s: State, id: string | undefined) => s.connectors.find((c) => c.id === id);
 export const accountOf = (s: State, id: string | undefined) => s.connectors.flatMap((c) => c.accounts).find((a) => a.id === id);
+/** A sign-in's account: its flow's, or, once the flow is let go, the one it landed on. */
+export const accountOfFlow = (s: State, flowId: number | undefined) =>
+  accountOf(s, s.flows.find((f) => f.id === flowId)?.accountId ?? (flowId === undefined ? undefined : landed.get(flowId)));
 export const consumerOf = (s: State, id: string) => s.consumers.find((c) => c.id === id);
 
 export const sameScope = (a: Scope, b: Scope) => a.kind === b.kind && (a.kind === "everywhere" || (b.kind !== "everywhere" && a.id === b.id));

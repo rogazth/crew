@@ -35,6 +35,8 @@ export function IntegrationsPage({ workspaces, bots }: Props) {
     ];
     setConsumers(consumers);
   }, [workspaces, bots]);
+  // The page always opens on the connectors: closing it forgets the detail or directory it was on.
+  useEffect(() => ui.reset, []);
   if (view === "directory" || (view === "detail" && detail))
     return (
       <>
