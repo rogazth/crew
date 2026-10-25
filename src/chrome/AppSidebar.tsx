@@ -9,6 +9,8 @@ import { WorkspaceSidebar, type WorkspaceSidebarProps } from "./WorkspaceSidebar
 
 type Props = {
   open: boolean;
+  /** Whether the user sees it: `open` stays true for a sidebar that slides out instead of unmounting. */
+  shown?: boolean;
   width: number;
   onResize: (width: number) => void;
   settings: SettingsSectionId | null;
@@ -22,7 +24,7 @@ type Props = {
  * The rail of workspaces stays put; the panel beside it is the workspace, or
  * settings sliding over it. One set of arrow keys walks both.
  */
-export function AppSidebar({ open, width, onResize, settings, onSelectSettings, onCloseSettings, rail, sessions }: Props) {
+export function AppSidebar({ open, shown = open, width, onResize, settings, onSelectSettings, onCloseSettings, rail, sessions }: Props) {
   const root = useRef<HTMLDivElement>(null);
   useSpatialKeys(root);
 
@@ -39,6 +41,7 @@ export function AppSidebar({ open, width, onResize, settings, onSelectSettings, 
         <WorkspaceRail {...rail} />
         <SlidingViews
           active={settings ? "settings" : "sessions"}
+          still={!shown}
           className="mb-2 min-w-0 border-t border-l border-transparent border-l-hairline"
           views={[
             { key: "sessions", node: <WorkspaceSidebar {...sessions} /> },

@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 type Props = {
   open: boolean;
@@ -84,18 +84,29 @@ export function SidebarShell({ open, width, minWidth, maxWidth, onResize, childr
 
 /**
  * Two views in one place, the inactive one slid out and inert, so settings
- * can come in over the sessions without either losing its state.
+ * can come in over the sessions without either losing its state. While
+ * `still`, the sidebar is out of sight or sliding away: the view in place
+ * stays, and the change lands without a slide once it is back.
  */
 export function SlidingViews({
   active,
+  still = false,
   className = "",
   views,
 }: {
   active: string;
+  still?: boolean;
   className?: string;
   views: { key: string; node: ReactNode }[];
 }) {
-  const index = Math.max(0, views.findIndex((view) => view.key === active));
+  const wanted = Math.max(0, views.findIndex((view) => view.key === active));
+  const [shown, setShown] = useState({ index: wanted, instant: false, still });
+  if (!still && (wanted !== shown.index || still !== shown.still)) {
+    setShown({ index: wanted, instant: shown.still && wanted !== shown.index, still });
+  } else if (still !== shown.still) {
+    setShown({ ...shown, still });
+  }
+  const index = still ? shown.index : wanted;
   return (
     // Clip, not hidden: a hidden overflow still scrolls when focus lands in a view mid-slide, and stays off by that much.
     <div className={`relative min-h-0 flex-1 overflow-clip ${className}`}>
@@ -105,7 +116,7 @@ export function SlidingViews({
           inert={at !== index}
           aria-hidden={at !== index}
           style={{ transform: `translateX(${(at - index) * 100}%)` }}
-          className="absolute inset-0 flex flex-col transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
+          className={`absolute inset-0 flex flex-col ${shown.instant ? "" : "transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)]"} motion-reduce:transition-none`}
         >
           {view.node}
         </div>

@@ -1461,9 +1461,62 @@ svg.lucide {
 [data-sheet="page"] {
   margin-top: 8px;
 }
-/* Beside the sidebar, the sidebar is the gutter. */
-aside[data-sidebar="sidebar"] ~ main [data-sheet] {
+/* The sidebar under, the main panel over it (SidebarSlide.tsx). Only resting
+   styles live here; the motion is inline, written by springs. */
+.sbx {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  overflow: clip;
+  background: var(--color-sidebar);
+}
+.sbx-under {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  z-index: 0;
+  display: flex;
+  /* The hinge it sinks on: its left edge, so it never moves left. */
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+.sbx-side {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+/* Collapsed and still, it is gone: nothing in it is styled, laid out or painted. */
+.sbx-side[data-covered] {
+  content-visibility: hidden;
+}
+/* Always the window's full width; the content inside takes what the panel leaves. */
+.sbx-main {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  background: var(--color-sidebar);
+  will-change: transform;
+}
+.sbx-content {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+}
+/* The panel's edge is the sheet's: it rests against the sidebar or the sneak. */
+.sbx [data-sheet] {
   margin-left: 0;
+}
+/* The traffic lights' reserve and the workspace button: the spring sets its
+   width; the button stays pinned beside the lights while the panel slides. */
+.sbx [data-tab-inset] {
+  overflow: hidden;
+  justify-content: flex-end;
+  /* Where the panel's edge cuts it, it fades like the tab strip's overflow, not a hard line.
+     At rest the fade falls on the traffic lights' empty reserve. */
+  mask-image: linear-gradient(to right, transparent, #000 40px);
 }
 /* Resizing the sidebar lights the sheet's own edge, not a line through the
    window: a hairline down its left side that fades out before the corners. */

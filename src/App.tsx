@@ -1,3 +1,4 @@
+import { SlideShell } from "./chrome/SidebarSlide";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BotSheetHost } from "./chrome/BotSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
@@ -365,9 +366,13 @@ export function App() {
     <Toaster onOpen={openNotified} />
     <BotAvatarProvider>
     <div className="flex h-full">
-      {active && (
+      <SlideShell
+        open={sidebarOpen}
+        width={sidebar.width}
+        sidebar={active && (
         <AppSidebar
-          open={sidebarOpen}
+          open
+          shown={sidebarOpen}
           width={sidebar.width}
           onResize={sidebar.resize}
           settings={settings}
@@ -455,7 +460,7 @@ export function App() {
           }}
         />
       )}
-
+      >
       <main className="flex min-w-0 flex-1 flex-col bg-sidebar">
         <Pages
           page={page}
@@ -468,7 +473,7 @@ export function App() {
         {/* Hidden, not unmounted: bot and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
           <TabBar
-            inset={!sidebarOpen}
+            inset
             tabs={tabs.tabs}
             activeId={tabs.active?.id ?? null}
             sessions={sessions}
@@ -613,6 +618,7 @@ export function App() {
           </div>
         </div>
       </main>
+      </SlideShell>
 
       {envs.picker && (
         <MachinePalette

@@ -235,7 +235,7 @@ export function TabBar({
       }`}
     >
       {inset && (
-        <div className="flex shrink-0 items-center">
+        <div data-tab-inset className="flex shrink-0 items-center">
           <div className={`shrink-0 ${TOGGLE_RESERVE}`} />
           <button
             type="button"
