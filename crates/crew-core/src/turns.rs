@@ -285,6 +285,9 @@ struct Launch {
     /// its provider. Neither CLI takes a change of them while it runs, so a
     /// kept process that has another set is launched again.
     off: Vec<String>,
+    /// The connector servers bound to the session. Claude takes a new set
+    /// while it idles; Codex has them in its thread's config.
+    connectors: Vec<String>,
 }
 
 impl Launch {
@@ -339,10 +342,15 @@ enum Change {
         tier: Option<String>,
         fast: Option<bool>,
     },
+    /// The connector servers bound to the session moved: `mcp_set_servers`,
+    /// which [`TurnHost::apply_claude_changes`] builds, since it names the
+    /// binary that runs them.
+    Connectors(Vec<String>),
 }
 
 impl Change {
-    /// The control request that makes it so; none when only Crew's record moves.
+    /// The control request that makes it so; none when only Crew's record
+    /// moves, or when the request is built where the binary is known.
     fn request(&self) -> Option<Value> {
         match self {
             Change::Model(model) => Some(json!({ "subtype": "set_model", "model": model })),
@@ -351,6 +359,7 @@ impl Change {
             Change::Tier { fast, .. } => {
                 fast.map(|on| json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": on } }))
             }
+            Change::Connectors(_) => None,
         }
     }
 
@@ -361,6 +370,7 @@ impl Change {
             Change::Effort(effort) => applied.effort = Some(effort),
             Change::Permission(autonomy) => applied.autonomy = autonomy,
             Change::Tier { tier, .. } => applied.service_tier = tier,
+            Change::Connectors(names) => applied.connectors = names,
         }
     }
 }
@@ -408,6 +418,9 @@ fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
         let want = fast(&new.service_tier) && fast_allowed;
         changes.push(Change::Tier { tier: new.service_tier.clone(), fast: (want || fast(&old.service_tier)).then_some(want) });
     }
+    if old.connectors != new.connectors {
+        changes.push(Change::Connectors(new.connectors.clone()));
+    }
     Plan::Changes(changes)
 }
 
@@ -415,7 +428,15 @@ fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
 impl Launch {
     /// Settings no session has, for a process a test installs by hand.
     fn none() -> Self {
-        Self { model: None, effort: None, service_tier: None, autonomy: Autonomy::Ask, cwd: String::new(), off: Vec::new() }
+        Self {
+            model: None,
+            effort: None,
+            service_tier: None,
+            autonomy: Autonomy::Ask,
+            cwd: String::new(),
+            off: Vec::new(),
+            connectors: Vec::new(),
+        }
     }
 }
 
@@ -3512,6 +3533,7 @@ impl TurnHost {
             autonomy: self.autonomy(session),
             cwd: cwd.to_string(),
             off: crate::provider_servers::off_names(&self.store, &session.provider).into_iter().collect(),
+            connectors: self.connector_servers(session, self.mcp().as_ref()).into_iter().map(|server| server.name).collect(),
         }
     }
 
@@ -3589,7 +3611,15 @@ impl TurnHost {
             _ => return false,
         };
         for change in changes {
-            if let Some(request) = change.request() {
+            let request = match &change {
+                Change::Connectors(names) => self.mcp().map(|(command, args)| {
+                    let servers: Vec<_> =
+                        names.iter().map(|name| crate::providers::McpServerSpec::connector(&command, name)).collect();
+                    crate::providers::claude::mcp_set_servers_request(&command, &args, &servers)
+                }),
+                _ => change.request(),
+            };
+            if let Some(request) = request {
                 let mut taken = self.claude_control_on(session_id, Some(epoch), request.clone());
                 // The CLI checks a model with the server within 5 s, and
                 // refuses ("Couldn't confirm model ... Try again") when that
@@ -5564,6 +5594,7 @@ mod plan_tests {
             autonomy: Autonomy::Ask,
             cwd: "/w".into(),
             off: Vec::new(),
+            connectors: Vec::new(),
         }
     }
 
@@ -5691,6 +5722,7 @@ mod plan_tests {
                 autonomy: Autonomy::Edits,
                 cwd: "/w".into(),
                 off: Vec::new(),
+                connectors: Vec::new(),
             }
         );
     }
@@ -5703,6 +5735,19 @@ mod plan_tests {
         assert_eq!(claude_plan(&launch(), &off, true), Plan::Relaunch);
         assert_eq!(claude_plan(&off, &launch(), true), Plan::Relaunch);
         assert_eq!(claude_plan(&off, &off, true), Plan::Changes(Vec::new()));
+    }
+
+    /// A connector bound or unbound reaches a kept Claude process in place,
+    /// as one `mcp_set_servers`, and nothing else moves.
+    #[test]
+    fn a_binding_change_reaches_a_kept_claude_in_place() {
+        let bound = Launch { connectors: vec!["notion".into()], ..launch() };
+        assert_eq!(claude_plan(&launch(), &bound, true), Plan::Changes(vec![Change::Connectors(vec!["notion".into()])]));
+        assert_eq!(claude_plan(&bound, &launch(), true), Plan::Changes(vec![Change::Connectors(Vec::new())]));
+        assert_eq!(claude_plan(&bound, &bound, true), Plan::Changes(Vec::new()));
+        let mut applied = launch();
+        Change::Connectors(vec!["notion".into()]).record(&mut applied);
+        assert_eq!(applied, bound);
     }
 
     #[test]

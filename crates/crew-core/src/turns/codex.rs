@@ -372,9 +372,10 @@ impl TurnHost {
                         && live.settled
                         && !live.cancelled
                         && !applied.clears_a_setting_of(&live.applied)
-                        // What is off in Crew is the thread's config, which a
-                        // turn does not change.
-                        && applied.off == live.applied.off =>
+                        // What is off in Crew, and the connectors, are the
+                        // thread's config, which a turn does not change.
+                        && applied.off == live.applied.off
+                        && applied.connectors == live.applied.connectors =>
                 {
                     live.begin_turn(tx);
                     let since = std::mem::replace(&mut live.applied, applied);

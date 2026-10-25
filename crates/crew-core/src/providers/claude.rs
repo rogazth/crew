@@ -69,12 +69,26 @@ pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
 /// Crew's: no `alwaysLoad`, so Claude defers them like any user server, and
 /// no env, since a stdio server inherits the CLI's (its `CREW_TOKEN`).
 pub fn claude_mcp_config(command: &str, args: &[String], connectors: &[McpServerSpec]) -> String {
+    json!({ "mcpServers": claude_mcp_servers(command, args, connectors) }).to_string()
+}
+
+/// The servers of [`claude_mcp_config`], by name.
+fn claude_mcp_servers(command: &str, args: &[String], connectors: &[McpServerSpec]) -> Map<String, Value> {
     let mut servers = Map::new();
     servers.insert("crew".into(), json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS, "alwaysLoad": true }));
     for server in connectors {
         servers.insert(server.name.clone(), json!({ "command": server.command, "args": server.args, "timeout": MCP_TIMEOUT_MS }));
     }
-    json!({ "mcpServers": servers }).to_string()
+    servers
+}
+
+/// Gives a running CLI the servers of `--mcp-config` again, as
+/// [`claude_mcp_config`] would launch it with: the set replaces the whole of
+/// what that flag gave, Crew's own server too, and leaves the user's and
+/// claude.ai's alone. The first one reconnects the servers it keeps, the
+/// next ones only what changed (measured on 2.1.310).
+pub fn mcp_set_servers_request(command: &str, args: &[String], connectors: &[McpServerSpec]) -> Value {
+    json!({ "subtype": "mcp_set_servers", "servers": claude_mcp_servers(command, args, connectors) })
 }
 
 /// Every tool on Crew's server, as a Claude permission rule: Crew's own tools
@@ -1550,6 +1564,19 @@ mod tests {
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
         assert_eq!(settings["permissions"]["allow"], json!(["mcp__crew__*"]), "{settings}");
+    }
+
+    /// A running CLI is given the whole of what `--mcp-config` launched it
+    /// with, Crew's server too: the set replaces that flag's servers.
+    #[test]
+    fn a_new_set_of_servers_carries_crews_own_with_the_connectors() {
+        let connectors = [super::McpServerSpec::connector("/app/crewd", "notion")];
+        let request = mcp_set_servers_request("/app/crewd", &["--mcp".into()], &connectors);
+        let launched: Value = serde_json::from_str(&claude_mcp_config("/app/crewd", &["--mcp".into()], &connectors)).unwrap();
+        assert_eq!(request["subtype"], "mcp_set_servers");
+        assert_eq!(request["servers"], launched["mcpServers"]);
+        let none = mcp_set_servers_request("/app/crewd", &["--mcp".into()], &[]);
+        assert_eq!(none["servers"].as_object().map(|servers| servers.keys().collect::<Vec<_>>()), Some(vec![&"crew".to_string()]));
     }
 
     /// A bot keeps to the workspace's settings, so `~/.claude` cannot inject a

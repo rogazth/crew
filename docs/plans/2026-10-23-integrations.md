@@ -247,8 +247,14 @@ listen on the redirect URI.
   wait on the network. A tool switched off is left out of `tools/list` and
   costs no context.
 - **Bindings** are resolved at spawn, from the machine's copy. A change
-  reaches a live Claude process through `mcp_set_servers`. Every other
-  provider gets it on its next spawn.
+  reaches a kept Claude process at its next turn through `mcp_set_servers`,
+  without a relaunch. The set replaces all of `--mcp-config`'s servers,
+  Crew's own too, and leaves the user's and claude.ai's alone; the first one
+  reconnects what it keeps, so it is never sent mid-turn (measured on
+  2.1.310). A kept Codex process is launched again, since the connectors are
+  its thread's config. opencode takes one server at a time per folder
+  (`PUT` and `DELETE /api/experimental/mcp/:name`, not written to any
+  config; measured on 2.1.2).
 - **Off in Crew** is applied at spawn, as the provider-facts table says.
   Cursor and Grok have no per-spawn way, so their row offers the CLI's own
   `mcp disable`, labelled "also outside Crew".
@@ -473,7 +479,8 @@ rotate, so its lease is a copy.
 | Provider servers: inventory, page, sign-in, Off in Crew, chip switch | built, covered by tests |
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
-| Vault on this Mac: a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
+| Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
+| Vault on this Mac: a binding change reaching opencode's shared server | todo |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |
 | Password managers as a kind | todo |
