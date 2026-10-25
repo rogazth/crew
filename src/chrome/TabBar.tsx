@@ -1,6 +1,3 @@
-import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
-import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
 import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, LayersIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -11,7 +8,6 @@ import { TOGGLE_RESERVE } from "../lib/chrome";
 import { DriverFace } from "./DriverFace";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
-import { SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
@@ -21,6 +17,7 @@ import { toneOf } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
 import { useFileDrop } from "../hooks/useFileDrop";
+import { useTabDrag } from "../hooks/useTabDrag";
 import { useTabOverflow } from "../hooks/useTabOverflow";
 import { useTabBackground } from "../hooks/useBackground";
 import { commandKeys } from "../lib/commands";
@@ -149,16 +146,6 @@ function tabActions(
   ]);
 }
 
-/** A pill slides along its own run, pinned or not, and stops at its ends; the strip scrolls under it. */
-const within = (selector: string) => [
-  RestrictToHorizontalAxis,
-  RestrictToElement.configure({
-    element: (operation) => operation.source?.element?.closest(selector) ?? null,
-  }),
-];
-const STRIP_MODIFIERS = within("[data-tab-strip]");
-const PIN_MODIFIERS = within("[data-tab-pins]");
-
 /** One 40px row of pill tabs, plus on the end. Every slot in a pill is fixed width. */
 export function TabBar({
   inset,
@@ -188,7 +175,7 @@ export function TabBar({
   const peekTimer = useRef<number | undefined>(undefined);
   const onPeek = useCallback((tabId: string, el: HTMLElement | null) => {
     window.clearTimeout(peekTimer.current);
-    if (!el) return setPeek(null);
+    if (!el || document.documentElement.dataset.tabDragging !== undefined) return setPeek(null);
     peekTimer.current = window.setTimeout(() => {
       const rect = el.getBoundingClientRect();
       setPeek({ tabId, anchor: { left: Math.min(rect.left, window.innerWidth - 312), top: rect.bottom + 6 } });
@@ -210,6 +197,12 @@ export function TabBar({
     groups?.placeOf ?? null,
   );
   const itemIds = items.map((item) => (item.kind === "tab" ? item.tab.id : item.id));
+  // A pill slides along its own run, pinned or not; the strip scrolls under it.
+  useTabDrag(bar, {
+    onReorder: (group, next) =>
+      onReorder(group === "pins" ? [...next, ...tabs.flatMap((tab) => (tab.pinned ? [] : [tab.id]))] : [...pinnedIds, ...itemOrder(next, items)]),
+    onStart: () => onPeek("", null),
+  });
   const { ref, endRef, overflowing, canScrollStart, canScrollEnd, scroll } = useTabOverflow(itemIds.join("|"));
   const branchOf = (tab: Tab): Branch | null => {
     const place = groups?.placeOf(tab);
@@ -266,17 +259,11 @@ export function TabBar({
       >
         <Tabs.List className="flex h-full min-w-0 flex-1 items-center">
           {pinned.length > 0 && (
-            <div data-tab-pins className="flex h-full shrink-0 items-center gap-0.5 pl-2.5">
-              <SortableList
-                ids={pinnedIds}
-                onReorder={(next) => onReorder([...next, ...tabs.flatMap((tab) => (tab.pinned ? [] : [tab.id]))])}
-                modifiers={PIN_MODIFIERS}
-              >
-                {pinned.map((tab, index) => (
+            <div data-tab-pins data-drag-group="pins" className="flex h-full shrink-0 items-center gap-0.5 pl-2.5">
+                {pinned.map((tab) => (
                   <PinnedPill
                     key={tab.id}
                     tab={tab}
-                    index={index}
                     active={tab.id === activeId}
                     sessions={sessions}
                     onClose={closePill}
@@ -285,7 +272,6 @@ export function TabBar({
                     onPeek={onPeek}
                   />
                 ))}
-              </SortableList>
               <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-border" />
             </div>
           )}
@@ -297,20 +283,15 @@ export function TabBar({
             <div
               ref={ref}
               data-tab-strip
+              data-drag-group="strip"
               data-tauri-drag-region={overflowing ? "false" : undefined}
               className={`no-scrollbar flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden pr-1.5 scroll-px-10 ${pinned.length > 0 ? "" : "pl-2.5"}`}
             >
-              <SortableList
-                ids={itemIds}
-                onReorder={(next) => onReorder([...pinnedIds, ...itemOrder(next, items)])}
-                modifiers={STRIP_MODIFIERS}
-              >
-                {items.map((item, index) =>
+                {items.map((item) =>
                   item.kind === "tab" ? (
                     <TabPill
                       key={item.tab.id}
                       tab={item.tab}
-                      index={index}
                       active={item.tab.id === activeId}
                       sessions={sessions}
                       onClose={closePill}
@@ -322,7 +303,6 @@ export function TabBar({
                     <GroupChip
                       key={item.id}
                       item={item}
-                      index={index}
                       branch={groups?.labelOf(item.place) ?? null}
                       sessions={sessions}
                       onExpand={groups?.onExpand ?? NO_EXPAND}
@@ -330,7 +310,6 @@ export function TabBar({
                     />
                   ),
                 )}
-              </SortableList>
 
               <div className="ml-1 flex shrink-0 items-center">
                 <TabLauncher
@@ -417,12 +396,11 @@ export function TabBar({
 }
 
 /**
- * A pill drags along the strip only. dnd-kit moves the DOM while it is held, so
- * the strip re-renders once, on drop, when the new order is saved.
+ * A pill drags along the strip only (useTabDrag). Nothing re-renders while it
+ * is held: the strip re-renders once, on drop, when the new order is saved.
  */
 const TabPill = memo(function TabPill({
   tab,
-  index,
   active,
   sessions,
   onClose,
@@ -431,7 +409,6 @@ const TabPill = memo(function TabPill({
   onPeek,
 }: {
   tab: Tab;
-  index: number;
   active: boolean;
   sessions: Session[];
   onClose: (id: string) => void;
@@ -439,13 +416,6 @@ const TabPill = memo(function TabPill({
   branch: Branch | null;
   onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
-  const { ref, isDragging } = useSortable({
-    id: tab.id,
-    index,
-    group: "tabs",
-    type: "tab",
-    accept: "tab",
-  });
   const status = tabStatus(tab, sessions);
   // A turn that ended with commands still running: their count beside the title.
   const background = useTabBackground(tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined);
@@ -453,11 +423,11 @@ const TabPill = memo(function TabPill({
   const signal = status !== null && status !== "idle" && status !== "exited";
   return (
     <Tabs.Tab
-      ref={ref}
       value={tab.id}
       nativeButton={false}
       render={<div />}
       data-tab-id={tab.id}
+      data-drag-id={tab.id}
       data-incognito={isIncognitoTab(tab) || undefined}
       data-tauri-drag-region="false"
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
@@ -469,12 +439,11 @@ const TabPill = memo(function TabPill({
       onMouseLeave={() => onPeek(tab.id, null)}
       onPointerDown={() => onPeek(tab.id, null)}
       title={tab.kind === "session" ? undefined : tabTitle(tab, sessions)}
-      /* The card (crew-tab in index.css) marks the one on screen; a held tab wears it too,
-         so it never shows its neighbours through it while it moves. */
-      data-on={active || isDragging || undefined}
+      /* The card (crew-tab in index.css) marks the one on screen. */
+      data-on={active || undefined}
       className={`crew-tab group w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} shrink-0 touch-none gap-1 pr-1 pl-2.5 ${
-        active || isDragging ? "text-text" : "text-text-muted"
-      } ${isDragging ? "cursor-grabbing" : ""}`}
+        active ? "text-text" : "text-text-muted"
+      }`}
     >
       {tab.kind === "browser" ? (
         <BrowserTabFace tab={tab} sessions={sessions} />
@@ -522,7 +491,6 @@ const TabPill = memo(function TabPill({
  */
 const PinnedPill = memo(function PinnedPill({
   tab,
-  index,
   active,
   sessions,
   onClose,
@@ -531,7 +499,6 @@ const PinnedPill = memo(function PinnedPill({
   onPeek,
 }: {
   tab: Tab;
-  index: number;
   active: boolean;
   sessions: Session[];
   onClose: (id: string) => void;
@@ -539,22 +506,15 @@ const PinnedPill = memo(function PinnedPill({
   branch: Branch | null;
   onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
-  const { ref, isDragging } = useSortable({
-    id: tab.id,
-    index,
-    group: "pins",
-    type: "pin",
-    accept: "pin",
-  });
   const status = tabStatus(tab, sessions);
   const title = tabTitle(tab, sessions);
   return (
     <Tabs.Tab
-      ref={ref}
       value={tab.id}
       nativeButton={false}
       render={<div />}
       data-tab-id={tab.id}
+      data-drag-id={tab.id}
       data-incognito={isIncognitoTab(tab) || undefined}
       data-tauri-drag-region="false"
       aria-label={title}
@@ -567,8 +527,8 @@ const PinnedPill = memo(function PinnedPill({
       onMouseLeave={() => onPeek(tab.id, null)}
       onPointerDown={() => onPeek(tab.id, null)}
       title={tab.kind === "session" ? undefined : title}
-      data-on={active || isDragging || undefined}
-      className={`crew-tab w-8 shrink-0 touch-none justify-center ${isDragging ? "cursor-grabbing" : ""}`}
+      data-on={active || undefined}
+      className="crew-tab w-8 shrink-0 touch-none justify-center"
     >
       {tab.kind === "browser" ? (
         <BrowserTabFace tab={tab} sessions={sessions} bare />
@@ -609,42 +569,33 @@ function groupStatus(tabs: Tab[], sessions: Session[]): SessionStatus | null {
  */
 const GroupChip = memo(function GroupChip({
   item,
-  index,
   branch,
   sessions,
   onExpand,
   onMenu,
 }: {
   item: GroupItem;
-  index: number;
   branch: Branch | null;
   sessions: Session[];
   onExpand: (place: string) => void;
   onMenu: (menu: Menu) => void;
 }) {
-  const { ref, isDragging } = useSortable({
-    id: item.id,
-    index,
-    group: "tabs",
-    type: "tab",
-    accept: "tab",
-  });
   const status = groupStatus(item.tabs, sessions);
   const hue = branch?.hue ?? 0;
   const label = branch?.label ?? "Worktree";
   const count = item.tabs.length;
   return (
     <button
-      ref={ref}
       type="button"
+      data-drag-id={item.id}
       data-tauri-drag-region="false"
       aria-label={`${label}, ${count} ${count === 1 ? "tab" : "tabs"}, collapsed`}
       aria-expanded={false}
       title={`Expand ${label}`}
       onClick={() => onExpand(item.place)}
       onContextMenu={(event) => onMenu({ point: menuFromEvent(event), group: item })}
-      style={{ background: `oklch(68% 0.14 ${hue} / ${isDragging ? 0.3 : 0.18})` }}
-      className={`flex h-6 max-w-[160px] shrink-0 touch-none items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-text outline-none transition-[filter,box-shadow] duration-150 hover:brightness-110 focus-visible:ring-1 focus-visible:ring-hairline ${isDragging ? "cursor-grabbing" : ""}`}
+      style={{ background: `oklch(68% 0.14 ${hue} / 0.18)` }}
+      className="flex h-6 max-w-[160px] shrink-0 touch-none items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-text outline-none transition-[filter,box-shadow] duration-150 hover:brightness-110 focus-visible:ring-1 focus-visible:ring-hairline"
     >
       <GitBranchIcon aria-hidden className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{label}</span>

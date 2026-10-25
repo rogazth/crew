@@ -109,7 +109,7 @@ test("L2: visited pages and typed addresses open from the launcher; a dragged st
     { message: "crewd saved the strip as it shows" },
   );
 
-  // The last tab dragged to the front: past the sortable's 5px, in steps.
+  // The last tab dragged to the front: past the 5px a press needs to come off, in steps.
   const [first, second, third, fourth] = before as [string, string, string, string];
   const tab = (id: string) => page.locator(`[data-tab-strip] [role="tab"][data-tab-id="${id}"]`);
   const from = await tab(fourth).boundingBox();

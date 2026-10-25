@@ -1316,6 +1316,66 @@ svg.lucide {
   opacity: 0;
 }
 
+/* A tab in hand (useTabDrag.ts): a copy over everything, the room it would
+   land in marked in the strip. The motion is inline, written by springs. */
+:root[data-tab-dragging],
+:root[data-tab-dragging] * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+.crew-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  overflow: hidden;
+  border-radius: 9px;
+  background: light-dark(var(--color-canvas), var(--color-surface));
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 14px 34px -14px oklch(0% 0 0 / 0.45),
+    0 4px 10px -6px oklch(0% 0 0 / 0.2);
+  pointer-events: none;
+  will-change: transform;
+  transition: box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Coming down, its shadow settles to the card's, so the hand-over to the real tab does not pop. */
+.crew-tab-ghost[data-landing] {
+  box-shadow:
+    0 0 0 1px var(--color-hairline),
+    0 1px 2px light-dark(oklch(0% 0 0 / 0.05), oklch(0% 0 0 / 0.3)),
+    0 3px 8px -3px light-dark(oklch(0% 0 0 / 0.1), oklch(0% 0 0 / 0.45));
+}
+.crew-tab-ghost .crew-tab-ghost-face {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text);
+}
+.crew-tab-ghost .crew-tab-ghost-face::before {
+  display: none;
+}
+.crew-tab-slot {
+  position: fixed;
+  left: 0;
+  z-index: 9999;
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--color-info) 9%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-info) 45%, transparent);
+  pointer-events: none;
+  animation: crew-tab-slot-in 240ms cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+@keyframes crew-tab-slot-in {
+  from {
+    opacity: 0;
+    scale: 0.7;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-tab-slot {
+    animation: none;
+  }
+}
+
 /* Work in progress: three dots in ink, rising in turn. A tab, a running call. */
 .crew-typing {
   display: flex;
