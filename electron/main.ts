@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -351,6 +351,28 @@ async function restartLocalDaemon(): Promise<void> {
   win?.reload();
 }
 
+// Dev only: scripts/app.mjs rebuilds crewd when a crate changes; a new binary
+// takes the child's place, as Settings' "Restart" would. Cargo replaces the
+// file, so the directory is watched and the mtime tells a real build apart.
+function restartOnRebuild(): void {
+  const binary = crewdPath();
+  let built = existsSync(binary) ? statSync(binary).mtimeMs : 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watcher = watch(path.dirname(binary), (_event, name) => {
+    if (name !== path.basename(binary)) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (!existsSync(binary)) return;
+      const mtime = statSync(binary).mtimeMs;
+      if (mtime === built) return;
+      built = mtime;
+      console.log("crew: crewd rebuilt, restarting it");
+      restartLocalDaemon().catch((error: unknown) => console.error("crewd restart:", error));
+    }, 500);
+  });
+  app.once("will-quit", () => watcher.close());
+}
+
 /** The tail of this Mac's crewd.log. Dev's child writes to Crew's stderr and keeps none. */
 async function localDaemonLogs(): Promise<string> {
   const file = path.join(app.getPath("userData"), "crewd.log");
@@ -590,6 +612,7 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  if (!app.isPackaged && !e2e && process.env.CREW_RUST_WATCH !== "0") restartOnRebuild();
   createWindow();
   // Crew works as before; the user only needs to know quitting stops things.
   if (notice && Notification.isSupported()) new Notification({ title: "Crew", body: notice }).show();
