@@ -20,6 +20,13 @@ describe("routeEnv", () => {
     expect(routeEnv("remote_list", {}, known)).toBe(LOCAL);
   });
 
+  it("sends a search inside one chat to the daemon holding it", () => {
+    const known = maps({ session: new Map([["s", "vps"], ["t", LOCAL]]) });
+    expect(routeEnv("messages_search", { query: "x", sessionIds: ["s"] }, known)).toBe("vps");
+    expect(routeEnv("messages_search", { query: "x", sessionIds: ["s", "t"] }, known)).toBe(LOCAL);
+    expect(routeEnv("messages_search", { query: "x", sessionIds: [] }, known)).toBe(LOCAL);
+  });
+
   it("follows a workspace, a session and a path to the daemon that owns them", () => {
     const known = maps({
       workspace: new Map([["w", "vps"]]),

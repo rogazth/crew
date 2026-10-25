@@ -800,7 +800,8 @@ function search(args: Row): Row[] {
   const from = args.from as number | undefined;
   const hits: Row[] = [];
   for (const session of sessions) {
-    if (session.kind !== "bot") continue;
+    // Across sessions it searches the bots; a chat's find names its own session.
+    if (only.length === 0 && session.kind !== "bot") continue;
     if (only.length > 0 && !only.includes(session.id as string)) continue;
     // thread() materializes the seed; a search should not depend on
     // whether someone opened the chat first.

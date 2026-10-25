@@ -62,6 +62,13 @@ export function routeEnv(
   focus: string = LOCAL,
 ): string {
   if (explicit) return explicit;
+  // A find inside one chat asks the daemon that holds its transcript; across
+  // sessions, the search stays with this Mac's.
+  if (method === "messages_search") {
+    const ids = params.sessionIds;
+    const only = Array.isArray(ids) && ids.length === 1 && typeof ids[0] === "string" ? ids[0] : null;
+    if (only && maps.session.has(only)) return maps.session.get(only) ?? LOCAL;
+  }
   if (LOCAL_METHODS.has(method)) return LOCAL;
   if (FOCUS_METHODS.has(method)) return focus;
 

@@ -57,4 +57,7 @@ export type ChatSurfaceProps = {
   readOnly?: boolean;
   /** Drawn over the transcript and the composer: a pair's thread, a background entry. */
   overlay?: ReactNode;
+  /** ⌘F's find bar is open, and each press bumps this. Absent or null: closed. */
+  finding?: number | null;
+  onCloseFind?: () => void;
 };

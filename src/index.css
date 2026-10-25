@@ -1221,6 +1221,20 @@ html[data-sidebar-resize="active"] * {
   .crew-found { animation: none; background: var(--color-card); }
 }
 
+/* A chat's ⌘F: every match on screen, and brighter, the message the reader is
+   on. The word is the mark, so its row does not light too: not while the bar
+   is open, and not when it closes on that row. */
+::highlight(crew-find) {
+  background-color: var(--color-find);
+}
+::highlight(crew-find-current) {
+  background-color: var(--color-find-current);
+}
+[data-quiet-found] .crew-found {
+  animation: none;
+  background: none;
+}
+
 /* One icon set, one weight: Lucide at 1.75 reads a touch lighter than text at 13px. */
 svg.lucide {
   stroke-width: 1.75;

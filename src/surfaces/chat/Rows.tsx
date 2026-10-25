@@ -168,6 +168,12 @@ export function TurnFold({
 }) {
   const [pinned, setPinned] = useState<boolean | null>(null);
   const holds = focusId !== null && row.rows.some((inner) => rowBlocks(inner).some((block) => block.id === focusId));
+  // Sent to a row inside, it opens even if the reader had closed it.
+  const [sentTo, setSentTo] = useState(focusId);
+  if (focusId !== sentTo) {
+    setSentTo(focusId);
+    if (holds) setPinned(null);
+  }
   const open = pinned ?? holds;
   const label = row.durationMs !== undefined ? `Worked for ${duration(row.durationMs)}` : "Worked";
   return (

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from "react-dom";
 import { callsOfEntry } from "../lib/subagent";
 import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
+import { useCommands as useShortcuts } from "../hooks/useCommand";
 import { useCommands } from "../hooks/useCommands";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
@@ -358,6 +359,15 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     [trail, session.id, session.name, session.provider, session.kind],
   );
   const threadOpen = Boolean(shown) || Boolean(letters.thread);
+
+  // ⌘F finds in the chat you see: under a thread, the thread's own chat has it.
+  const [finding, setFinding] = useState<number | null>(null);
+  const openFind = useCallback(() => setFinding((token) => (token ?? 0) + 1), []);
+  const closeFind = useCallback(() => {
+    setFinding(null);
+    field.current?.focus();
+  }, []);
+  useShortcuts(active && !threadOpen && held.length > 0 ? { find: openFind } : {});
   const agentView =
     shown &&
     !letters.thread &&
@@ -438,6 +448,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               switchProvider={fresh || botSwitch}
               {...(embedded ? { inThread: true } : {})}
               readOnly={readOnly}
+              finding={finding}
+              onCloseFind={closeFind}
             />
             </div>
             {agentView}

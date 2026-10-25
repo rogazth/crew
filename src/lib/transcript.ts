@@ -34,6 +34,8 @@ type Thread = {
   focusId: string | null;
   snapshot: ThreadSnapshot;
   loading: Promise<void> | null;
+  /** The page before the first one, while it is on its way. */
+  earlier: Promise<void> | null;
   listeners: Set<() => void>;
   frame: number | null;
 };
@@ -78,6 +80,7 @@ function thread(id: string): Thread {
       focusId: null,
       snapshot: EMPTY,
       loading: null,
+      earlier: null,
       listeners: new Set(),
       frame: null,
     };
@@ -153,27 +156,47 @@ function take(row: Thread, page: MessagePage): void {
 /** How many pages back a search hit — or a resync — is worth chasing. */
 const FOCUS_PAGES = 5;
 
+/** Bumped by every focus, so a walk through history a newer one replaced stops. */
+let focusing = 0;
+
 /**
  * Take the reader to a block by its position, loading history until it is in
  * hand. A hit from a year ago is not worth walking a year of pages for, so this
- * gives up after a few and leaves them at the oldest page it reached.
+ * gives up after a few and leaves them at the oldest page it reached — unless
+ * the caller asked for that hit by name, as a chat's find does. True when the
+ * block was reached and is now the focus.
  */
-export async function focus(id: string, pos: number): Promise<void> {
+export async function focus(id: string, pos: number, pages = FOCUS_PAGES): Promise<boolean> {
+  const mine = (focusing += 1);
   await load(id);
   const row = threads.get(id);
-  if (!row) return;
-  for (let page = 0; page < FOCUS_PAGES && row.fromPos > pos && row.more; page += 1) {
+  if (!row) return false;
+  for (let page = 0; page < pages && row.fromPos > pos && row.more; page += 1) {
+    const held = row.fromPos;
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each page starts where the previous one ended
     await loadEarlier(id);
+    if (mine !== focusing) return false;
+    // A page that failed leaves the thread where it was; asking again at once fails the same way.
+    if (row.fromPos === held) break;
   }
+  if (mine !== focusing) return false;
   row.focusId = row.blocks[pos - row.fromPos]?.id ?? null;
   publish(row);
+  return row.focusId !== null;
 }
 
-/** The page before the one in hand, prepended. */
-export async function loadEarlier(id: string): Promise<void> {
+/** The page before the one in hand, prepended. A second ask while it is on its way waits for the same page. */
+export function loadEarlier(id: string): Promise<void> {
   const row = threads.get(id);
-  if (!row || !row.ready || !row.more || row.loadingEarlier) return;
+  if (!row || !row.ready || !row.more) return Promise.resolve();
+  if (row.earlier) return row.earlier;
+  row.earlier = fetchEarlier(row, id).finally(() => {
+    row.earlier = null;
+  });
+  return row.earlier;
+}
+
+async function fetchEarlier(row: Thread, id: string): Promise<void> {
   row.loadingEarlier = true;
   publish(row);
   try {

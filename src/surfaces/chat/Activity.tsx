@@ -166,7 +166,7 @@ function StepRow({
  * pin, so the next turn's rows start folded again instead of inheriting a
  * decision made about work that is over.
  */
-function useFold(live: boolean): [boolean | null, (next: boolean) => void] {
+function useFold(live: boolean): [boolean | null, (next: boolean | null) => void] {
   const [pinned, setPinned] = useState<boolean | null>(null);
   const [wasLive, setWasLive] = useState(live);
   if (live !== wasLive) {
@@ -204,6 +204,12 @@ function RunShell({
   const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
   const holds = sent(focusId) || sent(marked);
   const [pinned, setPinned] = useFold(live);
+  // Sent to a row inside, it opens even if the reader had closed it.
+  const [sentTo, setSentTo] = useState(focusId);
+  if (focusId !== sentTo) {
+    setSentTo(focusId);
+    if (sent(focusId)) setPinned(null);
+  }
   const open = waiting || (pinned ?? (live || holds));
   const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
   const now = live ? currentActivity(blocks) : null;
@@ -366,6 +372,12 @@ function ToolRow({
 function ReasoningRow({ block, marked }: { block: Block; marked: string | null }) {
   const streaming = block.streaming === true;
   const [open, setOpen] = useState(false);
+  // Found by a search, the rest of the thought is where the match may be.
+  const [seen, setSeen] = useState(marked);
+  if (marked !== seen) {
+    setSeen(marked);
+    if (marked === block.id) setOpen(true);
+  }
   const summary = summarize(block.text);
   const rest = afterSummary(block.text);
   const label = (

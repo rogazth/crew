@@ -32,6 +32,8 @@ type Props = {
   /** The last block a search hit sent the reader to: scrolled to once, and
    *  left marked so the phase holding it stays open. */
   focusId: string | null;
+  /** False while the chat's find is open: it places the word it found, not the row holding it. */
+  placeFocus?: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
   /** When the running turn began, for blocks that carry no time (a subagent's thread). */
@@ -75,6 +77,7 @@ export function Transcript({
   loadingEarlier,
   onLoadEarlier,
   focusId,
+  placeFocus = true,
   onApprove,
   onAnswer,
   since,
@@ -223,6 +226,12 @@ export function Transcript({
 
   useEffect(() => {
     if (!focusId || scrolled.current === focusId) return;
+    if (!placeFocus) {
+      // Placed by the find bar; what is left here is to stop following the foot.
+      scrolled.current = focusId;
+      pinned.current = false;
+      return;
+    }
     let frames = 0;
     let handle = 0;
     // The row may live in a folded phase that opens on this render and mounts
@@ -242,7 +251,7 @@ export function Transcript({
     };
     look();
     return () => window.cancelAnimationFrame(handle);
-  }, [focusId]);
+  }, [focusId, placeFocus]);
 
   return (
     <div

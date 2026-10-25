@@ -39,6 +39,8 @@ import type {
   ProviderStatus,
   RemoteEnv,
   SearchFiles,
+  SearchHit,
+  SearchQuery,
   ThreadLetter,
   ThreadMessagesRequest,
   ThreadPage,
@@ -352,6 +354,9 @@ export const listFolder = (path: string): Promise<FolderEntry[]> => client.reque
 /** A newer search in the same folder cancels this one, which answers with what it had. */
 export const searchFiles = (request: SearchFiles): Promise<FileSearchResult> =>
   client.request("search_files", request);
+
+/** Blocks whose text matches, from the daemon's full-text index. */
+export const searchMessages = (query: SearchQuery): Promise<SearchHit[]> => client.request("messages_search", query);
 
 export const readTextFile = (path: string): Promise<string> =>
   client.request("read_text_file", { path });

@@ -246,13 +246,37 @@ describe("focus", () => {
     request.mockResolvedValue(page([said("recent")], 2, { from: 5000, more: true }));
     const transcript = await load("s1");
     request.mockClear();
-    request.mockImplementation(() =>
-      Promise.resolve(page([said("older")], 2, { from: 4999, more: true })),
-    );
+    let from = 5000;
+    request.mockImplementation(() => Promise.resolve(page([said(`older${from}`)], 2, { from: (from -= 1), more: true })));
     await transcript.focus("s1", 1);
     // Five pages, then it stops and leaves them where it got to.
     expect(request).toHaveBeenCalledTimes(5);
     expect(transcript.read("s1").focusId).toBeNull();
+  });
+
+  it("walks as far as it is asked to, and stops at a page that brings nothing", async () => {
+    request.mockResolvedValue(page([said("recent")], 2, { from: 5000, more: true }));
+    const transcript = await load("s1");
+    request.mockClear();
+    let from = 5000;
+    request.mockImplementation(() =>
+      Promise.resolve(page([said(`older${from}`)], 2, { from: from > 4990 ? (from -= 1) : from, more: true })),
+    );
+    expect(await transcript.focus("s1", 1, Number.POSITIVE_INFINITY)).toBe(false);
+    // Ten pages back, then one that did not move: asking again would only spin.
+    expect(request).toHaveBeenCalledTimes(11);
+  });
+
+  it("drops a walk a newer focus replaced", async () => {
+    request.mockResolvedValue(page([said("recent")], 2, { from: 50, more: true }));
+    const transcript = await load("s1");
+    let from = 50;
+    request.mockImplementation(() => Promise.resolve(page([said(`older${from}`)], 2, { from: (from -= 1), more: true })));
+    const far = transcript.focus("s1", 1, Number.POSITIVE_INFINITY);
+    const near = transcript.focus("s1", 50);
+    expect(await far).toBe(false);
+    expect(await near).toBe(true);
+    expect(transcript.read("s1").focusId).toBe("recent");
   });
 
   it("keeps the last line it was sent to, and moves it on the next hit", async () => {
