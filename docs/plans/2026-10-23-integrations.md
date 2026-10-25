@@ -314,9 +314,16 @@ UX, for the prototype to settle:
   approval the `listChanged` rule asks for.
 - None of the probed servers gives an `id_token` or userinfo unasked, so an
   account's label is mostly typed.
-- The page is the top-level Connectors page. Provider servers, Off in Crew,
-  duplicates and the vault sheet stay in the dev-only prototype
-  (`?prototype=integrations`) until their phases.
+- The page is the top-level Connectors page. The prototype is gone; its
+  designs for the vault sheet and duplicates, which phases 3 and 4 build, are
+  in `src/surfaces/settings/integrations-prototype/` at commit `10784e6`.
+- Tried with Notion on 2026-10-25: consent in the sign-in window, the token
+  exchange, `tools/list`, and calls through the shim from a Claude session.
+  Notion gives no identity, so the label was typed. The token was in no
+  process's arguments or environment, and in no database, transcript or log.
+- The same session also had claude.ai's Notion (`claude_ai_Notion`), and the
+  agent picked that one first. Phase 4 has to cover claude.ai's connectors as
+  duplicates, not only the servers in the CLIs' configs.
 
 ### Risks accepted
 
@@ -456,11 +463,11 @@ rotate, so its lease is a copy.
 | --- | --- |
 | Security before distributing: signed manifest, release ruleset and environment, hardened runtime, audits | in progress |
 | Notarization and Team ID check in the updater, with a Developer ID | todo (account next week) |
-| Spike: provider controls, servers' registration, redirect catching | todo |
-| Prototype of the page | in progress (variant C) |
-| Registry cache in `crewd`, search and featured over RPC | in progress (backs the prototype) |
-| Provider servers: inventory, page, sign-in, Off in Crew, chip switch | todo |
-| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, not yet tried against a real server's consent |
+| Spike: provider controls, servers' registration, redirect catching | servers' registration checked (2026-10-24); redirect catching built |
+| Prototype of the page | done, removed (in history at `10784e6`) |
+| Registry cache in `crewd`, search and featured over RPC | built |
+| Provider servers: inventory, page, sign-in, Off in Crew, chip switch | built, covered by tests |
+| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25); Disconnect's revocation not yet tried |
 | Vault on this Mac: keychain storage; a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |

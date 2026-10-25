@@ -1,5 +1,5 @@
 import { XIcon } from "lucide-react";
-import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { IconButton, PageHeadingContext, Tooltip, type PageHeading } from "../chrome/kit";
 import { TOGGLE_RESERVE } from "../lib/chrome";
@@ -11,18 +11,6 @@ import { RoutinesView } from "./RoutinesView";
 import { IntegrationsPage } from "./settings/integrations/IntegrationsPage";
 import { useIntegrationsTrail } from "./settings/integrations/lib";
 import { SettingsView } from "./SettingsView";
-
-/**
- * Dev only (`?prototype=integrations`): the Integrations prototype on its
- * fixtures, for the provider servers and the remote vault that later phases
- * build. Never in a build: Vite drops this branch.
- */
-const IntegrationsPrototype =
-  import.meta.env.DEV && new URLSearchParams(location.search).get("prototype") === "integrations"
-    ? lazy(() =>
-        import("./settings/integrations-prototype/IntegrationsPrototype").then((m) => ({ default: m.IntegrationsPrototype })),
-      )
-    : null;
 
 /** A page covers the workspace instead of living in a tab. */
 export type Page =
@@ -97,15 +85,7 @@ export function Pages({
     );
   }
   if (page.kind === "integrations")
-    return sheet(
-      IntegrationsPrototype ? (
-        <Suspense>
-          <IntegrationsPrototype />
-        </Suspense>
-      ) : (
-        <Integrations workspaces={workspaces} sessions={allSessions} />
-      ),
-    );
+    return sheet(<Integrations workspaces={workspaces} sessions={allSessions} />);
   return null;
 }
 
