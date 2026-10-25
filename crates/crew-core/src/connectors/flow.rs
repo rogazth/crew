@@ -249,10 +249,18 @@ impl Connectors {
         if let Some(grant) = self.vault.get(account_id)? {
             if let Some(endpoint) = &grant.revocation_endpoint {
                 let client = grant.client();
+                // Said in the log, since nothing else shows whether the
+                // service took it. The answer never carries the token.
+                let mut tokens = vec![(&grant.access_token, "access_token")];
                 if let Some(refresh) = &grant.refresh_token {
-                    let _ = oauth::revoke(endpoint, &client, refresh, "refresh_token").await;
+                    tokens.insert(0, (refresh, "refresh_token"));
                 }
-                let _ = oauth::revoke(endpoint, &client, &grant.access_token, "access_token").await;
+                for (token, hint) in tokens {
+                    match oauth::revoke(endpoint, &client, token, hint).await {
+                        Ok(()) => eprintln!("[crewd] account {account_id}: the {hint} was revoked"),
+                        Err(error) => eprintln!("[crewd] account {account_id}: the {hint} was not revoked: {error}"),
+                    }
+                }
             }
             self.vault.delete(account_id)?;
         }

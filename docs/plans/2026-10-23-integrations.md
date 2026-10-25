@@ -321,6 +321,8 @@ UX, for the prototype to settle:
   exchange, `tools/list`, and calls through the shim from a Claude session.
   Notion gives no identity, so the label was typed. The token was in no
   process's arguments or environment, and in no database, transcript or log.
+  After Disconnect, Notion answered the old access token with 401 and the
+  old refresh token with `invalid_grant`.
 - The same session also had claude.ai's Notion (`claude_ai_Notion`), and the
   agent picked that one first. Phase 4 has to cover claude.ai's connectors as
   duplicates, not only the servers in the CLIs' configs.
@@ -467,7 +469,7 @@ rotate, so its lease is a copy.
 | Prototype of the page | done, removed (in history at `10784e6`) |
 | Registry cache in `crewd`, search and featured over RPC | built |
 | Provider servers: inventory, page, sign-in, Off in Crew, chip switch | built, covered by tests |
-| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25); Disconnect's revocation not yet tried |
+| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
 | Vault on this Mac: keychain storage; a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |
