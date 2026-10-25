@@ -1,0 +1,32 @@
+# Known vulnerabilities in what ships: Rust crates (RustSec, through cargo-deny)
+# and the app's npm dependencies. Runs on every push to master and weekly, so an
+# advisory published after a release still shows up.
+name: Audit
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Only what ships; dev tooling never reaches a user. Low and moderate are left to Dependabot.
+      - run: npm audit --omit=dev --audit-level=high

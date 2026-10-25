@@ -46,7 +46,7 @@ npm run release -- patch    # or minor, major, or an exact version like 0.2.0
 
 That bumps the version in `package.json`, `package-lock.json`, `Cargo.toml` and `Cargo.lock`, commits `chore: bump the version to X`, tags `vX` and pushes master and the tag together. It refuses on a dirty tree, off master, or behind origin.
 
-The tag starts [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs `scripts/release-publish.mjs`: it builds `Crew-<version>-arm64.zip` and a `latest.json` next to it (version, download url, sha256) and publishes both to the GitHub release. Pushes to master never run it. To retry a tag whose publish failed, run the workflow by hand: `gh workflow run release.yml -f tag=vX`; it replaces the release's files.
+The tag starts [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs `scripts/release-publish.mjs`: it builds `Crew-<version>-arm64.zip`, a `latest.json` next to it (version, download url, sha256) and `latest.signed.json` (that manifest and its ed25519 signature), and publishes them to the GitHub release. The job runs in the `release` environment, which only `v*` tags (which only the owner can push) and master reach, and which alone holds the signing key (`UPDATE_SIGNING_KEY`, a PKCS#8 PEM; its public half is in `electron/update-signature.ts`). Keep a copy of that key outside GitHub: without it no installed copy accepts another update. Pushes to master never run it. To retry a tag whose publish failed, run the workflow by hand: `gh workflow run release.yml -f tag=vX`; it replaces the release's files.
 
 ## Install and update
 
@@ -56,9 +56,9 @@ Install by unzipping the release zip into `/Applications`:
 ditto -x -k Crew-0.1.0-arm64.zip /Applications
 ```
 
-From there Crew updates itself. It reads `latest.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. The zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
+From there Crew updates itself. It reads `latest.signed.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. A manifest whose signature does not verify is refused, and the zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
 
-The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
+The bundle is signed with Crew's own self-signed certificate (`scripts/signing-cert.mjs`, applied by `scripts/sign-mac.cjs`), or ad hoc without it, and runs with the hardened runtime. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
 
 ## The `crew` command
 

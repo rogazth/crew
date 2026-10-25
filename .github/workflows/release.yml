@@ -1,5 +1,8 @@
 # Builds Crew on a macOS arm64 runner and publishes the GitHub release.
 # Started by the tag `npm run release` pushes; commits to master never run it.
+# The release job runs in the `release` environment, which only v* tags (owner-only, by ruleset)
+# and master reach, and which alone holds UPDATE_SIGNING_KEY.
+# Actions are pinned to commits; the comment names the tag each one was.
 # Run it by hand (Actions › Release › Run workflow, or
 # `gh workflow run release.yml -f tag=v0.1.18`) to retry a tag whose publish failed.
 #
@@ -32,19 +35,19 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
 
       # rust-toolchain.toml picks the toolchain. Only the scheduled run saves: a tag's cache is unreachable from the next tag.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'schedule' }}
 
       # crew rides in the bundle beside crewd; Settings › General › Command line links to it.
       - run: cargo build --release -p crewd -p crew-cli
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: daemon-mac
           path: |
@@ -60,30 +63,30 @@ jobs:
       matrix:
         arch: [x64, arm64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
 
       - run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.arch }}
           save-if: ${{ github.event_name == 'schedule' }}
 
       # zig links against an old glibc, so the daemon runs on older distributions than the runner's.
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: latest
           use-cache: false
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-zigbuild
 
       - run: node scripts/crewd-linux.mjs ${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: daemon-linux-${{ matrix.arch }}
           path: target/linux/crewd-linux-${{ matrix.arch }}
@@ -94,10 +97,12 @@ jobs:
     needs: [daemon-mac, daemon-linux]
     runs-on: macos-15
     timeout-minutes: 30
+    # Only this environment holds UPDATE_SIGNING_KEY.
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
           # Full history and branches, for the master check below.
@@ -110,18 +115,18 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
 
       - run: npm ci
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: daemon-mac
           path: target/release
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: daemon-linux-*
           merge-multiple: true
@@ -165,6 +170,7 @@ jobs:
         run: node scripts/release-publish.mjs
         env:
           GH_TOKEN: ${{ github.token }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
 
       - name: Remove the signing keychain
         if: always() && env.CREW_SIGN_KEYCHAIN != ''
