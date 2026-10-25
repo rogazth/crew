@@ -175,6 +175,15 @@ export function App() {
     openRoutines,
   } = usePages();
   useUpdateWiring(openSettings);
+  // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
+  // Adjusted while rendering, on the page opening or closing, not on a toggle while it is open.
+  const settingsOpen = settings !== null;
+  const [settingsWas, setSettingsWas] = useState({ open: false, sidebarClosed: false });
+  if (settingsOpen !== settingsWas.open) {
+    setSettingsWas({ open: settingsOpen, sidebarClosed: settingsOpen && !sidebarOpen });
+    if (settingsOpen) setSidebarOpen(true);
+    else if (settingsWas.sidebarClosed) setSidebarOpen(false);
+  }
   const processes = useProcesses(workspaceId);
 
   // With only the main checkout there is no other worktree to tell apart.
