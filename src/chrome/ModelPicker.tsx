@@ -4,6 +4,7 @@ import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useInstalledProviders } from "../hooks/useInstalledProviders";
 import { useListedModels } from "../hooks/useListedModels";
+import { pickerKeyDown } from "./promptKeys";
 import {
   PROVIDERS,
   modelLabel,
@@ -83,6 +84,7 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
   }
 
   function onKeyDown(event: KeyDown) {
+    if (pickerKeyDown(event, "P", () => setOpen(false))) return;
     if (event.key === "Escape" && query) {
       event.preventDefault();
       event.stopPropagation();

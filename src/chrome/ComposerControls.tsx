@@ -3,6 +3,7 @@ import { Menu } from "@base-ui/react/menu";
 import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, ZapIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
 import { ModelPicker, type Opener } from "./ModelPicker";
+import { pickerKeyDown } from "./promptKeys";
 import { useListedModels } from "../hooks/useListedModels";
 import { claudeFastShown, claudeFastTitle, useClaudeFastMode } from "../lib/fastMode";
 import {
@@ -91,6 +92,7 @@ export function ModelControls({ value, onChange, lockProvider = false, openers }
  */
 function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next: AgentChoice) => void }) {
   const claude = useClaudeFastMode();
+  const [open, setOpen] = useState(false);
   const fast = fastChoice(value.provider, value.model);
   const tiers = tiersOf(value.provider, value.model);
 
@@ -120,14 +122,14 @@ function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next
     const current = value.serviceTier || "default";
     const label = current === "default" ? "Standard" : (tiers.find((tier) => tier.id === current)?.label ?? "Standard");
     return (
-      <Menu.Root modal={false}>
+      <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
         <Menu.Trigger aria-label="Speed" title="How quickly this model is served" className={CHIP}>
           <GaugeIcon className="size-3.5 shrink-0 text-icon" />
           <span className="truncate">{label}</span>
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
-            <Menu.Popup className={PANEL}>
+            <Menu.Popup className={PANEL} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
               <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Speed</div>
               <Menu.RadioGroup value={current} onValueChange={(serviceTier) => onChange(fitChoice({ ...value, serviceTier }))}>
                 <Menu.RadioItem value="default" closeOnClick className={ROW}>
@@ -191,7 +193,7 @@ export function EffortPicker({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
-          <Menu.Popup className={PANEL}>
+          <Menu.Popup className={PANEL} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
             <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Effort</div>
             <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Effort)}>
               {efforts.map((id) => (
@@ -249,7 +251,7 @@ export function AccessPicker({
       )}
       <Menu.Portal>
         <Menu.Positioner side={chip ? "top" : "bottom"} align={chip ? "end" : "start"} sideOffset={4} className="z-50">
-          <Menu.Popup className={`${PANEL} w-76`}>
+          <Menu.Popup className={`${PANEL} w-76`} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
             <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Access</div>
             <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Access)}>
               {ACCESSES.filter((a) => offered.includes(a.id)).map((access) => {

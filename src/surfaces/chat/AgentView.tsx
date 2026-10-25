@@ -157,8 +157,10 @@ export function AgentView({
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey
-      )
+      ) {
+        event.preventDefault();
         onStop();
+      }
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
@@ -200,7 +202,7 @@ export function AgentView({
   const elapsed = duration((entry.endedAt ?? now) - entry.startedAt);
 
   return (
-    <div ref={root} className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id}>
+    <div ref={root} className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id} {...(active && stoppable ? { "data-keys": "x" } : {})}>
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-16 bg-gradient-to-b from-canvas via-canvas/90 to-transparent" />
       <header className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center gap-2 px-6" data-thread-header>
         <div

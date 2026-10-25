@@ -152,6 +152,7 @@ export function WorkSegment({
         if (row.entry) work.onOpen(row.entry);
         else work.onOpenConversation(row.conversation!.thread);
       } else if (event.key === "x" && entry?.state === "running" && entry.stoppable) {
+        event.preventDefault();
         work.onStop(entry);
       }
     };
@@ -202,7 +203,7 @@ export function WorkSegment({
         ref={sheet}
         tabIndex={-1}
         data-work-sheet
-        {...(shown ? { "data-open": "" } : {})}
+        {...(shown ? { "data-open": "", "data-keys": "x" } : {})}
         inert={!shown}
         className={
           segment

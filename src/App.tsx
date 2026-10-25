@@ -516,6 +516,10 @@ export function App() {
                     workspaceId={active.id}
                     places={panePlaces}
                     defaultPath={startIn ?? work.placeIn ?? active.path}
+                    onPlace={(path) => {
+                      setStartIn(null);
+                      worktrees.select(path);
+                    }}
                     onAsk={(text, choice, path, files) => {
                       setStartIn(null);
                       void newSession(choice, path === active.path ? null : path, text, files);

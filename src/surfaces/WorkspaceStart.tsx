@@ -11,13 +11,14 @@ import { useUploads } from "../hooks/useUploads";
 import { useWorkspaceLink } from "../hooks/useEnvLinks";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useProjectFiles } from "../hooks/useProjectFiles";
+import { activatePrompt, promptLetter, registerPrompt, type Prompt, type PromptPickers } from "../chrome/promptKeys";
 import { effortsOf, fastChoice, fitChoice, selectedEffort, toggledFast, type AgentChoice } from "../lib/providers";
 import { completeMention, rememberMention } from "../lib/mentions";
 import type { CommandEntry } from "../lib/protocol";
 import { nextEffort } from "../lib/sessionOptions";
 import { removeSlash, searchCommands, slashAt } from "../lib/slashCommands";
 import type { ProjectFile } from "../lib/types";
-import { WorktreeFact, type Place } from "./chat/panePlace";
+import { hasWorktreePicker, openWorktreePicker, WorktreeFact, type Place } from "./chat/panePlace";
 import { pickFiles, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import type { AttachedFile } from "../lib/blocks";
@@ -89,6 +90,20 @@ export function StartScreen({
   const model = useRef<Opener>(null);
   const effort = useRef<Opener>(null);
   const access = useRef<Opener>(null);
+  // What the picker keys open, from this composer and from a picker it opened.
+  const pickers = useMemo<PromptPickers>(
+    () => ({
+      has: (letter) => letter === "P" || hasWorktreePicker(),
+      open: (letter) => (letter === "P" ? model.current?.open() : openWorktreePicker()),
+    }),
+    [],
+  );
+  const stepNow = useRef<() => boolean>(() => false);
+  const prompt = useMemo<Prompt>(
+    () => ({ pickers, element: () => well.current, field: () => field.current, stepEffort: () => stepNow.current() }),
+    [pickers],
+  );
+  useEffect(() => registerPrompt(prompt), [prompt]);
 
   // The same menus as a session's composer: `@` reads the folder, `/` offers what exists before a session does.
   const [cursor, setCursor] = useState(0);
@@ -107,6 +122,15 @@ export function StartScreen({
   const [mentioned, setMentioned] = useState<readonly string[]>([]);
   const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...mentioned]), [indexed, mentioned]);
   const fitted = fitChoice(choice);
+  // ⇧Tab steps the effort levels, as in a session's composer.
+  const stepEffort = () => {
+    const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
+    if (next) setPicked(fitChoice({ ...fitted, effort: next }));
+    return true;
+  };
+  useEffect(() => {
+    stepNow.current = stepEffort;
+  });
   const canFast = fastChoice(fitted.provider, fitted.model).available;
   const hasEfforts = effortsOf(fitted.provider, fitted.model).length > 0;
   const actions = useMemo(() => startActions(canFast, hasEfforts), [canFast, hasEfforts]);
@@ -174,11 +198,16 @@ export function StartScreen({
         return;
       }
     }
-    // ⇧Tab steps the effort levels, as in a session's composer.
+    // ⌥P and ⌥W pick the model and the worktree, as in a new session's composer.
+    const letter = promptLetter(event);
+    if (letter && pickers.has(letter)) {
+      event.preventDefault();
+      pickers.open(letter);
+      return;
+    }
     if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
-      const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
-      if (next) setPicked(fitChoice({ ...fitted, effort: next }));
+      stepEffort();
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -237,7 +266,7 @@ export function StartScreen({
 
   // The same three bands as a session's first screen (head, composer, ways in), so the two line up.
   return (
-    <div data-workspace-start className="flex h-full min-h-0 flex-col">
+    <div data-workspace-start onFocusCapture={() => activatePrompt(prompt)} className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-[4] flex-col items-center justify-end overflow-hidden">
         <EmptyHead mark={<CrewGlyph className="size-14" />} title={title} facts={facts} />
       </div>
@@ -320,6 +349,7 @@ export function WorkspaceStart({
   workspaceId,
   places,
   defaultPath,
+  onPlace,
   onAsk,
   onNewBot,
   onOpenFile,
@@ -329,6 +359,8 @@ export function WorkspaceStart({
   /** The worktrees a session can start in, and the one on screen in the sidebar. */
   places: Place[];
   defaultPath: string;
+  /** A worktree picked on the badge, remembered: the next first screen opens on it too. */
+  onPlace: (path: string) => void;
   /** A new session in the worktree at `path`, with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice, path: string, files: AttachedFile[]) => void;
   onNewBot: () => void;
@@ -337,17 +369,15 @@ export function WorkspaceStart({
 }) {
   const link = useWorkspaceLink(workspaceId);
   const machine = link?.name ?? "This Mac";
-  const [path, setPath] = useState(defaultPath);
-  // Picking another worktree in the sidebar moves the start with it.
-  useEffect(() => setPath(defaultPath), [defaultPath]);
-  const place = places.find((item) => item.path === path) ?? places.find((item) => item.path === defaultPath);
+  // The sidebar's pick, or the badge's: either one moves the start.
+  const place = places.find((item) => item.path === defaultPath);
   return (
     <StartScreen
       title="What are we working on?"
-      cwd={place?.path ?? path}
+      cwd={defaultPath}
       facts={
         <>
-          {place && <WorktreeFact place={place} places={places} onMove={setPath} />}
+          {place && <WorktreeFact place={place} places={places} onMove={onPlace} />}
           <Fact icon={machineIcon(link !== null)}>{machine}</Fact>
         </>
       }
@@ -358,7 +388,7 @@ export function WorkspaceStart({
           <StarterCard icon={GlobeIcon} title="Open a browser tab" hint="Let agents browse, fill forms and capture pages" onClick={onOpenBrowser} />
         </>
       }
-      onAsk={(text, choice, files) => onAsk(text, choice, place?.path ?? path, files)}
+      onAsk={(text, choice, files) => onAsk(text, choice, defaultPath, files)}
     />
   );
 }

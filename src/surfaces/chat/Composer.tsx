@@ -35,6 +35,8 @@ import { crewAction } from "../../lib/turnRuntime";
 import type { Upload } from "../../hooks/useUploads";
 import { AttachmentStrip } from "./Attachments";
 import { McpSegment } from "./Mcp";
+import { hasWorktreePicker, openWorktreePicker, usePanePlace } from "./panePlace";
+import { activatePrompt, promptLetter, registerPrompt, type Prompt, type PromptPickers } from "../../chrome/promptKeys";
 import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
@@ -191,6 +193,35 @@ export function Composer({
   const focusField = useCallback(() => field.current?.focus(), []);
 
   const model = useRef<Opener>(null);
+  const movable = usePanePlace(session.id) !== null;
+  const movableNow = useRef(movable);
+  useEffect(() => {
+    movableNow.current = movable;
+  });
+  // What the picker keys open, from this composer and from a picker it opened.
+  const pickers = useMemo<PromptPickers>(
+    () => ({
+      has: (letter) => letter === "P" || (movableNow.current && hasWorktreePicker()),
+      open: (letter) => (letter === "P" ? model.current?.open() : openWorktreePicker()),
+    }),
+    [],
+  );
+  const stepEffort = () => {
+    if (!onOptions) return false;
+    const fitted = fitChoice(choiceOf(session));
+    const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
+    if (next) onOptions(fitChoice({ ...fitted, effort: next }));
+    return true;
+  };
+  const stepNow = useRef(stepEffort);
+  useEffect(() => {
+    stepNow.current = stepEffort;
+  });
+  const prompt = useMemo<Prompt>(
+    () => ({ pickers, element: () => well.current, field: () => field.current, stepEffort: () => stepNow.current() }),
+    [pickers],
+  );
+  useEffect(() => registerPrompt(prompt), [prompt]);
   const effort = useRef<Opener>(null);
   const access = useRef<Opener>(null);
 
@@ -312,18 +343,16 @@ export function Composer({
         }
       }
     }
-    // ⌥P opens the model picker, as in Claude Code. By the key under it: on macOS ⌥P types π.
-    if (event.code === "KeyP" && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+    // ⌥P opens the model picker, as in Claude Code; ⌥W the worktree, while the session can still move.
+    const letter = promptLetter(event);
+    if (letter && pickers.has(letter)) {
       event.preventDefault();
-      model.current?.open();
+      pickers.open(letter);
       return;
     }
     // ⇧Tab steps the effort levels; access stays a deliberate pick.
-    if (event.key === "Tab" && event.shiftKey && onOptions) {
+    if (event.key === "Tab" && event.shiftKey && stepEffort()) {
       event.preventDefault();
-      const fitted = fitChoice(choiceOf(session));
-      const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
-      if (next) onOptions(fitChoice({ ...fitted, effort: next }));
       return;
     }
     // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
@@ -382,7 +411,7 @@ export function Composer({
         )}
       </AgentClip>
       <UsageWarning provider={session.provider} />
-      <form ref={well} onSubmit={submit} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
+      <form ref={well} onSubmit={submit} onFocusCapture={() => activatePrompt(prompt)} data-composer data-session={session.id} className="ds-composer" {...(centered ? { "data-roomy": "" } : {})}>
         {mention && (
           <MentionPicker
             results={results}

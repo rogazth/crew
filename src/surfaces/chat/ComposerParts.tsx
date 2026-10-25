@@ -15,6 +15,7 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { pickerKeyDown } from "../../chrome/promptKeys";
 import { PANEL, ROW } from "../../chrome/kit";
 import type { PanelEntry } from "../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../lib/contextMeter";
@@ -154,14 +155,15 @@ export function AttachMenu({
   onMention: () => void;
   onCommand: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Menu.Root modal={false}>
+    <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger aria-label="Add to the message" title="Attach, mention or run a command" className="ds-icon-btn">
         <PlusIcon className="size-[18px]" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="start" sideOffset={6} className="z-50">
-          <Menu.Popup className={`${PANEL} w-60`}>
+          <Menu.Popup className={`${PANEL} w-60`} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
             <Menu.Item className={ROW} onClick={onAttach}>
               <PaperclipIcon className="size-4 text-icon" />
               <span className="flex-1">Files and images…</span>

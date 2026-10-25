@@ -57,6 +57,7 @@ function sections(): { group: string; rows: Row[] }[] {
       group: "Prompt",
       rows: [
         [IS_MAC ? "⌥P" : "Alt+P", "Choose model"],
+        [IS_MAC ? "⌥W" : "Alt+W", "Choose worktree"],
         ["⇧Tab", "Step effort"],
       ],
     },
