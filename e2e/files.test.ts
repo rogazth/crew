@@ -73,7 +73,7 @@ test("an HTML report opens in the editor, and renders in a page with the stylesh
   const editor = crew.window.getByRole("textbox", { name: "report.html", exact: true }).filter({ visible: true });
   await waitFor(async () => (await editor.innerText()).includes("<title>First run</title>"), { message: "the source shows" });
 
-  await crew.window.getByRole("button", { name: "Open in Browser" }).click();
+  await crew.window.getByRole("button", { name: "Open in browser" }).click();
   await waitFor(async () => (await title()) === "First run", { message: "the report renders" });
   assert.equal(await activeTabId(), `browser:file:${repo}/out/report.html`);
   assert.ok(
@@ -119,7 +119,7 @@ test("the page goes by the report's title, and its editor stays open with the ne
   });
   // Rendering it again comes back to its page.
   const pages = (await stripTabIds(crew)).filter((id) => id.startsWith("browser:file:")).length;
-  await crew.window.getByRole("button", { name: "Open in Browser" }).click();
+  await crew.window.getByRole("button", { name: "Open in browser" }).click();
   assert.equal(await activeTabId(), `browser:file:${repo}/out/report.html`);
   assert.equal((await stripTabIds(crew)).filter((id) => id.startsWith("browser:file:")).length, pages);
 });
@@ -134,7 +134,7 @@ test("an image opens in the viewer, fitted, and zooms", async () => {
   await waitFor(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth === 2), { message: "the image loads" });
   await crew.window.getByText("2 × 2", { exact: true }).waitFor();
   await crew.window.getByRole("button", { name: "Show at actual size" }).filter({ hasText: "Fit · 100%" }).waitFor();
-  await crew.window.getByRole("button", { name: "Zoom In" }).click();
+  await crew.window.getByRole("button", { name: "Zoom in" }).click();
   await crew.window.getByRole("button", { name: "Fit to window" }).filter({ hasText: "150%" }).waitFor();
   assert.equal(await image.evaluate((img: HTMLImageElement) => img.getBoundingClientRect().width), 3);
 });

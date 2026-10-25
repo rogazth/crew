@@ -35,7 +35,7 @@ test("P1: a pinned tab keeps to the left, survives a restart, and unpinned heads
   await newSession(crew, workspace.id);
 
   // Pinned: out of the scrolling strip, first, and saved so.
-  await pick(crew, anyTab(crew, m2), "Pin Tab");
+  await pick(crew, anyTab(crew, m2), "Pin tab");
   await crew.window.locator(`[data-tab-pins] [role="tab"][data-tab-id*="${m2.id}"]`).waitFor();
   assert.ok(!has(await stripTabIds(crew), m2), "the pinned tab leaves the strip");
   await waitFor(async () => (await saved(crew, workspace.id))?.tabs[0]?.pinned === true, {
@@ -49,7 +49,7 @@ test("P1: a pinned tab keeps to the left, survives a restart, and unpinned heads
   assert.ok(has(await stripTabIds(crew), m1), "the unpinned tabs stay in the strip");
 
   // Unpinned, it heads the unpinned tabs.
-  await pick(crew, anyTab(crew, m2), "Unpin Tab");
+  await pick(crew, anyTab(crew, m2), "Unpin tab");
   await waitFor(async () => (await stripTabIds(crew))[0]?.includes(m2.id) ?? false, {
     message: "the unpinned tab heads the strip",
   });

@@ -27,12 +27,12 @@ export function FileView({ onOpenInBrowser, ...props }: Props) {
   const render = rendersAsPage(props.relative) ? (
     <button
       type="button"
-      title="Open in Browser"
+      title="Open in browser"
       onClick={() => onOpenInBrowser({ path: props.path, relative: props.relative })}
       className="-mr-2 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-icon hover:bg-hover hover:text-text"
     >
       <GlobeIcon className="size-4" />
-      Open in Browser
+      Open in browser
     </button>
   ) : null;
   return <FileEditor {...props} actions={render} />;

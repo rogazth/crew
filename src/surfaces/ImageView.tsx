@@ -102,7 +102,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
         <span className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
-            aria-label="Zoom Out"
+            aria-label="Zoom out"
             title={`Zoom Out (${commandKeys("zoom-out")})`}
             disabled={!natural || scale <= MIN_SCALE}
             onClick={() => step(-1)}
@@ -113,7 +113,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
           <button
             type="button"
             aria-label={zoom === null ? "Show at actual size" : "Fit to window"}
-            title={zoom === null ? `Actual Size (${commandKeys("zoom-reset")})` : "Fit to Window"}
+            title={zoom === null ? `Actual size (${commandKeys("zoom-reset")})` : "Fit to window"}
             disabled={!natural}
             onClick={() => setZoom(zoom === null ? 1 : null)}
             className="h-7 min-w-12 shrink-0 rounded-md px-1.5 text-[12px] text-icon tabular-nums hover:bg-hover hover:text-text"
@@ -122,7 +122,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
           </button>
           <button
             type="button"
-            aria-label="Zoom In"
+            aria-label="Zoom in"
             title={`Zoom In (${commandKeys("zoom-in")})`}
             disabled={!natural || scale >= MAX_SCALE}
             onClick={() => step(1)}

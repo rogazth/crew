@@ -214,7 +214,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
       >
         <button
           type="button"
-          aria-label="Close Developer Tools"
+          aria-label="Close developer tools"
           title={`Close Developer Tools (${commandKeys("browser-devtools")})`}
           // Not a drag: a header holding the pointer would take the click.
           onPointerDown={(event) => event.stopPropagation()}
@@ -239,7 +239,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
       <div
         role="separator"
         aria-orientation={horizontal ? "vertical" : "horizontal"}
-        aria-label="Resize Developer Tools"
+        aria-label="Resize developer tools"
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}

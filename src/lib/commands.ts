@@ -25,25 +25,25 @@ type Command = {
 export const COMMANDS = {
   // Tabs — browser conventions, so the muscle memory transfers.
   "open-launcher": { label: "New tab", keys: "Mod+T" },
-  close: { label: "Close Tab", keys: "Mod+W" },
-  "reopen-tab": { label: "Reopen Closed Tab", keys: "Mod+Shift+T" },
+  close: { label: "Close tab", keys: "Mod+W" },
+  "reopen-tab": { label: "Reopen closed tab", keys: "Mod+Shift+T" },
   // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the
   // object form. A brace is its bracket (see keymap), so ⇧⌘} is the same chord on a
   // US board, where } is ⇧], and a Latin American one, where ] is ⇧}.
-  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
-  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true }, repeat: true },
+  "next-tab": { label: "Next tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
+  "prev-tab": { label: "Previous tab", keys: { key: "[", mod: true, shift: true }, repeat: true },
 
   // Finding things — three doors into one palette, each opening a different filter.
-  "open-palette": { label: "Command Palette", keys: "Mod+K" },
-  "go-to-file": { label: "Go to File", keys: "Mod+P" },
-  "open-actions": { label: "Show All Actions", keys: "Mod+Shift+P" },
-  "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
-  "switch-workspace": { label: "Switch Workspace", keys: "Mod+Shift+O" },
+  "open-palette": { label: "Command palette", keys: "Mod+K" },
+  "go-to-file": { label: "Go to file", keys: "Mod+P" },
+  "open-actions": { label: "Show all actions", keys: "Mod+Shift+P" },
+  "open-workspace": { label: "Open workspace", keys: "Mod+O" },
+  "switch-workspace": { label: "Switch workspace", keys: "Mod+Shift+O" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
   // Each level up the ladder takes a harder chord: tabs ⌘⇧, workspaces ⌘⌥.
-  "go-home": { label: "Go Home", keys: "Mod+Shift+H" },
-  "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, alt: true } },
-  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, alt: true } },
+  "go-home": { label: "Go home", keys: "Mod+Shift+H" },
+  "next-workspace": { label: "Next workspace", keys: { key: "]", mod: true, alt: true } },
+  "prev-workspace": { label: "Previous workspace", keys: { key: "[", mod: true, alt: true } },
   "workspace-1": { label: "Go to Workspace 1", keys: "Mod+1" },
   "workspace-2": { label: "Go to Workspace 2", keys: "Mod+2" },
   "workspace-3": { label: "Go to Workspace 3", keys: "Mod+3" },
@@ -55,51 +55,51 @@ export const COMMANDS = {
   "workspace-9": { label: "Go to Workspace 9", keys: "Mod+9" },
 
   // Making things
-  "new-bot": { label: "New Bot", keys: "Mod+Shift+A" },
-  "new-session": { label: "New Session", keys: "Mod+N" },
-  "new-worktree": { label: "New Worktree", keys: { key: "N", ctrl: true, meta: true } },
+  "new-bot": { label: "New bot", keys: "Mod+Shift+A" },
+  "new-session": { label: "New session", keys: "Mod+N" },
+  "new-worktree": { label: "New worktree", keys: { key: "N", ctrl: true, meta: true } },
   // ⇧⌘N is Chrome's incognito window, so the muscle memory transfers; B is for browser.
-  "new-browser-tab": { label: "New Browser Tab", keys: "Mod+Shift+B" },
-  "new-incognito-tab": { label: "New Incognito Tab", keys: "Mod+Shift+N" },
+  "new-browser-tab": { label: "New browser tab", keys: "Mod+Shift+B" },
+  "new-incognito-tab": { label: "New incognito tab", keys: "Mod+Shift+N" },
 
   // Find and zoom — bound by whatever fills the active tab: a terminal or a page zooms
   // itself, anything else zooms the window.
   find: { label: "Find", keys: "Mod+F" },
   // ⌘+ is what the key says on most layouts; ⌘= is the same key unshifted on a US one.
-  "zoom-in": { label: "Zoom In", keys: { key: "+", mod: true }, also: [{ key: "=", mod: true }, { key: "+", mod: true, shift: true }] },
-  "zoom-out": { label: "Zoom Out", keys: { key: "-", mod: true } },
-  "zoom-reset": { label: "Actual Size", keys: "Mod+0" },
+  "zoom-in": { label: "Zoom in", keys: { key: "+", mod: true }, also: [{ key: "=", mod: true }, { key: "+", mod: true, shift: true }] },
+  "zoom-out": { label: "Zoom out", keys: { key: "-", mod: true } },
+  "zoom-reset": { label: "Actual size", keys: "Mod+0" },
 
   // Browser — bound only while a page fills the active tab. History is always there.
   "browser-back": { label: "Back", keys: { key: "[", mod: true } },
   "browser-forward": { label: "Forward", keys: { key: "]", mod: true } },
-  "browser-focus-address": { label: "Focus Address Bar", keys: "Mod+L" },
-  "browser-reload": { label: "Reload Page", keys: "Mod+R" },
-  "browser-hard-reload": { label: "Hard Reload Page", keys: "Mod+Shift+R" },
+  "browser-focus-address": { label: "Focus address bar", keys: "Mod+L" },
+  "browser-reload": { label: "Reload page", keys: "Mod+R" },
+  "browser-hard-reload": { label: "Hard reload page", keys: "Mod+Shift+R" },
   // Chrome's chords off macOS: Ctrl+Y is Redo there, and Ctrl+Alt+I is no one's DevTools.
-  "browser-devtools": { label: "Toggle Developer Tools", keys: "Mod+Alt+I", offMac: "Mod+Shift+I" },
+  "browser-devtools": { label: "Toggle developer tools", keys: "Mod+Alt+I", offMac: "Mod+Shift+I" },
   "open-history": { label: "History", keys: "Mod+Y", offMac: "Mod+H" },
 
-  "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
+  "toggle-sidebar": { label: "Toggle sidebar", keys: "Mod+B" },
   // VS Code's chords: the explorer beside the tabs, and search in the workspace's files.
-  "toggle-explorer": { label: "Toggle Explorer", keys: "Mod+Shift+E" },
-  "search-files": { label: "Search in Files", keys: "Mod+Shift+F" },
+  "toggle-explorer": { label: "Toggle explorer", keys: "Mod+Shift+E" },
+  "search-files": { label: "Search in files", keys: "Mod+Shift+F" },
   // ⌘⇧R is the page's hard reload; Routines is one click away in the sidebar.
   "open-routines": { label: "Routines" },
   // The workspace's dev servers and watchers, run per worktree.
   "open-commands": { label: "Commands" },
-  "start-all-commands": { label: "Start All Commands" },
-  "stop-all-commands": { label: "Stop All Commands" },
+  "start-all-commands": { label: "Start all commands" },
+  "stop-all-commands": { label: "Stop all commands" },
   "open-settings": { label: "Settings", keys: "Mod+," },
-  "open-browser-settings": { label: "Browser Settings" },
-  "save-file": { label: "Save File", keys: "Mod+S" },
-  "toggle-outline": { label: "Toggle Outline" },
+  "open-browser-settings": { label: "Browser settings" },
+  "save-file": { label: "Save file", keys: "Mod+S" },
+  "toggle-outline": { label: "Toggle outline" },
   // A note opens to read; the same chord turns it to editing and back.
-  "toggle-reading": { label: "Toggle Reading View", keys: "Mod+E" },
-  "insert-table": { label: "Insert Table" },
+  "toggle-reading": { label: "Toggle reading view", keys: "Mod+E" },
+  "insert-table": { label: "Insert table" },
   // ⇧⌘/ too: where / is a shifted key (⇧7 on a Latin American board) ⌘/ cannot be typed,
   // and on a US board it is ⌘?, the Help chord.
-  shortcuts: { label: "Keyboard Shortcuts", keys: { key: "/", mod: true }, also: [{ key: "/", mod: true, shift: true }] },
+  shortcuts: { label: "Keyboard shortcuts", keys: { key: "/", mod: true }, also: [{ key: "/", mod: true, shift: true }] },
 } as const satisfies Record<string, Command>;
 
 export type CommandId = keyof typeof COMMANDS;

@@ -496,7 +496,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // A cell's menu drops its row.
   await cell("beta").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete Row" }).click();
+  await page.getByRole("menuitem", { name: "Delete row" }).click();
   await save(crew);
   assert.ok(!(await readFile(file, "utf8")).includes(LONG_WORD), "the row is gone");
 
@@ -538,7 +538,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
   await editorLines(noteEditor(crew)).filter({ hasText: /^End of note\.$/ }).click();
   await pressChord(crew, `${MOD}+Shift+p`);
   const palette = page.getByRole("dialog", { name: "Command palette" });
-  await palette.getByRole("textbox", { name: "Search" }).fill("Insert Table");
+  await palette.getByRole("textbox", { name: "Search" }).fill("Insert table");
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
   await editorIn(noteEditor(crew).locator("[data-editing]")).waitFor();

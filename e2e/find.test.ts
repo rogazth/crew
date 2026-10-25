@@ -129,7 +129,7 @@ async function findsIn(relative: string, query: string, first: string, second: s
   // The last page kept the keyboard; the palette's chord is the window's.
   await crew.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await openFile(relative.split("/").pop()!.split(".")[0]!, relative);
-  if (relative.endsWith(".html")) await crew.window.getByRole("button", { name: "Open in Browser" }).click();
+  if (relative.endsWith(".html")) await crew.window.getByRole("button", { name: "Open in browser" }).click();
   await waitFor(async () => (await webviewIn(crew.window).filter({ visible: true }).count()) > 0, {
     message: `${relative} opens in its page`,
   });

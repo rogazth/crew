@@ -843,7 +843,7 @@ function EditDialog({ link, onClose, onSave }: { link: EnvLink; onClose: () => v
         </div>
         <button type="submit" hidden />
       </form>
-      <Footer hints={[["↩", "Save"], ["esc", "Cancel"]]}>
+      <Footer>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
@@ -876,7 +876,7 @@ function UpdateDialog({
       title={`Update ${link.name} now?`}
       description={`${plural(working, "session")} ${working === 1 ? "is" : "are"} working there. Updating restarts crewd, which breaks off ${working === 1 ? "its turn" : "their turns"}.`}
     >
-      <Footer hints={[["esc", "Cancel"]]}>
+      <Footer>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
@@ -923,7 +923,7 @@ function RemoveDialog({
         </span>
         <Switch checked={wipe} onChange={setWipe} />
       </label>
-      <Footer hints={[["esc", "Cancel"]]}>
+      <Footer>
         <Button variant="ghost" onClick={onClose}>
           Keep
         </Button>
@@ -1001,7 +1001,7 @@ function LogsDialog({ link, onClose }: { link: EnvLink; onClose: () => void }) {
           </pre>
         )}
       </div>
-      <Footer hints={[["esc", "Close"]]}>
+      <Footer>
         <Button variant="ghost" icon={RefreshCwIcon} onClick={load}>
           Refresh
         </Button>

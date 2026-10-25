@@ -29,7 +29,7 @@ export const SURFACE = "rounded-float bg-surface text-text shadow-float";
 
 /** A menu or popover panel, and one row in it. */
 export const PANEL =
-  "max-h-[70vh] min-w-48 origin-(--transform-origin) overflow-y-auto rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "max-h-[70vh] min-w-40 max-w-80 origin-(--transform-origin) overflow-y-auto rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 export const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 rounded-lg px-2 text-left whitespace-nowrap outline-none select-none data-highlighted:bg-hover data-popup-open:bg-hover";
 
@@ -80,11 +80,9 @@ const VARIANTS: Record<Variant, string> = {
   danger: "bg-danger text-white hover:bg-danger/90",
 };
 
-/** `keys` is the chord that does the same, shown inside the button the way the footers show them. */
 export function Button({
   variant = "secondary",
   icon: Glyph,
-  keys,
   loading = false,
   className = "",
   children,
@@ -93,11 +91,9 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant;
   icon?: Icon;
-  keys?: string;
   loading?: boolean;
   ref?: Ref<HTMLButtonElement>;
 }) {
-  const onDark = variant === "primary" || variant === "danger";
   return (
     <button
       ref={ref}
@@ -108,7 +104,6 @@ export function Button({
     >
       {loading ? <LoaderCircleIcon className="size-4 animate-spin" /> : Glyph && <Glyph className="size-4" />}
       {children}
-      {keys && <Kbd keys={keys} className={onDark ? "border-white/20 bg-white/10 text-current! opacity-80" : ""} />}
     </button>
   );
 }
@@ -290,8 +285,8 @@ export function Overlay({
   );
 }
 
-/** What the keyboard does here, on the surface's bottom edge; `children` sit at its right end. */
-export function Footer({ hints, children }: { hints: [string, string][]; children?: ReactNode }) {
+/** The surface's bottom edge: what the keyboard does here, if anything, and `children` at its right end. */
+export function Footer({ hints = [], children }: { hints?: [string, string][]; children?: ReactNode }) {
   return (
     <div className="flex min-h-9 shrink-0 items-center gap-4 border-t border-border px-3 py-1.5 text-[11px] text-text-muted">
       {hints.map(([keys, label]) => (

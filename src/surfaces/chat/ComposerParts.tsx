@@ -163,7 +163,7 @@ export function AttachMenu({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="start" sideOffset={6} className="z-50">
-          <Menu.Popup className={`${PANEL} w-60`} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
+          <Menu.Popup className={PANEL} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
             <Menu.Item className={ROW} onClick={onAttach}>
               <PaperclipIcon className="size-4 text-icon" />
               <span className="flex-1">Files and images…</span>

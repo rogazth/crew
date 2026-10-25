@@ -205,7 +205,7 @@ test("C2: closing a file with unsaved edits asks, and Discard drops the edits", 
   await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened file reads Unsaved");
 });
 
-// C3: "Close Other Tabs" over two files with unsaved edits, a code file and a
+// C3: "Close other tabs" over two files with unsaved edits, a code file and a
 // note, asks once, counting both; confirming drops both edits.
 test("C3: closing other tabs asks once for every unsaved file, and confirming drops their edits", async (t) => {
   const NOTES = "# Notes\n\nNothing yet.\n";
@@ -234,7 +234,7 @@ test("C3: closing other tabs asks once for every unsaved file, and confirming dr
   await openFile(crew, "util.ts", "src/util.ts");
 
   await fileTab(crew, util).click({ button: "right" });
-  await page.getByRole("menu").getByRole("menuitem", { name: "Close Other Tabs" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: "Close other tabs" }).click();
   const prompt = closePrompt(crew);
   await prompt.getByText("Close 2 tabs?", { exact: true }).waitFor();
   await prompt.getByText("2 files have unsaved changes", { exact: false }).waitFor();

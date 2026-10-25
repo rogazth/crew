@@ -87,7 +87,7 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   );
   // Forced: the sortable wrapper says aria-disabled while dragging is off. A
   // right-click that lands while the card still moves opens no menu: again.
-  const item = page.getByRole("menuitem", { name: "Bot Settings…" });
+  const item = page.getByRole("menuitem", { name: "Bot settings…" });
   await waitFor(
     async () => {
       if (await item.isVisible()) return true;

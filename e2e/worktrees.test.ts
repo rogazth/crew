@@ -81,7 +81,7 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   assert.ok(tabId, "the session has a tab");
 
   await header.click({ button: "right" });
-  await page.getByRole("menu").getByRole("menuitem", { name: "Remove Worktree…" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: "Remove worktree…" }).click();
   const alert = page.getByRole("alertdialog");
   await alert.getByText('Remove worktree "feat/login"?').waitFor();
   const description = await alert.innerText();

@@ -157,7 +157,7 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   // Removed from its mark's menu: gone from crewd with its sessions, its folder untouched.
   const head = await crew.git(alpha.path, "rev-parse", "HEAD");
   await mark(crew, "alpha").click({ button: "right" });
-  await page().getByRole("menu").getByRole("menuitem", { name: "Remove Workspace…" }).click();
+  await page().getByRole("menu").getByRole("menuitem", { name: "Remove workspace…" }).click();
   const alert = page().getByRole("alertdialog");
   await alert.getByText('Remove workspace "alpha"?').waitFor();
   await alert.getByRole("button", { name: "Remove" }).click();

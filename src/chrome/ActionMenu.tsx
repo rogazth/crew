@@ -1,7 +1,6 @@
 import { ArrowDownAZIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, BellIcon, BetweenHorizontalEndIcon, BetweenHorizontalStartIcon, BetweenVerticalEndIcon, BetweenVerticalStartIcon, CodeIcon, CopyPlusIcon, TextAlignCenterIcon, TextAlignEndIcon, TextAlignStartIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { isDeleteChord } from "../lib/hotkey";
 import { COPY_PATH, SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
 
 const ICONS: Record<MenuIcon, Icon> = {
@@ -65,23 +64,16 @@ function pathTail(path: string, max = 30): string {
   return `…${cut >= 0 ? tail.slice(cut) : tail}`;
 }
 
-/** Copy Path joins the first group of actions, unless the menu already has one or its key is taken. */
+/** Copy Path joins the first group of actions, unless the menu already has one. */
 function withCopyPath(actions: MenuEntry[]): MenuEntry[] {
-  const own = actions.filter((entry): entry is MenuAction => entry !== SEPARATOR);
-  if (own.some((action) => action.id === COPY_PATH.id)) return actions;
-  const taken = own.some((action) => keyOf(action) === keyOf(COPY_PATH));
-  const copy = taken ? { ...COPY_PATH, hotkey: "" } : COPY_PATH;
+  if (actions.some((entry) => entry !== SEPARATOR && entry.id === COPY_PATH.id)) return actions;
   const at = actions.indexOf(SEPARATOR);
-  return at < 0 ? [...actions, copy] : [...actions.slice(0, at), copy, ...actions.slice(at)];
-}
-
-function keyOf(action: MenuAction): string {
-  return action.hotkey.toLowerCase();
+  return at < 0 ? [...actions, COPY_PATH] : [...actions.slice(0, at), COPY_PATH, ...actions.slice(at)];
 }
 
 /**
  * Right-click popover at the cursor, in the same frame as every other menu.
- * ↑↓ walk the actions, ↵ runs one, and each action's letter runs it directly.
+ * ↑↓ walk the actions and ↵ runs one.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
  */
 export function ActionMenu({ point, actions: given, onPick: pick, onClose, title, path, rename }: Props) {
@@ -172,14 +164,7 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
       if (!hit) return;
       event.preventDefault();
       onPick(hit.id);
-      return;
     }
-    const hit = isDeleteChord(event)
-      ? runnable.find((action) => action.id.includes("delete") || action.id.includes("remove"))
-      : runnable.find((action) => keyOf(action) === event.key.toLowerCase());
-    if (!hit) return;
-    event.preventDefault();
-    onPick(hit.id);
   }
 
   return createPortal(
@@ -190,7 +175,7 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
       aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 min-w-52 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
+      className={`fixed z-50 min-w-40 max-w-80 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
         rename || path ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}
@@ -247,7 +232,6 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
             <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-icon"}`} />
             <span className="min-w-0 flex-1 truncate">{entry.label}</span>
             {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
-            {entry.hotkey && <span className="shrink-0 pl-4 text-[11px] text-text-muted">{entry.hotkey}</span>}
           </button>
         );
       })}

@@ -1,5 +1,4 @@
 import type { MouseEvent } from "react";
-import { IS_MAC } from "./hotkey";
 
 export type MenuIcon =
   | "edit"
@@ -43,8 +42,6 @@ export type MenuAction = {
   id: string;
   label: string;
   icon: MenuIcon;
-  /** Single key that fires the action while the menu is open; shown as the shortcut. */
-  hotkey: string;
   danger?: boolean;
   disabled?: boolean;
   /** A setting the action flips: drawn with a check when on. */
@@ -68,31 +65,30 @@ export function tidy(entries: MenuEntry[]): MenuEntry[] {
 
 export type MenuPoint = { x: number; y: number };
 
-export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit", hotkey: "R" };
-export const EDIT: MenuAction = { id: "edit", label: "Bot Settings…", icon: "settings", hotkey: "E" };
+export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit" };
+export const EDIT: MenuAction = { id: "edit", label: "Bot settings…", icon: "settings" };
 export const DELETE: MenuAction = {
   id: "delete",
   label: "Delete",
   icon: "delete",
-  hotkey: IS_MAC ? "⌘⌫" : "Del",
   danger: true,
 };
 
-export const OPEN: MenuAction = { id: "open", label: "Open", icon: "open", hotkey: "O" };
-export const COPY_PATH: MenuAction = { id: "copy-path", label: "Copy Path", icon: "copy", hotkey: "C" };
-export const COPY_URL: MenuAction = { id: "copy-url", label: "Copy URL", icon: "copy", hotkey: "C" };
-export const CLOSE_TAB: MenuAction = { id: "close", label: "Close Tab", icon: "close", hotkey: "W" };
-export const CLOSE_OTHERS: MenuAction = { id: "close-others", label: "Close Other Tabs", icon: "close", hotkey: "O" };
-export const CLOSE_RIGHT: MenuAction = { id: "close-right", label: "Close Tabs to the Right", icon: "close", hotkey: "R" };
-export const REOPEN_TAB: MenuAction = { id: "reopen", label: "Reopen Closed Tab", icon: "reopen", hotkey: "T" };
-export const PIN_TAB: MenuAction = { id: "pin", label: "Pin Tab", icon: "pin", hotkey: "P" };
-export const UNPIN_TAB: MenuAction = { id: "unpin", label: "Unpin Tab", icon: "unpin", hotkey: "P" };
-export const COLLAPSE_WORKTREE: MenuAction = { id: "collapse", label: "Collapse Worktree Tabs", icon: "collapse", hotkey: "G" };
-export const COLLAPSE_OTHERS: MenuAction = { id: "collapse-others", label: "Collapse Other Worktrees", icon: "collapse", hotkey: "H" };
-export const EXPAND_WORKTREE: MenuAction = { id: "expand", label: "Expand Tabs", icon: "expand", hotkey: "E" };
-export const CLOSE_WORKTREE: MenuAction = { id: "close-group", label: "Close Worktree Tabs", icon: "close", hotkey: "W" };
-export const COPY_NAME: MenuAction = { id: "copy-name", label: "Copy Name", icon: "copy", hotkey: "C" };
-export const MARK_READ: MenuAction = { id: "mark-read", label: "Mark as Read", icon: "read", hotkey: "M" };
+export const OPEN: MenuAction = { id: "open", label: "Open", icon: "open" };
+export const COPY_PATH: MenuAction = { id: "copy-path", label: "Copy path", icon: "copy" };
+export const COPY_URL: MenuAction = { id: "copy-url", label: "Copy URL", icon: "copy" };
+export const CLOSE_TAB: MenuAction = { id: "close", label: "Close tab", icon: "close" };
+export const CLOSE_OTHERS: MenuAction = { id: "close-others", label: "Close other tabs", icon: "close" };
+export const CLOSE_RIGHT: MenuAction = { id: "close-right", label: "Close tabs to the right", icon: "close" };
+export const REOPEN_TAB: MenuAction = { id: "reopen", label: "Reopen closed tab", icon: "reopen" };
+export const PIN_TAB: MenuAction = { id: "pin", label: "Pin tab", icon: "pin" };
+export const UNPIN_TAB: MenuAction = { id: "unpin", label: "Unpin tab", icon: "unpin" };
+export const COLLAPSE_WORKTREE: MenuAction = { id: "collapse", label: "Collapse worktree tabs", icon: "collapse" };
+export const COLLAPSE_OTHERS: MenuAction = { id: "collapse-others", label: "Collapse other worktrees", icon: "collapse" };
+export const EXPAND_WORKTREE: MenuAction = { id: "expand", label: "Expand tabs", icon: "expand" };
+export const CLOSE_WORKTREE: MenuAction = { id: "close-group", label: "Close worktree tabs", icon: "close" };
+export const COPY_NAME: MenuAction = { id: "copy-name", label: "Copy name", icon: "copy" };
+export const MARK_READ: MenuAction = { id: "mark-read", label: "Mark as read", icon: "read" };
 
 export function menuFromEvent(event: MouseEvent): MenuPoint {
   event.preventDefault();

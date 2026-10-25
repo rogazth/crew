@@ -185,7 +185,7 @@ test("a turn reads Working across tab switches, Unread and rung when it ends out
 
   // The row's menu reads it, with s2 still on screen.
   await (await rowOf(crew, s1)).click({ button: "right", force: true });
-  await crew.window.getByRole("menu").getByRole("menuitem", { name: "Mark as Read" }).click();
+  await crew.window.getByRole("menu").getByRole("menuitem", { name: "Mark as read" }).click();
   await crew.window.getByRole("menu").waitFor({ state: "detached" });
   await becomes(crew, s1, "Idle", "idle", 5000);
   assert.equal(await sessionTab(crew, s2).getAttribute("aria-selected"), "true", "s2 stayed on screen");

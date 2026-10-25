@@ -81,7 +81,7 @@ export function Explorer({ root, width, onResize, focus, active, onOpenFile, pla
             </Menu.Trigger>
             <Menu.Portal>
               <Menu.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
-                <Menu.Popup className={`${PANEL} min-w-56`}>
+                <Menu.Popup className={PANEL}>
                   <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Show files of</div>
                   {places.map((item) => (
                     <Menu.Item key={item.path} className={ROW} onClick={() => item.path !== root && onRoot?.(item.path)}>

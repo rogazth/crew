@@ -120,10 +120,10 @@ export function BrowserToolbar({
           {zoomLabel(page.zoom)}
         </button>
       )}
-      <Tool label="Responsive View" active={responsive} onClick={onResponsive}>
+      <Tool label="Responsive view" active={responsive} onClick={onResponsive}>
         <SmartphoneIcon className="size-4" />
       </Tool>
-      <Tool label="Developer Tools" command="browser-devtools" active={devtools} onClick={onDevTools}>
+      <Tool label="Developer tools" command="browser-devtools" active={devtools} onClick={onDevTools}>
         <CodeXmlIcon className="size-4" />
       </Tool>
       <DownloadsButton

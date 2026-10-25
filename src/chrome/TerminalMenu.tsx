@@ -1,8 +1,5 @@
 import { ActionMenu } from "./ActionMenu";
 import type { MenuAction, MenuPoint } from "../lib/menu";
-import { IS_MAC } from "../lib/hotkey";
-
-const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 type Props = {
   point: MenuPoint;
@@ -24,10 +21,10 @@ export function TerminalMenu({
   onClose,
 }: Props) {
   const actions: MenuAction[] = [
-    { id: "copy", label: "Copy", icon: "copy", hotkey: `${MOD}C`, disabled: !hasSelection },
-    { id: "paste", label: "Paste", icon: "paste", hotkey: `${MOD}V` },
-    { id: "select-all", label: "Select All", icon: "select-all", hotkey: `${MOD}A` },
-    { id: "clear", label: "Clear", icon: "clear", hotkey: "" },
+    { id: "copy", label: "Copy", icon: "copy", disabled: !hasSelection },
+    { id: "paste", label: "Paste", icon: "paste" },
+    { id: "select-all", label: "Select all", icon: "select-all" },
+    { id: "clear", label: "Clear", icon: "clear" },
   ];
 
   const run: Record<string, () => void> = {

@@ -5,7 +5,7 @@
 // too. A menu over the panel hides the view behind a still of it until the
 // menu goes.
 // The chord closes them from inside the page, and so does the panel's close
-// button. "Separate Window" opens them the old way, docking again pulls them
+// button. "Separate window" opens them the old way, docking again pulls them
 // back in, and a tab closed with DevTools docked takes them along.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -75,7 +75,7 @@ function near(actual: Rect | null, expected: Rect, what: string): void {
 async function dockTo(crew: Crew, label: string): Promise<void> {
   const page = crew.window;
   await page.getByRole("button", { name: "More" }).click();
-  await page.getByRole("menuitem", { name: "Developer Tools Position" }).click();
+  await page.getByRole("menuitem", { name: "Developer tools position" }).click();
   await page.getByRole("menuitemradio", { name: label }).click();
 }
 
@@ -94,7 +94,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   await waitFor(() => server.requests.includes("/inspect"), { message: "the page loads" });
 
   // Docked below the page by default, over the panel, inspecting this page.
-  const devtools = page.getByRole("button", { name: "Developer Tools", exact: true });
+  const devtools = page.getByRole("button", { name: "Developer tools", exact: true });
   await devtools.click();
   const docked = await frontend(
     crew,
@@ -120,7 +120,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   near((await frontend(crew, (it) => it.visible, "the view comes back after the drag")).bounds, grown, "the view covers the grown panel");
 
   // On the right: the same frontend, laid out again.
-  await dockTo(crew, "Dock to Right");
+  await dockTo(crew, "Dock to right");
   const right = await waitFor(() => page.locator(panel("right")).boundingBox(), {
     message: "the panel moves to the right",
   });
@@ -154,7 +154,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
 
   // The ⋯ menu's submenu opens over the panel: the view steps aside for a still of it.
   await page.getByRole("button", { name: "More" }).click();
-  await page.getByRole("menuitem", { name: "Developer Tools Position" }).click();
+  await page.getByRole("menuitem", { name: "Developer tools position" }).click();
   await frontend(crew, (it) => !it.visible, "the view hides under the menu");
   await page.locator(`${panel("right")} [data-devtools-still]`).waitFor();
   await page.keyboard.press("Escape");
@@ -165,7 +165,7 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   });
 
   // The left side, then the chord from inside the page closes them.
-  await dockTo(crew, "Dock to Left");
+  await dockTo(crew, "Dock to left");
   const left = await waitFor(() => page.locator(panel("left")).boundingBox(), {
     message: "the panel moves to the left",
   });
@@ -180,18 +180,18 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   // The panel's own close button closes them too.
   await devtools.click();
   await frontend(crew, (it) => it.docked && it.visible && it.inspects === url, "they dock again, on the left");
-  await page.getByRole("button", { name: "Close Developer Tools" }).click();
+  await page.getByRole("button", { name: "Close developer tools" }).click();
   await waitFor(async () => (await page.locator("[data-devtools]").count()) === 0, { message: "the button closes the panel" });
   await waitFor(async () => (await frontends(crew)).length === 0, { message: "and its frontend" });
 
   // A separate window, as before.
-  await dockTo(crew, "Separate Window");
+  await dockTo(crew, "Separate window");
   await devtools.click();
   await frontend(crew, (it) => !it.docked && it.inspects === url, "DevTools open in a window of their own");
   assert.equal(await page.locator("[data-devtools]").count(), 0, "no panel in the pane");
 
   // Docking again pulls that window's DevTools into the pane.
-  await dockTo(crew, "Dock to Bottom");
+  await dockTo(crew, "Dock to bottom");
   await frontend(crew, (it) => it.docked && it.inspects === url, "the window's DevTools move into the pane");
   await page.locator('[data-devtools="bottom"]').waitFor();
 

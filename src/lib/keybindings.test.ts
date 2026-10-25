@@ -128,7 +128,7 @@ describe("import", () => {
   it("rejects a file that leaves two commands on one chord", () => {
     const result = parseImport(JSON.stringify({ close: "Mod+K" }), true);
     expect(result).toMatchObject({ ok: false });
-    if (!result.ok) expect(result.errors[0]).toMatch(/Close Tab and Command Palette/);
+    if (!result.ok) expect(result.errors[0]).toMatch(/Close tab and Command palette/);
   });
 
   it("rejects text that is not JSON or not a map", () => {

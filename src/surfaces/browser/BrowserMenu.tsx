@@ -30,7 +30,7 @@ import { commandKeys, type CommandId } from "../../lib/commands";
 import type { CookieSource } from "../../lib/protocol";
 
 const PANEL =
-  "max-h-[70vh] w-60 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "max-h-[70vh] min-w-40 max-w-80 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 
 const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 whitespace-nowrap rounded-md px-2 text-left outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover data-popup-open:bg-hover";
@@ -39,10 +39,10 @@ const STEP =
   "grid size-6 cursor-default place-items-center rounded-md outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover";
 
 const DOCKS: Record<DevToolsDock, { label: string; icon: Icon }> = {
-  bottom: { label: "Dock to Bottom", icon: PanelBottomIcon },
-  right: { label: "Dock to Right", icon: PanelRightIcon },
-  left: { label: "Dock to Left", icon: PanelLeftIcon },
-  window: { label: "Separate Window", icon: AppWindowIcon },
+  bottom: { label: "Dock to bottom", icon: PanelBottomIcon },
+  right: { label: "Dock to right", icon: PanelRightIcon },
+  left: { label: "Dock to left", icon: PanelLeftIcon },
+  window: { label: "Separate window", icon: AppWindowIcon },
 };
 
 const ZOOM_MIN = ZOOM_STEPS[0];
@@ -152,7 +152,7 @@ export function BrowserMenu({
 
             <Item icon={HistoryIcon} label="History" command="open-history" onClick={onHistory} />
             {canImport && (
-              <Submenu icon={CookieIcon} label="Import Cookies">
+              <Submenu icon={CookieIcon} label="Import cookies">
                 {sources === null ? (
                   <Menu.Item disabled className={ROW}>
                     Looking for browsers…
@@ -171,8 +171,8 @@ export function BrowserMenu({
               </Submenu>
             )}
             {site && <SitePermissions site={site} />}
-            <Item icon={CodeXmlIcon} label="Developer Tools" command="browser-devtools" onClick={onDevTools} />
-            <Submenu icon={DOCKS[devtoolsDock].icon} label="Developer Tools Position">
+            <Item icon={CodeXmlIcon} label="Developer tools" command="browser-devtools" onClick={onDevTools} />
+            <Submenu icon={DOCKS[devtoolsDock].icon} label="Developer tools position">
               <Menu.RadioGroup value={devtoolsDock} onValueChange={(value) => onDevToolsDock(value as DevToolsDock)}>
                 {DEVTOOLS_DOCKS.map((id) => {
                   const { icon: Glyph, label } = DOCKS[id];
@@ -204,7 +204,7 @@ function Item({ icon: Glyph, label, command, onClick }: { icon: Icon; label: str
     <Menu.Item className={ROW} onClick={onClick}>
       <Glyph className="size-4 shrink-0 text-icon" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {command && <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{commandKeys(command)}</span>}
+      {command && <span className="shrink-0 pl-4 text-[12px] text-text-muted tabular-nums">{commandKeys(command)}</span>}
     </Menu.Item>
   );
 }
@@ -227,7 +227,7 @@ function SitePermissions({ site }: { site: string }) {
   const decided = useSitePermissions()[site] ?? {};
   const any = Object.keys(decided).length > 0;
   return (
-    <Submenu icon={ShieldIcon} label="Site Permissions">
+    <Submenu icon={ShieldIcon} label="Site permissions">
       <div className="truncate px-2 pt-1 pb-1.5 text-[11px] text-text-muted">{siteLabel(site)}</div>
       {SITE_PERMISSIONS.map((kind) => {
         const decision = decided[kind];
@@ -261,7 +261,7 @@ function SitePermissions({ site }: { site: string }) {
         className={ROW}
       >
         <span className="size-4 shrink-0" />
-        Reset Permissions
+        Reset permissions
       </Menu.Item>
     </Submenu>
   );

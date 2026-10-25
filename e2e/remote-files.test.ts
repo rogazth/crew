@@ -40,7 +40,7 @@ test("an HTML report on another machine runs its inline scripts", async () => {
     await palette.getByRole("textbox", { name: "Search" }).fill("report");
     await palette.getByRole("button", { name: "report.html", exact: true }).click();
     await palette.waitFor({ state: "detached" });
-    await window.getByRole("button", { name: "Open in Browser" }).click();
+    await window.getByRole("button", { name: "Open in browser" }).click();
 
     const preview = () =>
       crew.app.evaluate(async ({ webContents }) => {

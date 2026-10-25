@@ -188,7 +188,7 @@ function Body({ prompt, onAnswer }: { prompt: Prompt; onAnswer: (answer: PromptA
             </Button>
             {once && (
               <Button className="text-[12px]" onClick={() => onAnswer({ allow: true, remember: false })}>
-                Allow Once
+                Allow once
               </Button>
             )}
             <Button variant="primary" className="text-[12px]" onClick={() => onAnswer({ allow: true, remember: true })}>
@@ -223,7 +223,7 @@ function Body({ prompt, onAnswer }: { prompt: Prompt; onAnswer: (answer: PromptA
           </p>
           <Actions>
             <Button variant="ghost" className="text-[12px]" onClick={() => onAnswer({ settings: false })}>
-              Not Now
+              Not now
             </Button>
             <Button variant="primary" className="text-[12px]" onClick={() => onAnswer({ settings: true })}>
               Open System Settings
@@ -260,7 +260,7 @@ function SignIn({ prompt, onAnswer }: { prompt: Extract<Prompt, { kind: "auth" }
           Cancel
         </Button>
         <Button type="submit" variant="primary" className="text-[12px]">
-          Sign In
+          Sign in
         </Button>
       </Actions>
     </form>

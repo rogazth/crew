@@ -1,6 +1,7 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { PlusIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { RoutinesIcon } from "./RoutinesIcon";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { CrewGlyph } from "./CrewGlyph";
@@ -158,7 +159,7 @@ export function WorkspaceRail(props: Props) {
       {/* The foot sits under a short rule, apart from the marks. */}
       <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />
       <RailButton
-        icon={RefreshCwIcon}
+        icon={RoutinesIcon}
         label="Routines"
         active={props.routinesOpen}
         onClick={props.onOpenRoutines}
@@ -186,7 +187,7 @@ export function WorkspaceRail(props: Props) {
           title={menu.workspace.name}
           path={menu.workspace.path}
           // Rename opens the name in the sidebar's header.
-          actions={[RENAME, SEPARATOR, { ...DELETE, label: "Remove Workspace…" }]}
+          actions={[RENAME, SEPARATOR, { ...DELETE, label: "Remove workspace…" }]}
           onPick={(id) => {
             const workspace = menu.workspace;
             setMenu(null);

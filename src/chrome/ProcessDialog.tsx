@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { Button, Field, Footer, Overlay, TextArea, TextInput, Toggle } from "./kit";
 import * as api from "../lib/api";
+import { SUBMIT_KEYS } from "../lib/hotkey";
 import { formatEnv, isLive, parseEnv, type Process, type ProcessSpec } from "../lib/processes";
 
 type Props = {
@@ -102,11 +103,11 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
         {failure && <p className="text-[12px] text-danger">{failure}</p>}
         <button type="submit" hidden />
       </form>
-      <Footer hints={[["⌘↵", "save"], ["esc", "cancel"]]}>
+      <Footer>
         <Button variant="ghost" className="text-[12px]" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" className="text-[12px]" loading={busy} disabled={!ready} onClick={() => void save()}>
+        <Button variant="primary" title={SUBMIT_KEYS} className="text-[12px]" loading={busy} disabled={!ready} onClick={() => void save()}>
           {process ? "Save" : "Add command"}
         </Button>
       </Footer>

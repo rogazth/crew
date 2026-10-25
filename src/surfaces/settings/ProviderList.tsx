@@ -259,7 +259,7 @@ function EnvPicker({ link, links }: { link: EnvLink; links: EnvLink[] }) {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
-          <Menu.Popup className={`${PANEL} w-72`}>
+          <Menu.Popup className={PANEL}>
             <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-text-muted">Machine</div>
             {links.map((l) => (
               <Menu.Item key={l.id} className={`${ROW} h-11`} onClick={() => setProvidersEnv(l.id)}>

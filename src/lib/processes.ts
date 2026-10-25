@@ -112,15 +112,15 @@ export function stateTone(run: ProcessRun | undefined): Tone {
   }
 }
 
-const START: MenuAction = { id: "start", label: "Start", icon: "play", hotkey: "S" };
-const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop", hotkey: "S" };
-const RESTART: MenuAction = { id: "restart", label: "Restart", icon: "reopen", hotkey: "R" };
-const RESUME: MenuAction = { id: "resume", label: "Resume", icon: "play", hotkey: "P" };
-const LOGS: MenuAction = { id: "logs", label: "Open Logs", icon: "terminal", hotkey: "L" };
-const APPROVE: MenuAction = { id: "approve", label: "Approve", icon: "read", hotkey: "A" };
-const REJECT: MenuAction = { id: "reject", label: "Reject", icon: "close", hotkey: "X" };
-const EDIT_PROCESS: MenuAction = { id: "edit", label: "Edit…", icon: "edit", hotkey: "E" };
-const COPY_COMMAND: MenuAction = { id: "copy-command", label: "Copy Command", icon: "copy", hotkey: "C" };
+const START: MenuAction = { id: "start", label: "Start", icon: "play" };
+const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop" };
+const RESTART: MenuAction = { id: "restart", label: "Restart", icon: "reopen" };
+const RESUME: MenuAction = { id: "resume", label: "Resume", icon: "play" };
+const LOGS: MenuAction = { id: "logs", label: "Open logs", icon: "terminal" };
+const APPROVE: MenuAction = { id: "approve", label: "Approve", icon: "read" };
+const REJECT: MenuAction = { id: "reject", label: "Reject", icon: "close" };
+const EDIT_PROCESS: MenuAction = { id: "edit", label: "Edit…", icon: "edit" };
+const COPY_COMMAND: MenuAction = { id: "copy-command", label: "Copy command", icon: "copy" };
 
 /** What a right-click on a command offers: the decision it waits on first, then the definition. */
 export function processActions(process: Process): MenuEntry[] {

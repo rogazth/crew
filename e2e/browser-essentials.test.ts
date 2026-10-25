@@ -133,7 +133,7 @@ test("a site's permission is asked over its page and a block is remembered", asy
 
   // The page's ⋯ menu shows it, and Settings can take it back.
   await crew.window.getByRole("button", { name: "More" }).click();
-  await crew.window.getByRole("menuitem", { name: "Site Permissions" }).hover();
+  await crew.window.getByRole("menuitem", { name: "Site permissions" }).hover();
   await crew.window.getByRole("menuitemcheckbox", { name: /Location/ }).filter({ hasText: "Blocked" }).waitFor();
   await shot("site-permissions");
   await crew.window.keyboard.press("Escape");

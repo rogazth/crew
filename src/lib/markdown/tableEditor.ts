@@ -5,7 +5,6 @@ import { Annotation, EditorState, Facet, Prec, type Extension } from "@codemirro
 // react-doctor-disable-next-line react-doctor/prefer-dynamic-import -- only reached through the lazy MarkdownEditor
 import { EditorView, WidgetType, drawSelection, keymap, type Command, type KeyBinding } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
-import { IS_MAC } from "../hotkey";
 import { SEPARATOR, type MenuAction, type MenuEntry, type MenuPoint } from "../menu";
 import { renderInline } from "./inline";
 import { followRendered } from "./links";
@@ -86,14 +85,12 @@ function tableViewAt(view: EditorView, pos: number): TableView | null {
   return null;
 }
 
-const action = (id: string, label: string, icon: MenuAction["icon"], hotkey = "", extra: Partial<MenuAction> = {}): MenuAction => ({
+const action = (id: string, label: string, icon: MenuAction["icon"], extra: Partial<MenuAction> = {}): MenuAction => ({
   id,
   label,
   icon,
-  hotkey,
   ...extra,
 });
-const DELETE_KEY = IS_MAC ? "⌘⌫" : "Del";
 
 class TableView {
   readonly dom: HTMLDivElement;
@@ -315,7 +312,7 @@ class TableView {
     event.stopPropagation();
     // A body cell's menu is its row's, then its column's, which carries the one source item.
     const actions =
-      spot.row === 0 ? this.columnActions(spot.col) : [...this.rowActions(spot.row, false), SEPARATOR, ...this.columnActions(spot.col, "")];
+      spot.row === 0 ? this.columnActions(spot.col) : [...this.rowActions(spot.row, false), SEPARATOR, ...this.columnActions(spot.col)];
     this.menu({ x: event.clientX, y: event.clientY }, actions, (id) => this.run(id, spot));
   }
 
@@ -418,37 +415,36 @@ class TableView {
   private rowActions(row: number, source = true): MenuEntry[] {
     const body = this.grid.rows.length;
     return [
-      action("row-above", "Insert Row Above", "row-above", "A"),
-      action("row-below", "Insert Row Below", "row-below", "B"),
-      action("row-duplicate", "Duplicate Row", "duplicate", "D"),
+      action("row-above", "Insert row above", "row-above"),
+      action("row-below", "Insert row below", "row-below"),
+      action("row-duplicate", "Duplicate row", "duplicate"),
       SEPARATOR,
-      action("row-up", "Move Row Up", "move-up", "", { disabled: row <= 1 }),
-      action("row-down", "Move Row Down", "move-down", "", { disabled: row >= body }),
+      action("row-up", "Move row up", "move-up", { disabled: row <= 1 }),
+      action("row-down", "Move row down", "move-down", { disabled: row >= body }),
       SEPARATOR,
-      ...(source ? [action("source", "Edit as Markdown", "code", "M")] : []),
-      action("row-delete", "Delete Row", "delete", DELETE_KEY, { danger: true }),
+      ...(source ? [action("source", "Edit as Markdown", "code")] : []),
+      action("row-delete", "Delete row", "delete", { danger: true }),
     ];
   }
 
-  /** `deleteKey` is "" beside a row's menu, whose delete takes the key. */
-  private columnActions(col: number, deleteKey = DELETE_KEY): MenuEntry[] {
+  private columnActions(col: number): MenuEntry[] {
     const align = this.grid.align[col];
     return [
-      action("col-left", "Insert Column Left", "column-left", "L"),
-      action("col-right", "Insert Column Right", "column-right", "R"),
+      action("col-left", "Insert column left", "column-left"),
+      action("col-right", "Insert column right", "column-right"),
       SEPARATOR,
-      action("col-move-left", "Move Column Left", "move-left", "", { disabled: col === 0 }),
-      action("col-move-right", "Move Column Right", "move-right", "", { disabled: col === this.columns - 1 }),
+      action("col-move-left", "Move column left", "move-left", { disabled: col === 0 }),
+      action("col-move-right", "Move column right", "move-right", { disabled: col === this.columns - 1 }),
       SEPARATOR,
-      action("sort-asc", "Sort A to Z", "sort-asc", "S", { disabled: this.grid.rows.length < 2 }),
-      action("sort-desc", "Sort Z to A", "sort-desc", "Z", { disabled: this.grid.rows.length < 2 }),
+      action("sort-asc", "Sort A to Z", "sort-asc", { disabled: this.grid.rows.length < 2 }),
+      action("sort-desc", "Sort Z to A", "sort-desc", { disabled: this.grid.rows.length < 2 }),
       SEPARATOR,
-      action("align-left", "Align Left", "align-left", "", { checked: align === "left" }),
-      action("align-center", "Align Center", "align-center", "", { checked: align === "center" }),
-      action("align-right", "Align Right", "align-right", "", { checked: align === "right" }),
+      action("align-left", "Align left", "align-left", { checked: align === "left" }),
+      action("align-center", "Align center", "align-center", { checked: align === "center" }),
+      action("align-right", "Align right", "align-right", { checked: align === "right" }),
       SEPARATOR,
-      action("source", "Edit as Markdown", "code", "M"),
-      action("col-delete", "Delete Column", "delete", deleteKey, { danger: true, disabled: this.columns < 2 }),
+      action("source", "Edit as Markdown", "code"),
+      action("col-delete", "Delete column", "delete", { danger: true, disabled: this.columns < 2 }),
     ];
   }
 

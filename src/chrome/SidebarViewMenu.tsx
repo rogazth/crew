@@ -57,7 +57,7 @@ const DETAILS: { id: Detail; label: string; icon: Icon }[] = [
 ];
 
 const PANEL =
-  "max-h-[70vh] w-56 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "max-h-[70vh] min-w-40 max-w-80 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 
 const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 whitespace-nowrap rounded-md px-2 text-left outline-none select-none data-highlighted:bg-hover data-popup-open:bg-hover";
@@ -230,7 +230,7 @@ function Submenu({ icon: Glyph, label, value, active = false, children }: { icon
       <Menu.SubmenuTrigger className={ROW}>
         <Glyph className="size-4 shrink-0 text-icon" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        {value && <span className="shrink-0 text-text-muted">{value}</span>}
+        {value && <span className="shrink-0 pl-2 text-text-muted">{value}</span>}
         {active && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current text-text-muted" />}
         <ChevronRightIcon className="size-3.5 shrink-0 text-icon" />
       </Menu.SubmenuTrigger>

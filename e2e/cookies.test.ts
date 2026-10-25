@@ -92,7 +92,7 @@ test("the ⋯ menu zooms in place and offers the Chrome profile by its name", as
   await menu.getByRole("menuitem", { name: "Reset zoom" }).click();
   await menu.getByRole("menuitem", { name: "Reset zoom" }).filter({ hasText: "100%" }).waitFor();
 
-  await menu.getByRole("menuitem", { name: "Import Cookies" }).hover();
+  await menu.getByRole("menuitem", { name: "Import cookies" }).hover();
   const profile = page.getByRole("menuitem", { name: "Chrome — Work" });
   await profile.click();
   const dialog = page.getByRole("alertdialog");

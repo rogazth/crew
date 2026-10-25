@@ -87,7 +87,7 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
     message: "crewd starts it again",
   });
   await worktreeHeader(crew, "feat/web").click({ button: "right" });
-  await page.getByRole("menu").getByRole("menuitem", { name: "Remove Worktree…" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: "Remove worktree…" }).click();
   const alert = page.getByRole("alertdialog");
   await alert.getByText("web stops first.").waitFor();
   await alert.getByRole("button", { name: "Remove" }).click();

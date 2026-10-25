@@ -140,13 +140,13 @@ function TreeGlyph({ tree, className }: { tree: Worktree | undefined; className:
 
 // ── Menus ───────────────────────────────────────────────────────────────────
 
-const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
-const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to Worktree", icon: "open", hotkey: "O" };
-const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New Bot Here", icon: "bot", hotkey: "N" };
-const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
-const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
-const NEW_WORKTREE: MenuAction = { id: "new-worktree", label: "New Worktree…", icon: "branch", hotkey: "W" };
-const REMOVE_WORKSPACE: MenuAction = { ...DELETE, label: "Remove Workspace…" };
+const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New session here", icon: "terminal" };
+const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to worktree", icon: "open" };
+const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New bot here", icon: "bot" };
+const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy branch", icon: "branch" };
+const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove worktree…" };
+const NEW_WORKTREE: MenuAction = { id: "new-worktree", label: "New worktree…", icon: "branch" };
+const REMOVE_WORKSPACE: MenuAction = { ...DELETE, label: "Remove workspace…" };
 
 function sessionActions(session: Session, tree: Worktree | undefined): MenuEntry[] {
   const unreadNow = session.status === "done" || session.status === "error" || unseen(session);
@@ -155,7 +155,7 @@ function sessionActions(session: Session, tree: Worktree | undefined): MenuEntry
       OPEN,
       EDIT,
       SEPARATOR,
-      { id: "notifications", label: "Notifications", icon: "bell", hotkey: "N", checked: session.notifications },
+      { id: "notifications", label: "Notifications", icon: "bell", checked: session.notifications },
       ...(unreadNow ? [MARK_READ] : []),
       COPY_NAME,
       SEPARATOR,

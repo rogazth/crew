@@ -85,7 +85,7 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
               onClick={onOpenSettings}
               className="mt-2 flex w-full items-center justify-between border-t border-hairline px-4 py-2.5 text-[12px] text-text-muted outline-none transition-colors hover:bg-hover hover:text-text"
             >
-              Details in Settings
+              Details in settings
               <ArrowRightIcon className="size-3.5" />
             </Popover.Close>
           </Popover.Popup>

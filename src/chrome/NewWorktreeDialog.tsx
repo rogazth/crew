@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { Footer, Overlay } from "./kit";
+import { Button, Footer, Overlay } from "./kit";
+import { SUBMIT_KEYS } from "../lib/hotkey";
 import type { Workspace, Worktree } from "../lib/types";
 import { shortenPath } from "../lib/workspaces";
 import { branchError, worktreeLabel } from "../lib/worktrees";
@@ -78,13 +79,17 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
           {failure && <span data-error className="text-danger">{failure}</span>}
         </div>
       </div>
-      <Footer
-        hints={[
-          ["↵", busy ? "creating…" : "create"],
-          ["⌘↵", "create + bot"],
-          ["esc", "cancel"],
-        ]}
-      />
+      <Footer>
+        <Button variant="ghost" className="text-[12px]" disabled={busy} onClick={onClose}>
+          Cancel
+        </Button>
+        <Button title={SUBMIT_KEYS} className="text-[12px]" disabled={Boolean(invalid) || busy} onClick={() => void submit(true)}>
+          Create + bot
+        </Button>
+        <Button variant="primary" title="↵" className="text-[12px]" loading={busy} disabled={Boolean(invalid)} onClick={() => void submit(false)}>
+          Create
+        </Button>
+      </Footer>
     </Overlay>
   );
 }

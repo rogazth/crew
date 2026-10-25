@@ -2,6 +2,9 @@
 
 export const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
+/** The chord that submits a form whose ↵ is taken, as a tooltip names it. */
+export const SUBMIT_KEYS = IS_MAC ? "⌘↵" : "Ctrl+↵";
+
 /** ⌘⌫ on macOS, Delete elsewhere: the platform's "remove the focused row" chord. */
 export function isDeleteChord(event: { key: string; metaKey: boolean }): boolean {
   return IS_MAC ? event.key === "Backspace" && event.metaKey : event.key === "Delete";

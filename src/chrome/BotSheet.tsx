@@ -12,6 +12,7 @@ import { useBotFaces } from "../hooks/useBotFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { BOT_AVATARS, dealSeeds, type BotAvatarId, type BotFace } from "../lib/botAvatar";
 import { ACCESSES, DEFAULT_PROVIDER, accessesOf, defaultModelOf, type ProviderId } from "../lib/providers";
+import { SUBMIT_KEYS } from "../lib/hotkey";
 import type { Autonomy, Session } from "../lib/types";
 
 export type BotDraft = {
@@ -211,11 +212,11 @@ export function BotSheet({ session, existingNames, onNewRoutine, onSave, onClose
           )}
         </div>
 
-        <Footer hints={[["⌘↵", session ? "save" : "create"], ["esc", "cancel"]]}>
+        <Footer>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" loading={saving} onClick={() => void submit()}>
+          <Button variant="primary" title={SUBMIT_KEYS} loading={saving} onClick={() => void submit()}>
             {session ? "Save" : "Create bot"}
           </Button>
         </Footer>

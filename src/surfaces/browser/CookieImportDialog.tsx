@@ -77,13 +77,13 @@ export function CookieImportDialog({ source, onClose, onImported }: Props) {
         void go();
       }}
     >
-      <Footer hints={[["esc", step.kind === "done" ? "close" : "cancel"]]}>
+      <Footer>
         {step.kind !== "done" && (
           <Button variant="ghost" className="text-[12px]" disabled={busy} onClick={dismiss}>
             Cancel
           </Button>
         )}
-        <Button ref={action} variant="primary" keys="⏎" loading={busy} className="text-[12px]" onClick={() => void go()}>
+        <Button ref={action} variant="primary" loading={busy} className="text-[12px]" onClick={() => void go()}>
           {step.kind === "done" ? "Done" : "Import"}
         </Button>
       </Footer>

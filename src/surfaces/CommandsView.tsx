@@ -7,6 +7,7 @@ import { ProcessDialog } from "../chrome/ProcessDialog";
 import { ProcessDot } from "../chrome/ProcessDot";
 import { ServedLink } from "../chrome/ServedLink";
 import { deleteConfirm, type Processes } from "../hooks/useProcesses";
+import { SUBMIT_KEYS } from "../lib/hotkey";
 import type { MenuPoint } from "../lib/menu";
 import {
   awaitsUser,
@@ -399,12 +400,13 @@ function RunDialog({
         </Field>
         <button type="submit" hidden />
       </form>
-      <Footer hints={[["⌘↵", "run"], ["esc", "cancel"]]}>
+      <Footer>
         <Button variant="ghost" className="text-[12px]" onClick={onClose}>
           Cancel
         </Button>
         <Button
           variant="primary"
+          title={SUBMIT_KEYS}
           className="text-[12px]"
           loading={busy}
           disabled={env.env === null || running}

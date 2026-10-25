@@ -52,7 +52,7 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
   assert.notEqual(await crew.git(tree, "status", "--porcelain"), "");
 
   await header.click({ button: "right" });
-  await page.getByRole("menu").getByRole("menuitem", { name: "Remove Worktree…" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: "Remove worktree…" }).click();
   const alert = page.getByRole("alertdialog");
   await alert.waitFor();
   // The prompt comes from the stale listing: it warns about no changes. That is

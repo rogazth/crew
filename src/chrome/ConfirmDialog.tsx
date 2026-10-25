@@ -57,11 +57,11 @@ export function ConfirmDialog({ confirm, onAsk, onClose }: Props) {
         go();
       }}
     >
-      <Footer hints={[["esc", "cancel"]]}>
+      <Footer>
         <Button variant="ghost" className="text-[12px]" disabled={pending} onClick={dismiss}>
           Cancel
         </Button>
-        <Button ref={action} variant="danger" keys="⏎" loading={pending} className="text-[12px]" onClick={go}>
+        <Button ref={action} variant="danger" loading={pending} className="text-[12px]" onClick={go}>
           {confirm?.action}
         </Button>
       </Footer>
