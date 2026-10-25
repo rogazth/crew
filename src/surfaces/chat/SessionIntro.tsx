@@ -72,7 +72,7 @@ export function EmptyHead({
   facts?: ReactNode;
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-[840px] flex-col items-center gap-4 px-6 pb-5 text-center">
+    <div className="mx-auto flex w-full max-w-chat flex-col items-center gap-4 px-6 pb-5 text-center">
       {mark}
       <div className="flex flex-col items-center gap-1">
         <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
@@ -170,7 +170,7 @@ const INTRO_KEYS: [string, string][] = [
 /** Under the composer, on every first screen: three ways in, then the keys. Only the ways differ. */
 export function IntroWaysFrame({ children }: { children?: ReactNode }) {
   return (
-    <div className="mx-auto flex w-full max-w-[840px] flex-col gap-6 px-6 pt-2 pb-8">
+    <div className="mx-auto flex w-full max-w-chat flex-col gap-6 px-6 pt-2 pb-8">
       {children && <div className="grid grid-cols-3 gap-2 px-1">{children}</div>}
       <KeyHints keys={INTRO_KEYS} />
     </div>

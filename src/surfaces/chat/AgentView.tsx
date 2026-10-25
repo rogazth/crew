@@ -62,7 +62,7 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
         : `Read only · its report goes to ${parent}`;
   return (
     <div
-      className="mx-auto flex h-11 w-full max-w-[840px] shrink-0 items-center gap-2 px-6 text-[11.5px] text-placeholder"
+      className="mx-auto flex h-11 w-full max-w-chat shrink-0 items-center gap-2 px-6 text-[11.5px] text-placeholder"
       data-thread-footer
     >
       <span className="truncate">{why}</span>
@@ -191,7 +191,7 @@ export function AgentView({
   ) : detail && view ? (
     <SubagentTranscript calls={blocks} working={view.state === 'running'} active={active} />
   ) : (
-    <div className="mx-auto w-full max-w-[840px] px-6 pt-8">
+    <div className="mx-auto w-full max-w-chat px-6 pt-8">
       <p className="py-0.5 text-[12.5px] text-text-muted">Steps are in the parent transcript.</p>
     </div>
   );
@@ -239,7 +239,7 @@ export function AgentView({
         />
       </header>
       <div className="relative z-0 flex min-h-0 flex-1 flex-col pt-14">
-        {error && <p className="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
+        {error && <p className="mx-auto w-full max-w-chat shrink-0 px-6 pb-2 text-[12px] text-danger">{error}</p>}
         <div className="relative flex min-h-0 flex-1 flex-col">{body}</div>
       </div>
       {footer}

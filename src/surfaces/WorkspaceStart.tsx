@@ -270,7 +270,7 @@ export function StartScreen({
       <div className="flex min-h-0 flex-[4] flex-col items-center justify-end overflow-hidden">
         <EmptyHead mark={<CrewGlyph className="size-14" />} title={title} facts={facts} />
       </div>
-      <div className="ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 py-1">
+      <div className="ds-composer-wrap relative mx-auto w-full max-w-chat shrink-0 px-6 py-1">
         <form
           ref={well}
           className="ds-composer"

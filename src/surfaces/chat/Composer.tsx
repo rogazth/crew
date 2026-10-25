@@ -399,7 +399,7 @@ export function Composer({
         ? "Ask anything…"
         : `Message ${session.name}…`;
   return (
-    <div className={`ds-composer-wrap relative mx-auto w-full max-w-[840px] shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
+    <div className={`ds-composer-wrap relative mx-auto w-full max-w-chat shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
       <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
         {work && hasClip && (
           <WorkSegment

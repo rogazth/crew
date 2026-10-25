@@ -7,6 +7,9 @@
  * `static`: every token reaches :root, used by a utility or only by a plain rule.
  */
 @theme static {
+  /* The chat's column: the transcript and the composer share it, so their edges line up. */
+  --container-chat: 720px;
+
   /* Surfaces, back to front. */
   --color-canvas: light-dark(#ffffff, oklch(17% 0 0));
   --color-sidebar: light-dark(oklch(98% 0 0), oklch(13% 0 0));
