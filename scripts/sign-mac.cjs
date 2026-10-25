@@ -47,9 +47,10 @@ exports.default = async function signMac(context) {
     identityValidation: false,
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
-    // As the ad-hoc build was: no hardened runtime, the same entitlements, and no Apple timestamp,
-    // which Apple's server gives only to its own certificates.
-    optionsForFile: () => ({ hardenedRuntime: false, entitlements: ENTITLEMENTS, timestamp: "none" }),
+    // The hardened runtime keeps other processes of the user's from injecting code (DYLD_*) or
+    // attaching; the entitlements give back what Electron and the browser need. No Apple
+    // timestamp, which Apple's server gives only to its own certificates.
+    optionsForFile: () => ({ hardenedRuntime: true, entitlements: ENTITLEMENTS, timestamp: "none" }),
   });
   execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], { stdio: "inherit" });
   const requirement = execFileSync("/usr/bin/codesign", ["-d", "-r-", app], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

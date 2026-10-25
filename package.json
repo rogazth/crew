@@ -151,7 +151,9 @@
         "NSLocationUsageDescription": "Pages in Crew's browser can know your location once you allow them.",
         "NSLocationWhenInUseUsageDescription": "Pages in Crew's browser can know your location once you allow them."
       },
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "identity": "-"
     },
