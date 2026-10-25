@@ -38,9 +38,9 @@ export const COMMANDS = {
   "go-to-file": { label: "Go to File", keys: "Mod+P" },
   "open-actions": { label: "Show All Actions", keys: "Mod+Shift+P" },
   "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
-  "switch-workspace": { label: "Switch Workspace or Worktree", keys: "Mod+Shift+O" },
+  "switch-workspace": { label: "Switch Workspace", keys: "Mod+Shift+O" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
-  // Each level up the ladder takes a harder chord: tabs ⌘⇧, worktrees ⌃⌘, workspaces ⌘⌥.
+  // Each level up the ladder takes a harder chord: tabs ⌘⇧, workspaces ⌘⌥.
   "go-home": { label: "Go Home", keys: "Mod+Shift+H" },
   "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, alt: true } },
   "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, alt: true } },
@@ -53,20 +53,6 @@ export const COMMANDS = {
   "workspace-7": { label: "Go to Workspace 7", keys: "Mod+7" },
   "workspace-8": { label: "Go to Workspace 8", keys: "Mod+8" },
   "workspace-9": { label: "Go to Workspace 9", keys: "Mod+9" },
-
-  // Worktrees of the workspace on screen, cycled and picked with one chord.
-  // ⌃⌘ spelled out, not Mod+Ctrl: off macOS that collapses to Ctrl alone, which is Back and Forward.
-  "next-worktree": { label: "Next Worktree", keys: { key: "]", ctrl: true, meta: true } },
-  "prev-worktree": { label: "Previous Worktree", keys: { key: "[", ctrl: true, meta: true } },
-  "worktree-1": { label: "Go to Worktree 1", keys: { key: "1", ctrl: true, meta: true } },
-  "worktree-2": { label: "Go to Worktree 2", keys: { key: "2", ctrl: true, meta: true } },
-  "worktree-3": { label: "Go to Worktree 3", keys: { key: "3", ctrl: true, meta: true } },
-  "worktree-4": { label: "Go to Worktree 4", keys: { key: "4", ctrl: true, meta: true } },
-  "worktree-5": { label: "Go to Worktree 5", keys: { key: "5", ctrl: true, meta: true } },
-  "worktree-6": { label: "Go to Worktree 6", keys: { key: "6", ctrl: true, meta: true } },
-  "worktree-7": { label: "Go to Worktree 7", keys: { key: "7", ctrl: true, meta: true } },
-  "worktree-8": { label: "Go to Worktree 8", keys: { key: "8", ctrl: true, meta: true } },
-  "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", ctrl: true, meta: true } },
 
   // Making things
   "new-bot": { label: "New Bot", keys: "Mod+Shift+A" },

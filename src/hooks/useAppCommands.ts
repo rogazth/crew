@@ -17,7 +17,6 @@ type Deps = {
   toggleSidebar: () => void;
   toggleExplorer: () => void;
   searchFiles: () => void;
-  worktrees: { step: (delta: number) => void; selectAt: (index: number) => void };
   newWorktree: () => void;
   toggleShortcuts: () => void;
   /** History is a tab, beside the pages it lists. */
@@ -52,17 +51,6 @@ export function useAppCommands(deps: Deps) {
     "open-actions": () => deps.togglePalette("actions"),
     "open-workspace": deps.openWorkspace,
     "switch-workspace": () => deps.togglePalette("context"),
-    "next-worktree": away(() => deps.worktrees.step(1)),
-    "prev-worktree": away(() => deps.worktrees.step(-1)),
-    "worktree-1": away(() => deps.worktrees.selectAt(0)),
-    "worktree-2": away(() => deps.worktrees.selectAt(1)),
-    "worktree-3": away(() => deps.worktrees.selectAt(2)),
-    "worktree-4": away(() => deps.worktrees.selectAt(3)),
-    "worktree-5": away(() => deps.worktrees.selectAt(4)),
-    "worktree-6": away(() => deps.worktrees.selectAt(5)),
-    "worktree-7": away(() => deps.worktrees.selectAt(6)),
-    "worktree-8": away(() => deps.worktrees.selectAt(7)),
-    "worktree-9": away(() => deps.worktrees.selectAt(8)),
     "new-worktree": deps.newWorktree,
     shortcuts: deps.toggleShortcuts,
     "go-home": away(() => workspaces.activateHome()),

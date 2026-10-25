@@ -299,7 +299,6 @@ export function App() {
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
-    worktrees: work,
     newWorktree: () => !isHome && setDialog("new-worktree"),
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
     openWorkspace: envs.openWorkspace,
@@ -621,18 +620,11 @@ export function App() {
           workspaces={workspaces.workspaces}
           activeWorkspaceId={active.id}
           worktrees={worktrees.list}
-          activeWorktree={current?.path ?? active.path}
           onOpenFile={nav.openFile}
           onOpenSession={nav.openSession}
           onSelectWorkspace={(id) => {
             closePage();
             workspaces.activate(id);
-          }}
-          onSelectWorktree={(id, path) => {
-            closePage();
-            if (id === active.id) return work.selectWorktree(path);
-            // Its tab is picked before the workspace shows, so the strip never flashes another.
-            void work.selectWorktreeIn(id, path).catch(() => {}).finally(() => workspaces.activate(id));
           }}
           onClose={() => setPalette(null)}
         />

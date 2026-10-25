@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import * as api from "../lib/api";
 import { client } from "../lib/client";
 import type { SessionCreated } from "../lib/protocol";
 import { tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
-import { lastUsed, sessionTabId } from "../lib/tabs";
+import { sessionTabId } from "../lib/tabs";
 import type { Session, Workspace } from "../lib/types";
 import { placePath, sessionPath, unlistedWorktrees } from "../lib/worktrees";
 import { useTabs } from "./useTabs";
@@ -95,45 +94,6 @@ export function useWorkContext(
     [pathOf, sessions, tabs, worktrees],
   );
 
-  /**
-   * The same for a worktree of another workspace, before it shows. Its strip
-   * and sessions may not be in this window yet, so they are read first; a
-   * worktree with no tab there leaves the strip as it is.
-   */
-  const selectWorktreeIn = useCallback(
-    async (workspaceId: string, path: string) => {
-      worktrees.select(path, workspaceId);
-      const target = everywhere.workspaces.find((ws) => ws.id === workspaceId);
-      if (!target) return;
-      const [own, strips] = await Promise.all([api.listSessions(workspaceId), tabs.strips([workspaceId])]);
-      const tab = lastUsed(strips[workspaceId]!, (tab) => {
-        if (tab.kind !== "session") return false;
-        const session = own.find((s) => s.id === tab.sessionId);
-        return session !== undefined && placePath(session.worktree, target, null) === path;
-      });
-      if (tab) tabs.selectIn(workspaceId, tab.id);
-    },
-    [everywhere.workspaces, tabs, worktrees],
-  );
-
-  const step = useCallback(
-    (delta: number) => {
-      const list = worktrees.list;
-      const at = list.findIndex((tree) => tree.path === current?.path);
-      const next = list[(((at + delta) % list.length) + list.length) % list.length];
-      if (list.length > 1 && next) selectWorktree(next.path);
-    },
-    [current?.path, selectWorktree, worktrees.list],
-  );
-
-  const selectAt = useCallback(
-    (index: number) => {
-      const target = worktrees.list[index];
-      if (target) selectWorktree(target.path);
-    },
-    [selectWorktree, worktrees.list],
-  );
-
   const latest = useRef({ tabs, everywhere });
   useEffect(() => {
     latest.current = { tabs, everywhere };
@@ -166,9 +126,6 @@ export function useWorkContext(
     route,
     routeTo,
     selectWorktree,
-    selectWorktreeIn,
-    step,
-    selectAt,
     pathOf,
     placeOf,
     tabPlaceOf,

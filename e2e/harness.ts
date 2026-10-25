@@ -42,7 +42,7 @@ export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 /** The app's command modifier, as Playwright spells it: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD: Modifier = process.platform === "darwin" ? "Meta" : "Control";
 
-/** Worktree chords (⌃⌘N, ⌃⌘1…9, ⌃⌘[ and ]) hold both keys on every platform. */
+/** The worktree chord (⌃⌘N) holds both keys on every platform. */
 export const WORKTREE_MOD = "Control+Meta";
 
 export type Repo = { name: string; files?: Record<string, string> };

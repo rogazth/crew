@@ -7,9 +7,9 @@ import { COMMAND_IDS, COMMANDS, defaultKeysFor, isCommandId, type CommandId, typ
  * and the tests share it.
  */
 
-/** The numbered runs (⌘1–9, ⌃⌘1–9) follow one pattern and cannot be rebound one by one. */
+/** The numbered run (⌘1–9) follows one pattern and cannot be rebound one by one. */
 export function isEditable(id: string): id is CommandId {
-  return isCommandId(id) && !/^(workspace|worktree)-[1-9]$/.test(id);
+  return isCommandId(id) && !/^workspace-[1-9]$/.test(id);
 }
 
 const label = (id: string) => (isCommandId(id) ? COMMANDS[id].label : id);

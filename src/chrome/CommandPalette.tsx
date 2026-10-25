@@ -6,7 +6,6 @@ import { Footer, GroupHeader } from "./kit";
 import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
-import * as api from "../lib/api";
 import { commandKeys, listedCommands, runCommand, type CommandId } from "../lib/commands";
 import { fuzzyMatch } from "../lib/fuzzy";
 import type { ProjectFile, Session, Workspace, Worktree } from "../lib/types";
@@ -38,19 +37,17 @@ type Props = {
   workspaces: Workspace[];
   activeWorkspaceId: string;
   worktrees: Worktree[];
-  activeWorktree: string;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (session: Session) => void;
   onSelectWorkspace: (id: string) => void;
-  onSelectWorktree: (workspaceId: string, path: string) => void;
   onClose: () => void;
 };
 
 const PLACEHOLDERS: Record<PaletteMode, string> = {
-  all: "Search bots, worktrees, commands…",
+  all: "Search bots, workspaces, commands…",
   files: "Open a file…",
   actions: "Run a command…",
-  context: "Switch to repo › worktree…",
+  context: "Switch workspace…",
 };
 
 /** One palette with four doors. A leading `>` turns any of them into commands. */
@@ -60,28 +57,11 @@ export function CommandPalette(props: Props) {
   const [mode, setMode] = useState<PaletteMode>(props.mode);
   const [raw, setRaw] = useState("");
   const [cursor, setCursor] = useState(0);
-  const [others, setOthers] = useState<Record<string, Worktree[]>>({});
   const list = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
 
   // After commit, not at mount: a terminal that held the keyboard lets go of it by then.
   useEffect(() => search.current?.focus(), []);
-
-  // The other workspaces' worktrees are read when the palette opens; the one on screen is already live.
-  useEffect(() => {
-    if (mode !== "all" && mode !== "context") return;
-    let cancelled = false;
-    for (const workspace of workspaces) {
-      if (workspace.id === activeWorkspaceId) continue;
-      void api
-        .listWorktrees(workspace.path)
-        .then((trees) => !cancelled && setOthers((prev) => ({ ...prev, [workspace.id]: trees })))
-        .catch(() => {});
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [activeWorkspaceId, mode, workspaces]);
 
   const forcedActions = raw.startsWith(">");
   const query = (forcedActions ? raw.slice(1) : raw).trim();
@@ -113,24 +93,6 @@ export function CommandPalette(props: Props) {
           } satisfies Item;
         })
       : [];
-
-    const worktrees: Item[] = workspaces.flatMap((workspace) => {
-      const trees = workspace.id === activeWorkspaceId ? props.worktrees : (others[workspace.id] ?? []);
-      return trees.map((tree, index) => {
-        const current = workspace.id === activeWorkspaceId && tree.path === props.activeWorktree;
-        const keys = workspace.id === activeWorkspaceId && index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : "";
-        return {
-          key: `worktree:${workspace.id}:${tree.path}`,
-          group: "Worktrees",
-          label: worktreeLabel(tree),
-          detail: workspace.name,
-          icon: <GitBranchIcon className="size-4" />,
-          trail: current ? <Current /> : keys ? <Kbd keys={keys} /> : undefined,
-          search: `${workspace.name} ${worktreeLabel(tree)}`,
-          run: close(() => props.onSelectWorktree(workspace.id, tree.path)),
-        } satisfies Item;
-      });
-    });
 
     const spaces: Item[] = workspaces.map((workspace, index) => ({
       key: `workspace:${workspace.id}`,
@@ -173,10 +135,10 @@ export function CommandPalette(props: Props) {
 
     if (shown === "files") return rank(files, query).slice(0, FILE_LIMIT);
     if (shown === "actions") return rank(commands, query);
-    if (shown === "context") return rank([...worktrees, ...spaces], query);
+    if (shown === "context") return rank(spaces, query);
     // Files have their own door, ⌘P; here they would bury what ⌘K is for.
-    return rank([...sessions, ...worktrees, ...spaces, ...commands], query);
-  }, [activeWorkspaceId, others, props, query, shown, workspaces]);
+    return rank([...sessions, ...spaces, ...commands], query);
+  }, [activeWorkspaceId, props, query, shown, workspaces]);
 
   useEffect(() => {
     list.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
@@ -299,7 +261,7 @@ export function CommandPalette(props: Props) {
 
 const DOORS: { mode: PaletteMode; label: string; command: CommandId }[] = [
   { mode: "all", label: "Everything", command: "open-palette" },
-  { mode: "context", label: "Worktrees", command: "switch-workspace" },
+  { mode: "context", label: "Workspaces", command: "switch-workspace" },
   { mode: "files", label: "Files", command: "go-to-file" },
   { mode: "actions", label: "Commands", command: "open-actions" },
 ];
@@ -320,8 +282,6 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "new-worktree": GitBranchIcon,
   "new-browser-tab": GlobeIcon,
   "new-incognito-tab": HatGlassesIcon,
-  "next-worktree": GitBranchIcon,
-  "prev-worktree": GitBranchIcon,
   "open-settings": SettingsIcon,
   "open-browser-settings": SettingsIcon,
   "save-file": SaveIcon,

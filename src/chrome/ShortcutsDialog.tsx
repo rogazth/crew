@@ -13,21 +13,19 @@ const range = (first: CommandId) => `${commandKeys(first)}‥9`;
 function sections(): { group: string; rows: Row[] }[] {
   return [
     {
-      group: "Context",
+      group: "Workspaces",
       rows: [
         [commandKeys("go-home"), "Go home"],
         [range("workspace-1"), "Go to workspace"],
         [pair("prev-workspace", "next-workspace"), "Previous / next workspace"],
-        [range("worktree-1"), "Go to worktree"],
-        [pair("prev-worktree", "next-worktree"), "Previous / next worktree"],
-        [commandKeys("switch-workspace"), "Switch to any repo › worktree"],
+        [commandKeys("switch-workspace"), "Switch workspace"],
       ],
     },
     {
       group: "Create",
       rows: [
-        [commandKeys("new-session"), "New session in this worktree"],
-        [commandKeys("new-bot"), "New bot in this workspace"],
+        [commandKeys("new-session"), "New session"],
+        [commandKeys("new-bot"), "New bot"],
         [commandKeys("new-worktree"), "New worktree"],
         [commandKeys("open-workspace"), "Open workspace"],
       ],
@@ -37,7 +35,7 @@ function sections(): { group: string; rows: Row[] }[] {
       rows: [
         [commandKeys("open-launcher"), "New tab"],
         [pair("new-browser-tab", "new-incognito-tab"), "New browser / incognito tab"],
-        [commandKeys("go-to-file"), "Open a file in this worktree"],
+        [commandKeys("go-to-file"), "Open a file"],
         [pair("close", "reopen-tab"), "Close / reopen tab"],
         [pair("prev-tab", "next-tab"), "Previous / next tab"],
       ],

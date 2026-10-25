@@ -83,25 +83,6 @@ export function useWorktrees(workspace: Workspace | null) {
     [workspaceId],
   );
 
-  /** The keyboard walks the sidebar order and wraps, like tab cycling. */
-  const step = useCallback(
-    (delta: number) => {
-      if (list.length < 2 || !active) return;
-      const index = list.findIndex((tree) => tree.path === active.path);
-      const next = list[(((index + delta) % list.length) + list.length) % list.length];
-      if (next) select(next.path);
-    },
-    [active, list, select],
-  );
-
-  const selectAt = useCallback(
-    (index: number) => {
-      const target = list[index];
-      if (target) select(target.path);
-    },
-    [list, select],
-  );
-
   const create = useCallback(
     async (branch: string) => {
       const tree = await api.addWorktree(path, branch);
@@ -144,8 +125,6 @@ export function useWorktrees(workspace: Workspace | null) {
     refresh,
     reread,
     select,
-    step,
-    selectAt,
     create,
     remove,
   };

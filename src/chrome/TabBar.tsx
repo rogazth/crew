@@ -247,7 +247,7 @@ export function TabBar({
           <button
             type="button"
             data-tauri-drag-region="false"
-            title={`Switch ${commandKeys("switch-workspace")}`}
+            title={`Switch workspace ${commandKeys("switch-workspace")}`}
             onClick={context.onSwitch}
             className="mx-1 flex h-7 shrink-0 translate-y-px items-center gap-1.5 rounded-md px-2 text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
           >

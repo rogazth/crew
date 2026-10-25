@@ -16,7 +16,7 @@ export type BindingRow = {
 };
 export type BindingGroup = { title: string; rows: BindingRow[] };
 
-type Entry = CommandId | { run: "workspace" | "worktree"; label: string };
+type Entry = CommandId | { run: "workspace"; label: string };
 
 const GROUPS: { title: string; entries: Entry[] }[] = [
   {
@@ -33,9 +33,6 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
       "next-workspace",
       "prev-workspace",
       "new-worktree",
-      { run: "worktree", label: "Go to Worktree 1–9" },
-      "next-worktree",
-      "prev-worktree",
     ],
   },
   {

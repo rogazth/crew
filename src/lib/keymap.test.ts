@@ -264,16 +264,6 @@ describe("resolveForward", () => {
     ];
     expect(resolveForward(press("k", { meta: true }), commands, true)).toEqual({ id: "first", run: true });
   });
-
-  it("keeps Back apart from the worktree pair on both platforms", () => {
-    const commands = live("prev-worktree", "browser-back");
-    expect(resolveForward(press("[", { ctrl: true }), commands, false)).toEqual({ id: "browser-back", run: true });
-    expect(resolveForward(press("[", { meta: true }), commands, true)).toEqual({ id: "browser-back", run: true });
-    expect(resolveForward(press("[", { meta: true, ctrl: true }), commands, true)).toEqual({
-      id: "prev-worktree",
-      run: true,
-    });
-  });
 });
 
 /**
@@ -290,7 +280,6 @@ const LATAM: KeyboardLayout = {
   Minus: "'",
   Equal: "¿",
   KeyI: "i",
-  Digit1: "1",
 };
 
 describe("a Latin American Mac", () => {
@@ -299,9 +288,6 @@ describe("a Latin American Mac", () => {
     "prev-tab",
     "next-workspace",
     "prev-workspace",
-    "next-worktree",
-    "prev-worktree",
-    "worktree-1",
     "browser-back",
     "browser-forward",
     "browser-devtools",
@@ -336,12 +322,9 @@ describe("a Latin American Mac", () => {
     expect(run("Dead", "BracketRight", { meta: true, alt: true })).toBeNull();
   });
 
-  it("cycles tabs and worktrees on the same keys", () => {
+  it("cycles tabs on the same keys", () => {
     expect(run("]", "Backslash", { meta: true, shift: true })).toBe("next-tab");
     expect(run("[", "Quote", { meta: true, shift: true })).toBe("prev-tab");
-    expect(run("}", "Backslash", { meta: true, ctrl: true })).toBe("next-worktree");
-    expect(run("{", "Quote", { meta: true, ctrl: true })).toBe("prev-worktree");
-    expect(run("1", "Digit1", { meta: true, ctrl: true })).toBe("worktree-1");
   });
 
   it("still reads ⌥ letters by the key under them", () => {
