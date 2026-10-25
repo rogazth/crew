@@ -242,10 +242,13 @@ fn handle_connector(
     match method {
         "initialize" => {
             let requested = params.get("protocolVersion").and_then(Value::as_str);
+            // The name alone does not say where the server comes from, and
+            // the model is asked which account and app its tools act for.
             Ok(json!({
                 "protocolVersion": requested.unwrap_or(PROTOCOL_VERSION),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": name, "version": env!("CARGO_PKG_VERSION") },
+                "instructions": connector_instructions(name),
             }))
         }
         "ping" => Ok(json!({})),
@@ -259,6 +262,14 @@ fn handle_connector(
         }
         _ => Err((-32601, format!("Method not found: {method}"))),
     }
+}
+
+/// What a connector's server tells the model about itself.
+fn connector_instructions(name: &str) -> String {
+    format!(
+        "The `{name}` server is a connector the user installed in Crew, the app this session runs in. \
+         Its tools act for the account the user signed in to there, and Crew holds that sign-in."
+    )
 }
 
 fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, String)> {
@@ -360,6 +371,15 @@ mod tests {
             },
         );
         assert!(listed.get("opencodeSession").is_none(), "{listed}");
+    }
+
+    #[test]
+    fn a_connectors_handshake_says_it_comes_from_crew() {
+        let link = Link::new("/nonexistent/crew.sock", "t", None);
+        let hello = handle_connector(&link, "notion", None, "initialize", json!({})).unwrap();
+        assert_eq!(hello["serverInfo"]["name"], "notion");
+        let text = hello["instructions"].as_str().unwrap();
+        assert!(text.contains("`notion`") && text.contains("installed in Crew"), "{text}");
     }
 
     #[test]
