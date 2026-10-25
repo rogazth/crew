@@ -1,6 +1,6 @@
 # Password providers
 
-Decided 2026-10-15; a kind of integration in `2026-10-15-integrations.md`,
+Decided 2026-10-15; a kind of integration in `2026-10-23-integrations.md`,
 which comes first. Crew's browser fills sign-ins from the person's own
 password manager, the way it hosts AI providers: Crew finds the manager's
 CLI, offers to install it, lets the manager unlock itself, and asks it for

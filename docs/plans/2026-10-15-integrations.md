@@ -1,5 +1,8 @@
 # Integrations
 
+Superseded by `2026-10-23-integrations.md` on 2026-10-23, before any of it
+was built. Kept for the record.
+
 Decided 2026-10-15. Crew gets one catalog of integrations, like the
 connectors of Claude and ChatGPT: browse, "Connect", sign in on the service's
 own page, and every provider and session can use it. Crew never sees a
