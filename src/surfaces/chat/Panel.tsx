@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
@@ -68,7 +68,7 @@ export function EntryIcon({ entry, className }: { entry: PanelEntry; className: 
  * the entries, Enter opens one, x stops it and Esc closes the sheet; the
  * composer leaves Esc to it, so it does not also stop the turn.
  */
-export function WorkSegment({
+export const WorkSegment = memo(function WorkSegment({
   work,
   open,
   onOpenChange,
@@ -106,6 +106,21 @@ export function WorkSegment({
   const [picked, setPicked] = useState<string | null>(null);
   const at = Math.max(0, rows.findIndex((row) => row.id === picked));
   const now = useNow(1000, shown && running);
+  const { onOpen, onOpenConversation } = work;
+  const openEntry = useCallback(
+    (entry: PanelEntry) => {
+      onOpenChange(false);
+      onOpen(entry);
+    },
+    [onOpen, onOpenChange],
+  );
+  const openConversation = useCallback(
+    (thread: ThreadRef) => {
+      onOpenChange(false);
+      onOpenConversation(thread);
+    },
+    [onOpenConversation, onOpenChange],
+  );
 
   // The sheet takes the keys, so the arrows do not move the caret of a field behind it.
   useEffect(() => {
@@ -161,7 +176,13 @@ export function WorkSegment({
   }, [shown, rows, at, work, onOpenChange, onEscape]);
 
   useEffect(() => {
-    if (shown) sheet.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    // Only the sheet scrolls: scrollIntoView also scrolls every ancestor, and while the panel is mid-transition the row sits
+    // below where it will rest, so it shoved the transcript and the layout around (the CLS on quick clicks).
+    const box = sheet.current;
+    const row = box?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!shown || !box || !row) return;
+    if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop;
+    else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight;
   }, [shown, at]);
 
   if (total === 0) return null;
@@ -226,15 +247,13 @@ export function WorkSegment({
               <EntryRow
                 key={row.id}
                 entry={row.entry}
-                now={now}
+                // Only a running row reads the clock: the ended ones skip its ticks.
+                now={row.entry.state === "running" ? now : 0}
                 selected={index === at}
                 error={work.failed[row.id]}
-                onSelect={() => setPicked(row.id)}
-                onOpen={() => {
-                  onOpenChange(false);
-                  work.onOpen(row.entry!);
-                }}
-                onStop={() => work.onStop(row.entry!)}
+                onSelect={setPicked}
+                onOpen={openEntry}
+                onStop={work.onStop}
               />
             ) : (
               <Fragment key={row.id}>
@@ -242,14 +261,12 @@ export function WorkSegment({
                   <div className={`px-2 pb-1 text-[11px] text-text-muted ${entries.length > 0 ? "pt-2.5" : "pt-1"}`}>Conversations</div>
                 )}
                 <ConversationRow
+                  id={row.id}
                   conversation={row.conversation!}
                   sessions={work.sessions}
                   selected={index === at}
-                  onSelect={() => setPicked(row.id)}
-                  onOpen={() => {
-                    onOpenChange(false);
-                    work.onOpenConversation(row.conversation!.thread);
-                  }}
+                  onSelect={setPicked}
+                  onOpen={openConversation}
                 />
               </Fragment>
             ),
@@ -260,7 +277,7 @@ export function WorkSegment({
       )}
     </>
   );
-}
+});
 
 const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
@@ -268,26 +285,28 @@ const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.k
 type Row = { id: string; entry?: PanelEntry; conversation?: ConversationEntry };
 
 /** One conversation: the bot's face, its name, the last letter's first line and when it came. */
-function ConversationRow({
+const ConversationRow = memo(function ConversationRow({
+  id,
   conversation,
   sessions,
   selected,
   onSelect,
   onOpen,
 }: {
+  id: string;
   conversation: ConversationEntry;
   sessions: readonly Session[];
   selected: boolean;
-  onSelect: () => void;
-  onOpen: () => void;
+  onSelect: (id: string) => void;
+  onOpen: (thread: ThreadRef) => void;
 }) {
   return (
     <div
       role="option"
       aria-selected={selected}
       data-conversation={conversation.key}
-      onMouseEnter={onSelect}
-      onClick={onOpen}
+      onMouseEnter={() => onSelect(id)}
+      onClick={() => onOpen(conversation.thread)}
       className={`flex w-full cursor-default items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? "bg-hover" : ""}`}
     >
       <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-card">
@@ -300,10 +319,10 @@ function ConversationRow({
       <span className="w-12 shrink-0 text-right text-[11px] text-placeholder tabular-nums">{clock(conversation.at)}</span>
     </div>
   );
-}
+});
 
 /** One entry: its icon with its state, what it is, how long, how many tokens, and what it is on now. */
-function EntryRow({
+const EntryRow = memo(function EntryRow({
   entry,
   now,
   selected,
@@ -316,9 +335,9 @@ function EntryRow({
   now: number;
   selected: boolean;
   error: string | undefined;
-  onSelect: () => void;
-  onOpen: () => void;
-  onStop: () => void;
+  onSelect: (id: string) => void;
+  onOpen: (entry: PanelEntry) => void;
+  onStop: (entry: PanelEntry) => void;
 }) {
   const tokens = tokensLabel(entry);
   return (
@@ -327,8 +346,8 @@ function EntryRow({
       aria-selected={selected}
       data-entry={entry.id}
       data-attention={entry.attention}
-      onMouseEnter={onSelect}
-      onClick={onOpen}
+      onMouseEnter={() => onSelect(entry.id)}
+      onClick={() => onOpen(entry)}
       className={`group flex w-full cursor-default items-center gap-3 rounded-xl px-2.5 py-2 text-left ${selected ? "bg-hover" : ""}`}
     >
       <span className="relative grid size-8 shrink-0 place-items-center rounded-lg bg-card">
@@ -359,10 +378,10 @@ function EntryRow({
           ) : null}
         </span>
       </span>
-      <QuietStop entry={entry} onStop={onStop} />
+      <QuietStop entry={entry} onStop={() => onStop(entry)} />
     </div>
   );
-}
+});
 
 /**
  * Stop without a background of its own: the row's hover is the only fill, and
