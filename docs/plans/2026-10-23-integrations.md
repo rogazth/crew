@@ -155,11 +155,13 @@ does not: a machine spawns from its copy.
 
 - `integrations:vault` names the machine: `local` or a remote id. The
   default is `local`.
-- **Storage.** On macOS, a keychain item per build, named by `channel.ts`
-  and written by `crewd` through `security-framework` (new: today
-  `crew-core` only reads). On Linux, `<data>/vault.json`, mode 0600. It is
-  not encrypted at rest, because the key would sit on the same disk, and the
-  warning says so.
+- **Storage.** On macOS, a login keychain item per build (service `Crew
+  Connectors`, the data dir as its account), written by `crewd` through
+  `security-framework`. A debug build, `crewd serve` and the e2e sandbox keep
+  `<data>/vault.json` instead: an ad-hoc signed build is a new app to the
+  keychain on every rebuild, and an SSH session's keychain may be locked. On
+  Linux, `<data>/vault.json`, mode 0600. It is not encrypted at rest, because
+  the key would sit on the same disk, and the warning says so.
 - **Only the vault speaks OAuth.** It handles discovery (a 401's
   `WWW-Authenticate`, then protected-resource metadata, then
   authorization-server metadata), client registration (CIMD when the server
@@ -470,7 +472,8 @@ rotate, so its lease is a copy.
 | Registry cache in `crewd`, search and featured over RPC | built |
 | Provider servers: inventory, page, sign-in, Off in Crew, chip switch | built, covered by tests |
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
-| Vault on this Mac: keychain storage; a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
+| Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
+| Vault on this Mac: a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |
 | Password managers as a kind | todo |

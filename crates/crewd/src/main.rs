@@ -213,6 +213,17 @@ fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Whether Crew's grants go to the login keychain (`connectors::vault`): a
+/// release build on this Mac, not `crewd serve`, not a debug build, which is
+/// ad-hoc signed and would be a new app to the keychain on every rebuild, and
+/// not the e2e sandbox, whose HOME has no login keychain.
+fn keychain_vault(served: bool) -> bool {
+    cfg!(target_os = "macos")
+        && !cfg!(debug_assertions)
+        && !served
+        && std::env::var_os("CREW_SANDBOX").is_none()
+}
+
 fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -> Result<(), Failure> {
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
@@ -344,7 +355,10 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
             processes: processes.clone(),
             agents: agents.clone(),
             bridge: bridge.clone(),
-            vault: Some(dir.join("vault.json")),
+            vault: Some(crew_core::connectors::vault::VaultAt {
+                file: dir.join("vault.json"),
+                keychain: keychain_vault(listen.wait_for_addr).then(|| dir.to_path_buf()),
+            }),
         },
         listen,
     )

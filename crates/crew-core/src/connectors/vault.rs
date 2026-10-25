@@ -5,16 +5,24 @@
 //! again. Only the vault refreshes: a rotating refresh token can have one
 //! holder, and a copy that refreshes invalidates the others.
 //!
-//! Behind a trait so the keychain can take the file's place on macOS. The
-//! file is `<data>/vault.json`, mode 0600, written whole through a temporary
-//! file. It is not encrypted at rest: the key would sit on the same disk.
+//! Behind a trait, with two places to keep them (`open` picks one):
+//!
+//! - The login keychain on macOS: one item per build, service `Crew
+//!   Connectors` and the data dir as its account. The item trusts the crewd
+//!   that made it, and a signed update is the same app, so nothing prompts.
+//!   A `vault.json` left from before is moved into it, then deleted.
+//! - `<data>/vault.json`, mode 0600, written whole through a temporary file,
+//!   everywhere else: Linux, a debug build (ad-hoc signed, so every rebuild
+//!   would be a new app to the keychain and prompt), `crewd serve` (an SSH
+//!   session's keychain may be locked) and the e2e sandbox. It is not
+//!   encrypted at rest: the key would sit on the same disk.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -68,37 +76,93 @@ pub trait VaultStore: Send + Sync {
     fn delete(&self, account_id: &str) -> Result<(), String>;
 }
 
+/// Where the grants are kept, as `crewd` asks for it.
+pub struct VaultAt {
+    /// `<data>/vault.json`: the vault itself, or the one to move into the keychain.
+    pub file: PathBuf,
+    /// The data dir, which names this build's keychain item; `None` keeps the file.
+    pub keychain: Option<PathBuf>,
+}
+
+/// The vault `at` says, falling back to the file where there is no keychain.
+pub fn open(at: VaultAt) -> Arc<dyn VaultStore> {
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = at.keychain {
+        return Arc::new(Cached::over(Keychain { account: dir.to_string_lossy().into_owned(), legacy: at.file }));
+    }
+    Arc::new(FileVault::new(at.file))
+}
+
+/// The whole vault: every account's grant.
 #[derive(Serialize, Deserialize, Default)]
-struct FileBody {
+pub struct FileBody {
     version: u32,
     grants: HashMap<String, Grant>,
 }
 
-/// The 0600 file.
-pub struct FileVault {
-    path: PathBuf,
-    /// Read once, then kept: the daemon is the file's only writer.
+/// Where a cached vault reads its body from and writes it back to, whole.
+pub trait Backing: Send + Sync {
+    fn read(&self) -> Result<FileBody, String>;
+    fn write(&self, body: &FileBody) -> Result<(), String>;
+}
+
+/// A vault read once, then kept: the daemon is its only writer.
+pub struct Cached<B> {
+    backing: B,
     body: Mutex<Option<FileBody>>,
 }
 
-impl FileVault {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path, body: Mutex::new(None) }
+impl<B: Backing> Cached<B> {
+    fn over(backing: B) -> Self {
+        Self { backing, body: Mutex::new(None) }
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut FileBody) -> (T, bool)) -> Result<T, String> {
         let mut guard = self.body.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
-            *guard = Some(self.read()?);
+            *guard = Some(self.backing.read()?);
         }
         let body = guard.as_mut().expect("read above");
         let (out, changed) = f(body);
         if changed {
-            self.write(body)?;
+            self.backing.write(body)?;
         }
         Ok(out)
     }
+}
 
+impl<B: Backing> VaultStore for Cached<B> {
+    fn get(&self, account_id: &str) -> Result<Option<Grant>, String> {
+        self.with(|body| (body.grants.get(account_id).cloned(), false))
+    }
+
+    fn put(&self, account_id: &str, grant: &Grant) -> Result<(), String> {
+        self.with(|body| {
+            body.version = 1;
+            body.grants.insert(account_id.to_string(), grant.clone());
+            ((), true)
+        })
+    }
+
+    fn delete(&self, account_id: &str) -> Result<(), String> {
+        self.with(|body| ((), body.grants.remove(account_id).is_some()))
+    }
+}
+
+/// The 0600 file.
+pub type FileVault = Cached<File>;
+
+pub struct File {
+    path: PathBuf,
+}
+
+impl FileVault {
+    pub fn new(path: PathBuf) -> Self {
+        Cached::over(File { path })
+    }
+}
+
+impl Backing for File {
     fn read(&self) -> Result<FileBody, String> {
         match std::fs::read(&self.path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| format!("{} is not a vault Crew can read", self.path.display())),
@@ -123,21 +187,52 @@ impl FileVault {
     }
 }
 
-impl VaultStore for FileVault {
-    fn get(&self, account_id: &str) -> Result<Option<Grant>, String> {
-        self.with(|body| (body.grants.get(account_id).cloned(), false))
+/// The login keychain's item for this build.
+#[cfg(target_os = "macos")]
+pub struct Keychain {
+    account: String,
+    /// The file this build kept before, moved in on the first read.
+    legacy: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+const KEYCHAIN_SERVICE: &str = "Crew Connectors";
+
+#[cfg(target_os = "macos")]
+impl Keychain {
+    fn stored(&self) -> Result<FileBody, String> {
+        use security_framework::passwords::get_generic_password;
+        // errSecItemNotFound: nothing kept yet.
+        const NOT_FOUND: i32 = -25300;
+        match get_generic_password(KEYCHAIN_SERVICE, &self.account) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "The keychain's vault is not one Crew can read".to_string()),
+            Err(e) if e.code() == NOT_FOUND => Ok(FileBody { version: 1, grants: HashMap::new() }),
+            Err(e) => Err(format!("Couldn't read the vault from the keychain: {e}")),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Backing for Keychain {
+    fn read(&self) -> Result<FileBody, String> {
+        let mut body = self.stored()?;
+        if !self.legacy.exists() {
+            return Ok(body);
+        }
+        // What the keychain already holds is newer than the file.
+        let file = File { path: self.legacy.clone() }.read()?;
+        for (account, grant) in file.grants {
+            body.grants.entry(account).or_insert(grant);
+        }
+        self.write(&body)?;
+        std::fs::remove_file(&self.legacy).map_err(|e| format!("Couldn't remove {} after moving it into the keychain: {e}", self.legacy.display()))?;
+        Ok(body)
     }
 
-    fn put(&self, account_id: &str, grant: &Grant) -> Result<(), String> {
-        self.with(|body| {
-            body.version = 1;
-            body.grants.insert(account_id.to_string(), grant.clone());
-            ((), true)
-        })
-    }
-
-    fn delete(&self, account_id: &str) -> Result<(), String> {
-        self.with(|body| ((), body.grants.remove(account_id).is_some()))
+    fn write(&self, body: &FileBody) -> Result<(), String> {
+        let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
+        security_framework::passwords::set_generic_password(KEYCHAIN_SERVICE, &self.account, &bytes)
+            .map_err(|e| format!("Couldn't write the vault to the keychain: {e}"))
     }
 }
 
@@ -196,6 +291,29 @@ mod tests {
         assert_eq!(again.get("a1").unwrap(), Some(grant("rt-1")));
         again.delete("a1").unwrap();
         assert_eq!(FileVault::new(path).get("a1").unwrap(), None);
+    }
+
+    /// Run by hand, since it writes to the login keychain:
+    /// `cargo test -p crew-core keychain -- --ignored`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "writes to the login keychain"]
+    fn the_keychain_takes_the_old_file_and_keeps_its_grants() {
+        let dir = std::env::temp_dir().join(format!("cv-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("vault.json");
+        FileVault::new(file.clone()).put("old", &grant("rt-old")).unwrap();
+        let at = || VaultAt { file: file.clone(), keychain: Some(dir.clone()) };
+        let vault = open(at());
+        assert_eq!(vault.get("old").unwrap(), Some(grant("rt-old")), "the file's grant moved in");
+        assert!(!file.exists(), "and the file is gone");
+        vault.put("new", &grant("rt-new")).unwrap();
+        let again = open(at());
+        assert_eq!(again.get("new").unwrap(), Some(grant("rt-new")), "a restart reads the keychain");
+        again.delete("old").unwrap();
+        again.delete("new").unwrap();
+        assert_eq!(open(at()).get("new").unwrap(), None);
+        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, &dir.to_string_lossy()).unwrap();
     }
 
     #[test]

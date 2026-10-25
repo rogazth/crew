@@ -56,9 +56,9 @@ pub struct Config {
     pub bridge: Bridge,
     /// Built on the same store and PTY host. Nothing in it starts on its own.
     pub processes: ProcessHost,
-    /// Where Crew's grants are kept: `<data>/vault.json`. `None` keeps them in
-    /// memory, for a test.
-    pub vault: Option<std::path::PathBuf>,
+    /// Where Crew's grants are kept: the login keychain or `<data>/vault.json`.
+    /// `None` keeps them in memory, for a test.
+    pub vault: Option<connectors::vault::VaultAt>,
 }
 
 #[derive(Clone)]
@@ -628,7 +628,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     serve_on(config, Listen::local())
 }
 
-pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
+pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
     let token = listen.token.clone();
     let hub = Arc::new(Hub::new());
     // A box that changed, and a row whose derived fields did (a child's last
@@ -701,8 +701,8 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     toolbox.register(children.clone());
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
     toolbox.register(Arc::new(browser.clone()));
-    let vault: Arc<dyn connectors::vault::VaultStore> = match &config.vault {
-        Some(path) => Arc::new(connectors::vault::FileVault::new(path.clone())),
+    let vault: Arc<dyn connectors::vault::VaultStore> = match config.vault.take() {
+        Some(at) => connectors::vault::open(at),
         None => Arc::new(connectors::vault::MemoryVault::default()),
     };
     // Every window hears the whole list again after any change: it is short.
