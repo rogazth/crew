@@ -49,7 +49,7 @@ function sections(): { group: string; rows: Row[] }[] {
         ["↵", "Open"],
         ["F2", "Rename"],
         ["⇧F10", "Actions menu"],
-        ["⌘⌫", "Delete a session, remove a worktree"],
+        [IS_MAC ? "⌘⌫" : "Delete", "Delete a session, remove a worktree"],
         ["/", "Find"],
       ],
     },
