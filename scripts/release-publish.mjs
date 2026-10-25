@@ -3,9 +3,10 @@
 // `npm run release` instead of calling this. Re-running on a tag that already has
 // a release replaces its files, which is how a failed publish is retried.
 // Needs the daemons the workflow's other jobs build (in target/release and
-// target/linux) and a gh token (GH_TOKEN).
+// target/linux), a gh token (GH_TOKEN) and the update signing key
+// (UPDATE_SIGNING_KEY, a PKCS#8 PEM), which only the `release` environment holds.
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -43,6 +44,10 @@ async function sha256(file) {
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   return hash.digest("hex");
 }
+
+// The private half of the ed25519 key electron/update-signature.ts checks the manifest against.
+const signingKey = process.env.UPDATE_SIGNING_KEY;
+if (!signingKey) fail("UPDATE_SIGNING_KEY is not set; installed copies refuse an unsigned release.");
 
 const { version } = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
 const tag = `v${version}`;
@@ -99,14 +104,20 @@ const manifest = {
   notes,
 };
 const manifestPath = path.join(ROOT, "release", "latest.json");
-await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+await writeFile(manifestPath, manifestText);
+// What the updater reads: the exact bytes of latest.json and their signature.
+// latest.json stays for copies from before the updater checked signatures.
+const signedPath = path.join(ROOT, "release", "latest.signed.json");
+const signature = sign(null, Buffer.from(manifestText, "utf8"), createPrivateKey(signingKey)).toString("base64");
+await writeFile(signedPath, `${JSON.stringify({ manifest: manifestText, signature }, null, 2)}\n`);
 
 const exists = await run("gh", ["release", "view", tag, "--json", "tagName"], { capture: true }).then(
   () => true,
   () => false,
 );
 if (exists) {
-  await run("gh", ["release", "upload", tag, zip, manifestPath, "--clobber"]);
+  await run("gh", ["release", "upload", tag, zip, manifestPath, signedPath, "--clobber"]);
   await run("gh", ["release", "edit", tag, "--draft=false", "--latest", "--notes", body || `Crew ${version}`]);
 } else {
   await run("gh", [
@@ -115,6 +126,7 @@ if (exists) {
     tag,
     zip,
     manifestPath,
+    signedPath,
     "--verify-tag",
     "--title",
     `Crew ${version}`,

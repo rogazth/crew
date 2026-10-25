@@ -16,12 +16,14 @@ import {
   type UpdatePhase,
 } from "../src/lib/update";
 import { release } from "./build-info";
+import { openSigned } from "./update-signature";
 
 const REPO = "rogazth/crew";
 const RELEASES = `https://github.com/${REPO}/releases`;
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=12`;
 const RELEASES_TTL = 30 * 60 * 1000;
-const MANIFEST = `${RELEASES}/latest/download/latest.json`;
+// latest.json signed; copies from before signing still read latest.json itself.
+const MANIFEST = `${RELEASES}/latest/download/latest.signed.json`;
 const FIRST_CHECK = 15_000;
 const EVERY = 6 * 60 * 60 * 1000;
 const PROGRESS_EVERY = 100;
@@ -119,7 +121,7 @@ async function fetchManifest(): Promise<Manifest> {
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`${MANIFEST} answered ${response.status}`);
-  const parsed = parseManifest(await response.json());
+  const parsed = parseManifest(JSON.parse(openSigned(await response.json())));
   if (!parsed) throw new Error("latest.json is not a manifest Crew can use");
   return parsed;
 }
