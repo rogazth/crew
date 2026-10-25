@@ -1,5 +1,5 @@
 import { client } from "./client";
-import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
+import { focusEnv, envOf, LOCAL, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
 import { base64OfFile, CHUNK, extensionFor, fileSource, upload } from "./upload";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
@@ -7,9 +7,14 @@ import type {
   BackgroundList,
   BackgroundOutput,
   BotRules,
+  BindingSet,
   BotRulesSave,
   BrowserLeases,
   CommandCatalog,
+  Connector,
+  ConnectorAccount,
+  ConnectorAdd,
+  ConnectorConnect,
   CookieRead,
   CookieSource,
   DirListing,
@@ -36,15 +41,23 @@ import type {
   ProviderLoginCommand,
   ProviderLoginEvent,
   ProviderLoginFlow,
+  ProviderInventory,
+  ProviderServerRef,
+  ProviderSignIn,
   ProviderStatus,
+  RegistryMatched,
+  RegistryServer,
+  RegistryStatus,
   RemoteEnv,
   SearchFiles,
   SearchHit,
   SearchQuery,
+  SignIn,
   ThreadLetter,
   ThreadMessagesRequest,
   ThreadPage,
   ThreadPair,
+  ToolSet,
   TurnSendNow,
   TurnStarted,
   UsageSnapshot,
@@ -235,6 +248,10 @@ export const mcpLogin = (sessionId: string, name: string): Promise<McpSignIn> =>
 /** Has the session's provider connect one MCP server again. Answers the servers as they stand after. */
 export const mcpReconnect = (sessionId: string, name: string): Promise<McpStatus> =>
   client.request("mcp_reconnect", { sessionId, name });
+
+/** Claude only: switches one of a live session's servers on or off, now. Answers the servers as they stand after. */
+export const mcpToggle = (sessionId: string, name: string, enabled: boolean): Promise<McpStatus> =>
+  client.request("mcp_toggle", { sessionId, name, enabled });
 
 /**
  * Asks the provider to read a session's commands, skills and servers again,
@@ -449,6 +466,91 @@ export const browserPageGet = (pageId: string): Promise<PageSnapshot | null> =>
 
 export const browserPageDelete = (pageId: string): Promise<void> =>
   client.request("browser_page_delete", { pageId });
+
+/** The MCP Registry, from this Mac's copy. Empty text answers the featured servers, in their order. */
+export const registrySearch = (text: string, limit: number): Promise<RegistryServer[]> =>
+  client.request("registry_search", { text, limit });
+
+/** How far this Mac's copy of the MCP Registry is. */
+export const registryStatus = (): Promise<RegistryStatus> => client.request("registry_status", {});
+/** The registry servers some URLs are, from this Mac's copy of the registry. */
+export const registryMatch = (urls: string[]): Promise<RegistryMatched[]> => client.request("registry_match", { urls });
+
+/* Crew's connectors, kept by the vault on this Mac. */
+
+export const connectorsList = (): Promise<Connector[]> => client.request("connectors_list", {});
+
+/** Installs a registry server by its name, or a server by URL. */
+export const connectorAdd = (add: ConnectorAdd): Promise<Connector> => client.request("connector_add", add);
+
+/** Signs every account out and removes the connector. */
+export const connectorRemove = (connectorId: string): Promise<null> => client.request("connector_remove", { connectorId });
+
+/** Starts a sign-in: a new account without `accountId`, that one again with it. */
+export const connectorConnect = (connect: ConnectorConnect): Promise<SignIn> =>
+  client.request("connector_connect", connect);
+
+/** The redirect the sign-in window caught, whole; answers the account, connected, its tools listed. */
+export const vaultCallback = (state: string, url: string): Promise<ConnectorAccount> =>
+  client.request("vault_callback", { state, url });
+
+/** The sign-in window closed before the redirect came. */
+export const signInCancel = (state: string): Promise<null> => client.request("sign_in_cancel", { state });
+
+export const accountRename = (accountId: string, label: string): Promise<null> =>
+  client.request("account_rename", { accountId, label });
+
+/** Revokes the grant at the service, then deletes the account. */
+export const accountRemove = (accountId: string): Promise<null> => client.request("account_remove", { accountId });
+
+/** Lists the account's tools again. */
+export const accountRefresh = (accountId: string): Promise<ConnectorAccount> =>
+  client.request("account_refresh", { accountId });
+
+/** `on: null` drops the binding, so the scope follows the next less specific one. */
+export const bindingSet = (binding: BindingSet): Promise<null> => client.request("binding_set", binding);
+
+export const toolSet = (tool: ToolSet): Promise<null> => client.request("tool_set", tool);
+
+/*
+ * The servers each provider CLI already has, on one machine: every call goes
+ * to that machine's daemon, since its CLIs keep their own configs and sign-ins.
+ */
+
+/** One list per provider, as last read; `refresh` reads them again, and the new lists arrive as `onProviderServers`. */
+export const providerServersList = (envId: string, refresh = false): Promise<ProviderInventory[]> =>
+  client.request("provider_servers_list", { refresh }, envId);
+
+/** Leaves a server out of Crew's sessions of that provider, or puts it back. Cursor's and Grok's is the CLI's own disable. */
+export const providerServerOff = (envId: string, server: ProviderServerRef, off: boolean): Promise<null> =>
+  client.request("provider_server_off", { ...server, off }, envId);
+
+/** Takes a server out of its CLI's own config on that machine. */
+export const providerServerRemove = (envId: string, server: ProviderServerRef): Promise<null> =>
+  client.request("provider_server_remove", server, envId);
+
+/** Starts a server's sign-in on the machine whose CLI uses it: a page for the sign-in window, or a command for a terminal. */
+export const providerServerSignIn = (envId: string, server: ProviderServerRef): Promise<ProviderSignIn> =>
+  client.request("provider_server_sign_in", server, envId);
+
+/** Hands the redirect the sign-in window caught to the machine that started the sign-in. */
+export const providerServerCallback = (envId: string, state: string, url: string): Promise<unknown> =>
+  client.request("provider_server_callback", { state, url }, envId);
+
+/** The sign-in window closed before the redirect came. */
+export const providerServerSignInCancel = (envId: string, state: string): Promise<unknown> =>
+  client.request("provider_server_sign_in_cancel", { state }, envId);
+
+/** A machine's every list, whole, each time one changes (`provider-servers`). */
+export const onProviderServers = (listener: (inventory: ProviderInventory[], envId: string) => void): (() => void) =>
+  client.on("provider-servers", (payload, env) => listener(payload as ProviderInventory[], env ?? LOCAL));
+
+/** Every connector, whole, each time one changes. Only this Mac's daemon keeps them. */
+export function onConnectors(listener: (connectors: Connector[]) => void): () => void {
+  return client.on("connectors", (payload, env) => {
+    if (env === undefined || env === LOCAL) listener(payload as Connector[]);
+  });
+}
 
 export const listProcesses = (workspaceId: string): Promise<Process[]> =>
   client.request("process_list", { workspaceId });

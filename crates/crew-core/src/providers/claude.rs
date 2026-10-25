@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use super::runtime::{Autonomy, InlineImage};
 use super::{
     as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field, subagent_report,
-    todo_items,
+    todo_items, McpServerSpec,
 };
 
 pub use super::{parse_json_line, try_parse_json_record};
@@ -45,6 +45,10 @@ pub struct ClaudeSpawn {
     pub fast: bool,
     /// `--add-dir`: folders it may work in besides its own, a bot's folder.
     pub add_dirs: Vec<String>,
+    /// The user's servers left out of this run: the ones off in Crew, as
+    /// `deniedMcpServers`. That setting drops a server of any scope (user,
+    /// claude.ai, plugin) by its name; measured on 2.1.310.
+    pub denied_mcp: Vec<String>,
 }
 
 /// How long Claude Code lets one call to Crew's server run, in milliseconds:
@@ -60,9 +64,17 @@ pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
 /// `alwaysLoad` keeps Crew's tools in the prompt, never deferred behind Claude
 /// Code's own tool search (plan §7e.8). Read off Claude Code 2.1.289: it is a
 /// boolean beside `command` in the stdio server schema.
-pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
-    let server = json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS, "alwaysLoad": true });
-    json!({ "mcpServers": { "crew": server } }).to_string()
+///
+/// `connectors` are the session's bound accounts, one server each beside
+/// Crew's: no `alwaysLoad`, so Claude defers them like any user server, and
+/// no env, since a stdio server inherits the CLI's (its `CREW_TOKEN`).
+pub fn claude_mcp_config(command: &str, args: &[String], connectors: &[McpServerSpec]) -> String {
+    let mut servers = Map::new();
+    servers.insert("crew".into(), json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS, "alwaysLoad": true }));
+    for server in connectors {
+        servers.insert(server.name.clone(), json!({ "command": server.command, "args": server.args, "timeout": MCP_TIMEOUT_MS }));
+    }
+    json!({ "mcpServers": servers }).to_string()
 }
 
 /// Every tool on Crew's server, as a Claude permission rule: Crew's own tools
@@ -91,6 +103,9 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     };
     if input.fast {
         settings["fastMode"] = json!(true);
+    }
+    if !input.denied_mcp.is_empty() {
+        settings["deniedMcpServers"] = crate::provider_servers::claude_denied(&input.denied_mcp);
     }
     let mut args = vec![
         "--output-format".into(),
@@ -700,6 +715,11 @@ pub fn mcp_status_request() -> Value {
 /// login ("Server status: needs-auth").
 pub fn mcp_reconnect_request(server: &str) -> Value {
     json!({ "subtype": "mcp_reconnect", "serverName": server })
+}
+
+/// Switches one server on or off in the running CLI.
+pub fn mcp_toggle_request(server: &str, enabled: bool) -> Value {
+    json!({ "subtype": "mcp_toggle", "serverName": server, "enabled": enabled })
 }
 
 /// The login the CLI runs for a server: it opens the browser, waits for the
@@ -1464,6 +1484,7 @@ mod tests {
             user_settings: false,
             fast: false,
             add_dirs: vec!["/w/workspaces/w/bots/brisa".into()],
+            denied_mcp: Vec::new(),
         });
         assert!(args.windows(2).any(|pair| pair == ["--add-dir", "/w/workspaces/w/bots/brisa"]), "{args:?}");
     }
@@ -1481,10 +1502,11 @@ mod tests {
             asks_questions: false,
             system_prompt: None,
             autonomy: Autonomy::Ask,
-            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()])),
+            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], &[])),
             user_settings: false,
             fast: false,
             add_dirs: Vec::new(),
+            denied_mcp: Vec::new(),
         });
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1493,6 +1515,41 @@ mod tests {
         let mcp: Value = serde_json::from_str(&args[at + 1]).expect("json");
         assert_eq!(mcp["mcpServers"]["crew"]["timeout"], 3_900_000, "{mcp}");
         assert_eq!(mcp["mcpServers"]["crew"]["alwaysLoad"], true, "{mcp}");
+        assert_eq!(mcp["mcpServers"].as_object().map(Map::len), Some(1), "no connector is bound: {mcp}");
+    }
+
+    /// A bound account is one more server beside Crew's, deferred like any
+    /// user server (no `alwaysLoad`) and given no allow rule: the session's
+    /// autonomy decides its calls.
+    #[test]
+    fn a_bound_connector_is_one_more_server_beside_crews() {
+        let connectors = [super::McpServerSpec::connector("/app/crewd", "notion")];
+        let args = build_claude_spawn_args(&ClaudeSpawn {
+            model: None,
+            effort: None,
+            session_id: None,
+            resume: None,
+            replay_user_messages: false,
+            asks_questions: false,
+            system_prompt: None,
+            autonomy: Autonomy::Ask,
+            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], &connectors)),
+            user_settings: false,
+            fast: false,
+            add_dirs: Vec::new(),
+            denied_mcp: Vec::new(),
+        });
+        let at = args.iter().position(|arg| arg == "--mcp-config").expect("mcp");
+        let mcp: Value = serde_json::from_str(&args[at + 1]).expect("json");
+        let notion = &mcp["mcpServers"]["notion"];
+        assert_eq!(notion["command"], "/app/crewd", "{mcp}");
+        assert_eq!(notion["args"], json!(["--mcp-connector", "notion"]), "{mcp}");
+        assert_eq!(notion["timeout"], 3_900_000, "{mcp}");
+        assert!(notion.get("alwaysLoad").is_none(), "{mcp}");
+        assert_eq!(mcp["mcpServers"]["crew"]["args"], json!(["--mcp"]), "{mcp}");
+        let at = args.iter().position(|arg| arg == "--settings").expect("settings");
+        let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
+        assert_eq!(settings["permissions"]["allow"], json!(["mcp__crew__*"]), "{settings}");
     }
 
     /// A bot keeps to the workspace's settings, so `~/.claude` cannot inject a
@@ -1514,6 +1571,7 @@ mod tests {
                 user_settings,
                 fast: false,
                 add_dirs: Vec::new(),
+                denied_mcp: Vec::new(),
             })
         };
         let bot = spawn(false);
@@ -1545,6 +1603,7 @@ mod tests {
                 user_settings: true,
                 fast,
                 add_dirs: Vec::new(),
+                denied_mcp: Vec::new(),
             });
             let at = args.iter().position(|arg| arg == "--settings").expect("settings");
             let parsed: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1572,6 +1631,7 @@ mod tests {
                 user_settings: false,
                 fast: false,
                 add_dirs: Vec::new(),
+                denied_mcp: Vec::new(),
             })
         };
         let child = spawn(true);

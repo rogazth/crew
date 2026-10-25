@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { mcpLogin, mcpReconnect } from "../../lib/api";
 import { openUrl } from "../../lib/host";
-import { actionOf, chipLabel, sortedServers, stateLabel, unreportedNote, useMcp } from "../../lib/mcp";
+import { Switch } from "../../chrome/kit";
+import { actionOf, canToggle, chipLabel, quietLabel, sortedServers, stateLabel, toggleServer, unreportedNote, useMcp } from "../../lib/mcp";
 import { providerOf } from "../../lib/providers";
 import type { McpServer } from "../../lib/protocol";
 import type { Session } from "../../lib/types";
@@ -12,8 +13,10 @@ const failure = (reason: unknown) => (reason instanceof Error ? reason.message :
 /**
  * The status line's "N need sign-in" or "N failed", and the sheet it opens
  * over the composer: each MCP server with how it stands, and a way to sign in
- * to one that asks for it or to connect one that failed again. Nothing is
- * drawn while every server works, or connects. A click outside the sheet
+ * to one that asks for it or to connect one that failed again. A Claude
+ * session's rows also switch each server on or off, now (`mcp_toggle`), so
+ * its chip stays, quiet, while every server works; any other provider's chip
+ * is drawn only when something needs the user. A click outside the sheet
  * closes it. The composer owns whether it is open: only one sheet is open at
  * a time.
  */
@@ -27,7 +30,9 @@ export function McpSegment({
   onOpenChange: (open: boolean) => void;
 }) {
   const status = useMcp(session.id);
-  const label = chipLabel(status);
+  const toggles = canToggle(session.provider);
+  const alarm = chipLabel(status);
+  const label = alarm ?? (toggles ? quietLabel(status) : null);
   const servers = sortedServers(status);
   const shown = open && servers.length > 0;
   const sheet = useRef<HTMLDivElement>(null);
@@ -75,6 +80,7 @@ export function McpSegment({
       openSignIn(session.id, server.name, how.command);
     });
   const reconnect = (server: McpServer) => run(server, async () => void (await mcpReconnect(session.id, server.name)));
+  const toggle = (server: McpServer, enabled: boolean) => run(server, () => toggleServer(session.id, server.name, enabled));
 
   const provider = providerOf(session.provider)?.label ?? session.provider;
   const note = unreportedNote(status, provider);
@@ -88,7 +94,7 @@ export function McpSegment({
           onClick={() => onOpenChange(!open)}
           className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
         >
-          <span className="size-1.5 rounded-full bg-warning" aria-hidden />
+          {alarm && <span className="size-1.5 rounded-full bg-warning" aria-hidden />}
           {label}
         </button>
       )}
@@ -107,6 +113,7 @@ export function McpSegment({
               error={failed[server.name]}
               onSignIn={() => void signIn(server)}
               onReconnect={() => void reconnect(server)}
+              {...(toggles && { onToggle: (enabled: boolean) => void toggle(server, enabled) })}
             />
           ))}
           {note && <div className="px-2 pt-1.5 pb-0.5 text-[10.5px] text-placeholder">{note}</div>}
@@ -123,14 +130,18 @@ function ServerRow({
   error,
   onSignIn,
   onReconnect,
+  onToggle,
 }: {
   server: McpServer;
   busy: boolean;
   error: string | undefined;
   onSignIn: () => void;
   onReconnect: () => void;
+  /** Claude's runtime switch: on for this session, or off until it is turned on again. */
+  onToggle?: ((enabled: boolean) => void) | undefined;
 }) {
-  const action = actionOf(server);
+  const off = server.state === "disabled";
+  const action = off ? null : actionOf(server);
   const tone = server.state === "failed" ? "text-danger" : server.state === "needs_auth" ? "text-warning" : "text-text-muted";
   return (
     <div data-server={server.name} className="flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-hover">
@@ -150,6 +161,11 @@ function ServerRow({
         >
           {action === "sign-in" ? "Sign in" : "Reconnect"}
         </button>
+      )}
+      {onToggle && (
+        <span className={`flex h-6 shrink-0 items-center ${busy ? "pointer-events-none opacity-50" : ""}`}>
+          <Switch label={`${server.name} in this session`} checked={!off} onChange={onToggle} />
+        </span>
       )}
     </div>
   );

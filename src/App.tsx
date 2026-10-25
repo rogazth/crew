@@ -170,6 +170,7 @@ export function App() {
     settings,
     isWorkspace,
     isRoutines,
+    isIntegrations,
     close: closePage,
     toggle: togglePage,
     openSettings,
@@ -246,7 +247,7 @@ export function App() {
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
-  const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
+  const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTabIn: nav.openTabIn });
 
   const { activate } = workspaces;
   const openNotified = useNotificationTarget({
@@ -377,7 +378,6 @@ export function App() {
           onResize={sidebar.resize}
           settings={settings}
           onSelectSettings={openSettings}
-          onCloseSettings={closePage}
           rail={{
             workspaces: workspaces.projects,
             home: workspaces.home,
@@ -385,6 +385,7 @@ export function App() {
             sessions: all,
             settingsOpen: settings !== null,
             routinesOpen: isRoutines,
+            integrationsOpen: isIntegrations,
             // Picking a workspace is going back to it, out from under any page.
             onSelect: (id) => {
               closePage();
@@ -398,6 +399,7 @@ export function App() {
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
+            onOpenIntegrations: () => togglePage({ kind: "integrations" }),
             onOpenSettings: () => (settings ? closePage() : openSettings()),
             onOpenUsage: () => openSettings("usage"),
           }}
@@ -467,8 +469,11 @@ export function App() {
           workspaces={workspaces.workspaces}
           activeWorkspace={active}
           sessions={sessions}
+          allSessions={all}
           onConfirm={confirms.ask}
           onOpenTerminal={envs.openTerminalOn}
+          inset={!sidebarOpen}
+          onClose={closePage}
         />
         {/* Hidden, not unmounted: bot and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">

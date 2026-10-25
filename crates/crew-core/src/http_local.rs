@@ -272,7 +272,7 @@ impl EventStream {
 /// `encodeURIComponent`, which is how opencode's own clients put a folder in
 /// its header and how its server reads it back: everything but the unreserved
 /// characters is percent-encoded, so no byte of the path can end the header.
-fn encode_uri_component(text: &str) -> String {
+pub(crate) fn encode_uri_component(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {

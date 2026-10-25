@@ -229,7 +229,21 @@ fn npm_latest(package: &str) -> Option<String> {
 /// their status there). The exit code is ignored: a signed-out CLI says so and
 /// exits 1. None when it does not start or does not answer in time.
 pub(crate) fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    run_in(path, args, None, timeout)
+}
+
+/// [`run`], in `cwd`: a CLI that reads a project's config reads the one there.
+pub(crate) fn run_in(path: &Path, args: &[&str], cwd: Option<&Path>, timeout: Duration) -> Option<String> {
+    run_checked_in(path, args, cwd, timeout).map(|(_, text)| text).filter(|text| !text.trim().is_empty())
+}
+
+/// [`run_in`], with whether the CLI exited 0: for a command whose success is
+/// only its exit code.
+pub(crate) fn run_checked_in(path: &Path, args: &[&str], cwd: Option<&Path>, timeout: Duration) -> Option<(bool, String)> {
     let mut command = Command::new(path);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     command
         .args(args)
         .env("PATH", shell_path::joined())
@@ -252,9 +266,9 @@ pub(crate) fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<Strin
     let stdout = drain(child.stdout.take()?);
     let stderr = drain(child.stderr.take()?);
     let deadline = Instant::now() + timeout;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
             _ => {
                 unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
@@ -262,11 +276,11 @@ pub(crate) fn run(path: &Path, args: &[&str], timeout: Duration) -> Option<Strin
                 return None;
             }
         }
-    }
+    };
     let out = stdout.join().unwrap_or_default();
     let err = stderr.join().unwrap_or_default();
     let text = if out.trim().is_empty() { err } else { out };
-    Some(text).filter(|text| !text.trim().is_empty())
+    Some((status.success(), text))
 }
 
 /// `2.1.299 (Claude Code)`, `codex-cli 0.160.0`, `opencode v2.0.27`,

@@ -58,7 +58,7 @@ const IS_MAC = process.platform === "darwin";
  */
 const GUEST_PRELOAD = path.join(__dirname, "guest-preload.cjs");
 /** A login popup's: the sign-in disguise without the close guard, so it can still close itself. */
-const POPUP_PRELOAD = path.join(__dirname, "popup-preload.cjs");
+export const POPUP_PRELOAD = path.join(__dirname, "popup-preload.cjs");
 /** A snapshot handed over for restore waits this long for its webview to attach. */
 const RESTORE_TTL_MS = 10_000;
 /**
@@ -184,9 +184,25 @@ async function applyMachines(machines: ReadonlyMap<string, Upstream | null>): Pr
   await Promise.all(sessions.map((ses) => ses.closeAllConnections()));
 }
 
+/**
+ * Asked first about every request a page makes, before a remote workspace's
+ * loopback is moved to its machine; true cancels the request. A connector
+ * sign-in's redirect is caught here as well as on navigation, so its code
+ * never reaches a socket (sign-in-window.ts).
+ */
+let interceptRequest: (webContentsId: number | undefined, url: string) => boolean = () => false;
+
+export function setRequestInterceptor(intercept: (webContentsId: number | undefined, url: string) => boolean): void {
+  interceptRequest = intercept;
+}
+
 /** A page of a remote workspace that asks for plain loopback: the main frame moves to the machine's name, the rest says which machine. */
 function routeToMachines(ses: Session): void {
   ses.webRequest.onBeforeRequest((details, callback) => {
+    if (interceptRequest(details.webContentsId, details.url)) {
+      callback({ cancel: true });
+      return;
+    }
     const alias = details.resourceType === "mainFrame" || details.resourceType === "subFrame" ? machineOf(details.webContentsId) : null;
     const moved = onMachine(details.url, alias);
     callback(moved === details.url ? {} : { redirectURL: moved });
@@ -373,7 +389,7 @@ function openApp(contents: WebContents, url: string): void {
  * popup goes by Firefox's name, and by Chrome's again once it leaves. Most
  * arrive there by a redirect, from the site that asked for the sign-in.
  */
-function followSignIn(contents: WebContents): void {
+export function followSignIn(contents: WebContents): void {
   const follow = (details: { url: string; isMainFrame: boolean; isSameDocument: boolean }) => {
     if (!details.isMainFrame || details.isSameDocument) return;
     const agent = isGoogleSignIn(details.url) ? firefoxUserAgent() : contents.session.getUserAgent();
@@ -516,7 +532,8 @@ async function wipeIncognito(partition: string): Promise<void> {
   await ses.closeAllConnections().catch(() => {});
 }
 
-function trackIncognito(guest: WebContents, partition: string): void {
+/** Keeps the incognito session's sign-ins while `guest` is up; a sign-in window counts as a page too. */
+export function trackIncognito(guest: WebContents, partition: string): void {
   clearTimeout(incognitoWipes.get(partition));
   incognitoWipes.delete(partition);
   let open = incognitoGuests.get(partition);
@@ -679,7 +696,7 @@ function guardPopup(
   popup.on("did-create-window", (child) => guardPopup(host, openerId, partition, child.webContents, allowOpen));
 }
 
-function guardNavigation(contents: WebContents): void {
+export function guardNavigation(contents: WebContents): void {
   const guard = (event: { url: string; preventDefault: () => void }) => {
     const verdict = navigationVerdict(event.url);
     if (verdict === "allow") return;

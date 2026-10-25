@@ -1,6 +1,6 @@
 import { fileView } from "./browser/files";
 import { STUB_KINDS } from "./types";
-import type { Session, StubKind, Tab } from "./types";
+import type { Session, SignInRun, StubKind, Tab } from "./types";
 
 export const sessionTabId = (sessionId: string) => `session:${sessionId}`;
 export const fileTabId = (path: string) => `file:${path}`;
@@ -69,10 +69,10 @@ export function newTerminalTab(worktree: string | null, input?: string): Tab {
   return input ? { ...tab, input } : tab;
 }
 
-/** A terminal that runs a login for a session, in the worktree it was asked from. */
+/** A terminal that runs a login for a session or a provider server, in the worktree it was asked from. */
 export function newSignInTab(
   worktree: string | null,
-  signIn: { sessionId: string; command: string[]; server?: string },
+  signIn: SignInRun,
   title?: string,
 ): Tab {
   return {

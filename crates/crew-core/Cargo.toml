@@ -13,7 +13,13 @@ rusqlite = { version = "0.40.2", features = ["bundled", "cache"], default-featur
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2.189"
 base64 = "0.23.1"
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+# Connectors' OAuth and remote MCP calls. No native TLS and no system proxy:
+# every connection goes through `connectors::net`'s resolver, which a proxy
+# would bypass.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+url = "2.5"
+rand.workspace = true
 aes = "0.8"
 cbc = "0.1"
 pbkdf2 = "0.12"
@@ -25,6 +31,10 @@ globset = "0.4.16"
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
 grep-matcher = "0.1.9"
+
+[features]
+# The fake OAuth and MCP server (`connectors::fake_server`), for crewd's e2e.
+fakes = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

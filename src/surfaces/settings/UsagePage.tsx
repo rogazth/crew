@@ -90,7 +90,7 @@ function PlanLimits() {
         <div className="flex flex-col gap-2.5">
           {all.length === 0 && (
             <div className="rounded-xl bg-card px-4 py-3 text-text-muted">
-              {fresh.refreshing ? "Reading usage…" : "No usage read yet. Claude reports after its first turn; the others on refresh."}
+              {fresh.refreshing ? "Reading usage…" : "No usage yet. Claude reports after its first turn; others on refresh."}
             </div>
           )}
           {shown.map((reading) => (

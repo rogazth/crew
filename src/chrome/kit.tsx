@@ -14,7 +14,7 @@ import type {
   RefObject,
   TextareaHTMLAttributes,
 } from "react";
-import { useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Kbd } from "./Kbd";
 
@@ -153,7 +153,7 @@ export function Switch({
   );
 }
 
-export type Option<T extends string> = { value: T; label: string; icon?: ReactNode };
+export type Option<T extends string> = { value: T; label: string; icon?: ReactNode; disabled?: boolean };
 
 /** A dropdown whose list is one of our menus, not the platform's. */
 export function Select<T extends string>({
@@ -205,14 +205,17 @@ export function Segmented<T extends string>({
   options,
   onChange,
   label,
+  wide = false,
 }: {
   value: T;
   options: Option<T>[];
   onChange: (value: T) => void;
   label: string;
+  /** Fill the row, the options sharing it evenly. */
+  wide?: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex h-8 items-center gap-0.5 rounded-md bg-card p-0.5">
+    <div role="radiogroup" aria-label={label} className={`${wide ? "flex" : "inline-flex"} h-8 items-center gap-0.5 rounded-md bg-card p-0.5`}>
       {options.map((option) => {
         const on = option.value === value;
         return (
@@ -221,9 +224,10 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={on}
+            disabled={option.disabled}
             onClick={() => onChange(option.value)}
-            className={`flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
-              on ? "bg-canvas text-text shadow-sm" : "text-text-muted hover:text-text"
+            className={`flex h-7 items-center justify-center gap-1.5 rounded-[5px] px-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 disabled:opacity-40 ${wide ? "flex-1" : ""} ${
+              on ? "bg-canvas text-text shadow-sm" : "text-text-muted enabled:hover:text-text"
             }`}
           >
             {option.icon}
@@ -240,6 +244,11 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
   return <div className={`rounded-xl bg-card px-4 [&>*+*]:border-t [&>*+*]:border-hairline ${className}`}>{children}</div>;
 }
 
+/** Overlays on screen: one that opens while another is still up takes its place over the same backdrop. */
+let overlays = 0;
+/** How long an overlay takes to leave; `.dialog-panel-out` plays for as long. */
+const OVERLAY_LEAVE_MS = 140;
+
 /** The palette's frame: a card under the top edge over a light scrim; a press outside or Escape closes it. */
 export function Overlay({
   children,
@@ -253,17 +262,35 @@ export function Overlay({
   label?: string;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
+  // Read before this one counts itself: the one it replaces is still mounted.
+  const [swapped] = useState(() => overlays > 0);
+  const [leaving, setLeaving] = useState(false);
+  const leaveTimer = useRef(0);
+  useLayoutEffect(() => {
+    overlays++;
+    return () => {
+      overlays--;
+      window.clearTimeout(leaveTimer.current);
+    };
+  }, []);
   // Opened from a button, focus is still back on the page: take it, so Escape
   // reaches the dialog. A field inside that focused itself keeps it.
   useEffect(() => {
     const el = dialog.current;
     if (el && !el.contains(document.activeElement)) el.focus();
   }, []);
+  // A press outside or Escape plays the overlay out before it closes.
+  const close = () => {
+    if (leaving) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
+    setLeaving(true);
+    leaveTimer.current = window.setTimeout(onClose, OVERLAY_LEAVE_MS);
+  };
   // Portaled: an ancestor with a transform (the sidebar's sliding views) would
   // otherwise become the containing block for `fixed` and clip the dialog to it.
   return createPortal(
-    <div role="presentation" className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div className="absolute inset-0 bg-(--backdrop)" />
+    <div role="presentation" className={`fixed inset-0 z-50 ${leaving ? "pointer-events-none" : ""}`} onMouseDown={close}>
+      <div className={`absolute inset-0 bg-(--backdrop) ${leaving ? "dialog-backdrop-out" : swapped ? "" : "dialog-backdrop"}`} />
       <div
         ref={dialog}
         role="dialog"
@@ -274,9 +301,11 @@ export function Overlay({
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
           event.stopPropagation();
-          onClose();
+          close();
         }}
-        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden outline-none ${SURFACE}`}
+        className={`absolute top-[14vh] left-1/2 flex max-h-[76vh] ${width} max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden outline-none ${SURFACE} ${
+          leaving ? "dialog-panel-out" : swapped ? "dialog-panel-swap" : "dialog-panel"
+        }`}
       >
         {children}
       </div>
@@ -353,11 +382,11 @@ export function Alert({
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !next && onDismiss()}>
       <AlertDialog.Portal>
-        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-(--backdrop)" />
+        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-(--backdrop) transition-opacity duration-160 ease-(--ease-out) data-starting-style:opacity-0 data-ending-style:opacity-0 data-ending-style:duration-140 motion-reduce:transition-none" />
         <AlertDialog.Popup
           initialFocus={initialFocus}
           onKeyDown={onKeyDown}
-          className={`fixed top-1/2 left-1/2 z-50 flex w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 ${SURFACE}`}
+          className={`fixed top-1/2 left-1/2 z-50 flex w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none transition-[opacity,transform] duration-180 ease-(--ease-out) data-starting-style:opacity-0 data-starting-style:[transform:translateY(4px)_scale(0.995)] data-ending-style:opacity-0 data-ending-style:[transform:translateY(2px)] data-ending-style:duration-140 motion-reduce:transition-none ${SURFACE}`}
         >
           <div className="flex flex-col gap-1.5 p-4">
             <AlertDialog.Title className="text-[14px] font-semibold">{title}</AlertDialog.Title>
@@ -405,38 +434,75 @@ export function Tooltip({
   );
 }
 
+/** What a page's title is doing: the strip above the sheet echoes it once it has scrolled out of sight. */
+export type PageHeading = { title: string; hidden: boolean };
+
 /**
- * A page that covers the workspace: a drag strip where the tabs would be, a
- * title with its actions, and the content under it at reading width. Search,
- * routines and history share it, so they read as one family with the sidebar.
+ * Where a page tells the strip about its title. Given by the sheet; a page
+ * outside one (commands in a tab) has nobody to tell, and says nothing.
+ */
+export const PageHeadingContext = createContext<((heading: PageHeading | null) => void) | null>(null);
+
+/**
+ * Tells the strip whether `target` (the page's title) is out of sight in its
+ * scroller. For a page that draws its own title instead of using `PageFrame`.
+ */
+export function usePageHeading(title: string, target: RefObject<HTMLElement | null>, enabled = true) {
+  const report = useContext(PageHeadingContext);
+  useEffect(() => {
+    const el = target.current;
+    if (!report || !el || !enabled) return;
+    // The implicit root clips through the scroller, so a title scrolled under it no longer intersects.
+    const observer = new IntersectionObserver(([entry]) => report({ title, hidden: !entry!.isIntersecting }));
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      report(null);
+    };
+  }, [report, title, target, enabled]);
+}
+
+/**
+ * The frame of every page on the sheet: settings, routines, integrations, and
+ * commands in a tab. One title in one place, its actions beside it, and the
+ * content under it, centred at `reading` width for forms or `wide` for lists
+ * and grids. The strip above the sheet is the window's title bar, not this.
  */
 export function PageFrame({
   title,
   subtitle,
   actions,
-  width = "max-w-3xl",
-  inTab = false,
+  width = "reading",
+  hideHeader = false,
+  scrollRef,
   children,
 }: {
   title: string;
+  /** Only where the page needs telling how it works; most need no line under the title. */
   subtitle?: ReactNode;
   actions?: ReactNode;
-  width?: string;
-  /** Under a tab strip, which already is the window's title bar. */
-  inTab?: boolean;
+  width?: "reading" | "wide";
+  /** A page that draws its own top, like About's hero; the title stays for screen readers. */
+  hideHeader?: boolean;
+  /** The scroller, for a page that scrolls to a row itself. */
+  scrollRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  // A hidden header is visually gone from the start; the page draws its own top.
+  usePageHeading(title, heading, !hideHeader);
+  // Two boxes: the sheet clips the outer one, so the scroll lives inside it.
   return (
-    <div className="flex h-full flex-col">
-      {!inTab && <div data-tauri-drag-region className="h-10 shrink-0" />}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={`mx-auto flex ${width} flex-col gap-5 px-8 ${inTab ? "pt-10" : "pt-6"} pb-16`}>
-          <header className="flex items-end gap-3">
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <h1 className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
-              {subtitle && <p className="text-[13px] text-text-muted">{subtitle}</p>}
+    <div className="h-full">
+      {/* No scroll anchoring: a page that reorders cards above the fold (Usage) would be dragged along with them. */}
+      <div ref={scrollRef} className="@container h-full overflow-y-auto [overflow-anchor:none]">
+        <div className={`mx-auto flex ${width === "wide" ? "max-w-[920px]" : "max-w-[720px]"} min-h-full flex-col gap-7 px-10 pt-12 pb-28`}>
+          <header className={`flex items-center gap-4 px-1 ${hideHeader ? "sr-only" : ""}`}>
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <h1 ref={heading} className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
+              {subtitle && <p className="text-text-muted">{subtitle}</p>}
             </div>
-            {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+            {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
           </header>
           {children}
         </div>

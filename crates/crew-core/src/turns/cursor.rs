@@ -374,6 +374,9 @@ impl TurnHost {
     ) -> Result<Value, String> {
         let session_id = session.id.as_str();
         let path = self.resolve_bin("cursor-agent")?;
+        // Cursor keeps what is off per project: the servers off in Crew are
+        // disabled in this folder before it reads them.
+        self.provider_servers.cursor_prepare(cwd);
         // Minted once and used twice: the agent's own shell gets it, and so
         // does the MCP server cursor starts for it. A second mint would
         // retire the first, and this process lives across turns, so nothing
@@ -387,7 +390,7 @@ impl TurnHost {
             add_dirs: self.bot_folder(session).into_iter().collect(),
         });
         self.agents.spawn(session_id.to_string(), path, args, cwd.to_string(), Some(env))?;
-        Ok(mcp_servers(mcp, &mcp_env))
+        Ok(mcp_servers(mcp, &mcp_env, &self.connector_servers(session, mcp)))
     }
 
     fn acp_note_pending(&self, session_id: &str) -> bool {

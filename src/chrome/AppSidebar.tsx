@@ -15,7 +15,6 @@ type Props = {
   onResize: (width: number) => void;
   settings: SettingsSectionId | null;
   onSelectSettings: (section: SettingsSectionId) => void;
-  onCloseSettings: () => void;
   rail: ComponentProps<typeof WorkspaceRail>;
   sessions: WorkspaceSidebarProps;
 };
@@ -24,7 +23,7 @@ type Props = {
  * The rail of workspaces stays put; the panel beside it is the workspace, or
  * settings sliding over it. One set of arrow keys walks both.
  */
-export function AppSidebar({ open, shown = open, width, onResize, settings, onSelectSettings, onCloseSettings, rail, sessions }: Props) {
+export function AppSidebar({ open, shown = open, width, onResize, settings, onSelectSettings, rail, sessions }: Props) {
   const root = useRef<HTMLDivElement>(null);
   useSpatialKeys(root);
 
@@ -51,7 +50,6 @@ export function AppSidebar({ open, shown = open, width, onResize, settings, onSe
                 <SettingsSidebar
                   section={settings ?? SETTINGS_DEFAULT}
                   onSelect={onSelectSettings}
-                  onClose={onCloseSettings}
                 />
               ),
             },

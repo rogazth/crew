@@ -20,11 +20,11 @@
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{McpSignIn, McpState, McpStatus};
+use crew_protocol::{McpSignIn, McpState, McpStatus, ProviderSignIn};
 use serde_json::Value;
 
 use super::{Live, TurnHost};
-use crate::providers::claude::{mcp_login_command, mcp_reconnect_request, mcp_servers, mcp_status_request};
+use crate::providers::claude::{mcp_login_command, mcp_reconnect_request, mcp_servers, mcp_status_request, mcp_toggle_request};
 use crate::session;
 
 /// How many times Claude is asked while a server is still connecting, and how
@@ -100,6 +100,49 @@ impl TurnHost {
             other => return Err(format!("Crew does not reconnect {other}'s servers yet.")),
         }
         Ok(self.mcp_status.list(session_id))
+    }
+
+    /// Switches one of a live Claude session's servers on or off, now, and
+    /// answers its list as it stands after. Claude keeps the switch in its
+    /// own settings for the session's folder (`disabledMcpServers`), as its
+    /// `/mcp` does. No other CLI switches a server while it runs.
+    pub fn mcp_toggle(&self, session_id: &str, name: &str, enabled: bool) -> Result<McpStatus, String> {
+        let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
+        match session.provider.as_str() {
+            "claude" => {
+                self.mcp_known(session_id, name)?;
+                if name == "crew" {
+                    return Err("Crew's own server stays on.".into());
+                }
+                let asked = self.claude_control(session_id, mcp_toggle_request(name, enabled));
+                let _ = self.read_claude_mcp(session_id, None);
+                asked.map(|_| ())?;
+            }
+            "codex" => return Err("Codex cannot switch one server while it runs; turn it off in Crew instead.".into()),
+            "opencode" => return Err("opencode cannot switch one server while it runs; turn it off in Crew instead.".into()),
+            "cursor" | "grok" => return Err("This CLI does not report its servers, so Crew cannot switch them.".into()),
+            other => return Err(format!("Crew does not switch {other}'s servers.")),
+        }
+        Ok(self.mcp_status.list(session_id))
+    }
+
+    /// Starts signing in to one of a provider CLI's servers on this machine,
+    /// with no session: see [`crate::provider_servers`]. opencode's runs on the
+    /// shared server, whose own loopback takes the redirect.
+    pub fn provider_server_sign_in(&self, provider: &str, name: &str) -> Result<ProviderSignIn, String> {
+        if provider != "opencode" {
+            return self.provider_servers.sign_in(provider, name);
+        }
+        let home = crate::provider_servers::home().to_string_lossy().into_owned();
+        match self.opencode_mcp_login(&home, name) {
+            Ok(url) => self.provider_servers.loopback_flow("opencode", url),
+            // A sign-in opencode finishes with a code typed back: its own
+            // command, in a terminal, takes it.
+            Err(error) if error.contains("with a code") => {
+                Ok(ProviderSignIn::Terminal { command: vec!["opencode".into(), "mcp".into(), "auth".into(), name.into()] })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn mcp_known(&self, session_id: &str, name: &str) -> Result<(), String> {

@@ -32,6 +32,24 @@ export function openSettingsSection(section: SettingsSectionId) {
   settingsOpener?.(section);
 }
 
+type ServerSignIn = { provider: string; server: string; command: string[] };
+type OpenServerSignIn = (envId: string, signIn: ServerSignIn) => Promise<void>;
+let serverSignInOpener: OpenServerSignIn | null = null;
+
+export function setServerSignInOpener(fn: OpenServerSignIn | null) {
+  serverSignInOpener = fn;
+}
+
+/**
+ * A provider server's login, in a terminal tab on the machine whose CLI uses
+ * it; its end has that machine read its servers again. Rejects when there is
+ * no window to open it in, or the machine is not connected.
+ */
+export function openServerSignIn(envId: string, signIn: ServerSignIn): Promise<void> {
+  if (!serverSignInOpener) return Promise.reject(new Error("Signing in from a terminal needs the Crew app"));
+  return serverSignInOpener(envId, signIn);
+}
+
 let adding = false;
 const addWatchers = new Set<() => void>();
 

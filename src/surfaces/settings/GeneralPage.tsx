@@ -93,7 +93,7 @@ export function GeneralPage() {
             next
               ? setAsk({
                   title: "Bypass permissions for every session?",
-                  description: "All agents will edit files and run commands without asking, from their next turn.",
+                  description: "Agents edit files and run commands without asking, from their next turn.",
                   action: "Bypass",
                   onConfirm: () => void saveBypass(true),
                 })
@@ -169,7 +169,7 @@ function CommandLine() {
             <span className="flex flex-wrap items-center gap-x-1">
               Linked at <span className="font-mono">{shown ?? status.link}</span>
               <CopyButton text={status.link} label="Copy path" className="size-5" />
-              {!status.onPath && <span className="basis-full">That folder is not on your shell's PATH yet; add it to use crew by name.</span>}
+              {!status.onPath && <span className="basis-full">Not on your PATH yet. Add it to run crew by name.</span>}
             </span>
           ) : (
             describeCli(status)

@@ -173,14 +173,14 @@ export function CommandPalette(props: Props) {
 
   return (
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={props.onClose}>
-      <div className="absolute inset-0 bg-(--backdrop)" />
+      <div className="dialog-backdrop absolute inset-0 bg-(--backdrop)" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
-        className="absolute top-[12vh] left-1/2 flex w-[600px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-float bg-surface text-text shadow-float"
+        className="dialog-panel absolute top-[12vh] left-1/2 flex w-[600px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-float bg-surface text-text shadow-float"
       >
         <div className="flex h-13 shrink-0 items-center gap-3 px-4">
           <SearchIcon className="size-4.5 shrink-0 text-icon" />

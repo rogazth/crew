@@ -29,6 +29,7 @@ fn daemon(name: &str) -> (Handle, std::path::PathBuf) {
         store,
         agents: AgentHost::new(),
         bridge: Bridge::start(dir.clone()).expect("bridge"),
+        vault: None,
     })
     .expect("serve");
     (handle, dir)

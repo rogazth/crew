@@ -10,6 +10,7 @@ use crew_core::browser_leases::{Holder, Leases};
 use crew_core::browser_relay::BrowserRelay;
 use crew_core::browser_tools::BrowserTools;
 use crew_core::caller::Caller;
+use crew_core::connectors::{self, flow::Connectors};
 use crew_core::file_search;
 use crew_core::files;
 use crew_core::mailbox;
@@ -55,6 +56,9 @@ pub struct Config {
     pub bridge: Bridge,
     /// Built on the same store and PTY host. Nothing in it starts on its own.
     pub processes: ProcessHost,
+    /// Where Crew's grants are kept: `<data>/vault.json`. `None` keeps them in
+    /// memory, for a test.
+    pub vault: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone)]
@@ -74,6 +78,7 @@ struct Hosts {
     children: Arc<SessionTools>,
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
+    connectors: Arc<Connectors>,
     /// Installs, updates and sign-outs of this machine's agent CLIs, and the Codex device-code sign-in.
     provider_jobs: crew_core::provider_job::ProviderJobs,
     provider_logins: crew_core::provider_login::ProviderLogins,
@@ -129,6 +134,12 @@ impl Handle {
 
     pub fn override_agent_binary(&self, name: &str, path: impl Into<String>) {
         self.turns.override_binary(name, path);
+    }
+
+    /// Reads which servers each provider CLI has on this machine, a moment
+    /// from now, so the startup is not held up by five CLIs.
+    pub fn read_provider_servers(&self) {
+        self.turns.provider_servers().start(Duration::from_secs(5));
     }
 }
 
@@ -404,6 +415,7 @@ struct ToolDispatch {
     /// tool sheet in a bot's prompt.
     toolbox: Toolbox,
     exit: std_mpsc::Sender<()>,
+    connectors: Arc<Connectors>,
 }
 
 impl ToolHost for ToolDispatch {
@@ -421,17 +433,70 @@ impl ToolHost for ToolDispatch {
             let _ = self.exit.send(());
             return Ok(Value::Null);
         }
+        if let Some(name) = params.get(crew_core::mcp::CONNECTOR_PARAM).and_then(Value::as_str).map(str::to_string) {
+            return self.connector(Some(caller), &name, method, params);
+        }
         self.with_host(|host| tools::handle(host, caller, method, params))
     }
 
     /// A call through opencode's shared server: the bridge has already said
     /// which session it is, or that it is the host token alone.
     fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String> {
+        if let Some(name) = params.get(crew_core::mcp::CONNECTOR_PARAM).and_then(Value::as_str).map(str::to_string) {
+            return self.connector(caller, &name, method, params);
+        }
         self.with_host(|host| tools::handle_opencode(host, caller, method, params))
     }
 }
 
 impl ToolDispatch {
+    /// A call from a connector's shim. Which account `name` means is worked
+    /// out from the session the token is, never from the name alone (rule
+    /// 5): a name the session does not have on lists nothing and calls
+    /// nothing. Without a session (opencode's shared server listing) it is
+    /// the workspace's, and each call is still checked against its session.
+    fn connector(&self, caller: Option<&Caller>, name: &str, method: &str, mut params: Value) -> Result<Value, String> {
+        let workspace = params.get(crew_core::mcp::CONNECTOR_WORKSPACE_PARAM).and_then(Value::as_str).map(str::to_string);
+        if let Some(map) = params.as_object_mut() {
+            map.remove(crew_core::mcp::CONNECTOR_PARAM);
+            map.remove(crew_core::mcp::CONNECTOR_WORKSPACE_PARAM);
+        }
+        let server = match caller {
+            Some(Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session)) => {
+                connectors::resolve(&self.store, session, name)?
+            }
+            Some(Caller::User { .. }) => return Err("Connectors answer sessions, not the user's own calls.".into()),
+            None if method == "tools/list" => match workspace {
+                Some(workspace) => {
+                    connectors::bound_servers_for_workspace(&self.store, &workspace)?.into_iter().find(|s| s.name == name)
+                }
+                None => None,
+            },
+            None => return Err("A connector call has to come from a session.".into()),
+        };
+        match method {
+            "tools/list" => {
+                let tools = match &server {
+                    Some(server) => self.connectors.block_on(self.connectors.tools_for_shim(&server.account_id))?,
+                    None => Vec::new(),
+                };
+                Ok(serde_json::json!({ "tools": tools }))
+            }
+            "tools/call" => {
+                let Some(server) = server else {
+                    return Ok(serde_json::json!({
+                        "content": [{ "type": "text", "text": format!("{name} is not on for this session in Crew.") }],
+                        "isError": true,
+                    }));
+                };
+                let tool = params.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+                let arguments = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
+                Ok(self.connectors.block_on(self.connectors.call(&server.account_id, &tool, arguments)))
+            }
+            other => Err(format!("A connector's server has no {other}")),
+        }
+    }
+
     fn with_host<R>(&self, run: impl FnOnce(&tools::Host<'_>) -> R) -> R {
         let on_created = |created: &crew_core::session::Session| {
             self.hub.emit(
@@ -595,6 +660,10 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // So does a change in which of its MCP servers work.
     let servers = hub.clone();
     turns.mcp_status().set_listener(Arc::new(move |change| servers.emit("mcp-changed", change)));
+    // And every provider's servers on this machine, the whole list after any
+    // change: it is short.
+    let inventory = hub.clone();
+    turns.provider_servers().set_listener(Arc::new(move |lists| inventory.emit("provider-servers", lists)));
     // Claude's fast mode is the account's, so every window hears a change.
     let fast_mode = hub.clone();
     provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
@@ -632,6 +701,21 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     toolbox.register(children.clone());
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
     toolbox.register(Arc::new(browser.clone()));
+    let vault: Arc<dyn connectors::vault::VaultStore> = match &config.vault {
+        Some(path) => Arc::new(connectors::vault::FileVault::new(path.clone())),
+        None => Arc::new(connectors::vault::MemoryVault::default()),
+    };
+    // Every window hears the whole list again after any change: it is short.
+    let (told, listed) = (hub.clone(), config.store.clone());
+    let connectors = Connectors::new(
+        config.store.clone(),
+        vault,
+        Arc::new(move || {
+            if let Ok(list) = connectors::list(&listed) {
+                told.emit("connectors", list);
+            }
+        }),
+    )?;
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
@@ -639,6 +723,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         hub: hub.clone(),
         toolbox,
         exit: exit_tx.clone(),
+        connectors: connectors.clone(),
     }));
 
     // A letter left waiting for an idle bot is invisible until someone
@@ -672,6 +757,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         exit: exit_tx,
         children,
         socks_port: 0,
+        connectors,
         provider_jobs,
         provider_logins,
     };
@@ -1883,6 +1969,46 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let turns = hosts.turns.clone();
             json(block(move || turns.mcp_reconnect(&session_id, &name)).await?)
         }
+        "mcp_toggle" => {
+            let proto::McpToggle { session_id, name, enabled } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.mcp_toggle(&session_id, &name, enabled)).await?)
+        }
+        // The servers of this daemon's own CLIs, wherever the window is.
+        "provider_servers_list" => {
+            let refresh = parse::<proto::ProviderServersList>(params).is_ok_and(|list| list.refresh);
+            let servers = hosts.turns.provider_servers();
+            if refresh {
+                servers.refresh_all();
+            }
+            json(servers.list())
+        }
+        "provider_server_off" => {
+            let proto::ProviderServerOff { provider, name, off } = parse(params)?;
+            let servers = hosts.turns.provider_servers().clone();
+            json(block(move || servers.set_off(&provider, &name, off).map(|()| servers.list())).await?)
+        }
+        "provider_server_remove" => {
+            let proto::ProviderServerRef { provider, name } = parse(params)?;
+            let servers = hosts.turns.provider_servers().clone();
+            block(move || servers.remove(&provider, &name)).await?;
+            Ok(Value::Null)
+        }
+        "provider_server_sign_in" => {
+            let proto::ProviderServerRef { provider, name } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.provider_server_sign_in(&provider, &name)).await?)
+        }
+        "provider_server_callback" => {
+            let proto::ProviderServerCallback { state, url } = parse(params)?;
+            let servers = hosts.turns.provider_servers().clone();
+            json(block(move || servers.callback(&state, &url).map(|()| servers.list())).await?)
+        }
+        "provider_server_sign_in_cancel" => {
+            let proto::SignInCancel { state } = parse(params)?;
+            hosts.turns.provider_servers().cancel(&state);
+            Ok(Value::Null)
+        }
         "commands_list" => {
             let proto::CommandsList { session_id } = parse(params)?;
             let turns = hosts.turns.clone();
@@ -1982,6 +2108,88 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let now = app_state::now_millis();
             json(block(move || crew_core::browser::suggest(&store, &text, limit, now)).await?)
+        }
+        "registry_search" => {
+            let proto::RegistrySearch { text, limit } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || crew_core::registry::search(&store, &text, limit)).await?)
+        }
+        "registry_status" => {
+            let store = hosts.store.clone();
+            json(block(move || crew_core::registry::status(&store)).await?)
+        }
+        "registry_match" => {
+            let proto::RegistryMatch { urls } = parse(params)?;
+            let store = hosts.store.clone();
+            let found = block(move || crew_core::registry::match_urls(&store, &urls)).await?;
+            json(found.into_iter().map(|(url, server)| proto::RegistryMatched { url, server }).collect::<Vec<_>>())
+        }
+        "connectors_list" => {
+            let store = hosts.store.clone();
+            json(block(move || connectors::list(&store)).await?)
+        }
+        "connector_add" => {
+            let add: proto::ConnectorAdd = parse(params)?;
+            let store = hosts.store.clone();
+            let added = block(move || connector_to_add(&store, add)).await?;
+            let store = hosts.store.clone();
+            let connector = block(move || connectors::add(&store, added)).await?;
+            hosts.connectors.notify();
+            json(connector)
+        }
+        "connector_remove" => {
+            let proto::ConnectorRef { connector_id } = parse(params)?;
+            json(hosts.connectors.run(move |c| async move { c.remove_connector(&connector_id).await }).await?)
+        }
+        "connector_connect" => {
+            let req: proto::ConnectorConnect = parse(params)?;
+            json(hosts.connectors.run(move |c| async move { c.connect(req).await }).await?)
+        }
+        "vault_callback" => {
+            let proto::VaultCallback { state, url } = parse(params)?;
+            json(hosts.connectors.run(move |c| async move { c.callback(&state, &url).await }).await?)
+        }
+        "sign_in_cancel" => {
+            let proto::SignInCancel { state } = parse(params)?;
+            hosts.connectors.cancel(&state);
+            Ok(Value::Null)
+        }
+        "account_rename" => {
+            let proto::AccountRename { account_id, label } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || connectors::rename(&store, &account_id, &label)).await?;
+            hosts.connectors.notify();
+            Ok(Value::Null)
+        }
+        "account_remove" => {
+            let proto::AccountRef { account_id } = parse(params)?;
+            json(hosts.connectors.run(move |c| async move { c.remove_account(&account_id).await }).await?)
+        }
+        "account_refresh" => {
+            let proto::AccountRef { account_id } = parse(params)?;
+            json(
+                hosts
+                    .connectors
+                    .run(move |c| async move {
+                        c.list_tools(&account_id).await?;
+                        c.account(&account_id)
+                    })
+                    .await?,
+            )
+        }
+        "binding_set" => {
+            let proto::BindingSet { account_id, scope, on } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || connectors::set_binding(&store, &account_id, &scope, on)).await?;
+            hosts.connectors.notify();
+            Ok(Value::Null)
+        }
+        "tool_set" => {
+            let proto::ToolSet { account_id, tool, on } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || connectors::set_tool(&store, &account_id, &tool, on)).await?;
+            hosts.connectors.notify();
+            Ok(Value::Null)
         }
         "browser_history_list" => {
             let proto::HistoryList { text, before, limit } = parse(params)?;
@@ -2111,6 +2319,55 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
     }
 }
 
+/// What a connector is installed with: the registry's row for a registry
+/// name, or a URL the user typed, checked before anything is fetched from it.
+fn connector_to_add(store: &Store, add: proto::ConnectorAdd) -> Result<connectors::NewConnector, String> {
+    if let Some(name) = add.registry_name.filter(|n| !n.is_empty()) {
+        let server = crew_core::registry::server(store, &name)?.ok_or_else(|| format!("{name} is not in the registry"))?;
+        crew_core::connectors::net::check_url(&server.remote_url)?;
+        return Ok(connectors::NewConnector {
+            name: registry_display_name(&server),
+            registry_name: Some(server.name),
+            url: server.remote_url,
+            icon_url: server.icon_url,
+            description: server.description,
+            publisher: server.publisher,
+        });
+    }
+    let url = add.url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()).ok_or("Give a registry server or a URL")?;
+    let parsed = crew_core::connectors::net::check_url(&url)?;
+    let host = parsed.host_str().unwrap_or_default().to_string();
+    Ok(connectors::NewConnector {
+        name: add.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| host.clone()),
+        registry_name: None,
+        url,
+        icon_url: None,
+        description: String::new(),
+        publisher: host,
+    })
+}
+
+/// "Notion" for `com.notion/mcp` titled "Notion MCP": the title without the
+/// protocol's name, else the namespace's own word.
+fn registry_display_name(server: &proto::RegistryServer) -> String {
+    let title = server.title.as_deref().map(|t| {
+        let t = t.trim();
+        let lower = t.to_ascii_lowercase();
+        let cut = ["mcp server", "mcp"].iter().find_map(|suffix| lower.ends_with(suffix).then(|| t.len() - suffix.len()));
+        t[..cut.unwrap_or(t.len())].trim().to_string()
+    });
+    if let Some(title) = title.filter(|t| !t.is_empty()) {
+        return title;
+    }
+    let (namespace, slug) = server.name.split_once('/').unwrap_or((&server.name, ""));
+    let word = match namespace.strip_prefix("io.github.") {
+        Some(_) => slug.trim_start_matches("mcp-").trim_end_matches("-server").trim_end_matches("-mcp").to_string(),
+        None => namespace.split('.').nth(1).unwrap_or(slug).to_string(),
+    };
+    let mut chars = word.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or(word)
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, String> {
     serde_json::from_value(params).map_err(|e| e.to_string())
 }
@@ -2158,6 +2415,7 @@ mod tests {
             store,
             agents: AgentHost::new(),
             bridge: bridge.clone(),
+            vault: None,
         })
         .expect("serve");
         (handle, bridge)
@@ -2662,6 +2920,69 @@ mod tests {
         handle.shutdown();
     }
 
+    /// The whole of a connector on this Mac: installed by URL, signed in
+    /// through the redirect the window would catch, its tools listed with the
+    /// destructive one off, and then reached by a session through its shim's
+    /// calls, which the daemon answers for the account that name means for
+    /// that session and no other.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connector_signs_in_once_and_answers_a_session_through_its_shim() {
+        use crew_core::connectors::{fake_server, net};
+        net::allow_insecure_for_tests();
+        let fake = fake_server::start(fake_server::Options::default()).await;
+        let dir = test_dir("connector");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+
+        let added = rpc(&mut ws, 60, "connector_add", serde_json::json!({ "url": fake.mcp_url, "name": "Fake" })).await;
+        let connector: proto::Connector = serde_json::from_value(added.result.expect("added")).unwrap();
+        let started = rpc(&mut ws, 61, "connector_connect", serde_json::json!({ "connectorId": connector.id })).await;
+        let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
+        assert!(!sign_in.incognito, "the first account has nobody to hide from");
+        // What the tab would do: follow the page to its redirect, and stop there.
+        let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
+        let caught = answer.headers()["location"].to_str().unwrap().to_string();
+        assert!(caught.starts_with(&sign_in.redirect_uri), "{caught}");
+        let landed = rpc(&mut ws, 62, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await;
+        let account: proto::ConnectorAccount = serde_json::from_value(landed.result.expect("landed")).unwrap();
+        assert_eq!(account.state, proto::AccountState::Connected);
+        assert_eq!(account.identity.as_deref(), Some("ada@example.com"));
+        assert_eq!(account.tools_off, ["delete_page"]);
+        let replay = rpc(&mut ws, 63, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": "x" })).await;
+        assert!(replay.result.is_none(), "a sign-in lands once");
+
+        let info = bridge.info().expect("info");
+        let token = bridge.mint(&session_id);
+        let shim = |method: &str, params: serde_json::Value| {
+            let socket = info.socket_path.clone();
+            let payload = serde_json::json!({ "token": token, "method": method, "params": params });
+            std::thread::spawn(move || unix_call(&socket, &payload)).join().unwrap()
+        };
+        let listed = shim("tools/list", serde_json::json!({ "_crewConnector": "fake" }));
+        let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["search", "create_page"], "{listed}");
+        let called =
+            shim("tools/call", serde_json::json!({ "_crewConnector": "fake", "name": "search", "arguments": { "text": "hi" } }));
+        assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "hi", "{called}");
+        let off = shim("tools/call", serde_json::json!({ "_crewConnector": "fake", "name": "delete_page", "arguments": {} }));
+        assert_eq!(off["result"]["isError"], true, "{off}");
+        let other = shim("tools/call", serde_json::json!({ "_crewConnector": "notion", "name": "search", "arguments": {} }));
+        assert!(other["result"]["content"][0]["text"].as_str().unwrap().contains("not on for this session"), "{other}");
+        // Off for its workspace: the session lists nothing and calls nothing.
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let workspace = session::get(&store, session_id.clone()).unwrap().unwrap().workspace_id;
+        let unbind = serde_json::json!({ "accountId": account.id, "scope": { "kind": "workspace", "id": workspace }, "on": false });
+        assert!(rpc(&mut ws, 64, "binding_set", unbind).await.error.is_none());
+        let listed = shim("tools/list", serde_json::json!({ "_crewConnector": "fake" }));
+        assert_eq!(listed["result"]["tools"], serde_json::json!([]), "{listed}");
+        // No call from the window's own token: connectors answer sessions.
+        let theirs = rpc(&mut ws, 65, "account_remove", serde_json::json!({ "accountId": account.id })).await;
+        assert!(theirs.error.is_none());
+        assert!(fake.requests().iter().any(|r| r.path.contains("revoke")), "disconnecting revokes at the service");
+        handle.shutdown();
+    }
+
     /// A workspace with one bot and one terminal session in it.
     async fn seed_terminal(ws: &mut Ws, cwd: &str) -> (String, String, String) {
         let workspace: proto::Workspace = serde_json::from_value(
@@ -2937,6 +3258,129 @@ time.sleep(600)
             let unknown = rpc(&mut ws, id, method, named("nobody", "x")).await;
             assert!(!unknown.ok, "{method} took a session that does not exist");
         }
+        handle.shutdown();
+    }
+
+    /// A Grok whose `mcp list --json` says `a` and `b`, and whose `mcp
+    /// disable` and `enable` keep what is off in a file beside it.
+    fn write_fake_grok_mcp(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("grok");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+state = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "grok-off")
+off = open(state).read().split() if os.path.exists(state) else []
+args = sys.argv[1:]
+if args[:2] == ["mcp", "list"]:
+    print(json.dumps([{"name": n, "command": "npx", "args": [n], "env": {"KEY": "secret"}, "enabled": n not in off, "scope": "user"} for n in ["a", "b"]]))
+elif args[:2] == ["mcp", "disable"]:
+    open(state, "w").write(" ".join(sorted(set(off + [args[2]]))))
+    print("Disabled MCP server '%s'." % args[2])
+elif args[:2] == ["mcp", "enable"]:
+    open(state, "w").write(" ".join(n for n in off if n != args[2]))
+    print("Enabled MCP server '%s'." % args[2])
+"#,
+        )
+        .expect("fake grok");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// The lists, once a read of `provider` has landed and `done` holds.
+    async fn provider_lists_until(
+        ws: &mut Ws,
+        id: &mut u32,
+        provider: &str,
+        done: impl Fn(&proto::ProviderInventory) -> bool,
+    ) -> Vec<proto::ProviderInventory> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            *id += 1;
+            let listed = rpc(ws, *id, "provider_servers_list", serde_json::json!({ "refresh": false })).await;
+            let lists: Vec<proto::ProviderInventory> = serde_json::from_value(listed.result.expect("lists")).expect("lists");
+            if lists.iter().any(|list| list.provider == provider && !list.checking && list.checked_at.is_some() && done(list)) {
+                return lists;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{provider} never landed: {lists:?}");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// `provider_servers_list` answers the lists it has at once and reads them
+    /// again on `refresh`; `provider_server_off` keeps what is off and, for
+    /// Grok, runs Grok's own disable. A provider whose CLI is not there is
+    /// listed as not installed. The window hears each change as
+    /// `provider-servers`.
+    #[tokio::test]
+    async fn provider_servers_are_listed_and_turned_off_in_crew() {
+        let dir = test_dir("provider-servers");
+        let _ = std::fs::remove_file(dir.join("grok-off"));
+        let handle = test_serve(&dir);
+        for name in ["claude", "codex", "opencode", "cursor-agent"] {
+            handle.override_agent_binary(name, dir.join("missing").to_string_lossy());
+        }
+        handle.override_agent_binary("grok", write_fake_grok_mcp(&dir).to_string_lossy());
+        let mut ws = connect_authed(&handle).await;
+
+        let first = rpc(&mut ws, 1, "provider_servers_list", serde_json::json!({ "refresh": false })).await;
+        let lists: Vec<proto::ProviderInventory> = serde_json::from_value(first.result.expect("lists")).expect("lists");
+        let providers: Vec<_> = lists.iter().map(|list| list.provider.as_str()).collect();
+        assert_eq!(providers, ["claude", "codex", "opencode", "cursor", "grok"]);
+        assert!(lists.iter().all(|list| list.checked_at.is_none() && !list.checking), "nothing is read unasked here");
+
+        let refreshed = rpc(&mut ws, 2, "provider_servers_list", serde_json::json!({ "refresh": true })).await;
+        assert!(refreshed.ok, "{:?}", refreshed.error);
+        let heard = wait_event(&mut ws, "provider-servers").await;
+        let pushed: Vec<proto::ProviderInventory> = serde_json::from_value(heard.payload).expect("push");
+        assert_eq!(pushed.len(), 5);
+        let mut id = 10;
+        let lists = provider_lists_until(&mut ws, &mut id, "grok", |list| list.servers.len() == 2).await;
+        let grok = lists.iter().find(|list| list.provider == "grok").unwrap();
+        assert!(grok.installed);
+        assert_eq!(grok.servers[0].target, "npx a");
+        assert!(!serde_json::to_string(&grok.servers).unwrap().contains("secret"), "an env value reached a row");
+        let claude = lists.iter().find(|list| list.provider == "claude").unwrap();
+        assert!(!claude.installed && claude.servers.is_empty() && claude.error.is_none(), "{claude:?}");
+
+        let off =
+            rpc(&mut ws, 3, "provider_server_off", serde_json::json!({ "provider": "grok", "name": "a", "off": true })).await;
+        assert!(off.ok, "{:?}", off.error);
+        assert_eq!(std::fs::read_to_string(dir.join("grok-off")).unwrap(), "a", "Grok's own disable ran");
+        let lists =
+            provider_lists_until(&mut ws, &mut id, "grok", |list| list.servers.iter().any(|s| s.name == "a" && s.off_in_crew))
+                .await;
+        let grok = lists.iter().find(|list| list.provider == "grok").unwrap();
+        assert_eq!(
+            grok.servers.iter().map(|s| (s.name.as_str(), s.off_in_crew)).collect::<Vec<_>>(),
+            [("a", true), ("b", false)]
+        );
+        let on =
+            rpc(&mut ws, 4, "provider_server_off", serde_json::json!({ "provider": "grok", "name": "a", "off": false })).await;
+        assert!(on.ok, "{:?}", on.error);
+        assert_eq!(std::fs::read_to_string(dir.join("grok-off")).unwrap(), "");
+        let claude_off =
+            rpc(&mut ws, 5, "provider_server_off", serde_json::json!({ "provider": "claude", "name": "context7", "off": true }))
+                .await;
+        assert!(claude_off.ok, "{:?}", claude_off.error);
+        let crew =
+            rpc(&mut ws, 6, "provider_server_off", serde_json::json!({ "provider": "claude", "name": "crew", "off": true }))
+                .await;
+        assert!(!crew.ok, "Crew's own server is never off");
+
+        let grok_sign_in =
+            rpc(&mut ws, 7, "provider_server_sign_in", serde_json::json!({ "provider": "grok", "name": "a" })).await;
+        assert!(!grok_sign_in.ok, "Grok has no sign-in");
+        let cursor =
+            rpc(&mut ws, 8, "provider_server_sign_in", serde_json::json!({ "provider": "cursor", "name": "figma" })).await;
+        assert!(!cursor.ok, "no Cursor on this machine");
+        let stray = serde_json::json!({ "state": "nope", "url": "http://127.0.0.1:17899/callback?code=x&state=nope" });
+        assert!(!rpc(&mut ws, 9, "provider_server_callback", stray).await.ok, "no sign-in waits for it");
+        assert!(rpc(&mut ws, 10, "provider_server_sign_in_cancel", serde_json::json!({ "state": "nope" })).await.ok);
+        let toggle =
+            rpc(&mut ws, 11, "mcp_toggle", serde_json::json!({ "sessionId": "nobody", "name": "x", "enabled": false })).await;
+        assert!(!toggle.ok, "no such session");
         handle.shutdown();
     }
 

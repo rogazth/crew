@@ -12,6 +12,7 @@ use serde_json::{json, Map, Value};
 use super::runtime::Autonomy;
 use super::{
     as_record, clip, crew_result_detail, crew_tool_detail, finite_number, leaf, string_field, subagent_report, todo_items,
+    McpServerSpec,
 };
 
 /// How long opencode lets one call to Crew's server run, in milliseconds: a
@@ -44,23 +45,51 @@ pub const INSTALL: &str = "Crew needs opencode 2.x: npm i -g @opencode/cli";
 /// - `env` is the MCP server's own environment (Crew's socket, the run's host
 ///   token). opencode adds it to what the server process has, and only the MCP
 ///   server sees it: a shell inherits the server's environment, never this.
-pub fn server_config(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)]) -> String {
+/// - `off`: the user's servers off in Crew, each a disabled stub over the
+///   user's entry (see [`crate::provider_servers::opencode_off_entry`]).
+pub fn server_config(
+    mcp: Option<&(String, Vec<String>)>,
+    env: &[(String, String)],
+    connectors: &[McpServerSpec],
+    off: &[String],
+) -> String {
     let mut config = Map::new();
     config.insert("$schema".into(), json!("https://opencode.ai/config.json"));
+    let mut servers = Map::new();
     if let Some((exe, args)) = mcp {
         let mut command = vec![exe.clone()];
         command.extend(args.iter().cloned());
-        config.insert(
-            "mcp".into(),
-            json!({ "servers": { "crew": {
+        let environment = env.iter().map(|(key, value)| (key.clone(), json!(value))).collect::<Map<String, Value>>();
+        servers.insert(
+            "crew".into(),
+            json!({
                 "type": "local",
                 "command": command,
                 "timeout": { "execution": MCP_TIMEOUT_MS },
                 "codemode": false,
-                "environment": env.iter().map(|(key, value)| (key.clone(), json!(value))).collect::<Map<String, Value>>(),
-            } } }),
+                "environment": environment,
+            }),
         );
+        for server in connectors {
+            let mut command = vec![server.command.clone()];
+            command.extend(server.args.iter().cloned());
+            servers.insert(
+                server.name.clone(),
+                json!({
+                    "type": "local",
+                    "command": command,
+                    "timeout": { "execution": MCP_TIMEOUT_MS },
+                    "environment": environment,
+                }),
+            );
+        }
         config.insert("permissions".into(), json!([crew_rule()]));
+    }
+    for name in off {
+        servers.entry(name.clone()).or_insert_with(crate::provider_servers::opencode_off_entry);
+    }
+    if !servers.is_empty() {
+        config.insert("mcp".into(), json!({ "servers": servers }));
     }
     Value::Object(config).to_string()
 }
@@ -822,15 +851,35 @@ mod tests {
     fn the_server_config_names_crews_server_in_the_2x_format() {
         let env = [("CREW_TOKEN".to_string(), "host".to_string())];
         let config: Value =
-            serde_json::from_str(&server_config(Some(&("/bin/crewd".into(), vec!["--mcp".into()])), &env)).unwrap();
+            serde_json::from_str(&server_config(Some(&("/bin/crewd".into(), vec!["--mcp".into()])), &env, &[], &[])).unwrap();
         let crew = &config["mcp"]["servers"]["crew"];
         assert_eq!(crew["environment"], json!({ "CREW_TOKEN": "host" }));
         assert_eq!(crew["command"], json!(["/bin/crewd", "--mcp"]));
         assert_eq!(crew["timeout"], json!({ "execution": MCP_TIMEOUT_MS }), "a catalog timeout would wait the 65 minutes too");
         assert_eq!(crew["codemode"], json!(false));
         assert_eq!(config["permissions"], json!([{ "action": "crew_*", "resource": "*", "effect": "allow" }]));
-        let bare: Value = serde_json::from_str(&server_config(None, &[])).unwrap();
+        assert_eq!(config["mcp"]["servers"].as_object().map(Map::len), Some(1), "no connector is bound: {config}");
+        let bare: Value = serde_json::from_str(&server_config(None, &[], &[], &[])).unwrap();
         assert!(bare.get("mcp").is_none() && bare.get("permissions").is_none(), "{bare}");
+    }
+
+    /// A bound account is one more local server with the host's env, behind
+    /// Code Mode like any user server and not allowed by Crew's rule.
+    #[test]
+    fn a_bound_connector_is_one_more_server_in_the_config() {
+        let env = [("CREW_TOKEN".to_string(), "host".to_string())];
+        let connectors = [McpServerSpec::connector("/bin/crewd", "notion")];
+        let crew = ("/bin/crewd".to_string(), vec!["--mcp".to_string()]);
+        let config: Value = serde_json::from_str(&server_config(Some(&crew), &env, &connectors, &[])).unwrap();
+        let notion = &config["mcp"]["servers"]["notion"];
+        assert_eq!(notion["command"], json!(["/bin/crewd", "--mcp-connector", "notion"]), "{config}");
+        assert_eq!(notion["environment"], json!({ "CREW_TOKEN": "host" }));
+        assert_eq!(notion["timeout"], json!({ "execution": MCP_TIMEOUT_MS }));
+        assert!(notion.get("codemode").is_none(), "{config}");
+        assert_eq!(config["mcp"]["servers"]["crew"]["command"], json!(["/bin/crewd", "--mcp"]));
+        assert_eq!(config["permissions"], json!([{ "action": "crew_*", "resource": "*", "effect": "allow" }]));
+        let bare: Value = serde_json::from_str(&server_config(None, &env, &connectors, &[])).unwrap();
+        assert!(bare.get("mcp").is_none(), "{bare}");
     }
 
     #[test]

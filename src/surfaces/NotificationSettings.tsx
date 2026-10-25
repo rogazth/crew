@@ -99,7 +99,7 @@ export function NotificationSettings() {
             label="Banners only when Crew is in the background"
             description={
               prefs.onlyWhenUnfocused
-                ? "With Crew in front, news shows in the window."
+                ? "With Crew in front, updates show in the window."
                 : "Banners for any session but the one on screen."
             }
             checked={prefs.onlyWhenUnfocused}

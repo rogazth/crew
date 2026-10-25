@@ -84,7 +84,29 @@ export const CHANNELS = {
   guestMachine: "browser:guest-machine",
   /** main → window: an agent needs this tab live; mount it (hidden) and pin it, or add it first. */
   mount: "browser:mount",
+  /**
+   * window → main: open a sign-in (a connector's, a provider server's) in
+   * a window of its own and resolve once it ends: the redirect caught, or
+   * the window closed.
+   */
+  signIn: "browser:sign-in",
+  /** window → main: give up on a sign-in, closing its window. */
+  signInAbort: "browser:sign-in-abort",
 } as const;
+
+/**
+ * A sign-in the window started (the daemon's `SignIn`, or a provider
+ * server's `ProviderSignIn`). Main opens `authUrl` and catches the navigation
+ * to `redirectUri` whose `state` is this one; nothing on this Mac is asked
+ * for the redirect URI, Crew's own or a CLI's loopback port.
+ */
+export type SignInRequest = { state: string; authUrl: string; redirectUri: string; incognito: boolean };
+
+/**
+ * How a sign-in window ended: the redirect it caught, whole; closed before
+ * one came; or refused, a redirect to the URI with another `state`.
+ */
+export type SignInOutcome = { kind: "caught"; url: string } | { kind: "closed" } | { kind: "refused" };
 
 /**
  * `open`: a tab an agent just made, to add to its strip in the background.

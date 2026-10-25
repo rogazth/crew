@@ -214,7 +214,7 @@ fn settle(child: &mut Child, limit: Duration) -> bool {
     false
 }
 
-fn rfc3339(at: SystemTime) -> String {
+pub(crate) fn rfc3339(at: SystemTime) -> String {
     let secs = at.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant's days-to-civil.

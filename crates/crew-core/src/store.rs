@@ -500,6 +500,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 43 {
+        let tx = conn.unchecked_transaction()?;
+        // The daemon's copy of the MCP Registry, for Integrations to browse.
+        tx.execute_batch(crate::registry::MIGRATION_V43)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 44 {
+        let tx = conn.unchecked_transaction()?;
+        // Crew's connectors, their accounts and where each is on.
+        tx.execute_batch(crate::connectors::MIGRATION_V44)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (44, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

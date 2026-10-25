@@ -371,7 +371,10 @@ impl TurnHost {
                         && live.thread_id.is_some()
                         && live.settled
                         && !live.cancelled
-                        && !applied.clears_a_setting_of(&live.applied) =>
+                        && !applied.clears_a_setting_of(&live.applied)
+                        // What is off in Crew is the thread's config, which a
+                        // turn does not change.
+                        && applied.off == live.applied.off =>
                 {
                     live.begin_turn(tx);
                     let since = std::mem::replace(&mut live.applied, applied);
@@ -418,6 +421,7 @@ impl TurnHost {
         // the first, and this process lives across turns, so nothing mints
         // again until it is replaced.
         let env = self.agent_env(session_id);
+        let connectors = self.connector_servers(session, mcp.as_ref());
         let thread = CodexThread {
             cwd: params.cwd.clone(),
             resume: conversation_to_resume(session),
@@ -425,6 +429,8 @@ impl TurnHost {
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
             service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
             autonomy: self.autonomy(session),
+            connectors: connectors.clone(),
+            off: self.provider_servers.codex_off(&super::kept_servers(&connectors)),
             mcp,
             mcp_env: env.clone().into_iter().collect(),
             writable_roots: self.bot_folder(session).into_iter().collect(),

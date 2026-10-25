@@ -281,6 +281,10 @@ struct Launch {
     service_tier: Option<String>,
     autonomy: Autonomy,
     cwd: String,
+    /// The user's servers it was launched without: the ones off in Crew for
+    /// its provider. Neither CLI takes a change of them while it runs, so a
+    /// kept process that has another set is launched again.
+    off: Vec<String>,
 }
 
 impl Launch {
@@ -368,8 +372,8 @@ enum Plan {
     Changes(Vec<Change>),
     /// Something it cannot change while it runs: it is launched again on the
     /// same conversation. The cwd, Full autonomy (`--dangerously-skip-permissions`
-    /// is a launch flag), and a model or effort back to the CLI's own (there
-    /// is no request that takes one back). The question tool follows the
+    /// is a launch flag), a model or effort back to the CLI's own (there
+    /// is no request that takes one back), and what is off in Crew. The question tool follows the
     /// session's kind, which never changes, so it is not compared.
     Relaunch,
 }
@@ -377,7 +381,7 @@ enum Plan {
 /// The one place that says which differences a kept Claude process takes in
 /// place. `fast_allowed` is whether the account may use fast mode.
 fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
-    if old.cwd != new.cwd {
+    if old.cwd != new.cwd || old.off != new.off {
         return Plan::Relaunch;
     }
     let mut changes = Vec::new();
@@ -411,7 +415,7 @@ fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
 impl Launch {
     /// Settings no session has, for a process a test installs by hand.
     fn none() -> Self {
-        Self { model: None, effort: None, service_tier: None, autonomy: Autonomy::Ask, cwd: String::new() }
+        Self { model: None, effort: None, service_tier: None, autonomy: Autonomy::Ask, cwd: String::new(), off: Vec::new() }
     }
 }
 
@@ -772,6 +776,8 @@ pub struct TurnHost {
     commands: crate::commands::CommandsHost,
     /// The MCP servers of each session, and how they stand.
     mcp_status: crate::mcp_status::McpHost,
+    /// The servers each provider CLI has on this machine, and what is off in Crew.
+    provider_servers: crate::provider_servers::ProviderServers,
     /// The one `opencode serve` every opencode session runs on.
     opencode: opencode_server::OpencodeServer,
     /// What the providers' plans have spent, as turns and probes report it.
@@ -810,13 +816,15 @@ impl TurnHost {
         // entries stopped: no process of theirs is left to read or stop.
         let background = crate::background::BackgroundHost::persisted(store.clone());
         let usage = crate::usage::UsageHost::new(store.clone());
+        let binaries = Arc::new(Mutex::new(HashMap::new()));
+        let provider_servers = crate::provider_servers::ProviderServers::new(store.clone(), binaries.clone());
         Self {
             agents,
             store,
             transcripts,
             bridge,
             inner: Arc::new(Mutex::new(HashMap::new())),
-            binaries: Arc::new(Mutex::new(HashMap::new())),
+            binaries,
             #[cfg(test)]
             mcp_exe: Arc::new(Mutex::new(None)),
             claude_home: Arc::new(Mutex::new(None)),
@@ -837,6 +845,7 @@ impl TurnHost {
             background,
             commands: crate::commands::CommandsHost::default(),
             mcp_status: crate::mcp_status::McpHost::default(),
+            provider_servers,
             opencode: opencode_server::OpencodeServer::default(),
             usage,
             contexts: Arc::new(Mutex::new(HashMap::new())),
@@ -854,6 +863,12 @@ impl TurnHost {
     /// when they change.
     pub fn background(&self) -> &crate::background::BackgroundHost {
         &self.background
+    }
+
+    /// The servers each provider CLI has on this machine: crewd lists them,
+    /// turns them off in Crew, signs in to them, and hears when they change.
+    pub fn provider_servers(&self) -> &crate::provider_servers::ProviderServers {
+        &self.provider_servers
     }
 
     /// The plans' usage: crewd reads it, and hears when it changes.
@@ -2410,6 +2425,26 @@ impl TurnHost {
         Some((exe, vec!["--mcp".into()]))
     }
 
+    /// The connector accounts bound to a session, each one more server beside
+    /// Crew's `mcp`, run by the same crewd. None without Crew's server, and
+    /// none when they cannot be read: a spawn never waits on them.
+    pub(crate) fn connector_servers(
+        &self,
+        session: &crate::session::Session,
+        mcp: Option<&(String, Vec<String>)>,
+    ) -> Vec<crate::providers::McpServerSpec> {
+        let Some((command, _)) = mcp else {
+            return Vec::new();
+        };
+        match crate::connectors::bound_servers(&self.store, session) {
+            Ok(bound) => bound.iter().map(|server| crate::providers::McpServerSpec::connector(command, &server.name)).collect(),
+            Err(error) => {
+                eprintln!("[connectors] session {}: spawned without its connectors: {error}", session.id);
+                Vec::new()
+            }
+        }
+    }
+
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
         let row = session.clone();
         let outcome = match session.provider.as_str() {
@@ -3476,6 +3511,7 @@ impl TurnHost {
             service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
             autonomy: self.autonomy(session),
             cwd: cwd.to_string(),
+            off: crate::provider_servers::off_names(&self.store, &session.provider).into_iter().collect(),
         }
     }
 
@@ -3618,6 +3654,7 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
+        let connectors = self.connector_servers(session, mcp.as_ref());
         let persona = self.persona(session, Harness::Mcp, mcp.is_some(), &params.cwd);
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
@@ -3629,13 +3666,14 @@ impl TurnHost {
             asks_questions: carries_conversation(session),
             system_prompt: persona,
             autonomy,
-            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
+            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, &connectors)),
             user_settings: session.kind != "bot",
             // A tier carried over from another provider must not ask an
             // account that cannot use fast mode for it.
             fast: session.service_tier == "fast"
                 && crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden,
             add_dirs: self.bot_folder(session).into_iter().collect(),
+            denied_mcp: crate::provider_servers::spawn_off(&self.store, "claude", &kept_servers(&connectors)),
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
@@ -4868,6 +4906,58 @@ mod mailbox_tests {
         assert!(!launched["argv"].to_string().contains(token), "{}", launched["argv"]);
     }
 
+    /// The shared server carries each account the workspace has on, one
+    /// more local server with the host's env, named for the workspace it
+    /// lists tools for; with none on, Crew's is alone.
+    #[test]
+    fn the_shared_server_carries_the_workspaces_connectors() {
+        let first_launch = |world: &World| -> Value {
+            let launch = std::fs::read_dir(&world.dir)
+                .expect("dir")
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "launch"))
+                .expect("the server was launched");
+            serde_json::from_str(std::fs::read_to_string(launch).expect("log").lines().next().expect("a launch")).expect("json")
+        };
+
+        let bare = world();
+        let ws = workspace(&bare);
+        let coder = bot(&bare, &ws, "Coder");
+        turn(&bare, &coder, "hello");
+        let servers = first_launch(&bare)["config"]["mcp"]["servers"].clone();
+        assert_eq!(servers.as_object().map(|servers| servers.len()), Some(1), "{servers}");
+
+        let world = world();
+        let ws = workspace(&world);
+        let store = world.host.test_store();
+        let connector = crate::connectors::add(
+            store,
+            crate::connectors::NewConnector {
+                name: "Notion".into(),
+                registry_name: None,
+                url: "https://mcp.notion.com/mcp".into(),
+                icon_url: None,
+                description: String::new(),
+                publisher: String::new(),
+            },
+        )
+        .expect("connector");
+        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
+        let coder = bot(&world, &ws, "Coder");
+        turn(&world, &coder, "hello");
+        let launched = first_launch(&world);
+        let servers = &launched["config"]["mcp"]["servers"];
+        let notion = &servers["notion"];
+        let crew = &servers["crew"];
+        let exe = crew["command"][0].clone();
+        assert_eq!(notion["command"], json!([exe, "--mcp-connector", "notion", "--workspace", ws]), "{servers}");
+        assert_eq!(notion["environment"], crew["environment"], "{servers}");
+        assert!(notion.get("codemode").is_none(), "{servers}");
+        assert_eq!(launched["config"]["permissions"], json!([{ "action": "crew_*", "resource": "*", "effect": "allow" }]));
+    }
+
     #[test]
     fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
         let world = world();
@@ -5456,6 +5546,12 @@ mod context_tests {
     }
 }
 
+/// The servers of a spawn that are Crew's, never the CLI's: its own and the
+/// connectors'. Off in Crew never leaves one of them out.
+pub(crate) fn kept_servers(connectors: &[crate::providers::McpServerSpec]) -> Vec<String> {
+    std::iter::once("crew".to_string()).chain(connectors.iter().map(|server| server.name.clone())).collect()
+}
+
 #[cfg(test)]
 mod plan_tests {
     use super::*;
@@ -5467,6 +5563,7 @@ mod plan_tests {
             service_tier: None,
             autonomy: Autonomy::Ask,
             cwd: "/w".into(),
+            off: Vec::new(),
         }
     }
 
@@ -5593,8 +5690,19 @@ mod plan_tests {
                 service_tier: Some("fast".into()),
                 autonomy: Autonomy::Edits,
                 cwd: "/w".into(),
+                off: Vec::new(),
             }
         );
+    }
+
+    /// A server turned off in Crew, or back on, is a launch flag to Claude:
+    /// its kept process is launched again on the same conversation.
+    #[test]
+    fn what_is_off_in_crew_changing_launches_claude_again() {
+        let off = Launch { off: vec!["context7".into()], ..launch() };
+        assert_eq!(claude_plan(&launch(), &off, true), Plan::Relaunch);
+        assert_eq!(claude_plan(&off, &launch(), true), Plan::Relaunch);
+        assert_eq!(claude_plan(&off, &off, true), Plan::Changes(Vec::new()));
     }
 
     #[test]

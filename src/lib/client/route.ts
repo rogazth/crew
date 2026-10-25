@@ -39,6 +39,21 @@ const LOCAL_METHODS = new Set([
   "browser_page_save",
   "browser_page_get",
   "browser_page_delete",
+  "registry_search",
+  "registry_status",
+  "registry_match",
+  // Crew's connectors and the vault that signs them in: this Mac's, for now.
+  "connectors_list",
+  "connector_add",
+  "connector_remove",
+  "connector_connect",
+  "vault_callback",
+  "sign_in_cancel",
+  "account_rename",
+  "account_remove",
+  "account_refresh",
+  "binding_set",
+  "tool_set",
 ]);
 
 /** Calls about "the machine in front of you": the focused workspace's. */

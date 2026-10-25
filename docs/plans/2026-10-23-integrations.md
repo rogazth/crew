@@ -83,6 +83,25 @@ Claude's binary also reads `ENABLE_CLAUDEAI_MCP_SERVERS`, which presumably
 controls the claude.ai connectors. Everything in this table that Crew does not
 call today is checked by the spike.
 
+## Server facts (checked 2026-10-24)
+
+Connectors come from the registry, so the OAuth client is generic. These
+servers were probed without signing in, to find the cases it must cover:
+
+| Server | 401 names its metadata | DCR | CIMD | Public client | Revocation |
+| --- | --- | --- | --- | --- | --- |
+| Notion, Linear, Sentry | yes | yes | yes | yes | yes |
+| Stripe | yes; the authorization server has a path (`access.stripe.com/mcp`) | yes | no | yes | yes |
+| Atlassian | no: fall back to the well-known URIs | yes | no | yes | yes |
+| Figma | yes | yes | no | no: needs a secret | no |
+| GitHub | yes; `github.com/login/oauth` publishes no metadata | no | no | — | — |
+
+So discovery falls back from the header to the path-inserted and then the
+root well-known URIs, and from `oauth-authorization-server` to
+`openid-configuration`. A server with neither DCR nor CIMD, or that refuses
+Crew's registration, cannot be connected from Crew: Connect says so and
+points to the provider server.
+
 ## The rules
 
 1. **The service authenticates the person.** Sign-in happens on the
@@ -113,8 +132,8 @@ call today is checked by the spike.
   name, transport, URL or command, its scope (user, project, plugin,
   claude.ai), and its state. The CLI owns it.
 - **Connector.** A remote MCP server installed from Crew: from the official
-  registry (`registry.modelcontextprotocol.io/v0/servers`, cached for a day)
-  or from a URL.
+  registry (`registry.modelcontextprotocol.io/v0.1/servers`, kept by the
+  Mac's `crewd`, phase 1b) or from a URL.
 - **Account.** One sign-in to a connector, with a stable id and a label
   ("Work"). A connector can have several. The label is filled in from the
   authorization server's `id_token` or userinfo (`email`, `name`) when it
@@ -181,10 +200,15 @@ does not: a machine spawns from its copy.
 
 ### Signing in
 
-Every sign-in opens in a Crew browser tab. The tab catches the navigation to
-the redirect URI of a flow it started (`will-redirect` / `will-navigate`, and
-before the loopback rewrite of a remote workspace's tab), cancels it, closes
-itself, and sends the URL to the daemon that waits for it. A code is useless
+Every sign-in opens in a sign-in window of Crew's browser, not a tab: a tab
+sits in a workspace under the page, agents can drive tabs, and a remote
+workspace's tabs have their loopback rewritten. The window uses the shared
+partition (incognito for another account), so consent is usually one click,
+and no agent can list, open or drive it. It catches the navigation to the
+redirect URI of the flow it started (`will-redirect` / `will-navigate`, and
+the session's `onBeforeRequest` before the loopback rewrite, so the code never
+reaches a socket), cancels it, closes itself, and sends the URL to the daemon
+that waits for it (`electron/browser/sign-in-window.ts`, `sign-in-flows.ts`). A code is useless
 without its PKCE verifier, which never leaves that daemon. Nothing has to
 listen on the redirect URI.
 
@@ -271,6 +295,29 @@ UX, for the prototype to settle:
 - Out of scope here: moving the address book and preferences off the Mac,
   and push notifications.
 
+### Built in phase 2, and how
+
+- `crew-core/src/connectors/`: `mod.rs` (model, migration 44, bindings,
+  server names), `oauth.rs`, `remote.rs` (streamable HTTP; the 2024-11-05
+  HTTP+SSE transport is refused with a clear error), `net.rs` (one `reqwest`
+  client: HTTPS only, private and local addresses refused in its resolver,
+  no proxy, since a proxy would resolve the host itself), `vault.rs` (the
+  0600 file), `flow.rs` (sign-in, one refresh at a time per account, calls),
+  `fake_server.rs` (the `fakes` feature; `CREW_CONNECTORS_INSECURE=1` lets a
+  daemon reach it).
+- The shim is `crewd --mcp-connector <name>`. It marks `tools/*` with the
+  name; the daemon resolves the account from the session's token.
+- opencode has one shared server per daemon, not per folder: its config is
+  the union of what every workspace has on, each name passing the workspace
+  that has it (`--workspace`), and each call is checked against its session.
+- A tool added or reworded after the first listing starts off, which is the
+  approval the `listChanged` rule asks for.
+- None of the probed servers gives an `id_token` or userinfo unasked, so an
+  account's label is mostly typed.
+- The page is the top-level Connectors page. Provider servers, Off in Crew,
+  duplicates and the vault sheet stay in the dev-only prototype
+  (`?prototype=integrations`) until their phases.
+
 ### Risks accepted
 
 - Whoever reads the vault reads every Crew account. On Linux, that is root
@@ -278,6 +325,57 @@ UX, for the prototype to settle:
 - Sessions run as the user's UID, so one can read its machine's lease token
   file, as it can read `daemon.json` today.
 - Leases are bearer tokens in a `crewd`'s memory, and they never reach a CLI.
+
+## Security
+
+No server of Crew's holds a grant: each person's vault is one of their own
+machines, so there is no store of every user's accounts to breach. What every
+install shares is the update channel and, once there is one, the CIMD
+document. Those two are guarded first. The rest are acceptance criteria of the
+phase that builds the part.
+
+- **Before distributing.**
+  - `latest.json` is signed with an ed25519 key that only the release
+    workflow holds. The app embeds the public key and refuses a manifest
+    whose signature does not verify. The Linux `crewd` ships inside the
+    bundle, so it is covered too. Losing the key means reinstalling by hand,
+    so it is also kept in the owner's password manager.
+  - Release tags `v*` are created only by the owner (a ruleset), the signing
+    key lives in an environment only those tags and master reach, and every
+    action is pinned to a commit. Releases stay automatic.
+  - The app runs with the hardened runtime, so no process of the user's can
+    inject code into it through `DYLD_*` or attach to it.
+  - `cargo deny` and `npm audit` run weekly and on every push to master.
+  - Later, with a Developer ID: notarization, and the updater also checks
+    that the downloaded bundle is signed with the Team ID. An update then
+    passes on either check, as Sparkle does, so losing the manifest key no
+    longer strands installed copies.
+- **Phase 2.**
+  - `crewd` resolves the accounts a shim may call from the session's token,
+    never from the `--mcp-connector` argument, which the session controls.
+  - Vault RPCs (connect, callback, mint, move) take the user's token only,
+    never a session's.
+  - Discovery fetches HTTPS only, refuses private and loopback addresses,
+    checks that the resource metadata names the server's own origin, and
+    sends a token only to the resource it was issued for. The callback's
+    `iss` is checked (RFC 9207).
+  - No log, transcript or crash report holds a token, a `code=` URL or an
+    OAuth body. A test greps the fake server's run for them.
+  - Disconnect revokes the grant at the service (RFC 7009) before deleting it.
+  - Agents cannot consent for the user: sign-in tabs use their own browser
+    partition, and an agent's tab cannot open a flow Crew did not start.
+  - A `listChanged` that adds tools or changes their descriptions is shown
+    and waits for approval.
+  - The vault sits behind a storage trait: a 0600 file first, the keychain
+    on macOS next. This is what Claude Code and Codex do on Linux.
+- **Phase 3.**
+  - A machine's lease token leases only the accounts bound on that machine,
+    at a limited rate, and every lease is logged where the page shows it.
+  - The Mac's lease listener binds to its Tailscale address only, as
+    `crewd serve` already does on remotes (`remote-ssh.ts`).
+- **CIMD.** The client document is static, in a repository only the owner
+  can push to, behind two-factor sign-in. Whoever edits it can add a redirect
+  to Crew's client id.
 
 ## Phases
 
@@ -302,8 +400,32 @@ sign-in with caught redirects, Off in Crew for claude, codex and opencode,
 the CLI's disable for cursor and grok, and the runtime switch in the chip.
 This phase needs no vault.
 
+**1b. Registry cache.** The window can't read the registry: it sends no CORS
+headers, and it holds about 49k servers, 32k of them remote, too many to page
+through on open (491 pages, 6.5 min). So the Mac's `crewd` keeps the remote,
+active, latest ones in SQLite (`registry_servers`, FTS5 over name, title,
+description and publisher; migration 43, `crew-core/src/registry.rs`). It
+starts with the daemon, not with the page:
+- the featured list first, a GET each (22, under a second), so Browse has
+  them on the first open;
+- then every page once, committing each and saving the cursor, so search
+  works as it fills and an interrupted pass resumes;
+- then every 6 h, `updated_since` the last pass's start minus an hour
+  (about 2k changes a day).
+- Until the first full pass, a search also asks the registry's own search
+  (on names) and keeps what it finds.
+- Ranking: first party first (served from the publisher's domain; for an
+  `io.github.*` owner, a host that carries the owner's name), then bm25.
+- RPCs `registry_search {text, limit}` (empty text is the featured list) and
+  `registry_status`, both local methods. HTTPS through `curl`, like the npm
+  lookup; nothing under `CREW_SANDBOX`. A `crewd serve` keeps no copy.
+- Later: the daemon caches the icons and the page reads them through
+  `crew-file:`, so the CSP stays closed and Google never learns what the
+  user browses. Until then a logo is the registry's icon or the publisher's
+  favicon through Google's resolver.
+
 **2. Vault on this Mac.** The OAuth client in `crewd`, keychain writes,
-accounts and bindings, the registry catalog, Connect,
+accounts and bindings, Connect,
 `crewd --mcp-connector`, tool switches, and the tools cache. A fake OAuth and
 MCP server for tests and e2e.
 
@@ -328,20 +450,18 @@ rotate, so its lease is a copy.
 - Should Off in Crew be per workspace too, or per machine only, as here?
 - Should a second account start on nowhere (as here) or ask where?
 
-## How it is built
-
-Subagents build each part in its own worktree and do not commit. The
-orchestrating session reviews each part against the rules above, runs the
-checks, and makes every commit.
-
 ## Status
 
 | Part | State |
 | --- | --- |
+| Security before distributing: signed manifest, release ruleset and environment, hardened runtime, audits | in progress |
+| Notarization and Team ID check in the updater, with a Developer ID | todo (account next week) |
 | Spike: provider controls, servers' registration, redirect catching | todo |
-| Prototype of the page | todo |
+| Prototype of the page | in progress (variant C) |
+| Registry cache in `crewd`, search and featured over RPC | in progress (backs the prototype) |
 | Provider servers: inventory, page, sign-in, Off in Crew, chip switch | todo |
-| Vault on this Mac: OAuth client, keychain, accounts, bindings, connector shim | todo |
+| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, not yet tried against a real server's consent |
+| Vault on this Mac: keychain storage; a binding change reaching a live Claude (`mcp_set_servers`) or opencode's shared server | todo |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |
 | Password managers as a kind | todo |

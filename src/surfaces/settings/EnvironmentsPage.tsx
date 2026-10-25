@@ -297,7 +297,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           onClose={() => setEditing(null)}
           onSave={async (edit) => {
             const link = editing;
-            if (!link.host || link.port === null) throw new Error("This machine has no address on record, so it cannot be edited.");
+            if (!link.host || link.port === null) throw new Error("No address on record, so it can’t be edited.");
             // The address itself is kept blank for ssh: a machine added before used it.
             const ssh = edit.ssh === link.host ? "" : edit.ssh;
             await api.upsertRemote({ id: link.id, name: edit.name, host: link.host, port: link.port, user: edit.user, ssh });

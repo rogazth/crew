@@ -367,7 +367,7 @@ function Changelog({ current }: { current: string | null }) {
         ) : releases.length === 0 ? (
           <div className="flex min-h-10 items-center gap-3 px-2.5 py-1.5 text-text-muted">
             <span className="min-w-0 flex-1">
-              {list.stale ? "Couldn't reach GitHub, so there are no release notes to show." : "No releases yet."}
+              {list.stale ? "Couldn’t reach GitHub. No release notes to show." : "No releases yet."}
             </span>
             <button type="button" onClick={reload} className="text-link hover:underline">
               Retry

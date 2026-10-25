@@ -5,6 +5,8 @@ import type {
   DownloadInfo,
   MountRequest,
   OpenTabRequest,
+  SignInOutcome,
+  SignInRequest,
   PagePrompt,
   PromptAnswer,
   Responsiveness,
@@ -205,6 +207,13 @@ export type BrowserHost = {
   reportMachine?(webContentsId: number, machine: string | null): void;
   /** An agent needs a tab live that is cold, or not in this window yet. */
   onMount(cb: (request: MountRequest) => void): () => void;
+  /**
+   * Opens a sign-in in a window of its own and resolves once it
+   * ends: with the redirect it caught, or closed before one came.
+   */
+  signIn?(request: SignInRequest): Promise<SignInOutcome>;
+  /** Closes a sign-in's window; its `signIn` resolves closed. */
+  abortSignIn?(state: string): Promise<void>;
 };
 
 export type HostDragDrop =

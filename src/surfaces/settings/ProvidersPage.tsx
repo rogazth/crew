@@ -165,7 +165,7 @@ function Permissions() {
       <Heading title="Permissions" />
       <div className="rounded-xl bg-card p-1.5">
         {bypass && (
-          <p className="px-2.5 py-2 text-[12px] text-text-muted">Bypass permissions is on in General: every session runs without asking.</p>
+          <p className="px-2.5 py-2 text-[12px] text-text-muted">Bypass permissions is on in General. Sessions run without asking.</p>
         )}
         {!bypass && (
           <div className="flex flex-col gap-2 px-1 py-1">

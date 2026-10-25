@@ -4250,6 +4250,8 @@ time.sleep(600)
         assert_eq!(started.len(), 1, "{started:?}");
         let crew = &started[0]["config"]["mcp_servers"]["crew"];
         assert_eq!(crew["args"], json!(["--mcp"]), "{crew}");
+        let servers = started[0]["config"]["mcp_servers"].as_object().map(|servers| servers.len());
+        assert_eq!(servers, Some(1), "no connector is bound: {}", started[0]["config"]["mcp_servers"]);
         assert!(crew["env"]["CREW_TOKEN"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
         assert_eq!(
             (crew["tool_timeout_sec"].clone(), crew["default_tools_approval_mode"].clone()),
@@ -4289,6 +4291,41 @@ time.sleep(600)
         w.settle(&id);
         assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
         assert!(w.turns.idle_since(&id).is_some());
+    }
+
+    /// A connector account on everywhere is one more server on the thread,
+    /// run by Crew's own crewd with the session's token, and not pre-approved.
+    #[test]
+    fn a_codex_session_gets_its_bound_connector_beside_crews_server() {
+        let w = world();
+        let store = w.turns.store();
+        let connector = crate::connectors::add(
+            store,
+            crate::connectors::NewConnector {
+                name: "Notion".into(),
+                registry_name: None,
+                url: "https://mcp.notion.com/mcp".into(),
+                icon_url: None,
+                description: String::new(),
+                publisher: String::new(),
+            },
+        )
+        .expect("connector");
+        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "one", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let started = sent(&log, "thread/start");
+        let servers = &started[0]["config"]["mcp_servers"];
+        let (crew, notion) = (&servers["crew"], &servers["notion"]);
+        assert_eq!(notion["command"], crew["command"], "{servers}");
+        assert_eq!(notion["args"], json!(["--mcp-connector", "notion"]), "{servers}");
+        assert_eq!(notion["env"], crew["env"], "the session's token: {servers}");
+        assert!(notion.get("default_tools_approval_mode").is_none(), "{servers}");
+        let token = notion["env"]["CREW_TOKEN"].as_str().expect("token");
+        assert_eq!(w.turns.test_bridge().whose(token), Some(crate::bridge::Bearer::Session(id.clone())));
     }
 
     /// The token the CLI's MCP server was given at launch is the one the bridge

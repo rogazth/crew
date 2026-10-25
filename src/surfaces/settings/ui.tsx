@@ -3,7 +3,7 @@
 // lands the nav's search on a single row.
 import { CheckIcon, CopyIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Alert, Button, Card, IconButton, Toggle } from "../../chrome/kit";
+import { Alert, Button, Card, IconButton, PageFrame, Toggle } from "../../chrome/kit";
 
 /** The raised level: a hairline and a soft drop, the chat cards' recipe. */
 export const RAISED =
@@ -30,23 +30,17 @@ export function SettingsPage({
 }) {
   const root = useRef<HTMLDivElement>(null);
   useJumpLanding(root);
-  // Two boxes: the sheet clips the outer one, so the scroll lives inside it.
   return (
-    <div className="h-full">
-      {/* No scroll anchoring: a page that reorders cards above the fold (Usage) would be dragged along with them. */}
-      <div ref={root} className="@container h-full overflow-y-auto [overflow-anchor:none]">
-      <div className={`mx-auto flex ${wide ? "max-w-[920px]" : "max-w-[720px]"} flex-col gap-7 px-10 pt-12 pb-28`}>
-        <header className={`flex items-center gap-4 px-1 ${hideHeader ? "sr-only" : ""}`}>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
-            {description && <p className="text-text-muted">{description}</p>}
-          </div>
-          {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
-        </header>
-        {children}
-      </div>
-      </div>
-    </div>
+    <PageFrame
+      title={title}
+      subtitle={description}
+      actions={actions}
+      width={wide ? "wide" : "reading"}
+      hideHeader={hideHeader}
+      scrollRef={root}
+    >
+      {children}
+    </PageFrame>
   );
 }
 
@@ -305,7 +299,7 @@ export function Toasts() {
     () => toasts,
   );
   return (
-    <div className="pointer-events-none fixed bottom-16 left-1/2 z-[90] flex -translate-x-1/2 flex-col items-center gap-2">
+    <div className="pointer-events-none fixed top-4 left-1/2 z-[90] flex -translate-x-1/2 flex-col items-center gap-2">
       {items.map((item) => (
         <div
           key={item.id}
@@ -315,7 +309,7 @@ export function Toasts() {
           <span>{item.text}</span>
         </div>
       ))}
-      <style>{`@keyframes settings-toast { from { opacity: 0; transform: translateY(6px) scale(0.98); } }`}</style>
+      <style>{`@keyframes settings-toast { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }`}</style>
     </div>
   );
 }
