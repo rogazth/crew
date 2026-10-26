@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     url: (root: string, path: string, envId?: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path, envId),
     reveal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.reveal, path),
     openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
+    drag: (path: string) => ipcRenderer.send(FILE_CHANNELS.drag, path),
   },
   remotes: {
     tailnet: () => ipcRenderer.invoke("remotes:tailnet"),

@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { ChevronRightIcon, LoaderIcon } from "lucide-react";
 import { FileTypeIcon } from "../FileTypeIcon";
 import { useFileTree } from "../../hooks/useFileTree";
 import { useVirtualRows } from "../../hooks/useVirtualRows";
+import { isLocalPath } from "../../lib/client/registry";
 import { relativeTo, type TreeRow } from "../../lib/fileTree";
+import { filesHost } from "../../lib/host";
 import type { ProjectFile } from "../../lib/types";
 
 type Props = {
@@ -62,6 +64,14 @@ export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: P
     setCursor(row.entry.path);
     if (row.entry.dir) toggle(row.entry.path);
     else onOpenFile({ path: row.entry.path, name: row.entry.name, relative: relativeTo(root, row.entry.path) });
+  }
+
+  // Out of the window as Finder drags it: Slack, Mail or a folder take the file itself.
+  const host = filesHost();
+  const draggable = host !== null && isLocalPath(root);
+  function onDragStart(event: DragEvent<HTMLDivElement>, row: TreeRow) {
+    event.preventDefault();
+    host?.drag(row.entry.path);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -139,6 +149,8 @@ export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: P
               aria-selected={entry.path === active}
               data-cursor={index === at || undefined}
               title={relativeTo(root, entry.path)}
+              draggable={draggable}
+              onDragStart={(event) => onDragStart(event, row)}
               onClick={() => open(row)}
               style={{ top: index * ROW, height: ROW, paddingLeft: 8 + row.depth * INDENT }}
               className={`absolute inset-x-1.5 flex items-center gap-1.5 rounded-chrome pr-2 ${

@@ -78,6 +78,8 @@ export type FilesHost = {
   reveal(path: string): Promise<void>;
   /** Resolves to why it could not open, or "" once it did. */
   openExternal(path: string): Promise<string>;
+  /** From a dragstart: the drag becomes the file itself, for any app to take. */
+  drag(path: string): void;
 };
 
 /** Machines other than this Mac. Absent outside Electron. */

@@ -3,7 +3,7 @@ import { statSync, watch, type FSWatcher } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ipcMain, net, protocol, shell, type Session, type WebContents } from "electron";
+import { app, ipcMain, net, protocol, shell, type Session, type WebContents } from "electron";
 import { FILE_CHANNELS, FILE_SCHEME } from "../../src/lib/browser/files";
 import { servedPath, urlFor, within } from "./serve";
 
@@ -213,4 +213,9 @@ export function registerFileIpc(): void {
   ipcMain.handle(FILE_CHANNELS.openExternal, (_event, file: unknown) =>
     absolute(file) ? shell.openPath(file) : "Not a file",
   );
+  // A send, not a handle: the drag has to start while the mouse is still down.
+  ipcMain.on(FILE_CHANNELS.drag, (event, file: unknown) => {
+    if (!absolute(file)) return;
+    void app.getFileIcon(file).then((icon) => event.sender.startDrag({ file, icon }));
+  });
 }
