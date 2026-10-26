@@ -17,10 +17,8 @@ export type QueuedMessage = {
 /** CLIs that read a message at their next step instead of after the turn (decision 31). */
 const STEERABLE = new Set(["claude", "codex"]);
 
-/** What Enter does with a message written while a turn runs, for a session that takes one at all. */
-export function whileWorkingOf(kind: string, provider: string): "steer" | "queue" | undefined {
-  // A bot's turn is one job: what comes after it is mail, sent from the mailbox.
-  if (kind === "bot") return undefined;
+/** What Enter does with a message written while a turn runs. */
+export function whileWorkingOf(provider: string): "steer" | "queue" {
   return STEERABLE.has(provider) ? "steer" : "queue";
 }
 

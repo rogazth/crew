@@ -31,8 +31,8 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, driven, offers_fast, path_list, typed_by_user, Harness, Launch, QuestionReply,
-    Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, offers_fast, path_list, typed_by_user, Harness, Launch, QuestionReply, Steer,
+    TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::command_sources::{codex_commands, codex_skills};
 use crate::mailbox;
@@ -846,12 +846,7 @@ impl TurnHost {
         files: Vec<crew_protocol::AttachedFile>,
         rest: Vec<super::Extra>,
     ) -> Result<(), String> {
-        let typed = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(driven)
-            .is_some_and(|drive| typed_by_user(drive, &from));
+        let typed = typed_by_user(&from);
         // Files go in the text, as a turn's do.
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         let sent = crate::providers::with_files(self.steer_text_all(session_id, &from, text, &rest).trim(), &paths);

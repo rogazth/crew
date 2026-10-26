@@ -89,7 +89,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   // composer centred) would show for a beat and then jump away as the transcript lands.
   const settling = !ready && held.length === 0 && (!!session.providerSessionId || (session.cursor ?? 0) > 0);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
-  const whileWorking = whileWorkingOf(session.kind, session.provider);
+  const whileWorking = whileWorkingOf(session.provider);
   const panel = useBackgroundPanel(session, sessions, processes);
   const menu = useCommands(session.id);
   const commands = useMemo(() => turnTray(panel.board), [panel.board]);
@@ -265,8 +265,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     (mode?: "steer" | "queue") => {
       const text = draft.trim();
       if ((!text && files.length === 0) || !ready || uploading) return;
-      // A message while it works goes into the turn or after it; a bot takes none.
-      if (working && !(mode && whileWorking)) return;
+      // A message while it works goes into the turn or after it.
+      if (working && !mode) return;
       const attached = files;
       const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
       // A folder, or a file the index leaves out, goes too when it was picked from the menu.
@@ -281,7 +281,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       setDraft("");
       setFiles([]);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
-      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
+      if (working || waiting.length > 0) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
       else void send(session, cwd, sent, attached, asked);
     },
     [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
@@ -436,7 +436,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onSend={submit}
               onStop={() => void stop(session)}
               work={work}
-              {...(whileWorking ? { whileWorking, queue } : {})}
+              whileWorking={whileWorking}
+              queue={queue}
               onAttach={() => void attach()}
               onPasteFiles={uploadFiles}
               onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}

@@ -19,12 +19,11 @@ const letter = (id: string, from: ThreadLetter["from"], queue: ThreadLetter["que
 });
 
 describe("what Enter does while a turn runs", () => {
-  it("steers where the CLI reads it mid-turn, queues elsewhere, and does nothing for a bot", () => {
-    expect(whileWorkingOf("terminal", "claude")).toBe("steer");
-    expect(whileWorkingOf("child", "codex")).toBe("steer");
-    expect(whileWorkingOf("terminal", "opencode")).toBe("queue");
-    expect(whileWorkingOf("child", "cursor")).toBe("queue");
-    expect(whileWorkingOf("bot", "claude")).toBeUndefined();
+  it("steers where the CLI reads it mid-turn and queues elsewhere", () => {
+    expect(whileWorkingOf("claude")).toBe("steer");
+    expect(whileWorkingOf("codex")).toBe("steer");
+    expect(whileWorkingOf("opencode")).toBe("queue");
+    expect(whileWorkingOf("cursor")).toBe("queue");
   });
 });
 

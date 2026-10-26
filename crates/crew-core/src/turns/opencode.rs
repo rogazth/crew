@@ -37,8 +37,8 @@ use tokio::sync::oneshot;
 use super::codex::{subagent_updated, ChildBoard, ChildWork};
 use super::opencode_server::Conn;
 use super::{
-    carries_conversation, conversation_to_resume, driven, keeps_process, path_list, typed_by_user, Answers, Harness, Launch,
-    Live, QuestionReply, Steer, TurnHost, TurnOutcome,
+    carries_conversation, conversation_to_resume, keeps_process, path_list, typed_by_user, Answers, Harness, Launch, Live,
+    QuestionReply, Steer, TurnHost, TurnOutcome,
 };
 use crate::http_local::Reply;
 use crate::mailbox;
@@ -621,12 +621,7 @@ impl TurnHost {
         files: Vec<AttachedFile>,
         rest: Vec<super::Extra>,
     ) -> Result<(), String> {
-        let typed = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(driven)
-            .is_some_and(|drive| typed_by_user(drive, &from));
+        let typed = typed_by_user(&from);
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         let sent = crate::providers::with_files(self.steer_text_all(session_id, &from, text, &rest).trim(), &paths);
         let oc = {

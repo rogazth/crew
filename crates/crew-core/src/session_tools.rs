@@ -7321,6 +7321,58 @@ time.sleep(600)
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the steer started another process");
     }
 
+    /// A bot's chat takes what the user writes while it works as a session's
+    /// does: into the turn, as their own message and with no envelope.
+    #[test]
+    fn a_message_sent_while_a_claude_bots_turn_works_is_steered_as_the_users_own() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "Coder".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "full".into(),
+        )
+        .expect("bot");
+        w.type_to(&bot, "SLEEP 2", None, None);
+        until_claude_turn(&w, &bot.id);
+
+        let steered = w.type_to(&bot, "and this", None, None);
+        assert_eq!((steered.working, steered.delivery.as_deref()), (true, Some("steered")));
+        assert_eq!(w.turns.steer_text(&bot.id, &mailbox::user(), "and this"), "and this");
+
+        w.settle(&bot.id);
+        assert!(w.queue(&bot.id).is_empty(), "the echo did not mark it delivered");
+        let block = w.blocks(&bot.id).into_iter().find(|block| block.text == "and this").expect("the steer");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+        assert!(w.blocks(&bot.id).iter().any(|block| block.text == "report: SLEEP 2 + and this"));
+    }
+
+    /// Where the CLI takes nothing mid-turn, the bot's next turn is what the
+    /// user wrote, as they wrote it.
+    #[test]
+    fn a_message_sent_while_a_bot_works_waits_for_its_next_turn() {
+        let w = world();
+        let bot = w.session("bot", "Coder", "full");
+        let bot = w.row(bot.session_id().unwrap());
+        w.type_to(&bot, "SLEEP 1", None, None);
+        let queued = w.type_to(&bot, "after it", None, None);
+        assert_eq!(queued.delivery.as_deref(), Some("queued"));
+        assert_eq!(w.queue(&bot.id), [("after it".to_string(), "waiting".to_string())]);
+
+        until("the queue went as the next turn", || w.launches().len() == 2);
+        w.settle(&bot.id);
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap_or_default().to_string();
+        assert!(prompt.trim_end().ends_with("after it") && !prompt.contains("## Message"), "{prompt}");
+        let block = w.blocks(&bot.id).into_iter().find(|block| block.text == "after it").expect("the message");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+    }
+
     fn text_block(text: &str) -> (String, String) {
         ("text".into(), text.into())
     }

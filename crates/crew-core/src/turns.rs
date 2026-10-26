@@ -197,16 +197,17 @@ fn driven(session: &crate::session::Session) -> Option<Driven> {
     }
 }
 
-/// Whether `letter` is the user's own message to a session that is theirs: it
-/// reaches the model as they typed it, with no envelope.
+/// Whether `letter` is the user's own message to a session that is theirs, or
+/// to a bot they write to in its chat: it reaches the model as they typed it,
+/// with no envelope.
 fn is_own(drive: Driven, letter: &mailbox::Letter) -> bool {
-    drive == Driven::User && letter.from.kind.as_deref() == Some("user")
+    drive != Driven::Child && letter.from.kind.as_deref() == Some("user")
 }
 
-/// Whether `from` is the user typing to a session Crew drives for them: the
-/// transcript shows the message as theirs, not as a letter from "You".
-fn typed_by_user(drive: Driven, from: &crew_protocol::BotRef) -> bool {
-    drive != Driven::Bot && from.kind.as_deref() == Some("user")
+/// Whether `from` is the user typing to a session Crew drives: the transcript
+/// shows the message as theirs, not as a letter from "You".
+fn typed_by_user(from: &crew_protocol::BotRef) -> bool {
+    from.kind.as_deref() == Some("user")
 }
 
 /// The CLIs that take a message into a turn that is running; a message to any
@@ -1056,18 +1057,14 @@ impl TurnHost {
     ///   this message is the user saying go on. It joins the queue, and all of
     ///   it goes as one turn, in order.
     ///
-    /// A bot, and a message that is hidden or another bot's, only ever start
-    /// a turn.
+    /// To a bot it is the same, but an idle bot's turn carries no letter: what
+    /// the user typed is the turn's own message, as it always was. A message
+    /// that is hidden or another bot's only ever starts a turn.
     pub fn start_by_user(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         params.letter_id = None;
         let session = session::get(&self.store, params.session_id.clone())?.ok_or_else(|| "Session not found".to_string())?;
         let drive = driven(&session);
-        if !matches!(drive, Some(Driven::Child | Driven::User)) || params.hidden == Some(true) || params.from_bot.is_some() {
-            // A bot the user writes to is theirs again too: its count starts
-            // over (plan decision 27).
-            if drive == Some(Driven::Bot) && params.hidden != Some(true) && params.from_bot.is_none() {
-                self.user_wrote(&session.id);
-            }
+        if drive.is_none() || params.hidden == Some(true) || params.from_bot.is_some() {
             return self.start(params);
         }
         if drive == Some(Driven::Child) && session.status == "exited" {
@@ -1081,7 +1078,12 @@ impl TurnHost {
             Some(other) => return Err(format!("mode is auto, steer or queue, not \"{other}\"")),
         };
         if !self.is_running(&session.id) && mailbox::waiting_count(&self.store, &session.id)? == 0 {
-            match self.start_with_letter(&session, params.clone()) {
+            let started = if drive == Some(Driven::Bot) {
+                self.start(params.clone()).map(|started| TurnStarted { delivery: Some("started".into()), ..started })
+            } else {
+                self.start_with_letter(&session, params.clone())
+            };
+            match started {
                 // A turn began between the look and the start: this message is
                 // for the one that is running.
                 Err(error) if error == ALREADY_RUNNING => {}
@@ -1176,7 +1178,7 @@ impl TurnHost {
     /// behind it, only later.
     pub fn send_now(&self, session_id: &str, letter_id: &str) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or_else(|| "Session not found".to_string())?;
-        if !matches!(driven(&session), Some(Driven::Child | Driven::User)) {
+        if driven(&session).is_none() {
             return Err(format!("{} has no queue of the user's to send from.", session.name));
         }
         mailbox::send_first(&self.store, session_id, letter_id)?;
@@ -1285,7 +1287,7 @@ impl TurnHost {
             // name of whoever wrote it; the envelopes are for the model. What
             // the user typed is their message, not mail, and keeps its files.
             for letter in &letters {
-                if typed_by_user(drive, &letter.from) {
+                if typed_by_user(&letter.from) {
                     self.transcripts.append_user(
                         &params.session_id,
                         &letter.text,
@@ -1308,7 +1310,7 @@ impl TurnHost {
             let as_typed = |letter: &mailbox::Letter| {
                 is_own(drive, letter)
                     || (letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some())
-                        && typed_by_user(drive, &letter.from))
+                        && typed_by_user(&letter.from))
             };
             params.text =
                 letters
@@ -3385,12 +3387,7 @@ impl TurnHost {
         if grok {
             return Err("Grok cannot take a message in the middle of a turn".into());
         }
-        let typed = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(driven)
-            .is_some_and(|drive| typed_by_user(drive, &from));
+        let typed = typed_by_user(&from);
         let steered = self.steer_text_all(session_id, &from, text, &rest);
         let images = crate::files::load_inline_images(&files);
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
@@ -3431,10 +3428,11 @@ impl TurnHost {
     }
 
     /// A message written into a running turn, under the envelope a queued one
-    /// would have; the user's own to their own session goes as they typed it.
+    /// would have; the user's own to their own session or a bot goes as they
+    /// typed it.
     pub(crate) fn steer_text(&self, session_id: &str, from: &crew_protocol::BotRef, text: &str) -> String {
         let row = session::get(&self.store, session_id.to_string()).ok().flatten();
-        if row.as_ref().and_then(driven) == Some(Driven::User) && from.kind.as_deref() == Some("user") {
+        if matches!(row.as_ref().and_then(driven), Some(Driven::User | Driven::Bot)) && from.kind.as_deref() == Some("user") {
             return text.to_string();
         }
         let parent = row.and_then(|row| row.parent_id);
