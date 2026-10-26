@@ -1212,6 +1212,7 @@ fn spawn_claude_control(
     let mut child = Command::new(binary)
         .args(args)
         .env("PATH", shell_path::joined())
+        .env("CLAUDE_CODE_ENTRYPOINT", crate::providers::claude::ENTRYPOINT)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2156,7 +2157,7 @@ time.sleep(600)
             format!(
                 r#"#!/usr/bin/env python3
 import json, os, sys, time
-open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json"), "w").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}))
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json"), "w").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT")}}))
 first = json.loads(sys.stdin.readline())
 second = json.loads(sys.stdin.readline())
 assert first["request"]["subtype"] == "initialize" and second["request"]["subtype"] == "reload_skills"
@@ -2196,6 +2197,7 @@ time.sleep(600)
         assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
         assert!(argv.contains(&"--strict-mcp-config"), "{argv:?}");
         assert_eq!(std::fs::canonicalize(seen["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&work).unwrap());
+        assert_eq!(seen["entrypoint"].as_str(), Some(crate::providers::claude::ENTRYPOINT));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

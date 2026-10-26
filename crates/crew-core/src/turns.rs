@@ -3652,6 +3652,7 @@ impl TurnHost {
             Some({
                 let mut env = self.agent_env(&session_id);
                 env.insert("CLAUDE_CODE_ARTIFACT".into(), "1".into());
+                env.insert("CLAUDE_CODE_ENTRYPOINT".into(), crate::providers::claude::ENTRYPOINT.into());
                 env
             }),
         )?;

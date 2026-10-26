@@ -47,6 +47,12 @@ pub struct ClaudeSpawn {
     pub add_dirs: Vec<String>,
 }
 
+/// `CLAUDE_CODE_ENTRYPOINT` for every Claude Crew starts: the client its
+/// requests name. Left unset, a stream-json CLI calls itself `sdk-cli`, which
+/// the 5-hour window counts about twice as heavily (anthropics/claude-code#97074).
+/// It names Crew, not another client: the CLI rewrites `cli` to `sdk-cli`.
+pub const ENTRYPOINT: &str = "crew";
+
 /// How long Claude Code lets one call to Crew's server run, in milliseconds:
 /// a wait plus its margin (plan §7e.2). Without it a call is cut at Claude's
 /// default. Read off Claude Code 2.1.289: the per-server `timeout` is in the

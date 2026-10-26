@@ -78,6 +78,7 @@ pub fn name_claude(binary: &Path, cwd: &Path, id: &str, description: &str) -> Re
             "--strict-mcp-config",
         ])
         .env("PATH", shell_path::joined())
+        .env("CLAUDE_CODE_ENTRYPOINT", crate::providers::claude::ENTRYPOINT)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

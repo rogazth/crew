@@ -55,4 +55,13 @@ mod tests {
         assert!(envs.contains(&(OsStr::new("CREW_TEST_SCRUB_INHERITED"), None)));
         assert!(envs.contains(&(OsStr::new("CREW_TEST_SCRUB_OWN"), Some(OsStr::new("daemon")))));
     }
+
+    #[test]
+    fn the_entrypoint_a_command_sets_is_kept() {
+        let mut cmd = Command::new("true");
+        cmd.env("CLAUDE_CODE_ENTRYPOINT", "crew");
+        scrub(&mut cmd);
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&(OsStr::new("CLAUDE_CODE_ENTRYPOINT"), Some(OsStr::new("crew")))));
+    }
 }
