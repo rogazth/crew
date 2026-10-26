@@ -480,7 +480,7 @@ rotate, so its lease is a copy.
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
 | Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
-| Vault on this Mac: a binding change reaching opencode's shared server | todo |
+| Vault on this Mac: a binding change reaching opencode's shared server (per folder, next turn) | built |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
 | Duplicates and import | todo |
 | Password managers as a kind | todo |

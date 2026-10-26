@@ -4988,6 +4988,70 @@ mod mailbox_tests {
         assert_eq!(launched["config"]["permissions"], json!([{ "action": "crew_*", "resource": "*", "effect": "allow" }]));
     }
 
+    /// A binding changed after the shared server started reaches the
+    /// session's folder on its next turn, one server added or taken out
+    /// there, and nothing is asked when nothing moved.
+    #[test]
+    fn a_binding_change_reaches_the_shared_server_on_the_next_turn() {
+        let world = world();
+        let ws = workspace(&world);
+        let store = world.host.test_store();
+        let connector = crate::connectors::add(
+            store,
+            crate::connectors::NewConnector {
+                name: "Notion".into(),
+                registry_name: None,
+                url: "https://mcp.notion.com/mcp".into(),
+                icon_url: None,
+                description: String::new(),
+                publisher: String::new(),
+            },
+        )
+        .expect("connector");
+        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
+        let coder = bot(&world, &ws, "Coder");
+        let changes = |world: &World| -> Vec<Value> {
+            let log = world.dir.read_dir().unwrap().flatten().map(|entry| entry.path()).find(|path| {
+                path.extension().is_some_and(|ext| ext == "log") && path.to_string_lossy().contains("fake-opencode-")
+            });
+            std::fs::read_to_string(log.expect("the request log"))
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|row| row["path"].as_str().is_some_and(|path| path.starts_with("/api/experimental/mcp/")))
+                .filter(|row| row["method"] == "PUT" || row["method"] == "DELETE")
+                .collect()
+        };
+
+        turn(&world, &coder, "hello");
+        assert!(changes(&world).is_empty(), "the launch already had it: {:?}", changes(&world));
+
+        let scope = crew_protocol::BindingScope::Workspace { id: ws.clone() };
+        crate::connectors::set_binding(store, &account.id, &scope, Some(false)).expect("off");
+        turn(&world, &coder, "again");
+        let after_off = changes(&world);
+        assert_eq!(after_off.len(), 1, "{after_off:?}");
+        assert_eq!((&after_off[0]["method"], &after_off[0]["path"]), (&json!("DELETE"), &json!("/api/experimental/mcp/notion")));
+
+        crate::connectors::set_binding(store, &account.id, &scope, Some(true)).expect("on");
+        turn(&world, &coder, "once more");
+        let after_on = changes(&world);
+        assert_eq!(after_on.len(), 2, "{after_on:?}");
+        let put = &after_on[1];
+        assert_eq!(put["method"], "PUT", "{put}");
+        assert_eq!(put["directory"], after_off[0]["directory"], "the same folder: {put}");
+        let command = &put["body"]["config"]["command"];
+        assert_eq!(
+            command.as_array().map(|c| c[1..].to_vec()),
+            Some(vec![json!("--mcp-connector"), json!("notion"), json!("--workspace"), json!(ws)])
+        );
+        assert!(put["body"]["config"]["environment"].get("CREW_TOKEN").is_some(), "{put}");
+
+        turn(&world, &coder, "and again");
+        assert_eq!(changes(&world).len(), 2, "nothing moved, nothing asked");
+    }
+
     #[test]
     fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
         let world = world();

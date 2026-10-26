@@ -71,17 +71,7 @@ pub fn server_config(
             }),
         );
         for server in connectors {
-            let mut command = vec![server.command.clone()];
-            command.extend(server.args.iter().cloned());
-            servers.insert(
-                server.name.clone(),
-                json!({
-                    "type": "local",
-                    "command": command,
-                    "timeout": { "execution": MCP_TIMEOUT_MS },
-                    "environment": environment,
-                }),
-            );
+            servers.insert(server.name.clone(), connector_entry(server, &environment));
         }
         config.insert("permissions".into(), json!([crew_rule()]));
     }
@@ -92,6 +82,19 @@ pub fn server_config(
         config.insert("mcp".into(), json!({ "servers": servers }));
     }
     Value::Object(config).to_string()
+}
+
+/// A connector's server in opencode's config, as a launch writes it and as
+/// `PUT /api/experimental/mcp/:name` takes it later.
+pub fn connector_entry(server: &McpServerSpec, environment: &Map<String, Value>) -> Value {
+    let mut command = vec![server.command.clone()];
+    command.extend(server.args.iter().cloned());
+    json!({
+        "type": "local",
+        "command": command,
+        "timeout": { "execution": MCP_TIMEOUT_MS },
+        "environment": environment,
+    })
 }
 
 fn rule(action: &str, effect: &str) -> Value {
