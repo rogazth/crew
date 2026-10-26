@@ -34,6 +34,9 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
 
   const value = draft ?? displayUrl(url);
   const rows = open ? buildSuggestions(value, resolveAddress(value, searchTemplate), history, SUGGESTIONS) : [];
+  // The highlighted row previews in the bar; the list keeps following what was typed.
+  const highlighted = cursor >= 0 ? rows[cursor] : undefined;
+  const shown = highlighted ? (highlighted.kind === "search" ? highlighted.label : highlighted.url) : value;
 
   useImperativeHandle(ref, () => ({
     focus() {
@@ -108,7 +111,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
     <div className="relative min-w-0 flex-1" data-tauri-drag-region="false">
       <input
         ref={input}
-        value={value}
+        value={shown}
         aria-label="Address"
         placeholder="Search or enter address"
         spellCheck={false}
@@ -147,6 +150,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
         <div
           role="listbox"
           aria-label="Suggestions"
+          onMouseLeave={() => setCursor(-1)}
           className="absolute top-full right-0 left-0 z-20 mt-1 rounded-lg bg-surface p-1 shadow-float"
         >
           {rows.map((row, at) => (
