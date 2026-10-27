@@ -189,6 +189,9 @@ async fn daemon_info_and_dir_list() {
     let home = call(&mut ws, 4, "dir_list", json!({ "path": "~" })).await.expect("home");
     assert_eq!(home["path"], info["home"]);
     assert!(call(&mut ws, 5, "dir_list", json!({ "path": tree.join("missing") })).await.is_err());
+    let made = call(&mut ws, 5, "dir_create", json!({ "path": tree.join("missing/deep") })).await.expect("dir_create");
+    assert_eq!(made, json!(tree.join("missing/deep")));
+    assert!(tree.join("missing/deep").is_dir());
 
     assert_eq!(call(&mut ws, 6, "ping", json!({})).await.expect("ping"), Value::Null);
     let saved =

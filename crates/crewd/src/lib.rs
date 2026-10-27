@@ -30,11 +30,11 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotRules, BotRulesCap, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
-    NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
-    PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
-    SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
-    TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
+    self as proto, Auth, BotRules, BotRulesCap, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue,
+    ListProjectFiles, Name, NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached,
+    PtyKill, PtyResize, PtySpawn, PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate,
+    SessionCreated, SessionId, SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile,
+    TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -469,10 +469,7 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
             .iter()
             .filter_map(|label| known(label))
             .map(Change::Remove)
-            .chain(
-                edit.into_iter()
-                    .filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })),
-            )
+            .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
             .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add { body }))
             .collect();
         rules::apply(store, &row.id, changes)?.map_err(|refused| match refused {
@@ -486,10 +483,7 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
     Ok(BotRules {
         used: rules::used(&listed) as u32,
         cap: rules::cap(store, &row.id)? as u32,
-        rules: listed
-            .into_iter()
-            .map(|rule| proto::BotRule { id: rules::label(rule.id), body: rule.body })
-            .collect(),
+        rules: listed.into_iter().map(|rule| proto::BotRule { id: rules::label(rule.id), body: rule.body }).collect(),
     })
 }
 
@@ -1447,11 +1441,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "bot_rules_cap_set" => {
             let BotRulesCap { id, cap } = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || {
-                crew_core::rules::set_cap(&store, &id, cap as usize)?;
-                bot_rules(&store, &id, None)
-            })
-            .await?)
+            json(
+                block(move || {
+                    crew_core::rules::set_cap(&store, &id, cap as usize)?;
+                    bot_rules(&store, &id, None)
+                })
+                .await?,
+            )
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
@@ -1754,6 +1750,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "dir_list" => {
             let proto::DirList { path } = parse(params)?;
             json(block(move || machine::dir_list(&path)).await?)
+        }
+        "dir_create" => {
+            let proto::DirList { path } = parse(params)?;
+            json(block(move || machine::dir_create(&path)).await?)
         }
         "agent_resolve_claude" => json(block(AgentHost::resolve_claude).await?),
         "agent_resolve" => {
@@ -2649,7 +2649,10 @@ mod tests {
 
         // Its own cap: what it may hold from then on.
         let raised: BotRules = serde_json::from_value(
-            rpc(&mut ws, 55, "bot_rules_cap_set", serde_json::json!({ "id": session_id, "cap": 4_000 })).await.result.expect("cap"),
+            rpc(&mut ws, 55, "bot_rules_cap_set", serde_json::json!({ "id": session_id, "cap": 4_000 }))
+                .await
+                .result
+                .expect("cap"),
         )
         .unwrap();
         assert_eq!(raised.cap, 4_000);

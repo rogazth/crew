@@ -525,6 +525,9 @@ export const deleteRemoteRecord = (id: string): Promise<void> => client.request(
 export const listDir = (envId: string, path: string): Promise<DirListing> =>
   client.request("dir_list", { path }, envId);
 
+/** Makes the folder at `path` on `envId`, and any missing above it; answers its absolute path. */
+export const createDir = (envId: string, path: string): Promise<string> => client.request("dir_create", { path }, envId);
+
 /**
  * The agent CLIs on one machine, as that machine's daemon sees them: path,
  * version, newest release and account. `refresh` skips the daemon's caches;

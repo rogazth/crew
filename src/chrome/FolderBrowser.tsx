@@ -31,7 +31,8 @@ type Props = {
  * A folder on a machine that has no Finder, picked from the keyboard. The path
  * completes like a shell: "code/sto" lists code/ for names that start with
  * "sto", ⇥ goes into the highlighted folder, ↵ opens a repo or goes into a
- * folder that is not one, ⌘↵ opens exactly what is typed.
+ * folder that is not one, ⌘↵ opens exactly what is typed, making the folder
+ * first when it is not there.
  */
 export function FolderBrowser({ env, onOpen }: Props) {
   const home = env.info?.home ?? env.home ?? "/";
@@ -48,6 +49,7 @@ export function FolderBrowser({ env, onOpen }: Props) {
 
   const { dir, filter } = splitTyped(raw, home);
   const current = listings[dir];
+  const typed = filter ? joinPath(dir, filter) : dir;
 
   useEffect(() => {
     void api.stateGet(recentKey(env.id)).then(
@@ -105,10 +107,11 @@ export function FolderBrowser({ env, onOpen }: Props) {
     list.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  async function open(path: string) {
+  async function open(path: string, make = false) {
     setOpening(true);
     setError(null);
     try {
+      if (make) path = await api.createDir(env.id, path);
       await onOpen(path);
       const next = [path, ...recents.filter((item) => item !== path)].slice(0, 6);
       void api.stateSet(recentKey(env.id), JSON.stringify(next)).catch(() => {});
@@ -149,13 +152,15 @@ export function FolderBrowser({ env, onOpen }: Props) {
     } else if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      if (event.metaKey || event.ctrlKey) void open(filter ? joinPath(dir, filter) : dir);
+      if (event.metaKey || event.ctrlKey) void open(typed, true);
       else if (row) choose(row);
     }
   }
 
   const loading = online && (current === undefined || current.state === "loading");
   const failed = current?.state === "error" ? current.message : null;
+  // A filter that matches nothing names a folder that is not there; so does a folder that will not list for being missing.
+  const missing = (filter !== "" && current?.state === "ready") || (failed !== null && /os error 2\b/.test(failed));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -223,9 +228,11 @@ export function FolderBrowser({ env, onOpen }: Props) {
               </div>
             );
           })}
-          {rows.length === 0 && !loading && (
+          {rows.every((row) => row.kind === "up") && !loading && (
             <p className="px-2.5 py-6 text-center text-text-muted">
-              {failed ?? "No folder here."} <Kbd keys="⌘↵" /> opens <span className="font-mono">{prettyPath(filter ? joinPath(dir, filter) : dir, home)}</span> anyway.
+              <span className="font-mono">{prettyPath(typed, home)}</span>{" "}
+              {missing ? "doesn't exist." : failed ? `can't be read: ${failed.replace(/^.*?: /, "")}.` : "has no folders."}{" "}
+              <Kbd keys="⌘↵" /> {missing ? "creates and opens it" : "opens it anyway"}.
             </p>
           )}
         </div>
