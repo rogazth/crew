@@ -319,6 +319,7 @@ export function StartScreen({
               onCaret={setCursor}
               onKeyDown={onKeyDown}
               onPasteFiles={pasted}
+              roomy
             />
           </div>
           <div className="flex h-8 items-center justify-between gap-2">
