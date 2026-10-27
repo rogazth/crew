@@ -1,7 +1,10 @@
-import { CheckIcon, ChevronRightIcon, LoaderCircleIcon, MinusIcon, PlayIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Menu } from "@base-ui/react/menu";
+import { BotIcon, EllipsisIcon, LoaderCircleIcon, PlayIcon, PowerIcon, Trash2Icon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { BotPicker } from "../chrome/BotPicker";
-import { Button, Card, Field, IconButton, TextArea, TextInput, Toggle } from "../chrome/kit";
+import { CardHead, PaneCard, PaneRow, PaneSentence } from "../chrome/BotPaneParts";
+import { Button, IconButton, PANEL, ROW, Switch, usePageTrail } from "../chrome/kit";
+import { RunMark } from "../chrome/RoutineCard";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
 import { isValidCron } from "../lib/cron";
@@ -37,6 +40,8 @@ export function RoutineEditor({
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  // Where it is goes in the strip above the sheet, as Settings says where it is.
+  usePageTrail([{ label: "Routines", onClick: onBack }, draft.name.trim() || "New routine"]);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,126 +90,127 @@ export function RoutineEditor({
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-3xl flex-col gap-6 px-10 py-12">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onBack}
-            className="rounded-md px-1.5 py-0.5 text-icon transition-colors hover:bg-hover hover:text-text"
-          >
-            Routines
-          </button>
-          <ChevronRightIcon className="size-3 text-placeholder" />
-          <span className="min-w-0 truncate">{draft.name.trim() || "New routine"}</span>
-          <span className="flex-1" />
-          {onRunNow && (
-            <Button icon={PlayIcon} loading={running} onClick={() => void run()}>
-              Run now
-            </Button>
-          )}
-          <Button variant="primary" disabled={!valid} loading={saving} onClick={() => void save()}>
-            Save
-          </Button>
-          {onDelete && <IconButton icon={Trash2Icon} label="Delete routine" onClick={onDelete} />}
-        </div>
-
-        {runError && (
-          <p className="text-[13px] text-danger" role="alert">
-            {runError}
-          </p>
-        )}
-
-        <div className="flex flex-col gap-6">
-          <Field label="Title">
-            <TextInput
-              autoFocus
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* PageFrame's measure, so the name sits where the Routines title was. */}
+        <div className="mx-auto flex max-w-[720px] flex-col gap-7 px-10 pt-12 pb-8">
+          <header className="flex items-center gap-4 px-1">
+            {/* The name is the page's title, typed in place: no box, nothing that shifts as it is edited. */}
+            <input
+              autoFocus={!draft.name}
+              spellCheck={false}
+              aria-label="Name"
               value={draft.name}
-              placeholder="e.g. Morning digest"
+              placeholder="Routine name"
               onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            />
-          </Field>
-
-          <Group label="Triggers">
-            <RoutineTrigger
-              schedule={draft.schedule}
-              onChange={(schedule) => setDraft({ ...draft, schedule })}
-            />
-          </Group>
-
-          <Field label="Instructions">
-            <TextArea
-              rows={10}
-              value={draft.prompt}
-              placeholder="What the bot should do each run"
-              onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
-            />
-          </Field>
-
-          <Group label="Runs as">
-            <BotPicker
-              workspaces={workspaces}
-              workspaceId={workspaceId}
-              sessionId={draft.sessionId}
-              onChange={(nextWorkspaceId, sessionId) => {
-                setWorkspaceId(nextWorkspaceId);
-                setDraft((prev) => ({ ...prev, sessionId }));
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
               }}
+              className="h-7 min-w-0 flex-1 truncate bg-transparent text-[22px] leading-7 font-semibold tracking-[-0.02em] outline-none placeholder:text-placeholder"
             />
-          </Group>
+            {(onRunNow || onDelete) && (
+              <Menu.Root modal={false}>
+                <Menu.Trigger
+                  render={
+                    <IconButton
+                      icon={running ? LoaderCircleIcon : EllipsisIcon}
+                      label="More actions"
+                      className={`data-popup-open:bg-hover data-popup-open:text-text ${running ? "[&_svg]:animate-spin" : ""}`}
+                    />
+                  }
+                />
+                <Menu.Portal>
+                  <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
+                    <Menu.Popup className={PANEL}>
+                      {onRunNow && (
+                        <Menu.Item className={ROW} disabled={running} onClick={() => void run()}>
+                          <PlayIcon className="size-4 shrink-0 text-icon" />
+                          <span className="min-w-0 flex-1 truncate">Run now</span>
+                        </Menu.Item>
+                      )}
+                      {onDelete && (
+                        <Menu.Item className={`${ROW} text-danger data-highlighted:bg-danger/10`} onClick={onDelete}>
+                          <Trash2Icon className="size-4 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">Delete routine</span>
+                        </Menu.Item>
+                      )}
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
+            )}
+          </header>
 
-          <Card>
-            <Toggle
-              label="Enabled"
-              description="Off pauses the schedule. Run now still works."
-              checked={draft.enabled}
-              onChange={(enabled) => setDraft({ ...draft, enabled })}
-            />
-          </Card>
+          {runError && (
+            <p className="-mt-4 px-1 text-[13px] text-danger" role="alert">
+              {runError}
+            </p>
+          )}
 
-          {runs.length > 0 && <History runs={runs} />}
+          <div className="flex flex-col gap-3">
+            <PaneCard label="Instructions">
+              <textarea
+                aria-label="Instructions"
+                value={draft.prompt}
+                placeholder="What it does each run, as you would ask it in a message."
+                onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
+                className="block min-h-[152px] w-full resize-none bg-transparent py-3 text-[13px] leading-[19px] outline-none [field-sizing:content] placeholder:text-placeholder"
+              />
+            </PaneCard>
+
+            <PaneCard label="Bot">
+              <PaneSentence icon={<BotIcon className="size-4" />} title="Bot">
+                <BotPicker
+                  workspaces={workspaces}
+                  workspaceId={workspaceId}
+                  sessionId={draft.sessionId}
+                  onChange={(nextWorkspaceId, sessionId) => {
+                    setWorkspaceId(nextWorkspaceId);
+                    setDraft((prev) => ({ ...prev, sessionId }));
+                  }}
+                />
+              </PaneSentence>
+            </PaneCard>
+
+            <RoutineTrigger schedule={draft.schedule} onChange={(schedule) => setDraft({ ...draft, schedule })} />
+
+            <PaneCard label="Enabled">
+              <PaneRow toggles icon={<PowerIcon className="size-4" />} title="Enabled">
+                <Switch label="Enabled" checked={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} />
+              </PaneRow>
+            </PaneCard>
+
+            {runs.length > 0 && <History runs={runs} />}
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** A label over something that is not one control; Field's <label> would forward clicks into it. */
-function Group({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div role="group" aria-label={label} className="flex flex-col gap-1.5">
-      <span className="text-[12px] font-medium text-text-muted">{label}</span>
-      {children}
+      {/* No rule over it: what scrolls fades into it. */}
+      <div className="relative mx-auto flex w-full max-w-[720px] shrink-0 items-center justify-end gap-2 px-10 pt-1 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-gradient-to-t before:from-canvas before:to-transparent">
+        <Button variant="ghost" onClick={onBack}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!valid} loading={saving} onClick={() => void save()}>
+          Save
+        </Button>
+      </div>
     </div>
   );
 }
 
 function History({ runs }: { runs: RoutineRun[] }) {
   return (
-    <Group label="Run history">
-      <ul className="flex flex-col rounded-xl bg-card px-4 [&>*+*]:border-t [&>*+*]:border-hairline">
-        {runs.map((run) => (
-          <li key={run.id} className="flex h-9 items-center gap-2.5">
+    <PaneCard label="Run history">
+      <CardHead title="Run history" aside={runs.length} />
+      {runs.map((run) => (
+        <div key={run.id} className="flex h-10 items-center gap-3">
+          <span className="grid w-5 shrink-0 place-items-center">
             <RunMark run={run} />
-            <span className="min-w-0 flex-1 truncate">{dayLabel(run.startedAt)}</span>
-            {run.trigger === "manual" && <span className="shrink-0 text-placeholder">manual</span>}
-            {run.finishedAt !== null && (
-              <span className="shrink-0 text-text-muted tabular-nums">
-                {duration(run.finishedAt - run.startedAt)}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </Group>
+          </span>
+          <span className="min-w-0 flex-1 truncate">{dayLabel(run.startedAt)}</span>
+          {run.trigger === "manual" && <span className="shrink-0 text-placeholder">manual</span>}
+          {run.finishedAt !== null && <span className="shrink-0 text-text-muted tabular-nums">{duration(run.finishedAt - run.startedAt)}</span>}
+        </div>
+      ))}
+    </PaneCard>
   );
-}
-
-function RunMark({ run }: { run: RoutineRun }) {
-  if (run.status === "running")
-    return <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-warning" />;
-  if (run.status === "ok") return <CheckIcon className="size-3.5 shrink-0 text-success" />;
-  // Came due while the bot was busy: nothing ran, and nothing went wrong.
-  if (run.status === "skipped") return <MinusIcon className="size-3.5 shrink-0 text-placeholder" />;
-  return <XIcon className="size-3.5 shrink-0 text-danger" />;
 }

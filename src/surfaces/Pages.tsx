@@ -1,7 +1,7 @@
 import { XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { IconButton, PageHeadingContext, Tooltip, type PageHeading } from "../chrome/kit";
+import { IconButton, PageHeadingContext, PageTrailContext, Tooltip, type Crumb, type PageHeading } from "../chrome/kit";
 import { TOGGLE_RESERVE } from "../lib/chrome";
 import { commandKeys } from "../lib/commands";
 import type { RoutineDraft } from "../lib/routines";
@@ -14,7 +14,7 @@ import { SettingsView } from "./SettingsView";
 export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
-  | { kind: "routines"; draft: RoutineDraft | null };
+  | { kind: "routines"; draft: RoutineDraft | null; editId?: string };
 
 type Props = {
   page: Page;
@@ -44,13 +44,17 @@ export function Pages({
 }: Props) {
   const bots = sessions.filter((session) => session.kind === "bot");
   const [heading, setHeading] = useState<PageHeading | null>(null);
+  // A page deeper than its top (a routine being edited) says its own trail.
+  const [deeper, setDeeper] = useState<Crumb[] | null>(null);
   // The page is a sheet laid over the chrome, like the workspace under the tabs,
   // and its strip stands where the tabs were, so the sheet does not jump.
   const sheet = (children: ReactNode) => (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageStrip trail={trail(page)} heading={heading} inset={inset} onClose={onClose} />
+      <PageStrip trail={deeper ?? trail(page)} heading={heading} inset={inset} onClose={onClose} />
       <div data-sheet="page" className="min-h-0 flex-1">
-        <PageHeadingContext.Provider value={setHeading}>{children}</PageHeadingContext.Provider>
+        <PageHeadingContext.Provider value={setHeading}>
+          <PageTrailContext.Provider value={setDeeper}>{children}</PageTrailContext.Provider>
+        </PageHeadingContext.Provider>
       </div>
     </div>
   );
@@ -68,8 +72,9 @@ export function Pages({
       <RoutinesView
         // A draft arriving from the bot drawer has to reopen the editor even
         // when the page is already up.
-        key={page.draft?.key ?? "routines"}
+        key={page.draft?.key ?? page.editId ?? "routines"}
         draft={page.draft}
+        editId={page.editId}
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspace.id}
         bots={bots}
@@ -83,9 +88,9 @@ export function Pages({
 /**
  * Where the page is. Settings swaps the sidebar for its sections, so the strip
  * says whose they are and which is on screen; Routines already heads the sheet
- * with its own name, so the strip leaves it out.
+ * with its own name, so the strip leaves it out until a routine is open.
  */
-function trail(page: Page): string[] {
+function trail(page: Page): Crumb[] {
   return page.kind === "settings" ? ["Settings", settingsSection(page.section).label] : [];
 }
 
@@ -99,7 +104,7 @@ function PageStrip({
   inset,
   onClose,
 }: {
-  trail: string[];
+  trail: Crumb[];
   heading: PageHeading | null;
   inset: boolean;
   onClose: () => void;
@@ -118,12 +123,26 @@ function PageStrip({
         </span>
       )}
       <nav aria-label="Breadcrumb" className="flex min-w-0 translate-y-px items-center gap-1.5 text-icon">
-        {trail.map((part, index) => (
-          <span key={part} className="flex min-w-0 items-center gap-1.5">
-            {index > 0 && <span aria-hidden>›</span>}
-            <span className={`truncate ${index === trail.length - 1 ? "font-medium text-text" : ""}`}>{part}</span>
-          </span>
-        ))}
+        {trail.map((part, index) => {
+          const label = typeof part === "string" ? part : part.label;
+          return (
+            <span key={`${index}:${label}`} className="flex min-w-0 items-center gap-1.5">
+              {index > 0 && <span aria-hidden>›</span>}
+              {typeof part === "string" ? (
+                <span className={`truncate ${index === trail.length - 1 ? "font-medium text-text" : ""}`}>{label}</span>
+              ) : (
+                <button
+                  type="button"
+                  data-tauri-drag-region="false"
+                  onClick={part.onClick}
+                  className="truncate rounded outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
+                >
+                  {label}
+                </button>
+              )}
+            </span>
+          );
+        })}
       </nav>
       <div className="flex-1" />
       <Tooltip

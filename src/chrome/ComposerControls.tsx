@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "reac
 import { Menu } from "@base-ui/react/menu";
 import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, ZapIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
-import { ModelPicker, type Opener } from "./ModelPicker";
+import { ModelPicker, ROW_TRIGGER, type Opener, type RowLabel } from "./ModelPicker";
 import { pickerKeyDown } from "./promptKeys";
 import { useListedModels } from "../hooks/useListedModels";
 import { claudeFastShown, claudeFastTitle, useClaudeFastMode } from "../lib/fastMode";
@@ -219,6 +219,7 @@ export function AccessPicker({
   onChange,
   hint,
   trigger = "chip",
+  row,
 }: {
   ref?: Ref<Opener>;
   provider: string;
@@ -228,16 +229,27 @@ export function AccessPicker({
   hint?: string;
   /** "chip" is the composer's compact trigger; "field" is the sheet's full-width control. */
   trigger?: "chip" | "field";
+  /** The whole row is the trigger instead, labelled as given (ROW_TRIGGER). */
+  row?: RowLabel;
 }) {
   const [open, setOpen] = useState(false);
   useImperativeHandle(ref, () => ({ open: () => setOpen(true) }));
-  const chip = trigger === "chip";
+  const chip = trigger === "chip" && !row;
   const offered = accessesOf(provider);
   const current = ACCESSES.find((a) => a.id === value) ?? ACCESSES[0]!;
   const Glyph = ACCESS_ICONS[current.id];
   return (
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
-      {chip ? (
+      {row ? (
+        <Menu.Trigger aria-label="Access" title={current.description} className={ROW_TRIGGER}>
+          <span className="grid size-5 shrink-0 place-items-center text-icon">{row.icon}</span>
+          <span className="min-w-0 flex-1 font-medium">{row.label}</span>
+          <span data-row-value className="flex min-w-0 items-center gap-1.5 text-text-muted transition-colors group-hover:text-text">
+            <span className="truncate">{current.label}</span>
+            <ChevronDownIcon className="size-3.5 shrink-0 text-icon" />
+          </span>
+        </Menu.Trigger>
+      ) : chip ? (
         <Menu.Trigger aria-label="Access" title={current.description} className={CHIP}>
           <Glyph className="size-3.5 shrink-0 text-icon" />
           <span className="truncate">{current.label}</span>
@@ -250,7 +262,7 @@ export function AccessPicker({
         </Menu.Trigger>
       )}
       <Menu.Portal>
-        <Menu.Positioner side={chip ? "top" : "bottom"} align={chip ? "end" : "start"} sideOffset={4} className="z-50">
+        <Menu.Positioner side={chip ? "top" : "bottom"} align={chip || row ? "end" : "start"} sideOffset={4} className="z-50">
           <Menu.Popup className={`${PANEL} w-76`} onKeyDown={(event) => pickerKeyDown(event, null, () => setOpen(false))}>
             <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Access</div>
             <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Access)}>

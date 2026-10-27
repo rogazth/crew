@@ -29,6 +29,8 @@ export function usePages() {
       }),
     [],
   );
+  /** From a bot's drawer: the routines page, editing one of its routines. */
+  const openRoutine = useCallback((id: string) => setPage({ kind: "routines", draft: null, editId: id }), []);
 
   return {
     page,
@@ -39,5 +41,6 @@ export function usePages() {
     toggle,
     openSettings,
     openRoutines,
+    openRoutine,
   };
 }

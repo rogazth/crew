@@ -902,6 +902,7 @@ impl TurnHost {
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
             let rules = crate::rules::list(&self.store, &session.id).unwrap_or_default();
+            let rules_cap = crate::rules::cap(&self.store, &session.id).unwrap_or(crate::rules::CAP);
             let folder = self.bot_folder(session);
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
@@ -911,6 +912,7 @@ impl TurnHost {
                 harness,
                 tools: &tools,
                 rules: &rules,
+                rules_cap,
                 folder: folder.as_deref(),
             }));
         }
@@ -1366,7 +1368,7 @@ impl TurnHost {
             }
         }
         // Under the tail, the header of this turn names the blocks its message
-        // took: the number `rules` cites a decision of the user's by.
+        // took, numbered as the trail's messages are.
         let history = trail.map(|trail| {
             let last = self.transcripts.len(&params.session_id);
             working_set::with_turn(trail, (last + 1).saturating_sub(appended).max(1), last)
@@ -4928,9 +4930,9 @@ mod mailbox_tests {
     }
 
     /// The block numbers a bot is shown — under the trail for this turn, and
-    /// on each message the user typed — are the ones `rules` takes as `from`.
+    /// on each message the user typed — are those messages' blocks.
     #[test]
-    fn the_block_numbers_a_bot_is_shown_are_the_ones_from_accepts() {
+    fn the_block_numbers_a_bot_is_shown_are_the_users_messages() {
         let world = world();
         let ws = workspace(&world);
         let probe = bot(&world, &ws, "Probe");
@@ -4950,13 +4952,13 @@ mod mailbox_tests {
         let header = prompt.split("## This turn (block ").nth(1).expect("the header").split(')').next().unwrap();
         let now: usize = header.parse().expect("a number");
         assert_eq!(rows[now - 1].text, "y corre los tests", "{prompt}");
-        assert!(crate::rules::user_message(&rows, now as i64).is_ok());
+        assert!(crate::rules::typed_by_user(&rows[now - 1]));
         assert!(prompt.contains("[#1 · ") && prompt.contains("· user] nunca hagas push a master"), "{prompt}");
         let numbered: Vec<&str> = prompt.lines().filter(|line| line.starts_with("[#")).collect();
         assert!(!numbered.is_empty(), "{prompt}");
         for line in numbered {
             let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
-            assert!(crate::rules::user_message(&rows, n).is_ok(), "{line}");
+            assert!(crate::rules::typed_by_user(&rows[n as usize - 1]), "{line}");
         }
     }
 

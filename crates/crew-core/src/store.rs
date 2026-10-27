@@ -500,6 +500,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 43 {
+        let tx = conn.unchecked_transaction()?;
+        // Each bot's own cap on its rules (see `rules::set_cap`).
+        if !has_column(&tx, "bots", "rules_cap")? {
+            tx.execute_batch(crate::rules::MIGRATION_V43)?;
+        }
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

@@ -30,7 +30,7 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
+    self as proto, Auth, BotRules, BotRulesCap, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
     NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
     PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
     SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
@@ -456,9 +456,9 @@ impl ToolDispatch {
 }
 
 /// A bot's rules, after writing the user's edit when given. Only a bot has
-/// rules. What the user wrote in the sheet is theirs: it cites no message.
+/// rules.
 fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotRules, String> {
-    use crew_core::rules::{self, Change, Source};
+    use crew_core::rules::{self, Change};
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
     if let Some(BotRulesSave { add, edit, remove, .. }) = save {
         // A rule the bot removed while the sheet was open is not the user's
@@ -471,17 +471,13 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
             .map(Change::Remove)
             .chain(
                 edit.into_iter()
-                    .filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body, message_id: None })),
+                    .filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })),
             )
-            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add {
-                body,
-                message_id: None,
-                source: Source::Sheet,
-            }))
+            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add { body }))
             .collect();
         rules::apply(store, &row.id, changes)?.map_err(|refused| match refused {
-            rules::Refused::Full { used } => {
-                format!("Rules hold at most {} characters; these are {}.", rules::thousands(rules::CAP), rules::thousands(used))
+            rules::Refused::Full { used, cap } => {
+                format!("Rules hold at most {} characters; these are {}.", rules::thousands(cap), rules::thousands(used))
             }
             other => other.say(),
         })?;
@@ -489,25 +485,12 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
     let listed = rules::list(store, &row.id)?;
     Ok(BotRules {
         used: rules::used(&listed) as u32,
-        cap: rules::CAP as u32,
+        cap: rules::cap(store, &row.id)? as u32,
         rules: listed
             .into_iter()
-            .map(|rule| proto::BotRule {
-                id: rules::label(rule.id),
-                body: rule.body,
-                cited: rule.cited.map(|cited| proto::CitedMessage { excerpt: excerpt(&cited.text, 160), at: cited.at }),
-            })
+            .map(|rule| proto::BotRule { id: rules::label(rule.id), body: rule.body })
             .collect(),
     })
-}
-
-/// The start of a message, on one line.
-fn excerpt(text: &str, limit: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match flat.chars().count() > limit {
-        true => format!("{}…", flat.chars().take(limit - 1).collect::<String>().trim_end()),
-        false => flat,
-    }
 }
 
 fn proto_session(row: &crew_core::session::Session) -> proto::Session {
@@ -1459,6 +1442,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let id = save.id.clone();
             json(block(move || bot_rules(&store, &id, Some(save))).await?)
+        }
+        // The most this bot's rules may hold; what they hold now stays.
+        "bot_rules_cap_set" => {
+            let BotRulesCap { id, cap } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || {
+                crew_core::rules::set_cap(&store, &id, cap as usize)?;
+                bot_rules(&store, &id, None)
+            })
+            .await?)
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
@@ -2606,8 +2599,7 @@ mod tests {
         handle.shutdown();
     }
 
-    /// What a bot writes with `rules` is what the sheet reads, with the
-    /// user's message it cites, and the user's edit from the sheet goes by
+    /// What a bot writes with `rules` is what the sheet reads, and the user's edit from the sheet goes by
     /// id: the bot's rule written meanwhile stays.
     #[tokio::test]
     async fn the_bot_sheet_reads_and_writes_the_rules_the_bot_keeps() {
@@ -2615,15 +2607,12 @@ mod tests {
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
-        handle.turns.transcripts().append_user(&session_id, "nunca\nhagas push a master", false, None, None);
-        // The sheet reads the cited message from the database.
-        handle.turns.transcripts().flush_all();
         let info = bridge.info().expect("info");
         let add = |content: &str| {
             serde_json::json!({
                 "token": bridge.mint(&session_id),
                 "method": "tools/call",
-                "params": { "name": "rules", "arguments": { "action": "add", "content": content, "from": 1 } }
+                "params": { "name": "rules", "arguments": { "action": "add", "content": content } }
             })
         };
         let reply = unix_call(&info.socket_path, &add("Never push to master"));
@@ -2633,7 +2622,6 @@ mod tests {
         assert_eq!((rules.used, rules.cap, rules.rules.len()), (20, 1_500, 1));
         let first = rules.rules[0].clone();
         assert_eq!((first.id.as_str(), first.body.as_str()), ("r1", "Never push to master"));
-        assert_eq!(first.cited.as_ref().map(|cited| cited.excerpt.as_str()), Some("nunca hagas push a master"));
 
         // The bot writes another while the sheet is open; the sheet's save
         // edits the first and adds one, and the bot's stays.
@@ -2647,7 +2635,6 @@ mod tests {
             serde_json::from_value(rpc(&mut ws, 51, "bot_rules_save", save).await.result.expect("saved")).unwrap();
         let bodies: Vec<&str> = saved.rules.iter().map(|rule| rule.body.as_str()).collect();
         assert_eq!(bodies, ["Never push to main", "Run the tests before pushing", "Ask before deleting a branch"]);
-        assert!(saved.rules[0].cited.is_some() && saved.rules[2].cited.is_none());
         let ids: Vec<&str> = saved.rules.iter().map(|rule| rule.id.as_str()).collect();
         assert_eq!(ids, ["r1", "r2", "r3"]);
         let again = rpc(&mut ws, 52, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
@@ -2658,7 +2645,19 @@ mod tests {
             serde_json::from_value(rpc(&mut ws, 53, "bot_rules_save", removed).await.result.expect("removed")).unwrap();
         assert_eq!(left.rules.len(), 2);
         let over = serde_json::json!({ "id": session_id, "add": ["x".repeat(1_501)] });
-        assert!(rpc(&mut ws, 54, "bot_rules_save", over).await.result.is_none(), "over the cap");
+        assert!(rpc(&mut ws, 54, "bot_rules_save", over.clone()).await.result.is_none(), "over the cap");
+
+        // Its own cap: what it may hold from then on.
+        let raised: BotRules = serde_json::from_value(
+            rpc(&mut ws, 55, "bot_rules_cap_set", serde_json::json!({ "id": session_id, "cap": 4_000 })).await.result.expect("cap"),
+        )
+        .unwrap();
+        assert_eq!(raised.cap, 4_000);
+        assert!(rpc(&mut ws, 56, "bot_rules_save", over).await.result.is_some(), "under the new cap");
+        let low = serde_json::json!({ "id": session_id, "cap": 10 });
+        let floored: BotRules =
+            serde_json::from_value(rpc(&mut ws, 57, "bot_rules_cap_set", low).await.result.expect("cap")).unwrap();
+        assert_eq!(floored.cap, 1_500, "under the default is the default");
         handle.shutdown();
     }
 

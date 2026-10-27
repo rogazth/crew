@@ -152,6 +152,9 @@ export const getBotRules = (id: string): Promise<BotRules> => client.request("bo
 export const saveBotRules = (id: string, changes: Omit<BotRulesSave, "id">): Promise<BotRules> =>
   client.request("bot_rules_save", { id, ...changes });
 
+/** The most a bot's rules may hold; what they hold now stays. */
+export const setBotRulesCap = (id: string, cap: number): Promise<BotRules> => client.request("bot_rules_cap_set", { id, cap });
+
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });
 

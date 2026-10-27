@@ -660,6 +660,27 @@ html[data-sidebar-resize="active"] * {
 .crew-scroll-shadow[data-fade-bottom] {
   --fade-bottom: var(--fade-size);
 }
+/*
+ * A control that floats over a scroller, on a plain disc of the surface so what
+ * scrolls under it never crosses the glyph. The disc holds still on hover; only
+ * the glyph goes from near-black to black, and a touch bolder.
+ */
+.crew-float-ground,
+.crew-float-ground:hover {
+  border-radius: 9999px;
+  background: var(--color-surface);
+  color: light-dark(#222, #ddd);
+}
+.crew-float-ground:hover {
+  color: light-dark(#000, #fff);
+}
+.crew-float-ground svg {
+  stroke-width: 1.9;
+  transition: stroke-width 150ms var(--ease-out);
+}
+.crew-float-ground:hover svg {
+  stroke-width: 2.1;
+}
 .crew-prose {
   font-size: var(--chat-text);
   line-height: calc(var(--chat-text) * 1.43);
@@ -1460,6 +1481,44 @@ svg.lucide {
     0 0 0 1px var(--color-hairline),
     0 0 16px -6px oklch(0% 0 0 / 0.1);
 }
+/* A bot's rules (BotRules.tsx): the one being written or pointed at stands
+   out because the others step back, not because it gains a ground. Focus
+   wins over a pointer passing by. */
+:has(> [data-rule]:focus-within) > [data-rule]:not(:focus-within),
+:not(:has(> [data-rule]:focus-within)):has(> [data-rule]:hover) > [data-rule]:not(:hover) {
+  opacity: 0.45;
+}
+
+/* A bot's pane (BotPane.tsx) comes in from the right, the side it lives on,
+   and goes back out there; leaving is quicker than arriving, and `forwards`
+   holds the end state until unmount. Its backdrop fades as a dialog's does. */
+@keyframes bot-pane-in {
+  from { transform: translateX(24px); opacity: 0; }
+}
+@keyframes bot-pane-out {
+  to { transform: translateX(24px); opacity: 0; }
+}
+.bot-pane-in {
+  animation: bot-pane-in 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bot-pane-out {
+  animation: bot-pane-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bot-pane-in, .bot-pane-out { animation: none; }
+}
+
+/* Under a bot's pane (BotPane.tsx) the whole window steps back, on a spring
+   (useRecede): what is in it a touch smaller and a little to the left, away
+   from the pane, under a scrim. No frame and no
+   ground of its own: it shrinks on the ground it already stands on, so
+   nothing reads as a box. The pane itself is portaled out of it. */
+:root {
+  --recede-scale: 0.965;
+  --recede-shift: 24px;
+  --recede-scrim: light-dark(oklch(0% 0 0 / 0.12), oklch(0% 0 0 / 0.4));
+}
+
 /* The sidebar under, the main panel over it (SidebarSlide.tsx). Only resting
    styles live here; the motion is inline, written by springs. */
 .sbx {
@@ -1611,8 +1670,8 @@ button:not(:disabled):active {
   box-shadow: none;
 }
 
-/* A filter chip is a fill like every other chip: no outline at rest, the card
-   ground once it filters something. */
+/* A filter chip is a fill like every other chip: no outline at rest, and the
+   same card ground whether or not it filters anything; the value it says is enough. */
 [data-filter-chip] {
   --tw-ring-shadow: 0 0 #0000;
   background: var(--color-card);
@@ -1622,7 +1681,6 @@ button:not(:disabled):active {
   background: var(--color-hover);
 }
 [data-filter-chip][data-lit] {
-  background: color-mix(in oklab, var(--color-accent) 10%, var(--color-card));
   color: var(--color-text);
 }
 [data-filter-chip]:focus-visible {

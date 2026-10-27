@@ -116,7 +116,7 @@ is still there. Before asking the user something they may already have said, loo
 ### Your rules {usage}
 
 The decisions the user gave you about how to work, written with `rules`. Add one when the user decides how you \
-should work, citing the block of their message; edit or remove one by its id when they change their mind. Your \
+should work; edit or remove one by its id when they change their mind. Your \
 instructions above are who you are, your job and where you work; rewrite them with `update_description` only when \
 those change.
 
@@ -367,6 +367,8 @@ pub struct Bot<'a> {
     pub tools: &'a [&'a str],
     /// Its rules, oldest first (`crate::rules`).
     pub rules: &'a [crate::rules::Rule],
+    /// The most they may hold (`crate::rules::cap`).
+    pub rules_cap: usize,
     /// Its folder, for anything it wants to keep (`crate::bot_folder`).
     pub folder: Option<&'a str>,
 }
@@ -388,7 +390,7 @@ pub fn bot(bot: &Bot) -> String {
     let mut text = fill(
         BOT,
         &[
-            ("usage", &crate::rules::usage(bot.rules)),
+            ("usage", &crate::rules::usage(bot.rules, bot.rules_cap)),
             ("folder", &folder),
             ("name", name),
             ("id", bot.id),
@@ -515,6 +517,7 @@ mod tests {
             harness,
             tools,
             rules: &[],
+            rules_cap: crate::rules::CAP,
             folder: None,
         })
     }
@@ -605,29 +608,15 @@ mod tests {
         }
     }
 
-    fn rule(id: i64, body: &str, source: crate::rules::Source, cited: Option<i64>) -> crate::rules::Rule {
-        crate::rules::Rule {
-            id,
-            body: body.into(),
-            message_id: cited.map(|_| "m1".into()),
-            source,
-            created_at: 1_792_000_000_000,
-            updated_at: 1_792_000_000_000,
-            cited: cited.map(|at| crate::rules::Cited { text: "nunca push a master".into(), at }),
-        }
+    fn rule(id: i64, body: &str) -> crate::rules::Rule {
+        crate::rules::Rule { id, body: body.into(), created_at: 1_792_000_000_000, updated_at: 1_792_000_000_000 }
     }
 
-    /// The rules are in every turn, with their ids, who set them and how full
-    /// they are; the description is offered for who the bot is, not as a
+    /// The rules are in every turn, with their ids and how full they are; the description is offered for who the bot is, not as a
     /// notebook.
     #[test]
     fn the_bot_is_handed_its_rules_and_how_full_they_are() {
-        use crate::rules::Source;
-        let at = 1_792_500_000_000;
-        let rules = vec![
-            rule(1, "Never push to master.", Source::Bot, Some(at)),
-            rule(4, "Run the tests before pushing.", Source::Notes, None),
-        ];
+        let rules = vec![rule(1, "Never push to master."), rule(4, "Run the tests before pushing.")];
         let tools = every(CallerKind::Bot);
         let text = bot(&Bot {
             name: "Home",
@@ -637,24 +626,22 @@ mod tests {
             harness: Harness::Mcp,
             tools: &tools,
             rules: &rules,
+            rules_cap: crate::rules::CAP,
             folder: None,
         });
-        let usage = crate::rules::usage(&rules);
+        let usage = crate::rules::usage(&rules, crate::rules::CAP);
         assert_eq!(usage, "[3% - 50/1,500]");
         assert!(
             text.contains(&format!(
                 "### Your rules {usage}\n\nThe decisions the user gave you about how to work, written with `mcp__crew__rules`. \
-                 Add one when the user decides how you should work, citing the block of their message; edit or remove one \
+                 Add one when the user decides how you should work; edit or remove one \
                  by its id when they change their mind. Your instructions above are who you are, your job and where you \
                  work; rewrite them with `mcp__crew__update_description` only when those change.\n\n"
             )),
             "{text}"
         );
-        let day = crate::rules::day(at);
         assert!(
-            text.contains(&format!(
-                "\n\n[r1] Never push to master. (user, {day})\n[r4] Run the tests before pushing.\n\n### Who wrote this turn"
-            )),
+            text.contains("\n\n[r1] Never push to master.\n[r4] Run the tests before pushing.\n\n### Who wrote this turn"),
             "{text}"
         );
         assert!(!text.contains("### Your notes") && !text.contains("memory`"), "{text}");
@@ -674,6 +661,7 @@ mod tests {
             harness: Harness::Mcp,
             tools: &[],
             rules: &[],
+            rules_cap: crate::rules::CAP,
             folder: Some("/w/workspaces/home/bots/home"),
         });
         assert!(
@@ -698,6 +686,7 @@ mod tests {
             harness: Harness::Mcp,
             tools: &[],
             rules: &[],
+            rules_cap: crate::rules::CAP,
             folder: None,
         });
         assert!(text.contains("You are the user's bot, a bot in Crew"), "{text}");

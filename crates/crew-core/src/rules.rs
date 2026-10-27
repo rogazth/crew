@@ -6,9 +6,7 @@
 //! address: a patch replaced the whole entry that held a phrase, a remove
 //! matched by substring, and the bot kept ids, prices and pending work there.
 //! A rule is a row with an id the bot edits or removes it by (`r3`, numbered
-//! within the bot and never given twice), and one the bot adds cites the
-//! user's message that set it: what is not the user's decision has no message
-//! to cite.
+//! within the bot and never given twice).
 //!
 //! The description is still who the bot is, its job and where it works.
 
@@ -17,8 +15,12 @@ use rusqlite::{params, Connection};
 
 use crate::store::{now_millis, Store};
 
-/// The most the rules may hold, in characters, summed over their bodies.
+/// The most the rules may hold, in characters, summed over their bodies,
+/// until the user sets a bot's own (`bots.rules_cap`).
 pub const CAP: usize = 1_500;
+
+/// v43: each bot's own cap, the default until the user changes it.
+pub const MIGRATION_V43: &str = "ALTER TABLE bots ADD COLUMN rules_cap INTEGER NOT NULL DEFAULT 1500;";
 
 /// The notes the rules replace: v40 made the table, v41 reads it into rules
 /// and drops it.
@@ -30,9 +32,10 @@ CREATE TABLE IF NOT EXISTS bot_notes (
 );
 ";
 
-/// One row per rule. `number` is the rule's id within its bot (`r3`);
-/// `message_id` is the `messages.id` of the user's message that set it, or
-/// last changed it; `source` says who wrote it (see [`Source`]).
+/// One row per rule. `number` is the rule's id within its bot (`r3`).
+/// `message_id` and `source` are from when a rule cited the user's message and
+/// said who wrote it; nothing reads them now, and a new rule leaves them at
+/// their defaults.
 const RULES_TABLE: &str = "
 CREATE TABLE IF NOT EXISTS bot_rules (
   id          INTEGER PRIMARY KEY,
@@ -51,8 +54,7 @@ CREATE TABLE IF NOT EXISTS bot_rules (
 /// (`rules_made`), so a number is never given twice even after the newest
 /// rule is removed. Every bot's notes become its rules, an entry a rule,
 /// numbered in order, and the notes go. An entry keeps its text and the time
-/// the notes were last written; it cites no message, and says so by its
-/// source. Notes of a session that is not a bot (none should exist) go with
+/// the notes were last written. Notes of a session that is not a bot (none should exist) go with
 /// the table.
 pub(crate) fn migrate_v41(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(RULES_TABLE)?;
@@ -93,53 +95,13 @@ fn split_notes(body: &str) -> Vec<String> {
         .collect()
 }
 
-/// Who wrote a rule, which says what its line in the prompt ends with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    /// The bot, citing the user's message (`message_id`).
-    Bot,
-    /// The user, in the bot sheet.
-    Sheet,
-    /// An entry of the notes the rules replaced: nobody can say who.
-    Notes,
-}
-
-impl Source {
-    fn as_str(self) -> &'static str {
-        match self {
-            Source::Bot => "bot",
-            Source::Sheet => "sheet",
-            Source::Notes => "notes",
-        }
-    }
-
-    fn parse(text: &str) -> Self {
-        match text {
-            "sheet" => Source::Sheet,
-            "notes" => Source::Notes,
-            _ => Source::Bot,
-        }
-    }
-}
-
-/// The user's message a rule cites, as the transcript keeps it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Cited {
-    pub text: String,
-    pub at: i64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     /// Its number within the bot: what [`label`] names it by.
     pub id: i64,
     pub body: String,
-    pub message_id: Option<String>,
-    pub source: Source,
     pub created_at: i64,
     pub updated_at: i64,
-    /// The cited message, while the transcript still has it.
-    pub cited: Option<Cited>,
 }
 
 /// `r3`: how a rule is named wherever it is shown or taken: the prompt, the
@@ -160,26 +122,34 @@ pub fn list(store: &Store, bot_id: &str) -> Result<Vec<Rule>, String> {
     store.with(|conn| read(conn, bot_id))
 }
 
+/// The most this bot's rules may hold.
+pub fn cap(store: &Store, bot_id: &str) -> Result<usize, String> {
+    store.with(|conn| cap_of(conn, bot_id))
+}
+
+fn cap_of(conn: &Connection, bot_id: &str) -> rusqlite::Result<usize> {
+    let cap: Option<i64> = conn
+        .query_row("SELECT rules_cap FROM bots WHERE id = ?1", params![bot_id], |row| row.get(0))
+        .map(Some)
+        .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
+    Ok(cap.and_then(|cap| usize::try_from(cap).ok()).unwrap_or(CAP))
+}
+
+/// The user's cap for this bot, never under [`CAP`]: less is taken as
+/// that, and there is no most. Returns the cap kept.
+pub fn set_cap(store: &Store, bot_id: &str, cap: usize) -> Result<usize, String> {
+    let cap = cap.max(CAP);
+    let stored = i64::try_from(cap).unwrap_or(i64::MAX);
+    store.with(|conn| conn.execute("UPDATE bots SET rules_cap = ?2 WHERE id = ?1", params![bot_id, stored]))?;
+    Ok(cap)
+}
+
 fn read(conn: &Connection, bot_id: &str) -> rusqlite::Result<Vec<Rule>> {
     conn.prepare_cached(
-        "SELECT r.number, r.body, r.message_id, r.source, r.created_at, r.updated_at, m.text, m.at
-           FROM bot_rules r
-           LEFT JOIN messages m ON m.session_id = r.bot_id AND m.id = r.message_id
-          WHERE r.bot_id = ?1
-          ORDER BY r.number",
+        "SELECT number, body, created_at, updated_at FROM bot_rules WHERE bot_id = ?1 ORDER BY number",
     )?
     .query_map(params![bot_id], |row| {
-        let text: Option<String> = row.get(6)?;
-        let at: Option<i64> = row.get(7)?;
-        Ok(Rule {
-            id: row.get(0)?,
-            body: row.get(1)?,
-            message_id: row.get(2)?,
-            source: Source::parse(&row.get::<_, String>(3)?),
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-            cited: text.zip(at).map(|(text, at)| Cited { text, at }),
-        })
+        Ok(Rule { id: row.get(0)?, body: row.get(1)?, created_at: row.get(2)?, updated_at: row.get(3)? })
     })?
     .collect()
 }
@@ -195,15 +165,10 @@ pub fn tidy(body: &str) -> String {
 pub enum Change {
     Add {
         body: String,
-        message_id: Option<String>,
-        source: Source,
     },
-    /// `message_id`, given, is the user's message that changed the rule: the
-    /// rule cites it from now on.
     Edit {
         id: i64,
         body: String,
-        message_id: Option<String>,
     },
     Remove(i64),
 }
@@ -227,8 +192,8 @@ pub enum Refused {
     Asked(String),
     /// No rule has this id; `ids` are the ones there are.
     Unknown { id: i64, ids: Vec<i64> },
-    /// The rules would take `used` characters, more than [`CAP`].
-    Full { used: usize },
+    /// The rules would take `used` characters, more than the bot's `cap`.
+    Full { used: usize, cap: usize },
 }
 
 impl Refused {
@@ -242,9 +207,9 @@ impl Refused {
                 label(*id),
                 ids.iter().map(|id| label(*id)).collect::<Vec<_>>().join(", ")
             ),
-            Refused::Full { used } => format!(
+            Refused::Full { used, cap } => format!(
                 "Your rules hold at most {} characters, and that would make them {}. Merge, shorten or remove rules first.",
-                thousands(CAP),
+                thousands(*cap),
                 thousands(*used)
             ),
         }
@@ -269,8 +234,9 @@ pub fn apply(store: &Store, bot_id: &str, changes: Vec<Change>) -> Result<Result
             }
         }
         let after = used(&read(&tx, bot_id)?);
-        if after > CAP && after > before {
-            return Ok(Err(Refused::Full { used: after }));
+        let cap = cap_of(&tx, bot_id)?;
+        if after > cap && after > before {
+            return Ok(Err(Refused::Full { used: after, cap }));
         }
         tx.commit()?;
         Ok(Ok(done))
@@ -285,7 +251,7 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
         None => Err(Refused::Unknown { id, ids: rules.iter().map(|rule| rule.id).collect() }),
     };
     Ok(match change {
-        Change::Add { body, message_id, source } => {
+        Change::Add { body } => {
             let body = tidy(&body);
             if body.is_empty() {
                 return Ok(Err(Refused::Asked("content is required: the rule.".into())));
@@ -300,13 +266,12 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
                 |row| row.get(0),
             )?;
             conn.execute(
-                "INSERT INTO bot_rules (bot_id, number, body, message_id, source, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                params![bot_id, id, body, message_id, source.as_str(), now],
+                "INSERT INTO bot_rules (bot_id, number, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![bot_id, id, body, now],
             )?;
             Ok(Done::Added(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just added")))
         }
-        Change::Edit { id, body, message_id } => {
+        Change::Edit { id, body } => {
             let body = tidy(&body);
             if body.is_empty() {
                 return Ok(Err(Refused::Asked("content is required: what the rule becomes. To drop it, remove it.".into())));
@@ -314,17 +279,10 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             if let Err(refused) = find(id) {
                 return Ok(Err(refused));
             }
-            match &message_id {
-                Some(message_id) => conn.execute(
-                    "UPDATE bot_rules SET body = ?3, updated_at = ?4, message_id = ?5, source = 'bot'
-                      WHERE bot_id = ?1 AND number = ?2",
-                    params![bot_id, id, body, now, message_id],
-                )?,
-                None => conn.execute(
-                    "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
-                    params![bot_id, id, body, now],
-                )?,
-            };
+            conn.execute(
+                "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
+                params![bot_id, id, body, now],
+            )?;
             Ok(Done::Edited(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just edited")))
         }
         Change::Remove(id) => {
@@ -338,18 +296,8 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
     })
 }
 
-/// The block `at` (1-based, as the trail and `read_session` number them) when
-/// it is a message the user typed in this conversation; otherwise the refusal
-/// the bot is given. A letter from a bot or a session, the bot's own words, a
-/// line of Crew's and a routine's prompt are nobody's decision about how the
-/// bot works.
-pub fn user_message(blocks: &[Block], at: i64) -> Result<&Block, String> {
-    let refused = || format!("Rules hold the user's decisions, and block {at} is not a message from the user.");
-    let block = usize::try_from(at).ok().and_then(|at| at.checked_sub(1)).and_then(|index| blocks.get(index));
-    block.filter(|block| typed_by_user(block)).ok_or_else(refused)
-}
-
-/// A message the user typed in this conversation: what a rule may cite.
+/// A message the user typed in this conversation, not a letter, a line of
+/// Crew's or a routine's prompt: what the trail numbers.
 pub fn typed_by_user(block: &Block) -> bool {
     block.role == BlockRole::User && block.from_bot.is_none() && block.hidden != Some(true)
 }
@@ -359,37 +307,23 @@ pub fn used(rules: &[Rule]) -> usize {
     rules.iter().map(|rule| rule.body.chars().count()).sum()
 }
 
-/// `[22% - 335/1,500]`: how full the rules are.
-pub fn usage(rules: &[Rule]) -> String {
+/// `[22% - 335/1,500]`: how full the rules are, of `cap`.
+pub fn usage(rules: &[Rule], cap: usize) -> String {
     let used = used(rules);
-    format!("[{}% - {}/{}]", used * 100 / CAP, thousands(used), thousands(CAP))
+    format!("[{}% - {}/{}]", used * 100 / cap.max(1), thousands(used), thousands(cap))
 }
 
 /// The rules as the prompt shows them, one a line: `[r1] Never push to
-/// master. (user, 2026-10-21)`. The date is the cited message's, or the day
-/// the user wrote it in the sheet; a rule from the notes says nothing of who.
+/// master.`
 pub fn lines(rules: &[Rule]) -> String {
     if rules.is_empty() {
         return "None yet.".into();
     }
     rules
         .iter()
-        .map(|rule| {
-            let who = match (rule.source, &rule.cited) {
-                (Source::Bot, Some(cited)) => format!(" (user, {})", day(cited.at)),
-                (Source::Bot, None) => " (user)".to_string(),
-                (Source::Sheet, _) => format!(" (user, {})", day(rule.created_at)),
-                (Source::Notes, _) => String::new(),
-            };
-            format!("[{}] {}{who}", label(rule.id), tidy(&rule.body))
-        })
+        .map(|rule| format!("[{}] {}", label(rule.id), tidy(&rule.body)))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// `2026-10-21`, local.
-pub fn day(ms: i64) -> String {
-    crate::store::stamp(ms).chars().take(10).collect()
 }
 
 pub fn thousands(n: usize) -> String {
@@ -429,7 +363,7 @@ mod tests {
     }
 
     fn add(body: &str) -> Change {
-        Change::Add { body: body.into(), message_id: None, source: Source::Sheet }
+        Change::Add { body: body.into() }
     }
 
     fn bodies(store: &Store, bot: &str) -> Vec<String> {
@@ -464,12 +398,11 @@ mod tests {
         let again = apply(&store, &bot, vec![add("Never push to master")]).unwrap().unwrap();
         assert!(matches!(&again[..], [Done::Repeated(rule)] if rule.id == first.id), "{again:?}");
 
-        let edited =
-            apply(&store, &bot, vec![Change::Edit { id: first.id, body: "Never push to main".into(), message_id: None }]);
+        let edited = apply(&store, &bot, vec![Change::Edit { id: first.id, body: "Never push to main".into() }]);
         assert!(matches!(&edited.unwrap().unwrap()[..], [Done::Edited(rule)] if rule.body == "Never push to main"));
         assert_eq!(bodies(&store, &bot), ["Never push to main", "Run the tests before pushing"]);
         let kept = list(&store, &bot).unwrap().remove(0);
-        assert_eq!((kept.created_at, kept.source), (first.created_at, Source::Sheet));
+        assert_eq!(kept.created_at, first.created_at);
 
         apply(&store, &bot, vec![Change::Remove(second.id)]).unwrap().unwrap();
         assert_eq!(bodies(&store, &bot), ["Never push to main"]);
@@ -510,52 +443,31 @@ mod tests {
         assert_eq!(bodies(&store, &bot), ["Never push to master", "Ask before deleting a branch"]);
     }
 
-    /// An edit given the message that changed the rule cites that message
-    /// from then on; one without keeps the citation it had.
-    #[test]
-    fn an_edit_from_a_later_message_moves_the_citation() {
-        let (store, bot, _) = store();
-        let (early, late): (i64, i64) = (1_792_000_000_000, 1_792_500_000_000);
-        store
-            .with(|conn| {
-                conn.execute_batch(&format!(
-                    "INSERT INTO messages (session_id, pos, id, role, text, at) VALUES
-                       ('{bot}', 1, 'm1', 'user', 'run the tests before pushing', {early}),
-                       ('{bot}', 2, 'm2', 'user', 'unless it is docs only', {late});"
-                ))
-            })
-            .unwrap();
-        let cited =
-            Change::Add { body: "Run the tests before pushing.".into(), message_id: Some("m1".into()), source: Source::Bot };
-        let rule = added(apply(&store, &bot, vec![cited]));
-        let body = "Run the tests before pushing, unless it is docs only.";
-        apply(&store, &bot, vec![Change::Edit { id: rule.id, body: body.into(), message_id: None }]).unwrap().unwrap();
-        assert_eq!(list(&store, &bot).unwrap()[0].message_id.as_deref(), Some("m1"));
-
-        let moved = Change::Edit { id: rule.id, body: body.into(), message_id: Some("m2".into()) };
-        let done = apply(&store, &bot, vec![moved]).unwrap().unwrap();
-        let [Done::Edited(edited)] = &done[..] else { panic!("{done:?}") };
-        assert_eq!(edited.message_id.as_deref(), Some("m2"));
-        assert_eq!(edited.cited, Some(Cited { text: "unless it is docs only".into(), at: late }));
-        assert_eq!(edited.created_at, rule.created_at);
-        assert_eq!(lines(&list(&store, &bot).unwrap()), format!("[r1] {body} (user, {})", day(late)));
-
-        // A rule the user wrote in the sheet becomes one that cites them.
-        let sheet = added(apply(&store, &bot, vec![add("Ask first.")]));
-        let cite = Change::Edit { id: sheet.id, body: "Ask first.".into(), message_id: Some("m2".into()) };
-        apply(&store, &bot, vec![cite]).unwrap().unwrap();
-        assert_eq!(list(&store, &bot).unwrap()[1].source, Source::Bot);
-    }
-
     /// Over the cap the whole write is refused, and nothing of it is kept.
     #[test]
     fn a_write_over_the_cap_is_refused_whole() {
         let (store, bot, _) = store();
         apply(&store, &bot, vec![add(&"a".repeat(CAP - 10))]).unwrap().unwrap();
         let refused = apply(&store, &bot, vec![add("short"), add(&"b".repeat(20))]).unwrap().unwrap_err();
-        assert_eq!(refused, Refused::Full { used: CAP - 10 + 5 + 20 });
+        assert_eq!(refused, Refused::Full { used: CAP - 10 + 5 + 20, cap: CAP });
         assert!(refused.say().contains("at most 1,500 characters, and that would make them 1,515"), "{}", refused.say());
         assert_eq!(list(&store, &bot).unwrap().len(), 1, "a refused write changes nothing");
+    }
+
+    /// A bot's own cap is what a write is held to, never under the default;
+    /// lowered under what the rules hold, they stay and may only shrink.
+    #[test]
+    fn a_bot_holds_its_rules_to_its_own_cap() {
+        let (store, bot, _) = store();
+        assert_eq!(cap(&store, &bot).unwrap(), CAP);
+        assert_eq!(set_cap(&store, &bot, 100).unwrap(), CAP, "under the default is the default");
+        assert_eq!(set_cap(&store, &bot, 50_000).unwrap(), 50_000);
+        apply(&store, &bot, vec![add(&"a".repeat(2_000))]).unwrap().unwrap();
+        set_cap(&store, &bot, 0).unwrap();
+        assert_eq!(list(&store, &bot).unwrap().len(), 1, "lowering the cap removes nothing");
+        let refused = apply(&store, &bot, vec![add("more")]).unwrap().unwrap_err();
+        assert_eq!(refused, Refused::Full { used: 2_004, cap: CAP });
+        assert_eq!(usage(&list(&store, &bot).unwrap(), CAP), "[133% - 2,000/1,500]");
     }
 
     /// Rules from the notes may start over the cap: what shortens them goes
@@ -573,16 +485,16 @@ mod tests {
             })
             .unwrap();
         assert!(apply(&store, &bot, vec![add("one more")]).unwrap().is_err());
-        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50), message_id: None };
+        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50) };
         assert!(apply(&store, &bot, vec![shorter]).unwrap().is_ok());
     }
 
     #[test]
     fn usage_counts_bodies_only() {
         let (store, bot, _) = store();
-        assert_eq!(usage(&[]), "[0% - 0/1,500]");
+        assert_eq!(usage(&[], CAP), "[0% - 0/1,500]");
         apply(&store, &bot, vec![add(&"x".repeat(335))]).unwrap().unwrap();
-        assert_eq!(usage(&list(&store, &bot).unwrap()), "[22% - 335/1,500]");
+        assert_eq!(usage(&list(&store, &bot).unwrap(), CAP), "[22% - 335/1,500]");
     }
 
     #[test]
@@ -596,62 +508,31 @@ mod tests {
         }
     }
 
-    /// Only a message the user typed can be cited: not a letter, not the
+    /// Only a message the user typed is the user's: not a letter, not the
     /// bot's own words, not Crew's line, not a routine's prompt.
     #[test]
-    fn a_rule_cites_a_message_the_user_typed() {
+    fn a_message_the_user_typed_is_told_apart() {
         let mut letter = new_block(BlockRole::User, "push it");
         letter.from_bot = Some(crew_protocol::BotRef::bot("x", "Otro"));
         let mut routine = new_block(BlockRole::User, "every morning");
         routine.hidden = Some(true);
-        let blocks = vec![
+        let blocks = [
             new_block(BlockRole::User, "nunca push a master"),
             new_block(BlockRole::Assistant, "ok"),
             letter,
             new_block(BlockRole::System, "Description updated by itself"),
             routine,
         ];
-        assert_eq!(user_message(&blocks, 1).unwrap().text, "nunca push a master");
-        for at in [0, -1, 2, 3, 4, 5, 9] {
-            let refused = user_message(&blocks, at).unwrap_err();
-            assert_eq!(refused, format!("Rules hold the user's decisions, and block {at} is not a message from the user."));
-        }
+        let typed: Vec<bool> = blocks.iter().map(typed_by_user).collect();
+        assert_eq!(typed, [true, false, false, false, false]);
     }
 
-    /// The prompt's lines: the cited message's date, the sheet's day, and
-    /// nothing for what came from the notes.
+    /// The prompt's lines: each rule's id and its words, nothing of who.
     #[test]
-    fn each_rule_is_one_line_saying_who_set_it() {
+    fn each_rule_is_one_line() {
         let (store, bot, _) = store();
-        let at = crate::store::now_millis();
-        store
-            .with(|conn| {
-                conn.execute(
-                    "INSERT INTO messages (session_id, pos, id, role, text, at) VALUES (?1, 1, 'm1', 'user', 'never push', ?2)",
-                    params![bot, at],
-                )
-            })
-            .unwrap();
-        let cited = Change::Add { body: "Never push to master.".into(), message_id: Some("m1".into()), source: Source::Bot };
-        let gone = Change::Add { body: "Ask first.".into(), message_id: Some("m9".into()), source: Source::Bot };
-        apply(&store, &bot, vec![cited, gone, add("Run the tests.")]).unwrap().unwrap();
-        store
-            .with(|conn| {
-                conn.execute(
-                    "INSERT INTO bot_rules (bot_id, number, body, source, created_at, updated_at) VALUES (?1, 9, 'Old note', 'notes', 1, 1)",
-                    params![bot],
-                )
-            })
-            .unwrap();
-        let rules = list(&store, &bot).unwrap();
-        assert_eq!(rules[0].cited, Some(Cited { text: "never push".into(), at }));
-        let today = day(at);
-        assert_eq!(
-            lines(&rules),
-            format!(
-                "[r1] Never push to master. (user, {today})\n[r2] Ask first. (user)\n[r3] Run the tests. (user, {today})\n[r9] Old note"
-            )
-        );
+        apply(&store, &bot, vec![add("Never push to master."), add("Run the tests.")]).unwrap().unwrap();
+        assert_eq!(lines(&list(&store, &bot).unwrap()), "[r1] Never push to master.\n[r2] Run the tests.");
         assert_eq!(lines(&[]), "None yet.");
     }
 
@@ -684,10 +565,8 @@ mod tests {
             [(1, "Never push to master"), (2, "The staging password is in 1Password")]
         );
         for rule in &rules {
-            assert_eq!((rule.message_id.as_deref(), rule.source), (None, Source::Notes));
             assert_eq!((rule.created_at, rule.updated_at), (1_792_000_000_000, 1_792_000_000_000));
         }
-        assert!(!lines(&rules).contains("(user"), "{}", lines(&rules));
         assert!(!store.with(|conn| crate::store::has_table(conn, "bot_notes")).unwrap());
         assert_eq!(added(apply(&store, &bot, vec![add("Ask first")])).id, 3);
     }

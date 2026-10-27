@@ -3,7 +3,7 @@ import type { BotRule } from "./protocol";
 import { newRuleRow, ruleChanges, ruleRows, rulesUsed } from "./botRules";
 
 const saved: BotRule[] = [
-  { id: "r1", body: "Never push to master", cited: { excerpt: "nunca hagas push a master", at: 0 } },
+  { id: "r1", body: "Never push to master" },
   { id: "r4", body: "Run the tests before pushing" },
 ];
 

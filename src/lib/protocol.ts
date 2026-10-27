@@ -181,11 +181,7 @@ export type BotRule = {
 /**
  * Its id within the bot, as the bot names it: `r3`.
  */
-id: string, body: string, 
-/**
- * The user's message that set it, while the transcript has it.
- */
-cited?: CitedMessage, };
+id: string, body: string, };
 
 /**
  * A rule's new text.
@@ -197,6 +193,12 @@ export type BotRuleEdit = { id: string, body: string, };
  * first, and the characters they take of the most they may.
  */
 export type BotRules = { rules: Array<BotRule>, used: number, cap: number, };
+
+/**
+ * `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
+ * sheet; less than the default is taken as the default.
+ */
+export type BotRulesCap = { id: string, cap: number, };
 
 /**
  * `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
@@ -312,11 +314,6 @@ workspaceId?: string, };
  * A browser tool run as the user, from the window or `crew`.
  */
 export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
-
-/**
- * The start of the user's message a rule cites, and when it was written.
- */
-export type CitedMessage = { excerpt: string, at: number, };
 
 /**
  * A session's `/` menu as it stood when it was read.

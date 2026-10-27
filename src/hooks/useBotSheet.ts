@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { BotDraft } from "../chrome/BotSheet";
+import type { BotDraft } from "../chrome/BotPane";
 import { MIN_SAVE_MS } from "../lib/timing";
 import type { Session } from "../lib/types";
 import { setBotFace } from "./useBotFaces";
@@ -13,7 +13,7 @@ type Deps = {
   openSession: (session: Session) => void;
 };
 
-/** One sheet serves both create and edit. The sheet closes itself so its exit can play. */
+/** One pane serves both create and edit: a new bot is saved whole, a bot that exists a field at a time. */
 export function useBotSheet({ create, update, openSession }: Deps) {
   const [sheet, setSheet] = useState<{ session: Session | null; worktree?: string } | null>(null);
 
@@ -45,5 +45,17 @@ export function useBotSheet({ create, update, openSession }: Deps) {
     [create, openSession, sheet, update],
   );
 
-  return { sheet, newBot, editBot, close, save };
+  /** One change to a bot that exists, written at once; the rest of it as it stands. */
+  const patch = useCallback(
+    async (session: Session, fields: Partial<BotDraft>) => {
+      const { face, ...rest } = fields;
+      if (face) setBotFace(session.id, face);
+      if (Object.keys(rest).length === 0) return;
+      const { name, provider, model, description, notifications, autonomy } = session;
+      await update(session.id, { name, provider, model, description, notifications, autonomy, ...rest });
+    },
+    [update],
+  );
+
+  return { sheet, newBot, editBot, close, save, patch };
 }

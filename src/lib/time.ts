@@ -55,3 +55,13 @@ export function until(at: number, now = Date.now()): string {
   if (hours < 24) return `in ${hours}h`;
   return `in ${Math.floor(hours / 24)}d`;
 }
+
+/** How long ago, to one unit as a list column says it: "now", "12m ago", "8h ago", "3d ago". */
+export function ago(at: number, now = Date.now()): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}

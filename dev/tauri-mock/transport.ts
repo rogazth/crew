@@ -351,20 +351,21 @@ function threadMessages({ a, b, before, limit }: Row): Row {
 }
 
 /** Each bot's rules, as `crew_core::rules` keeps them. */
-type MockRule = { id: string; body: string; cited?: { excerpt: string; at: number } };
+type MockRule = { id: string; body: string };
 const botRules = new Map<string, MockRule[]>([
   [
     "s1",
     [
-      { id: "r1", body: "Never push to master.", cited: { excerpt: "nunca hagas push directo a master, abre un PR", at: now - 2 * 86_400_000 } },
+      { id: "r1", body: "Never push to master." },
       { id: "r2", body: "Run the tests before pushing." },
     ],
   ],
 ]);
 let nextRule = 3;
+const ruleCaps = new Map<string, number>();
 function rulesOf(id: string) {
   const rules = botRules.get(id) ?? [];
-  return { rules, used: rules.reduce((sum, rule) => sum + [...rule.body].length, 0), cap: 1500 };
+  return { rules, used: rules.reduce((sum, rule) => sum + [...rule.body].length, 0), cap: ruleCaps.get(id) ?? 1500 };
 }
 function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
   const tidy = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
@@ -427,6 +428,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_update: ({ id, ...rest }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, rest),
   bot_rules_get: ({ id }) => rulesOf(String(id)),
   bot_rules_save: saveRules,
+  bot_rules_cap_set: ({ id, cap }) => (ruleCaps.set(String(id), Math.max(Number(cap), 1500)), rulesOf(String(id))),
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),

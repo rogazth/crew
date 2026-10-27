@@ -2,17 +2,17 @@
 // select beside a Bot select. It loads the bots of every workspace up front, so
 // picking one sets both at once and the pair can never disagree.
 //
-// Trigger: the chosen bot's face, its name, and under it the workspace's mark +
-// name and the bot's provider. Popup: a search field, then bots grouped by
+// Trigger: a word in a sentence (TOKEN), the chosen bot's face, its name and
+// its workspace's. Popup: a search field, then bots grouped by
 // workspace. ↑/↓ move, Enter picks, Esc clears the search and then closes.
 import { Popover } from "@base-ui/react/popover";
-import { BotIcon, CheckIcon, ChevronsUpDownIcon, SearchIcon, XIcon } from "lucide-react";
+import { CheckIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { BotAvatar } from "./BotAvatar";
+import { TOKEN } from "./kit";
 import { ProviderIcon } from "./ProviderIcon";
 import * as api from "../lib/api";
 import { fuzzyMatch } from "../lib/fuzzy";
-import { providerLine } from "../lib/providers";
 import type { Session, Workspace } from "../lib/types";
 import { filterSessions, workspaceMark } from "../lib/workspaces";
 
@@ -134,42 +134,26 @@ export function BotPicker({ workspaces, workspaceId, sessionId, onChange }: Prop
 
   return (
     <Popover.Root open={open} onOpenChange={openChange} modal={false}>
-      <Popover.Trigger className="flex h-14 w-full items-center gap-3 rounded-xl bg-card px-3 text-left outline-none transition-[background-color,box-shadow] duration-150 hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover motion-reduce:transition-none">
+      <Popover.Trigger className={`${TOKEN} gap-1.5`}>
         {chosen && chosenWorkspace ? (
           <>
-            <BotAvatar seed={chosen.id} bare className="size-9" />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate font-medium">{chosen.name}</span>
-              <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-text-muted">
-                <WorkspaceMark name={chosenWorkspace.name} />
-                <span className="min-w-0 truncate">{chosenWorkspace.name}</span>
-                <span aria-hidden className="text-placeholder">
-                  ·
-                </span>
-                <ProviderIcon provider={chosen.provider} className="size-3" />
-                <span className="min-w-0 truncate">{providerLine(chosen.provider, chosen.model)}</span>
-              </span>
-            </span>
+            <BotAvatar seed={chosen.id} bare className="size-4" />
+            <span className="truncate">{chosen.name}</span>
+            <span className="truncate font-normal opacity-70">· {chosenWorkspace.name}</span>
           </>
+        ) : loaded === null && sessionId ? (
+          "Loading…"
         ) : (
-          <>
-            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-fill text-text-muted">
-              <BotIcon className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-text-muted">
-              {loaded === null && sessionId ? "Loading…" : "Choose a bot"}
-            </span>
-          </>
+          "Choose a bot"
         )}
-        <ChevronsUpDownIcon className="size-4 shrink-0 text-icon" />
       </Popover.Trigger>
 
       <Popover.Portal>
-        <Popover.Positioner side="bottom" align="start" sideOffset={6} className="z-50">
+        <Popover.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
           <Popover.Popup
             initialFocus={search}
             onKeyDown={onKeyDown}
-            className="flex max-h-[min(420px,var(--available-height))] w-(--anchor-width) min-w-72 origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0 motion-reduce:transition-none"
+            className="flex max-h-[min(420px,var(--available-height))] w-80 origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0 motion-reduce:transition-none"
           >
             <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
               <SearchIcon className="size-3.5 shrink-0 text-icon" />

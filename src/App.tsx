@@ -1,6 +1,6 @@
 import { SlideShell } from "./chrome/SidebarSlide";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BotSheetHost } from "./chrome/BotSheet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BotPaneHost } from "./chrome/BotPane";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { MachineBanner } from "./chrome/MachineBanner";
 import { MachinePalette } from "./chrome/MachinePalette";
@@ -22,6 +22,7 @@ import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
 import { useExplorer } from "./hooks/useExplorer";
+import { useRecede } from "./hooks/useRecede";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useNotificationTarget } from "./hooks/useNotificationTarget";
@@ -174,6 +175,7 @@ export function App() {
     toggle: togglePage,
     openSettings,
     openRoutines,
+    openRoutine,
   } = usePages();
   useUpdateWiring(openSettings);
   // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
@@ -246,6 +248,8 @@ export function App() {
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
+  const appRoot = useRef<HTMLDivElement>(null);
+  useRecede(appRoot, sheet.sheet !== null);
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
 
   const { activate } = workspaces;
@@ -304,7 +308,8 @@ export function App() {
       closePage();
       explorer.toggle("search", selectedLine());
     },
-    newBot: () => sheet.newBot(),
+    // The chord that opened a new bot's pane closes it again.
+    newBot: () => (sheet.sheet?.session === null ? sheet.close() : sheet.newBot()),
     newSession: () => void newSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
@@ -365,7 +370,8 @@ export function App() {
     <LinkRouter open={nav.openBrowser} />
     <Toaster onOpen={openNotified} />
     <BotAvatarProvider>
-    <div className="flex h-full">
+    {/* Under a bot's pane the whole window steps back (useRecede); the pane is portaled out of it. */}
+    <div ref={appRoot} data-app className="flex h-full">
       <SlideShell
         open={sidebarOpen}
         width={sidebar.width}
@@ -669,12 +675,21 @@ export function App() {
 
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
-
-      <BotSheetHost
+      {/* Over the window, not beside the tabs: a bot's pane is no tab. */}
+      <BotPaneHost
         sheet={sheet}
         sessions={sessions}
-        onNewRoutine={openRoutines}
+        // Going to another page leaves the pane: it is about the window it stepped back from.
+        onNewRoutine={(id) => {
+          sheet.close();
+          openRoutines(id);
+        }}
+        onOpenRoutine={(id) => {
+          sheet.close();
+          openRoutine(id);
+        }}
       />
+
     </div>
     </BotAvatarProvider>
     </BrowserPrefsProvider>

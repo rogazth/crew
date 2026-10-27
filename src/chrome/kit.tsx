@@ -27,11 +27,26 @@ import { Kbd } from "./Kbd";
 /** A floating surface: palette, dialog, menu. */
 export const SURFACE = "rounded-float bg-surface text-text shadow-float";
 
+/** A popover's card and its open and close motion, sized by whoever uses it. */
+export const POPOVER =
+  "origin-(--transform-origin) rounded-xl bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+
 /** A menu or popover panel, and one row in it. */
-export const PANEL =
-  "max-h-[70vh] min-w-40 max-w-80 origin-(--transform-origin) overflow-y-auto rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+export const PANEL = `max-h-[70vh] min-w-40 max-w-80 overflow-y-auto p-1 ${POPOVER}`;
 export const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 rounded-lg px-2 text-left whitespace-nowrap outline-none select-none data-highlighted:bg-hover data-popup-open:bg-hover";
+
+/** A field that opens a list or a picker: the Select's trigger, and the time and date pickers'. */
+export const TRIGGER =
+  "flex h-8 items-center gap-2 rounded-md bg-canvas px-2.5 text-left ring ring-border outline-none focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-focus/50";
+
+/** A trigger that is a row's value, at its right end: the value and a chevron, no field around them. */
+export const ROW_VALUE =
+  "flex h-8 items-center gap-1.5 rounded-md px-2 text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover data-popup-open:text-text";
+
+/** A trigger that is a word in a sentence (Shortcuts-style): plain text that fades to the link's blue on hover, no chevron, its popup opening under it. */
+export const TOKEN =
+  "inline-flex items-center rounded-sm font-medium text-text outline-none transition-colors duration-150 hover:text-link focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:text-link";
 
 const CONTROL =
   "w-full rounded-md bg-canvas px-2.5 ring ring-border outline-none transition-shadow placeholder:text-placeholder focus:ring-[1.5px] focus:ring-focus/50 disabled:opacity-50 aria-invalid:ring-danger/60";
@@ -162,27 +177,32 @@ export function Select<T extends string>({
   onChange,
   label,
   className = "w-44",
+  variant = "field",
 }: {
   value: T;
   options: Option<T>[];
   onChange: (value: T) => void;
   label: string;
   className?: string;
+  /** "row": the value at a row's right end (ROW_VALUE), its list as wide as it needs. "token": a word in a sentence (TOKEN). */
+  variant?: "field" | "row" | "token";
 }) {
   const current = options.find((option) => option.value === value);
+  const row = variant === "row";
+  const token = variant === "token";
   return (
     <BaseSelect.Root value={value} onValueChange={(next) => next !== null && onChange(next as T)}>
       <BaseSelect.Trigger
         aria-label={label}
-        className={`flex h-8 items-center gap-2 rounded-md bg-canvas px-2.5 text-left ring ring-border outline-none focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-focus/50 ${className}`}
+        className={token ? TOKEN : row ? ROW_VALUE : `${TRIGGER} ${className}`}
       >
         {current?.icon}
-        <span className="min-w-0 flex-1 truncate">{current?.label ?? ""}</span>
-        <ChevronsUpDownIcon className="size-3.5 shrink-0 text-icon" />
+        <span className={row || token ? "truncate" : "min-w-0 flex-1 truncate"}>{current?.label ?? ""}</span>
+        {token ? null : row ? <ChevronDownIcon className="size-3.5 shrink-0 text-icon" /> : <ChevronsUpDownIcon className="size-3.5 shrink-0 text-icon" />}
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner sideOffset={4} alignItemWithTrigger={false} className="z-50">
-          <BaseSelect.Popup className={`${PANEL} w-(--anchor-width)`}>
+        <BaseSelect.Positioner sideOffset={4} alignItemWithTrigger={false} align={row ? "end" : token ? "start" : "center"} className="z-50">
+          <BaseSelect.Popup className={`${PANEL} ${row || token ? "min-w-44" : "w-(--anchor-width)"}`}>
             {options.map((option) => (
               <BaseSelect.Item key={option.value} value={option.value} className={ROW}>
                 {option.icon}
@@ -462,6 +482,35 @@ export function usePageHeading(title: string, target: RefObject<HTMLElement | nu
   }, [report, title, target, enabled]);
 }
 
+/** A step in the strip's trail: its name, and where a click on it goes, if anywhere. */
+export type Crumb = string | { label: string; onClick: () => void };
+
+/** Where a page deeper than its own top (a routine in Routines) tells the strip its trail. */
+export const PageTrailContext = createContext<((trail: Crumb[] | null) => void) | null>(null);
+
+/**
+ * Puts `trail` in the strip while the caller is up, in place of the page's
+ * own; a page outside the sheet has no strip, and says nothing.
+ */
+export function usePageTrail(trail: Crumb[]) {
+  const report = useContext(PageTrailContext);
+  // The clicks change every render; the trail only when its words do.
+  const latest = useRef(trail);
+  useLayoutEffect(() => {
+    latest.current = trail;
+  });
+  const words = trail.map((part) => (typeof part === "string" ? part : part.label)).join("\u0000");
+  useEffect(() => {
+    if (!report) return;
+    report(
+      latest.current.map((part, index) =>
+        typeof part === "string" ? part : { label: part.label, onClick: () => (latest.current[index] as Exclude<Crumb, string>).onClick() },
+      ),
+    );
+    return () => report(null);
+  }, [report, words]);
+}
+
 /**
  * The frame of every page on the sheet: settings, routines, integrations, and
  * commands in a tab. One title in one place, its actions beside it, and the
@@ -539,8 +588,8 @@ export function FilterChip<T extends string>({
         aria-label={label}
         data-filter-chip
         {...(lit ? { "data-lit": "" } : {})}
-        className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
-          lit ? "bg-card text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
+        className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
+          lit ? "text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
         }`}
       >
         {current?.icon ?? (Glyph && <Glyph className="size-3.5 text-icon" />)}

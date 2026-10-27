@@ -500,19 +500,6 @@ pub struct BotRule {
     /// Its id within the bot, as the bot names it: `r3`.
     pub id: String,
     pub body: String,
-    /// The user's message that set it, while the transcript has it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cited: Option<CitedMessage>,
-}
-
-/// The start of the user's message a rule cites, and when it was written.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct CitedMessage {
-    pub excerpt: String,
-    #[ts(type = "number")]
-    pub at: i64,
 }
 
 /// `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
@@ -528,6 +515,15 @@ pub struct BotRulesSave {
     pub edit: Vec<BotRuleEdit>,
     #[serde(default)]
     pub remove: Vec<String>,
+}
+
+/// `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
+/// sheet; less than the default is taken as the default.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotRulesCap {
+    pub id: String,
+    pub cap: u32,
 }
 
 /// A rule's new text.

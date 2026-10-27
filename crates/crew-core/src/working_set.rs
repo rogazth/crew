@@ -6,7 +6,7 @@
 //! never its output — and stops at a whole block when the budget runs out.
 //!
 //! A message the user typed says its block number, and so does the header of
-//! this turn: that is what `rules` takes as `from`, the decision it cites.
+//! this turn: what `read_session` takes as `around`.
 
 use crew_protocol::{ApprovalDecision, Block, BlockRole, TodoStatus, ToolDetail, ToolStatus};
 
@@ -39,8 +39,8 @@ pub fn history(blocks: &[Block], harness: Harness) -> Option<String> {
 }
 
 /// The trail with the header of this turn under it, naming the blocks the
-/// turn's message took (`first` to `last`, 1-based): a message the user typed
-/// is cited by that number. A first turn has no trail and still the header.
+/// turn's message took (`first` to `last`, 1-based), numbered as the trail's
+/// messages are. A first turn has no trail and still the header.
 pub fn with_turn(trail: Option<String>, first: usize, last: usize) -> String {
     let header = match first == last {
         true => format!("## This turn (block {last})"),
@@ -258,8 +258,7 @@ fn short_name(tool: &crew_protocol::BlockTool) -> String {
 /// half of it is better than none.
 ///
 /// A message the user typed leads with its block `number`: `[#20 · …`, what
-/// `rules` takes as `from`. Nothing else is numbered, so a number is never
-/// one `from` refuses.
+/// `read_session` takes as `around`. Nothing else is numbered.
 fn line(block: &Block, latest: bool, number: usize) -> Option<String> {
     let (who, text) = parts(block, latest, number)?;
     let line = stamped(block, &who, &text);
@@ -786,7 +785,7 @@ mod tests {
 
     /// A message the user typed says its block; a letter from a bot, a
     /// routine's prompt and everything else do not, so every number in the
-    /// trail is one `rules` takes as `from`.
+    /// trail is a message the user typed.
     #[test]
     fn only_the_users_messages_are_numbered() {
         let mut letter = new_block(BlockRole::User, "revisa el PR");
@@ -811,7 +810,7 @@ mod tests {
         );
         for line in out.lines().filter(|line| line.starts_with("[#")) {
             let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
-            assert!(crate::rules::user_message(&blocks, n).is_ok(), "{line}");
+            assert!(crate::rules::typed_by_user(&blocks[n as usize - 1]), "{line}");
         }
         // Counted from the start of the transcript, not of the trail.
         let mut long: Vec<Block> = (0..TAIL_BLOCKS + 5).map(|_| new_block(BlockRole::System, "x")).collect();
