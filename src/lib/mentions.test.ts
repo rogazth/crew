@@ -9,6 +9,7 @@ import {
   mentionTokens,
   mergeChoices,
   splitMentions,
+  looksLikePath,
 } from "./mentions";
 import type { ProjectFile } from "./types";
 
@@ -106,5 +107,16 @@ describe("folders", () => {
     expect(completeMention("see @refer", 10, folder, { into: true })).toEqual({ text: "see @reference/", cursor: 15 });
     expect(completeMention("see @refer", 10, folder)).toEqual({ text: "see @reference/ ", cursor: 16 });
     expect(mentionTokens("@reference/ and @a.ts @a.ts")).toEqual(["reference/", "a.ts"]);
+  });
+});
+
+describe("looksLikePath", () => {
+  const files = [{ name: "Makefile", path: "/repo/Makefile", relative: "Makefile" }];
+  it("takes a folder, an extension or a file the index has, and nothing else", () => {
+    expect(looksLikePath("src/App.tsx", files)).toBe(true);
+    expect(looksLikePath("notes.md", files)).toBe(true);
+    expect(looksLikePath("Makefile", files)).toBe(true);
+    expect(looksLikePath(".", files)).toBe(false);
+    expect(looksLikePath("someone", files)).toBe(false);
   });
 });

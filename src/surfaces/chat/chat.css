@@ -166,17 +166,18 @@
   box-shadow: none;
 }
 
-/* Inline `code`: the transcript's pill (`.crew-inline-code`), its ticks faint. */
+/* Inline `code`: the transcript's pill (`.crew-inline-code`) around the code alone; its ticks are hidden,
+   as Slack hides them. A pill that wraps keeps its ends on each line. */
 .ds-prompt .cm-icode {
   border-radius: 5px;
   background: var(--color-card);
   box-shadow: inset 0 0 0 1px var(--color-hairline);
-  padding: 1px 0;
+  padding: 1px 4px;
+  margin: 0 1px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;
-}
-.ds-prompt .cm-icode-tick {
-  color: var(--color-placeholder);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 /* Where the session runs, when it is another machine: a quiet pill in the status line. */
@@ -674,12 +675,17 @@
   bottom: auto;
   margin-top: 0.5rem;
   margin-bottom: 0;
+  transform-origin: top left;
 }
 
-/* A `#name` in the composer: a bot or a session of the workspace. It wears the
+/* An `@name` in the composer: a bot or a session of the workspace. It wears the
    bot's face or the session's provider logo, with no square behind it. */
 .ds-prompt .cm-chip[data-kind="agent"] {
   --chip-ink: light-dark(oklch(55% 0.13 200), oklch(64% 0.12 200));
+}
+/* An `@branch`: a worktree of the repo, on git's orange. */
+.ds-prompt .cm-chip[data-kind="worktree"] {
+  --chip-ink: light-dark(oklch(60% 0.15 50), oklch(66% 0.14 50));
 }
 .ds-prompt .cm-chip[data-face] .cm-chip-icon {
   background: none;
@@ -693,7 +699,7 @@
   background: var(--color-icon);
 }
 
-/* The `@`, `#` and `/` pickers: a card of their own width that hangs from the
+/* The `@` and `/` pickers: a card of their own width that hangs from the
    character that opened them (its `left` is set inline), not a sheet across the well. */
 .crew-picker {
   --picker-w: min(360px, 100%);
@@ -713,4 +719,20 @@
 }
 .crew-picker [role="option"] {
   border-radius: 8px;
+}
+/* It opens as the app's menus do (kit's PANEL): out of the edge it hangs from, scaling up as it fades in. */
+.crew-picker {
+  transform-origin: bottom left;
+  animation: picker-in 100ms ease-out;
+}
+@keyframes picker-in {
+  from {
+    opacity: 0;
+    scale: 0.95;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-picker {
+    animation: none;
+  }
 }

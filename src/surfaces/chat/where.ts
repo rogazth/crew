@@ -4,9 +4,9 @@
 // hooks feed, and asks git itself only for a folder nobody has listed yet or
 // when the window comes back, so a branch switched or a workspace renamed
 // shows here as it does there.
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { useWorkspaceLink } from "../../hooks/useEnvLinks";
-import { placesVersion, readTrees, readWorkspaces, subscribePlaces, mainBranchOf, treeKnown, watchPlaces, workspacesKnown } from "../../lib/placeStore";
+import { placesVersion, readTrees, readWorkspaces, subscribePlaces, mainBranchOf, treeKnown, treesOf, watchPlaces, workspacesKnown } from "../../lib/placeStore";
 import type { Session, Worktree } from "../../lib/types";
 import { useChatActions } from "./context";
 
@@ -59,4 +59,15 @@ export function useWhere(session: Pick<Session, "workspaceId">): Where {
 /** The branch a session works on, when it is a branch worth naming. */
 export function branchOf(where: Where): string | null {
   return where.tree?.branch ?? null;
+}
+
+/** Every checkout of the repository `root` is in, kept as fresh as `useWhere` keeps its own: what `#` can name. */
+export function useRepoTrees(root: string): readonly Worktree[] {
+  const version = useSyncExternalStore(subscribePlaces, placesVersion);
+  const key = trim(root);
+  useEffect(() => {
+    if (key && treeKnown(key) === undefined) void readTrees(key);
+    return watchPlaces(key || null);
+  }, [key]);
+  return useMemo(() => (key ? treesOf(key) : []), [key, version]); // eslint-disable-line react-hooks/exhaustive-deps
 }

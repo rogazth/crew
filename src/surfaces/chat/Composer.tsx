@@ -16,9 +16,10 @@ import type { AttachedFile } from "../../lib/blocks";
 import { composerHints } from "../../lib/composerHints";
 import { effortsOf, fitChoice, selectedEffort, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextEffort } from "../../lib/sessionOptions";
-import { agentMentionAt, completeAgentMention, searchAgents } from "../../lib/agentMentions";
+import { completeAgentMention, searchAgents, searchTrees, type TreeMention } from "../../lib/agentMentions";
 import {
   completeMention,
+  mentionAt,
   rememberMention,
 } from "../../lib/mentions";
 import type { CommandEntry } from "../../lib/protocol";
@@ -110,6 +111,7 @@ const choiceOf = (session: Session): AgentChoice => ({
 /** The menu before the daemon has answered: nothing to list or to paint. */
 const NO_ENTRIES: CommandEntry[] = [];
 const NO_AGENTS: readonly Session[] = [];
+const NO_TREES: readonly TreeMention[] = [];
 
 /** A control well in the chrome's dialect: hairline, radius 16, plus and model left, send right. */
 export function Composer({
@@ -145,7 +147,7 @@ export function Composer({
     apply: (edit: TextEdit) => field.current?.apply(edit),
     coordsAt: (at: number) => field.current?.coordsAt(at) ?? null,
   }));
-  const { files: projectFiles, agents = NO_AGENTS, confirm, resolvePath } = useChatActions();
+  const { files: projectFiles, agents = NO_AGENTS, worktrees = NO_TREES, confirm, resolvePath } = useChatActions();
   // A file still travelling has no path to send yet.
   const uploading = uploads.some((upload) => upload.error === undefined);
   const canSend = ready && !uploading && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
@@ -157,27 +159,49 @@ export function Composer({
   const [picked, setPicked] = useState<readonly string[]>([]);
   const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...picked]), [indexed, picked]);
 
-  // A `#` names a bot or a session of the workspace instead of a file; its chip wears the menu's icon.
+  // An `@` names a bot or a session of the workspace, or a worktree of its repo; its chip wears the menu's icon.
   const agentIcons = useAgentIcons(agents);
-  const chipAgents = useMemo(() => agents.map((agent) => ({ name: agent.name, icon: agentIcons.get(agent.id) })), [agents, agentIcons]);
-  const agentMention = mention ? null : agentMentionAt(draft, cursor);
-  const agentResults = useMemo(
-    () => (agentMention ? searchAgents(agentMention.query, agents) : []),
-    [agentMention?.query, agents], // eslint-disable-line react-hooks/exhaustive-deps
+  const chipAgents = useMemo(
+    () => [
+      ...agents.map((agent) => ({ name: agent.name, icon: agentIcons.get(agent.id) })),
+      ...worktrees.map((tree) => ({ name: tree.name, kind: "worktree" })),
+    ],
+    [agents, agentIcons, worktrees],
   );
+  const agentResults = useMemo(
+    () => (mention ? searchAgents(mention.query, agents) : []),
+    [mention?.query, agents], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const treeResults = useMemo(
+    () => (mention ? searchTrees(mention.query, worktrees) : []),
+    [mention?.query, worktrees], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // Once something is typed, the files it matches follow the agents and worktrees; the menu's last row turns the
+  // `@` into a file search of its own. A path being typed is one already; with no agents or worktrees, it is only files.
+  const [filesAt, setFilesAt] = useState<number | null>(null);
+  const searchingFiles =
+    mention !== null && (filesAt === mention.start || mention.query.includes("/") || agents.length + worktrees.length === 0);
+  const agentMention = mention && !searchingFiles ? mention : null;
+  const fileMention = searchingFiles ? mention : null;
+  const fileHits = agentMention && agentMention.query ? results.slice(0, 3) : [];
 
   // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
   const entries = useCommands(session.id)?.entries ?? NO_ENTRIES;
-  const slash = mention || agentMention ? null : slashAt(draft, cursor);
+  const slash = mention ? null : slashAt(draft, cursor);
   const slashStarts = slash ? opensMessage(draft, slash.start) : false;
   const slashResults = useMemo(
     () => (slash ? searchCommands(entries, slash.query, slashStarts) : []),
     [slash?.query, slashStarts, entries], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const choices = mention ? results.length : agentMention ? agentResults.length : slashResults.length;
+  // The agents' menu has one more row than its matches: Files.
+  const choices = fileMention
+    ? results.length
+    : agentMention
+      ? agentResults.length + treeResults.length + fileHits.length + 1
+      : slashResults.length;
   // The open picker hangs from the character that opened it, and stays there as the query is typed.
   const well = useRef<HTMLFormElement>(null);
-  const trigger = mention?.start ?? agentMention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null;
+  const trigger = mention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null;
   const pickerLeft = usePickerAnchor(field, well, trigger);
   // The daemon answers from its cache and reads again once that is stale: a menu opened late is current.
   const typingSlash = slash !== null;
@@ -247,7 +271,13 @@ export function Composer({
     place(next.cursor);
   };
 
-  const pickAgent = (agent: Session) => {
+  const searchFiles = () => {
+    if (!mention) return;
+    setFilesAt(mention.start);
+    setActive(0);
+  };
+
+  const pickAgent = (agent: Session | TreeMention) => {
     const el = field.current;
     if (!el) return;
     const next = completeAgentMention(draft, el.read().from, agent);
@@ -301,14 +331,24 @@ export function Composer({
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         const at = Math.min(active, choices - 1);
-        if (mention) pick(results[at]!, event.key === "Tab");
-        else if (agentMention) pickAgent(agentResults[at]!);
+        if (fileMention) pick(results[at]!, event.key === "Tab");
+        else if (agentMention) {
+          const target = agentResults[at] ?? treeResults[at - agentResults.length];
+          const file = fileHits[at - agentResults.length - treeResults.length];
+          if (target) pickAgent(target);
+          else if (file) pick(file, event.key === "Tab");
+          else searchFiles();
+        }
         else pickSlash(slashResults[at]!);
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        setCursor(-1);
+        // Out of the files it went into, back to the agents; from there, the menu closes.
+        if (fileMention && filesAt === fileMention.start) {
+          setFilesAt(null);
+          setActive(0);
+        } else setCursor(-1);
         return;
       }
     }
@@ -424,9 +464,13 @@ export function Composer({
         {agentMention && (
           <AgentPicker
             results={agentResults}
-            active={Math.min(active, Math.max(0, agentResults.length - 1))}
+            trees={treeResults}
+            files={fileHits}
+            active={Math.min(active, agentResults.length + treeResults.length + fileHits.length)}
             onHover={setActive}
             onPick={pickAgent}
+            onPickFile={pick}
+            onFiles={searchFiles}
             left={pickerLeft}
           />
         )}
@@ -463,6 +507,8 @@ export function Composer({
               onDraft(value);
               setCursor(caret);
               setActive(0);
+              // The file search lasts as long as the `@` it was opened for.
+              if (filesAt !== null && mentionAt(value, caret)?.start !== filesAt) setFilesAt(null);
             }}
             onCaret={setCursor}
             onKeyDown={onKeyDown}

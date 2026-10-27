@@ -42,7 +42,7 @@ type Props = {
   label: string;
   /** Files the draft may name: an `@path` among them becomes a chip. */
   known: ReadonlySet<string>;
-  /** Bots and sessions the draft may name: a `#name` among them becomes a chip. */
+  /** Bots, sessions and worktrees the draft may name: an `@name` among them becomes a chip. */
   agents?: readonly ChipAgent[];
   /** Commands and skills: a `/name` among them becomes a chip. */
   entries: readonly CommandEntry[];
@@ -56,8 +56,8 @@ type Props = {
   roomy?: boolean;
 };
 
-/** A bot or session a `#name` chip can stand for, with the icon it wears. */
-type ChipAgent = { name: string; icon?: AgentIcon | undefined };
+/** A bot, session or worktree an `@name` chip can stand for, with the icon it wears; a worktree is of `kind` worktree. */
+type ChipAgent = { name: string; icon?: AgentIcon | undefined; kind?: string };
 const NO_AGENTS: readonly ChipAgent[] = [];
 
 /** A change the composer made to the draft, not the user typing: it is not reported back. */
@@ -75,6 +75,8 @@ const ICONS: Record<string, string> = {
   skill:
     '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
   command: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  worktree:
+    '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   agent:
     '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
 };
@@ -102,7 +104,7 @@ class ChipWidget extends WidgetType {
     const path = this.text.slice(1);
     if (this.kind === "file" || this.kind === "folder") icon.append(fileTypeIconElement(path, this.kind === "folder"));
     else if (this.icon) {
-      // A bot's face or a session's provider logo, as the `#` menu shows them.
+      // A bot's face or a session's provider logo, as the `@` menu shows them.
       chip.dataset.face = "";
       const face = document.createElement(this.icon.mask ? "span" : "img");
       face.className = "cm-chip-face";
@@ -142,10 +144,10 @@ function chipRuns(text: string, { known, agents, entries }: ChipSource) {
     }
     at += part.text.length;
   }
-  // A `#name` is a chip where nothing else already is.
+  // An `@name` is a chip where nothing else already is.
   for (const run of agentRuns(text, agents)) {
     if (runs.some((other) => other.from < run.to && run.from < other.to)) continue;
-    runs.push({ from: run.from, to: run.to, text: text.slice(run.from, run.to), kind: "agent", icon: run.agent.icon });
+    runs.push({ from: run.from, to: run.to, text: text.slice(run.from, run.to), kind: run.agent.kind ?? "agent", icon: run.agent.icon });
   }
   return runs;
 }
@@ -210,8 +212,14 @@ class MarkerWidget extends WidgetType {
   }
 }
 
-function markdownDecorations(view: EditorView): DecorationSet {
+/**
+ * What the draft's markdown looks like: list markers as bullets, and inline code as a pill whose ticks are
+ * hidden, as Slack does. `atomic` is the part the caret steps over whole: the markers and the ticks, not
+ * the code, which stays editable.
+ */
+function markdownDecorations(view: EditorView): { all: DecorationSet; atomic: DecorationSet } {
   const ranges: Range<Decoration>[] = [];
+  const atomic: Range<Decoration>[] = [];
   for (const { from, to } of view.visibleRanges) {
     for (let pos = from; pos <= to; ) {
       const line = view.state.doc.lineAt(pos);
@@ -220,41 +228,66 @@ function markdownDecorations(view: EditorView): DecorationSet {
         const [whole, indent, marker, gap] = item as unknown as [string, string, string, string];
         const depth = indent.replace(/\t/g, "  ").length / 2;
         const box = /\[[ xX]\]/.exec(gap)?.[0] ?? "";
+        const mark = Decoration.replace({ widget: new MarkerWidget(marker, box) }).range(line.from, line.from + whole.length);
         ranges.push(
           Decoration.line({
             class: "cm-li",
             attributes: { style: `--li-depth: ${depth}; --li-mark: 1.5em` },
           }).range(line.from),
-          Decoration.replace({ widget: new MarkerWidget(marker, box) }).range(line.from, line.from + whole.length),
+          mark,
         );
+        atomic.push(mark);
       }
       for (const match of line.text.matchAll(CODE)) {
         const start = line.from + match.index;
-        ranges.push(
-          Decoration.mark({ class: "cm-icode" }).range(start, start + match[0].length),
-          Decoration.mark({ class: "cm-icode-tick" }).range(start, start + 1),
-          Decoration.mark({ class: "cm-icode-tick" }).range(start + match[0].length - 1, start + match[0].length),
-        );
+        const end = start + match[0].length;
+        const ticks = [Decoration.replace({}).range(start, start + 1), Decoration.replace({}).range(end - 1, end)];
+        ranges.push(Decoration.mark({ class: "cm-icode" }).range(start + 1, end - 1), ...ticks);
+        atomic.push(...ticks);
       }
       pos = line.to + 1;
     }
   }
-  return Decoration.set(ranges, true);
+  return { all: Decoration.set(ranges, true), atomic: Decoration.set(atomic, true) };
+}
+
+/**
+ * Backspace just past a code pill would take its hidden closing tick and undo the pill; as in Slack, it
+ * takes the code's last character instead, and the pill's last character takes the whole pill.
+ */
+function backspaceCode(view: EditorView): boolean {
+  const { head, empty } = view.state.selection.main;
+  if (!empty) return false;
+  const line = view.state.doc.lineAt(head);
+  for (const match of line.text.matchAll(CODE)) {
+    const start = line.from + match.index;
+    const end = start + match[0].length;
+    if (head !== end) continue;
+    const whole = end - start === 3;
+    view.dispatch({
+      changes: whole ? { from: start, to: end } : { from: end - 2, to: end - 1 },
+      selection: { anchor: whole ? start : end - 1 },
+      userEvent: "delete.backward",
+    });
+    return true;
+  }
+  return false;
 }
 
 const markdown = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    atomic: DecorationSet;
     constructor(view: EditorView) {
-      this.decorations = markdownDecorations(view);
+      ({ all: this.decorations, atomic: this.atomic } = markdownDecorations(view));
     }
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) this.decorations = markdownDecorations(update.view);
+      if (update.docChanged || update.viewportChanged) ({ all: this.decorations, atomic: this.atomic } = markdownDecorations(update.view));
     }
   },
   {
     decorations: (plugin) => plugin.decorations,
-    provide: (plugin) => EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? Decoration.none),
+    provide: (plugin) => EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
   },
 );
 
@@ -300,7 +333,7 @@ export function PromptEditor({ ref, value, placeholder, label, known, agents = N
               return true;
             },
           }),
-          keymap.of([{ key: "Shift-Enter", run: insertNewline }, ...historyKeymap, ...defaultKeymap]),
+          keymap.of([{ key: "Shift-Enter", run: insertNewline }, { key: "Backspace", run: backspaceCode }, ...historyKeymap, ...defaultKeymap]),
           EditorView.updateListener.of((update) => {
             const outside = update.transactions.some((tr) => tr.annotation(fromOutside));
             const caret = update.view.hasFocus ? update.state.selection.main.head : -1;

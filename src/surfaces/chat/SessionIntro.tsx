@@ -162,7 +162,7 @@ function startersFor(session: Pick<Session, "kind">, where: Where): Starter[] {
 const INTRO_KEYS: [string, string][] = [
   ["↵", "send"],
   ["⇧↵", "new line"],
-  ["@", "mention a file"],
+  ["@", "mention"],
   ["/", "run a command"],
   ["⇧Tab", "step the effort"],
 ];

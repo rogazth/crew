@@ -4,6 +4,7 @@ import type { PanelEntry } from "../../lib/backgroundPanel";
 import type { Process } from "../../lib/processes";
 import type { BackgroundCommand } from "../../lib/protocol";
 import type { Ask } from "../../lib/turnRuntime";
+import type { TreeMention } from "../../lib/agentMentions";
 import type { ProjectFile, Session } from "../../lib/types";
 
 /** What a chat surface can ask of the shell without a prop for every level. */
@@ -26,6 +27,8 @@ export type ChatActions = {
   files: ProjectFile[];
   /** The workspace's other bots and sessions, for `#` mentions; absent outside a session's chat. */
   agents?: readonly Session[];
+  /** The worktrees of the session's repo, for `#` mentions too; absent outside a session's chat. */
+  worktrees?: readonly TreeMention[];
   /** The workspace's commands, whose runs a session started are in its background panel. */
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */

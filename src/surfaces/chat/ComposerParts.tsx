@@ -170,7 +170,7 @@ export function AttachMenu({
             </Menu.Item>
             <Menu.Item className={ROW} onClick={onMention}>
               <AtSignIcon className="size-4 text-icon" />
-              <span className="flex-1">Mention a file</span>
+              <span className="flex-1">Mention</span>
               <kbd className="font-sans text-[11px] text-text-muted">@</kbd>
             </Menu.Item>
             <Menu.Item className={ROW} onClick={onCommand}>

@@ -680,16 +680,13 @@ html[data-sidebar-resize="active"] * {
 :root {
   --chat-text: 14px;
 }
+/* The composer's pickers: the card and shadow of the app's other menus (kit's PANEL). */
 .crew-popover {
   overflow: hidden;
   padding: 4px 0;
   border-radius: 12px;
   background: var(--color-surface);
-  box-shadow:
-    inset 0 0 0 1px var(--color-hairline),
-    0 6px 18px rgb(0 0 0 / 0.04),
-    0 3px 9px rgb(0 0 0 / 0.04),
-    0 1px 1px rgb(0 0 0 / 0.04);
+  box-shadow: var(--shadow-float);
 }
 
 /* The agent's turn: prose in a grey bubble on the left, at the user's width

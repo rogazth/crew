@@ -21,7 +21,7 @@ import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgro
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters, sessionParty } from "../lib/letters";
 import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPrompt, takeCarried } from "../lib/firstPrompt";
-import { agentNote, mentionedAgents } from "../lib/agentMentions";
+import { agentNote, mentionedAgents, mentionedTrees, treeMentions } from "../lib/agentMentions";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -35,6 +35,7 @@ import type { QueueScope } from "./chat/Queue";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 import { AgentView, type Crumb } from "./chat/AgentView";
 import { Thread } from "./chat/Thread";
+import { useRepoTrees } from "./chat/where";
 import type { PromptHandle } from "./chat/PromptEditor";
 
 type Props = {
@@ -152,7 +153,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     () => sessions.filter((row) => row.workspaceId === session.workspaceId && row.id !== session.id),
     [sessions, session.workspaceId, session.id],
   );
-  const chatActions = useMemo(() => ({ ...actions, openAgent, agents }), [actions, openAgent, agents]);
+  const trees = useRepoTrees(cwd);
+  const worktrees = useMemo(() => treeMentions(trees), [trees]);
+  const chatActions = useMemo(() => ({ ...actions, openAgent, agents, worktrees }), [actions, openAgent, agents, worktrees]);
   const openOutput = useCallback(
     (commandId: string) => {
       closeThread();
@@ -276,15 +279,15 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       }
       const { command, skills } = dispatchOf(text, menu?.entries ?? []);
       const asked = { mentions, ...(command ? { command } : {}), skills };
-      // The agents it names go under it with their ids, which the agent acts on; a command's arguments take none.
-      const sent = command ? text : text + agentNote(mentionedAgents(text, agents));
+      // The agents and worktrees it names go under it with their ids and paths, which the agent acts on; a command's arguments take none.
+      const sent = command ? text : text + agentNote(mentionedAgents(text, agents), mentionedTrees(text, worktrees, agents));
       setDraft("");
       setFiles([]);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
       if (working || waiting.length > 0) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
       else void send(session, cwd, sent, attached, asked);
     },
-    [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
+    [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working, worktrees],
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);

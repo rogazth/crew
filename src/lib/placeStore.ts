@@ -52,6 +52,18 @@ export function publishWorktrees(root: string, list: Worktree[]) {
   bump();
 }
 
+/** Every checkout git lists for the repository `root` is in, the main one first; empty until git has answered. */
+export function treesOf(root: string): Worktree[] {
+  const repo = repoOf.get(trim(root));
+  if (!repo) return [];
+  const list: Worktree[] = [];
+  for (const [path, owner] of repoOf) {
+    const tree = owner === repo ? trees.get(path) : null;
+    if (tree) list.push(tree);
+  }
+  return list.sort((a, b) => Number(b.main) - Number(a.main));
+}
+
 /** The branch the repository's main checkout is on, which is where its work lands: the real default, not a guess. */
 export function mainBranchOf(root: string): string | null {
   const repo = repoOf.get(trim(root));
