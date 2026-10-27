@@ -205,8 +205,8 @@ function Row({
       }`}
     >
       {icon}
-      <span className="shrink-0 truncate text-text">{row.label}</span>
-      {detail && <span className="min-w-0 truncate text-[12px] opacity-60">{detail}</span>}
+      <span className="min-w-0 truncate text-text">{row.label}</span>
+      {detail && <span className="min-w-0 shrink-[3] truncate text-[12px] opacity-60">{detail}</span>}
     </button>
   );
 }
