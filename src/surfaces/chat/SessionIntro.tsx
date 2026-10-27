@@ -116,8 +116,8 @@ export function IntroHead({ session }: { session: Session }) {
 type Starter = { icon: Icon; title: string; hint: string; text: string };
 
 /** Code starters need a git checkout to talk about: not a bot, not Home, not a folder outside git, and not before git has answered. */
-function startersFor(session: Pick<Session, "kind">, where: Where): Starter[] {
-  if (session.kind === "bot" || where.home || !where.tree) return [];
+function startersFor(kind: Session["kind"] | undefined, where: Where): Starter[] {
+  if (kind === "bot" || where.home || !where.tree) return [];
   const branch = branchOf(where);
   const base = where.base ?? "the default branch";
   const onBranch = branch && !where.tree.main;
@@ -169,12 +169,19 @@ export function IntroWaysFrame({ children }: { children?: ReactNode }) {
   );
 }
 
+/** The code starters for a folder, which a workspace's first screen shows as a session's does. */
+export function Starters({ where, onPick }: { where: Where; onPick: (text: string) => void }) {
+  return startersFor(undefined, where).map((starter) => (
+    <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
+  ));
+}
+
 /** Ways in under the composer: starters and the keys. */
 export function IntroWays({ session, onPick }: { session: Session; onPick: (text: string) => void }) {
   const where = useWhere(session);
   return (
     <IntroWaysFrame>
-      {startersFor(session, where).map((starter) => (
+      {startersFor(session.kind, where).map((starter) => (
         <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
       ))}
     </IntroWaysFrame>

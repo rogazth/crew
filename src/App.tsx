@@ -545,9 +545,6 @@ export function App() {
                       setStartIn(null);
                       void newSession(choice, path === active.path ? null : path, text, files);
                     }}
-                    onNewBot={() => sheet.newBot()}
-                    onOpenFile={() => openPalette("files")}
-                    onOpenBrowser={() => nav.openBrowser("")}
                   />
                 ) : undefined
               }

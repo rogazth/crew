@@ -30,8 +30,12 @@ const trim = (path: string) => path.replace(/\/+$/, "");
 
 export function useWhere(session: Pick<Session, "workspaceId">): Where {
   const { resolvePath } = useChatActions();
-  const root = trim(resolvePath("./") ?? "");
-  const link = useWorkspaceLink(session.workspaceId);
+  return useWhereAt(trim(resolvePath("./") ?? ""), session.workspaceId);
+}
+
+/** Where a folder is, before any session runs in it: a workspace's first screen. */
+export function useWhereAt(root: string, workspaceId: string): Where {
+  const link = useWorkspaceLink(workspaceId);
   useSyncExternalStore(subscribePlaces, placesVersion);
   const tree = root ? treeKnown(root) : undefined;
   const list = workspacesKnown();
@@ -42,7 +46,7 @@ export function useWhere(session: Pick<Session, "workspaceId">): Where {
     return watchPlaces(root || null);
   }, [root]);
 
-  const workspace = list?.find((one) => one.id === session.workspaceId);
+  const workspace = list?.find((one) => one.id === workspaceId);
   const name = workspace?.name;
   const base = root ? mainBranchOf(root) : null;
   return {

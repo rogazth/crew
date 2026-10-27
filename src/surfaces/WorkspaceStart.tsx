@@ -1,7 +1,6 @@
 // A workspace with no tab open is a new session's first
 // screen: a mark and a line, the composer, then the other ways in. Sending is
 // what creates the session, with the text as its first message.
-import { BotIcon, FileSearchIcon, GlobeIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
 import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
@@ -32,7 +31,8 @@ import { PromptEditor, type PromptHandle } from "./chat/PromptEditor";
 import { SlashPicker } from "./chat/SlashPicker";
 import { usePickerAnchor } from "./chat/usePickerAnchor";
 import { useMentionMenu } from "./chat/useMentionMenu";
-import { EmptyHead, Fact, IntroWaysFrame, StarterCard } from "./chat/SessionIntro";
+import { EmptyHead, Fact, IntroWaysFrame, Starters } from "./chat/SessionIntro";
+import { useWhereAt } from "./chat/where";
 
 /** Puts the caret in the composer, so the sidebar's New session lands where typing starts. */
 export function focusWorkspaceStart() {
@@ -48,6 +48,11 @@ function startActions(fast: boolean, efforts: boolean): CommandEntry[] {
     action("access", "Change what it may do without asking"),
     ...(fast ? [action("fast", "Turn fast mode on or off")] : []),
   ];
+}
+
+/** A function of ways is rendered here, so the composer's refs stay out of the screen's own render. */
+function Ways({ render, onDraft }: { render: (draftText: (text: string) => void) => ReactNode; onDraft: (text: string) => void }) {
+  return render(onDraft);
 }
 
 /**
@@ -66,7 +71,8 @@ export function StartScreen({
 }: {
   title: string;
   facts: ReactNode;
-  ways: ReactNode;
+  /** The ways in under the composer; given a way to draft text into it, for starters. */
+  ways: ReactNode | ((draftText: (text: string) => void) => ReactNode);
   /** The folder a new session will run in: what `@` reads files from. */
   cwd: string | null;
   /** Whether `@` searches an index of the folder, which only a project is worth; folders are always listed. */
@@ -254,6 +260,13 @@ export function StartScreen({
     window.setTimeout(() => place(before.length + gap.length + 1), 40);
   };
 
+  // A starter drafts its text for the sender to read and send; nothing is sent.
+  const draftText = (text: string) => {
+    setDraft(text);
+    setCursor(-1);
+    field.current?.focus();
+  };
+
   const send = () => {
     const text = draft.trim();
     if ((!text && files.length === 0) || uploading) return;
@@ -340,7 +353,7 @@ export function StartScreen({
         <div className="ds-status" />
       </div>
       <div className="min-h-0 flex-[6] overflow-y-auto">
-        <IntroWaysFrame>{ways}</IntroWaysFrame>
+        <IntroWaysFrame>{typeof ways === "function" ? <Ways render={ways} onDraft={draftText} /> : ways}</IntroWaysFrame>
       </div>
     </div>
   );
@@ -352,9 +365,6 @@ export function WorkspaceStart({
   defaultPath,
   onPlace,
   onAsk,
-  onNewBot,
-  onOpenFile,
-  onOpenBrowser,
 }: {
   workspaceId: string;
   /** The worktrees a session can start in, and the one on screen in the sidebar. */
@@ -364,13 +374,11 @@ export function WorkspaceStart({
   onPlace: (path: string) => void;
   /** A new session in the worktree at `path`, with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice, path: string, files: AttachedFile[]) => void;
-  onNewBot: () => void;
-  onOpenFile: () => void;
-  onOpenBrowser: () => void;
 }) {
   const link = useWorkspaceLink(workspaceId);
   const machine = link?.name ?? "This Mac";
   // The sidebar's pick, or the badge's: either one moves the start.
+  const where = useWhereAt(defaultPath, workspaceId);
   const place = places.find((item) => item.path === defaultPath);
   return (
     <StartScreen
@@ -382,13 +390,7 @@ export function WorkspaceStart({
           <Fact icon={machineIcon(link !== null)}>{machine}</Fact>
         </>
       }
-      ways={
-        <>
-          <StarterCard icon={BotIcon} title="New bot" hint="A named agent with its own history" onClick={onNewBot} />
-          <StarterCard icon={FileSearchIcon} title="Open a file" hint="Jump to any file in the project" onClick={onOpenFile} />
-          <StarterCard icon={GlobeIcon} title="Open a browser tab" hint="Let agents browse, fill forms and capture pages" onClick={onOpenBrowser} />
-        </>
-      }
+      ways={(pick) => <Starters where={where} onPick={pick} />}
       onAsk={(text, choice, files) => onAsk(text, choice, defaultPath, files)}
     />
   );
