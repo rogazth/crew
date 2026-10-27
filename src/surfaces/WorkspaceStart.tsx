@@ -3,41 +3,34 @@
 // what creates the session, with the text as its first message.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
-import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
 import { machineIcon } from "../chrome/EnvBits";
-import type { Opener } from "../chrome/ModelPicker";
 import { useUploads } from "../hooks/useUploads";
 import { useWorkspaceLink } from "../hooks/useEnvLinks";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useProjectFiles } from "../hooks/useProjectFiles";
-import { activatePrompt, promptLetter, registerPrompt, type Prompt, type PromptPickers } from "../chrome/promptKeys";
-import { effortsOf, fastChoice, fitChoice, selectedEffort, toggledFast, type AgentChoice } from "../lib/providers";
-import { completeMention, rememberMention } from "../lib/mentions";
+import { agentNote, mentionedAgents, mentionedTrees, treeMentions } from "../lib/agentMentions";
+import { effortsOf, fastChoice, fitChoice, type AgentChoice } from "../lib/providers";
 import type { CommandEntry } from "../lib/protocol";
-import { nextEffort } from "../lib/sessionOptions";
-import { removeSlash, searchCommands, slashAt } from "../lib/slashCommands";
-import type { ProjectFile } from "../lib/types";
-import { hasWorktreePicker, openWorktreePicker, WorktreeFact, type Place } from "./chat/panePlace";
+import type { Session } from "../lib/types";
+import { WorktreeFact, type Place } from "./chat/panePlace";
 import { pickFiles, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import type { AttachedFile } from "../lib/blocks";
 import { focusEnv } from "../lib/client/registry";
 import { LOCAL } from "../lib/client/route";
 import { extensionFor, pathSource, upload } from "../lib/upload";
-import { AttachmentStrip } from "./chat/Attachments";
-import { AttachMenu, SendButton } from "./chat/ComposerParts";
-import { MentionPicker } from "./chat/MentionPicker";
-import { PromptEditor, type PromptHandle } from "./chat/PromptEditor";
-import { SlashPicker } from "./chat/SlashPicker";
-import { usePickerAnchor } from "./chat/usePickerAnchor";
-import { useMentionMenu } from "./chat/useMentionMenu";
+import { SendButton } from "./chat/ComposerParts";
+import type { PromptHandle } from "./chat/PromptEditor";
+import { PromptWell } from "./chat/PromptWell";
 import { EmptyHead, Fact, IntroWaysFrame, Starters } from "./chat/SessionIntro";
-import { useWhereAt } from "./chat/where";
+import { useRepoTrees, useWhereAt } from "./chat/where";
 
 /** Puts the caret in the composer, so the sidebar's New session lands where typing starts. */
 export function focusWorkspaceStart() {
   document.querySelector<HTMLElement>("[data-workspace-start] .cm-content")?.focus();
 }
+
+const NO_AGENTS: readonly Session[] = [];
 
 /** What a `/` offers before any session exists: Crew's own actions on the chips. A provider's commands need its CLI running. */
 function startActions(fast: boolean, efforts: boolean): CommandEntry[] {
@@ -67,6 +60,7 @@ export function StartScreen({
   cwd,
   indexFiles = true,
   rememberPick = false,
+  agents = NO_AGENTS,
   onAsk,
 }: {
   title: string;
@@ -79,6 +73,8 @@ export function StartScreen({
   indexFiles?: boolean;
   /** A pick on the chips becomes the preferred agent, as Home's does; elsewhere it is for the next session only. */
   rememberPick?: boolean;
+  /** The workspace's bots and sessions, which `@` names alongside its worktrees. */
+  agents?: readonly Session[];
   /** A new session with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice, files: AttachedFile[]) => void;
 }) {
@@ -93,27 +89,7 @@ export function StartScreen({
   );
   const [draft, setDraft] = useState("");
   const field = useRef<PromptHandle>(null);
-  const model = useRef<Opener>(null);
-  const effort = useRef<Opener>(null);
-  const access = useRef<Opener>(null);
-  // What the picker keys open, from this composer and from a picker it opened.
-  const pickers = useMemo<PromptPickers>(
-    () => ({
-      has: (letter) => letter === "P" || hasWorktreePicker(),
-      open: (letter) => (letter === "P" ? model.current?.open() : openWorktreePicker()),
-    }),
-    [],
-  );
-  const stepNow = useRef<() => boolean>(() => false);
-  const prompt = useMemo<Prompt>(
-    () => ({ pickers, element: () => well.current, field: () => field.current, stepEffort: () => stepNow.current() }),
-    [pickers],
-  );
-  useEffect(() => registerPrompt(prompt), [prompt]);
-
-  // The same menus as a session's composer: `@` reads the folder, `/` offers what exists before a session does.
-  const [cursor, setCursor] = useState(0);
-  const [active, setActive] = useState(0);
+  // The same menus as a session's composer: `@` reads the folder and names the workspace's others, `/` offers what exists before a session does.
   const projectFiles = useProjectFiles(indexFiles ? cwd : null);
   const resolvePath = useCallback(
     (path: string) => {
@@ -124,103 +100,13 @@ export function StartScreen({
     },
     [cwd],
   );
-  const { mention, indexed, results } = useMentionMenu(draft, cursor, projectFiles, resolvePath);
-  const [mentioned, setMentioned] = useState<readonly string[]>([]);
-  const known = useMemo(() => new Set([...indexed.map((file) => file.relative), ...mentioned]), [indexed, mentioned]);
+  // Home is no repo: only a project has worktrees to name.
+  const trees = useRepoTrees(indexFiles ? (cwd ?? "") : "");
+  const worktrees = useMemo(() => treeMentions(trees), [trees]);
   const fitted = fitChoice(choice);
-  // ⇧Tab steps the effort levels, as in a session's composer.
-  const stepEffort = () => {
-    const next = nextEffort(selectedEffort(fitted.provider, fitted.model, fitted.effort), effortsOf(fitted.provider, fitted.model));
-    if (next) setPicked(fitChoice({ ...fitted, effort: next }));
-    return true;
-  };
-  useEffect(() => {
-    stepNow.current = stepEffort;
-  });
   const canFast = fastChoice(fitted.provider, fitted.model).available;
   const hasEfforts = effortsOf(fitted.provider, fitted.model).length > 0;
   const actions = useMemo(() => startActions(canFast, hasEfforts), [canFast, hasEfforts]);
-  const slash = mention ? null : slashAt(draft, cursor);
-  const slashResults = useMemo(
-    () => (slash ? searchCommands(actions, slash.query, true) : []),
-    [slash?.query, actions], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const choices = mention ? results.length : slashResults.length;
-  const well = useRef<HTMLFormElement>(null);
-  const pickerLeft = usePickerAnchor(field, well, mention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null);
-  // The draft has just changed: the caret goes where the change left it once the field has the new text.
-  const place = (at: number, then?: () => void) => {
-    requestAnimationFrame(() => {
-      field.current?.select(at);
-      then?.();
-    });
-  };
-  const pickMention = (file: ProjectFile, into = false) => {
-    const el = field.current;
-    if (!el) return;
-    const next = completeMention(draft, el.read().from, file, { into });
-    if (!next) return;
-    rememberMention(file.path);
-    setMentioned((list) => (list.includes(file.relative) ? list : [...list, file.relative]));
-    setDraft(next.text);
-    setActive(0);
-    place(next.cursor);
-  };
-  const pickSlash = (entry: CommandEntry) => {
-    const el = field.current;
-    if (!el) return;
-    const next = removeSlash(draft, el.read().from);
-    if (!next) return;
-    setDraft(next.text);
-    setActive(0);
-    place(next.cursor, () => {
-      if (entry.name === "model") model.current?.open();
-      else if (entry.name === "effort") effort.current?.open();
-      else if (entry.name === "access") access.current?.open();
-      else if (entry.name === "fast") {
-        const toggled = toggledFast(choice);
-        if (toggled) setPicked(toggled);
-      }
-    });
-  };
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (choices > 0) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
-        setActive((index) => (index + step + choices) % choices);
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        const at = Math.min(active, choices - 1);
-        if (mention) pickMention(results[at]!, event.key === "Tab");
-        else pickSlash(slashResults[at]!);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setCursor(-1);
-        return;
-      }
-    }
-    // ⌥P and ⌥W pick the model and the worktree, as in a new session's composer.
-    const letter = promptLetter(event);
-    if (letter && pickers.has(letter)) {
-      event.preventDefault();
-      pickers.open(letter);
-      return;
-    }
-    if (event.key === "Tab" && event.shiftKey) {
-      event.preventDefault();
-      stepEffort();
-      return;
-    }
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      send();
-    }
-  };
 
   useEffect(() => field.current?.focus(), []);
 
@@ -249,107 +135,55 @@ export function StartScreen({
     const env = focusEnv();
     startUploads(list.map((file) => ({ name: file.name || "pasted file", size: file.size, run: (onProgress) => writeTempFile(file, env, onProgress) })));
   };
-  // What the plus menu types for you: the mark at the caret, and its menu opens.
-  const typeMark = (mark: string) => {
-    const at = mark === "/" && draft.trim() === "" ? 0 : (field.current?.read().from ?? draft.length);
-    const before = mark === "/" && at === 0 ? "" : draft.slice(0, at);
-    const gap = before.length > 0 && !/\s$/.test(before) ? " " : "";
-    setDraft(`${before}${gap}${mark}${draft.slice(at)}`);
-    setActive(0);
-    // The menu hands the focus back to its trigger as it closes: the caret goes in after that.
-    window.setTimeout(() => place(before.length + gap.length + 1), 40);
-  };
-
   // A starter drafts its text for the sender to read and send; nothing is sent.
   const draftText = (text: string) => {
     setDraft(text);
-    setCursor(-1);
     field.current?.focus();
   };
 
+  const canSend = (draft.trim().length > 0 || files.length > 0) && !uploading;
   const send = () => {
     const text = draft.trim();
-    if ((!text && files.length === 0) || uploading) return;
+    if (!canSend) return;
     setDraft("");
     setFiles([]);
     // A pick made here was for this session: the next first screen opens on the preferred agent again.
     if (!rememberPick) setPickedDraft(null);
-    onAsk(text, choice, files);
+    // The agents and worktrees it names go under it with their ids and paths, as a session's composer sends them.
+    onAsk(text + agentNote(mentionedAgents(text, agents), mentionedTrees(text, worktrees, agents)), choice, files);
   };
 
   // The same three bands as a session's first screen (head, composer, ways in), so the two line up.
   return (
-    <div data-workspace-start onFocusCapture={() => activatePrompt(prompt)} className="flex h-full min-h-0 flex-col">
+    <div data-workspace-start className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-[4] flex-col items-center justify-end overflow-hidden">
         <EmptyHead mark={<CrewGlyph className="size-14" />} title={title} facts={facts} />
       </div>
       <div className="ds-composer-wrap relative mx-auto w-full max-w-chat shrink-0 px-6 py-1">
-        <form
-          ref={well}
-          className="ds-composer"
-          data-roomy=""
-          onSubmit={(event) => {
-            event.preventDefault();
-            send();
-          }}
-        >
-          {mention && (
-            <MentionPicker
-              results={results}
-              active={Math.min(active, Math.max(0, results.length - 1))}
-              onHover={setActive}
-              onPick={pickMention}
-              left={pickerLeft}
-            />
-          )}
-          {slashResults.length > 0 && (
-            <SlashPicker
-              results={slashResults}
-              active={Math.min(active, slashResults.length - 1)}
-              onHover={setActive}
-              onPick={pickSlash}
-              left={pickerLeft}
-            />
-          )}
-          {(files.length > 0 || uploads.length > 0) && (
-            <div className="px-1.5">
-              <AttachmentStrip files={files} onRemove={(item) => setFiles((prev) => prev.filter((file) => file.path !== item))} uploads={uploads} onDismissUpload={dismissUpload} />
-            </div>
-          )}
-          <div className="ds-composer-text">
-            <PromptEditor
-              ref={field}
-              value={draft}
-              placeholder="Ask anything…"
-              label="Ask anything"
-              known={known}
-              entries={actions}
-              onChange={(value, caret) => {
-                setDraft(value);
-                setCursor(caret);
-                setActive(0);
-              }}
-              onCaret={setCursor}
-              onKeyDown={onKeyDown}
-              onPasteFiles={pasted}
-              roomy
-            />
-          </div>
-          <div className="flex h-8 items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <AttachMenu onAttach={() => void attach()} onMention={() => typeMark("@")} onCommand={() => typeMark("/")} />
-              <div className="ds-model-group">
-                <ModelControls value={choice} onChange={setPicked} openers={{ model, effort }} />
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <div className="ds-access">
-                <AccessPicker ref={access} provider={choice.provider} value={choice.access} onChange={(access) => setPicked({ ...choice, access })} />
-              </div>
-              <SendButton stopping={false} canSend={(draft.trim().length > 0 || files.length > 0) && !uploading} label="Send" title="Send (↵)" stopTitle="" onStop={() => undefined} />
-            </div>
-          </div>
-        </form>
+        <PromptWell
+          ref={field}
+          draft={draft}
+          onDraft={setDraft}
+          files={files}
+          uploads={uploads}
+          onRemoveFile={(item) => setFiles((prev) => prev.filter((file) => file.path !== item))}
+          onDismissUpload={dismissUpload}
+          onAttach={() => void attach()}
+          onPasteFiles={pasted}
+          projectFiles={projectFiles}
+          resolvePath={resolvePath}
+          agents={agents}
+          worktrees={worktrees}
+          commands={actions}
+          choice={choice}
+          onChoice={setPicked}
+          placeholder="Ask anything…"
+          label="Ask anything"
+          roomy
+          canSend={canSend}
+          onSend={send}
+          trailing={<SendButton stopping={false} canSend={canSend} label="Send" title="Send (↵)" stopTitle="" onStop={() => undefined} />}
+        />
         <div className="ds-status" />
       </div>
       <div className="min-h-0 flex-[6] overflow-y-auto">
@@ -364,6 +198,7 @@ export function WorkspaceStart({
   places,
   defaultPath,
   onPlace,
+  agents,
   onAsk,
 }: {
   workspaceId: string;
@@ -372,6 +207,8 @@ export function WorkspaceStart({
   defaultPath: string;
   /** A worktree picked on the badge, remembered: the next first screen opens on it too. */
   onPlace: (path: string) => void;
+  /** The workspace's bots and sessions, for `@`. */
+  agents: readonly Session[];
   /** A new session in the worktree at `path`, with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice, path: string, files: AttachedFile[]) => void;
 }) {
@@ -390,6 +227,7 @@ export function WorkspaceStart({
           <Fact icon={machineIcon(link !== null)}>{machine}</Fact>
         </>
       }
+      agents={agents}
       ways={(pick) => <Starters where={where} onPick={pick} />}
       onAsk={(text, choice, files) => onAsk(text, choice, defaultPath, files)}
     />

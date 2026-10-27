@@ -262,6 +262,9 @@ export function App() {
     closePage,
   });
 
+  // What the start screen's `@` names: the workspace's bots and sessions, as a session's composer does.
+  const startAgents = useMemo(() => all.filter((session) => session.workspaceId === active?.id), [all, active?.id]);
+
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
 
@@ -536,6 +539,7 @@ export function App() {
                     key={active.id}
                     workspaceId={active.id}
                     places={panePlaces}
+                    agents={startAgents}
                     defaultPath={startIn ?? work.placeIn ?? active.path}
                     onPlace={(path) => {
                       setStartIn(null);
