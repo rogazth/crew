@@ -71,7 +71,6 @@ export function CommandsView({ workspaceId, processes, places, here, sessions, o
 
   return (
     <PageFrame
-      inTab
       title="Commands"
       subtitle="Dev servers and watchers, run in any worktree."
       actions={

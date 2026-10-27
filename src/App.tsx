@@ -377,7 +377,6 @@ export function App() {
           onResize={sidebar.resize}
           settings={settings}
           onSelectSettings={openSettings}
-          onCloseSettings={closePage}
           rail={{
             workspaces: workspaces.projects,
             home: workspaces.home,
@@ -469,6 +468,8 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenTerminal={envs.openTerminalOn}
+          inset={!sidebarOpen}
+          onClose={closePage}
         />
         {/* Hidden, not unmounted: bot and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">

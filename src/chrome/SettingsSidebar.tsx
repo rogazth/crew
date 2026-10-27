@@ -1,6 +1,6 @@
 // The settings nav: a search that finds pages and single settings (Enter lands
 // on the row and lights it), and the pages grouped by what they govern.
-import { ArrowDownToLineIcon, ArrowLeftIcon, CornerDownLeftIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { ArrowDownToLineIcon, CornerDownLeftIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useProviderAttention } from "../hooks/useProviderStatus";
 import { useUpdateActions, useUpdateState } from "../hooks/useUpdate";
@@ -12,14 +12,12 @@ import { requestJump } from "../surfaces/settings/ui";
 type Props = {
   section: SettingsSectionId;
   onSelect: (section: SettingsSectionId) => void;
-  /** Back to the sessions sidebar. */
-  onClose: () => void;
 };
 
 type Result = { kind: "page"; page: SettingsSectionId } | { kind: "setting"; entry: IndexEntry };
 
 /** Slides over the session panel while settings are open; the rail stays beside it. */
-export function SettingsSidebar({ section, onSelect, onClose }: Props) {
+export function SettingsSidebar({ section, onSelect }: Props) {
   // A page can send the nav elsewhere, like an Environments card's "Manage providers".
   useSectionRequests(onSelect);
   const [query, setQuery] = useState("");
@@ -55,9 +53,6 @@ export function SettingsSidebar({ section, onSelect, onClose }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 px-[11px] pt-2.5">
-        <NavRow label="Back" icon={<ArrowLeftIcon className="size-4 text-icon" />} onClick={onClose} />
-      </div>
       <div className="shrink-0 px-[11px] pt-2.5 pb-3">
         <label className="flex h-8 items-center gap-2 rounded-lg bg-fill px-2.5 transition-shadow focus-within:shadow-[0_0_0_1.5px_color-mix(in_oklab,var(--color-focus)_45%,transparent)]">
           <SearchIcon className="size-3.5 shrink-0 text-icon" />

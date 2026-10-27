@@ -22,7 +22,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     (session: Session) =>
       setConfirm({
         title: `Delete ${session.kind === "bot" ? "bot" : "session"} "${session.name}"?`,
-        description: "Its history is removed from this workspace. This cannot be undone.",
+        description: "Removes its history from this workspace. Can’t be undone.",
         action: "Delete",
         onConfirm: async () => {
           closeTabsFor(session.id);
@@ -38,7 +38,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
       if (list.length === 1 && only) return askSession(only);
       setConfirm({
         title: `Delete ${list.length} items?`,
-        description: "Their history is removed from this workspace. This cannot be undone.",
+        description: "Removes their history from this workspace. Can’t be undone.",
         action: "Delete",
         onConfirm: async () => {
           for (const session of list) closeTabsFor(session.id);

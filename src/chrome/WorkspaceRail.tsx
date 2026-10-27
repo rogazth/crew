@@ -5,6 +5,7 @@ import { RoutinesIcon } from "./RoutinesIcon";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { CrewGlyph } from "./CrewGlyph";
+import { Tooltip } from "./kit";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { RailUpdate } from "./UpdateButton";
@@ -146,7 +147,8 @@ export function WorkspaceRail(props: Props) {
 
       <RailButton
         icon={PlusIcon}
-        label={`Open workspace ${commandKeys("open-workspace")}`}
+        label="Open workspace"
+        keys={commandKeys("open-workspace")}
         dashed
         onClick={props.onCreate}
       />
@@ -166,7 +168,8 @@ export function WorkspaceRail(props: Props) {
       />
       <RailButton
         icon={SettingsIcon}
-        label={`Settings ${commandKeys("open-settings")}`}
+        label="Settings"
+        keys={commandKeys("open-settings")}
         active={props.settingsOpen}
         onClick={props.onOpenSettings}
       />
@@ -219,19 +222,24 @@ function HomeMark({
   status: SessionStatus | null;
   onSelect: () => void;
 }) {
-  const label = `Home ${commandKeys("go-home")}`;
   return (
     <div className="flex shrink-0 flex-col items-center gap-2 pt-1">
-      <button
-        type="button"
-        data-nav
-        data-home-mark
-        data-tauri-drag-region="false"
-        aria-current={current ? "true" : undefined}
-        aria-label="Home"
-        title={label}
-        onClick={onSelect}
-        className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
+      <Tooltip
+        content={<RailTip label="Home" keys={commandKeys("go-home")} />}
+        side="right"
+        delay={0}
+        render={
+          <button
+            type="button"
+            data-nav
+            data-home-mark
+            data-tauri-drag-region="false"
+            aria-current={current ? "true" : undefined}
+            aria-label="Home"
+            onClick={onSelect}
+            className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
+          />
+        }
       >
         <span
           aria-hidden
@@ -252,7 +260,7 @@ function HomeMark({
             <StatusDot status={status} className="size-3" />
           </span>
         )}
-      </button>
+      </Tooltip>
       <span aria-hidden className="h-px w-5 bg-border-strong" />
     </div>
   );
@@ -349,36 +357,54 @@ function Mark({
   );
 }
 
+/** A rail button's name to its right, with its chord when it has one: the glyph alone says little. */
+function RailTip({ label, keys }: { label: string; keys?: string | undefined }) {
+  return (
+    <span className="flex items-center gap-2">
+      {label}
+      {keys && <span className="tracking-wide opacity-60">{keys}</span>}
+    </span>
+  );
+}
+
 function RailButton({
   icon: Glyph,
   label,
+  keys,
   active = false,
   dashed = false,
   onClick,
 }: {
   icon: Icon;
   label: string;
+  keys?: string;
   active?: boolean;
   dashed?: boolean;
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      data-nav
-      data-tauri-drag-region="false"
-      aria-label={label}
-      aria-pressed={active}
-      title={label}
-      onClick={onClick}
-      className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
-        dashed
-          ? "rounded-[18px] border border-dashed border-border-strong text-text-muted hover:text-text"
-          : `rounded-xl ${active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"}`
-      }`}
+    <Tooltip
+      content={<RailTip label={label} keys={keys} />}
+      side="right"
+      delay={0}
+      render={
+        <button
+          type="button"
+          data-nav
+          data-tauri-drag-region="false"
+          aria-label={label}
+          aria-pressed={active}
+          onClick={onClick}
+          className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
+            dashed
+              ? "rounded-[18px] border border-dashed border-border-strong text-text-muted hover:text-text"
+              : `rounded-xl ${active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"}`
+          }`}
+        />
+      }
     >
       <Glyph className="size-[18px]" />
-    </button>
+    </Tooltip>
   );
 }
 

@@ -20,10 +20,10 @@ export type CliStatus =
 export type CliResult = { status: CliStatus; error?: string | undefined };
 
 export function describeCli(status: CliStatus): string {
-  const what = "Lets you run crew from your own terminal. Agents in Crew reach it without this.";
+  const what = "Run crew from your terminal. Agents in Crew don’t need it.";
   switch (status.state) {
     case "unavailable":
-      return "This build has no crew command to link. Build it with: cargo build -p crew-cli";
+      return "No crew command in this build. Run cargo build -p crew-cli.";
     case "absent":
       return `${what} It links into ${status.dir}.`;
     case "installed":

@@ -104,6 +104,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onCon
   const counts = { all: entries?.length ?? 0, active: entries?.filter((e) => e.routine.enabled).length ?? 0 };
   return (
     <PageFrame
+      width="wide"
       title="Routines"
       subtitle="Wake a bot on a schedule with saved instructions."
       actions={
@@ -112,6 +113,8 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onCon
         </Button>
       }
     >
+      {/* The filters sit close over the list they narrow. */}
+      <div className="flex flex-col gap-5">
       {entries !== null && entries.length > 0 && (
         <div className="flex items-center gap-1 border-b border-hairline pb-3">
           {FILTERS.map((option) => {
@@ -159,6 +162,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onCon
           ))}
         </div>
       )}
+      </div>
     </PageFrame>
   );
 }

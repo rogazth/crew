@@ -554,37 +554,42 @@ html[data-sidebar-resize="active"] * {
   animation: status-pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes sheet-in {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+/* Every dialog's motion: the panel rises a few pixels as it fades in and
+   settles back as it fades out, over a backdrop that fades with it. A dialog
+   that replaces another keeps the backdrop and only fades its panel in.
+   Leaving is quicker than arriving; `forwards` holds the end state until unmount. */
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.995); }
 }
-@keyframes sheet-out {
-  from { transform: translateX(0); opacity: 1; }
-  to { transform: translateX(24px); opacity: 0; }
+@keyframes dialog-out {
+  to { opacity: 0; transform: translateY(2px); }
+}
+@keyframes dialog-swap {
+  from { opacity: 0; transform: scale(0.995); }
 }
 @keyframes fade-in {
   from { opacity: 0; }
-  to { opacity: 1; }
 }
 @keyframes fade-out {
-  from { opacity: 1; }
   to { opacity: 0; }
 }
-.sheet-panel {
-  animation: sheet-in 180ms cubic-bezier(0.2, 0, 0, 1);
+.dialog-panel {
+  animation: dialog-in 180ms var(--ease-out);
 }
-.sheet-backdrop {
-  animation: fade-in 180ms ease-out;
+.dialog-panel-swap {
+  animation: dialog-swap 140ms var(--ease-out);
 }
-/* Leaving is quicker than arriving; `forwards` holds the end state until unmount. */
-.sheet-panel-out {
-  animation: sheet-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+.dialog-panel-out {
+  animation: dialog-out 140ms var(--ease-out) forwards;
 }
-.sheet-backdrop-out {
-  animation: fade-out 150ms ease-in forwards;
+.dialog-backdrop {
+  animation: fade-in 160ms var(--ease-out);
+}
+.dialog-backdrop-out {
+  animation: fade-out 140ms var(--ease-out) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
-  .sheet-panel, .sheet-backdrop, .sheet-panel-out, .sheet-backdrop-out,
+  .dialog-panel, .dialog-panel-swap, .dialog-panel-out, .dialog-backdrop, .dialog-backdrop-out,
   .animate-status-pulse { animation: none; }
 }
 
@@ -1454,9 +1459,6 @@ svg.lucide {
   box-shadow:
     0 0 0 1px var(--color-hairline),
     0 0 16px -6px oklch(0% 0 0 / 0.1);
-}
-[data-sheet="page"] {
-  margin-top: 8px;
 }
 /* The sidebar under, the main panel over it (SidebarSlide.tsx). Only resting
    styles live here; the motion is inline, written by springs. */
