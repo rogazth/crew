@@ -41,6 +41,14 @@ export function who(target: SshTarget): string[] {
   return [...(target.user ? ["-l", target.user] : []), ...(target.port ? ["-p", String(target.port)] : [])];
 }
 
+/**
+ * The `ControlPath` option, quoted: the data dir sits under "Application
+ * Support", and ssh splits an unquoted option value at the space.
+ */
+export function controlOption(control: string): string {
+  return `ControlPath="${control}"`;
+}
+
 /** macOS refuses a socket path past 104 bytes. */
 const SOCKET_PATH_MAX = 103;
 

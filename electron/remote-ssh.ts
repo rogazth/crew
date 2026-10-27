@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import type { InstallFailure } from "../src/lib/remotes.ts";
 import { classifyInstallFailure } from "./install-errors.ts";
 import { resolveSsh } from "./ssh-config.ts";
-import { BASE_OPTIONS, controlPath, options, PERSIST_S, who, type SshTarget } from "./ssh-options.ts";
+import { BASE_OPTIONS, controlOption, controlPath, options, PERSIST_S, who, type SshTarget } from "./ssh-options.ts";
 import { isLoopback, Tunnels } from "./ssh-tunnel.ts";
 
 export type StepId = "reach" | "ssh" | "existing" | "upload" | "service" | "pair" | "clis";
@@ -602,7 +602,7 @@ export function sshArgs(target: SshTarget, control: string): string[] {
   return [
     ...options(BASE_OPTIONS),
     // Rides the machine's open connection, or opens one that waits for the next command.
-    ...options(["ControlMaster=auto", `ControlPath=${control}`, `ControlPersist=${PERSIST_S}`]),
+    ...options(["ControlMaster=auto", controlOption(control), `ControlPersist=${PERSIST_S}`]),
     // A LocalForward or RemoteForward in ~/.ssh/config has no business on these.
     ...options(["ClearAllForwardings=yes"]),
     ...who(target),
@@ -668,7 +668,7 @@ function collect(child: ReturnType<typeof spawn>, resolve: (stdout: string) => v
 
 async function closeControl(target: SshTarget, control: string) {
   await new Promise<void>((resolve) => {
-    const child = spawn("ssh", ["-o", `ControlPath=${control}`, "-O", "exit", ...who(target), "--", target.destination], {
+    const child = spawn("ssh", ["-o", controlOption(control), "-O", "exit", ...who(target), "--", target.destination], {
       stdio: "ignore",
     });
     child.on("error", () => resolve());

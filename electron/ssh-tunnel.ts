@@ -7,7 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { isLoopback } from "../src/lib/remotes";
-import { BASE_OPTIONS, controlPath, options, who, type SshTarget } from "./ssh-options";
+import { BASE_OPTIONS, controlOption, controlPath, options, who, type SshTarget } from "./ssh-options";
 
 export { isLoopback };
 
@@ -22,7 +22,7 @@ export function tunnelArgs(target: SshTarget, forward: Forward, remotePort: numb
     ...options(BASE_OPTIONS),
     // The machine's master while it is up, so commands to it ride this connection. One a
     // command left open already is left alone, and this runs as a connection of its own.
-    ...options(["ControlMaster=yes", `ControlPath=${controlPath(target)}`, "ControlPersist=no"]),
+    ...options(["ControlMaster=yes", controlOption(controlPath(target)), "ControlPersist=no"]),
     // A forward that cannot bind ends ssh, rather than leaving a tunnel that goes nowhere;
     // and the forwards listen on this Mac's loopback alone, whatever ~/.ssh/config says.
     ...options(["ExitOnForwardFailure=yes", "GatewayPorts=no"]),
