@@ -107,6 +107,18 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
     }
   }
 
+  // Rows appear (and shift while filtering) under a still pointer and the browser answers with
+  // mouse events. Only a pointer that actually travelled may steer the cursor.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  function hoverAt(index: number) {
+    return (event: React.MouseEvent) => {
+      const last = pointer.current;
+      pointer.current = { x: event.screenX, y: event.screenY };
+      if (!last || (last.x === event.screenX && last.y === event.screenY)) return;
+      setCursor(index);
+    };
+  }
+
   return (
     <div className="relative min-w-0 flex-1" data-tauri-drag-region="false">
       <input
@@ -158,7 +170,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
               key={`${row.kind}:${row.url}`}
               row={row}
               active={at === cursor}
-              onHover={() => setCursor(at)}
+              onHover={hoverAt(at)}
               onPick={() => go(row.url)}
             />
           ))}
@@ -178,7 +190,7 @@ function Row({
 }: {
   row: Suggestion;
   active: boolean;
-  onHover: () => void;
+  onHover: (event: React.MouseEvent) => void;
   onPick: () => void;
 }) {
   const icon =
@@ -198,7 +210,7 @@ function Row({
       tabIndex={-1}
       // Keeps focus in the input, so the click lands before blur closes the list.
       onMouseDown={(event) => event.preventDefault()}
-      onMouseEnter={onHover}
+      onMouseMove={onHover}
       onClick={onPick}
       className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] ${
         active ? "bg-selected text-text" : "text-text-muted"
