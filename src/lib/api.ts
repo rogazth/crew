@@ -5,6 +5,11 @@ import { base64OfFile, CHUNK, extensionFor, fileSource, upload } from "./upload"
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BuiltinConnector,
+  VaultJoin,
+  VaultKey,
+  VaultMinted,
+  VaultPull,
+  VaultStatus,
   BackgroundList,
   BackgroundOutput,
   BotRules,
@@ -477,44 +482,71 @@ export const registryStatus = (): Promise<RegistryStatus> => client.request("reg
 /** The registry servers some URLs are, from this Mac's copy of the registry. */
 export const registryMatch = (urls: string[]): Promise<RegistryMatched[]> => client.request("registry_match", { urls });
 
-/* Crew's connectors, kept by the vault on this Mac. */
+/*
+ * Crew's connectors, kept by the vault: this Mac's daemon, or the machine the
+ * window made the vault (`setVaultEnv`). Every call about them goes there.
+ */
 
-export const connectorsList = (): Promise<Connector[]> => client.request("connectors_list", {});
+let vaultEnv: string = LOCAL;
+/** Where the connectors' calls go from now on. */
+export function setVaultEnv(envId: string) {
+  vaultEnv = envId;
+}
+export const getVaultEnv = () => vaultEnv;
+
+export const connectorsList = (): Promise<Connector[]> => client.request("connectors_list", {}, vaultEnv);
 
 /** The connectors Crew builds in (Google's apps), installed or not. */
-export const builtinList = (): Promise<BuiltinConnector[]> => client.request("builtin_list", {});
+export const builtinList = (): Promise<BuiltinConnector[]> => client.request("builtin_list", {}, vaultEnv);
 
 /** Installs a registry server by its name, or a server by URL. */
-export const connectorAdd = (add: ConnectorAdd): Promise<Connector> => client.request("connector_add", add);
+export const connectorAdd = (add: ConnectorAdd): Promise<Connector> => client.request("connector_add", add, vaultEnv);
 
 /** Signs every account out and removes the connector. */
-export const connectorRemove = (connectorId: string): Promise<null> => client.request("connector_remove", { connectorId });
+export const connectorRemove = (connectorId: string): Promise<null> => client.request("connector_remove", { connectorId }, vaultEnv);
 
 /** Starts a sign-in: a new account without `accountId`, that one again with it. */
 export const connectorConnect = (connect: ConnectorConnect): Promise<SignIn> =>
-  client.request("connector_connect", connect);
+  client.request("connector_connect", connect, vaultEnv);
 
 /** The redirect the sign-in window caught, whole; answers the account, connected, its tools listed. */
 export const vaultCallback = (state: string, url: string): Promise<ConnectorAccount> =>
-  client.request("vault_callback", { state, url });
+  client.request("vault_callback", { state, url }, vaultEnv);
 
 /** The sign-in window closed before the redirect came. */
-export const signInCancel = (state: string): Promise<null> => client.request("sign_in_cancel", { state });
+export const signInCancel = (state: string): Promise<null> => client.request("sign_in_cancel", { state }, vaultEnv);
 
 export const accountRename = (accountId: string, label: string): Promise<null> =>
-  client.request("account_rename", { accountId, label });
+  client.request("account_rename", { accountId, label }, vaultEnv);
 
 /** Revokes the grant at the service, then deletes the account. */
-export const accountRemove = (accountId: string): Promise<null> => client.request("account_remove", { accountId });
+export const accountRemove = (accountId: string): Promise<null> => client.request("account_remove", { accountId }, vaultEnv);
 
 /** Lists the account's tools again. */
 export const accountRefresh = (accountId: string): Promise<ConnectorAccount> =>
-  client.request("account_refresh", { accountId });
+  client.request("account_refresh", { accountId }, vaultEnv);
 
 /** `on: null` drops the binding, so the scope follows the next less specific one. */
-export const bindingSet = (binding: BindingSet): Promise<null> => client.request("binding_set", binding);
+export const bindingSet = (binding: BindingSet): Promise<null> => client.request("binding_set", binding, vaultEnv);
 
-export const toolSet = (tool: ToolSet): Promise<null> => client.request("tool_set", tool);
+export const toolSet = (tool: ToolSet): Promise<null> => client.request("tool_set", tool, vaultEnv);
+
+/* The vault between machines (vault_*): each call to the machine named. */
+
+export const vaultStatus = (envId: string): Promise<VaultStatus> => client.request("vault_status", {}, envId);
+/** A lease token for a machine, from the vault; shown once. */
+export const vaultMint = (envId: string, name: string): Promise<VaultMinted> => client.request("vault_mint", { name }, envId);
+export const vaultRevoke = (envId: string, machineId: string): Promise<null> => client.request("vault_revoke", { machineId }, envId);
+/** This Mac as the vault takes leases on its tailnet address too. */
+export const vaultListen = (envId: string, address: string): Promise<null> => client.request("vault_listen", { address }, envId);
+export const vaultJoin = (envId: string, join: VaultJoin): Promise<null> => client.request("vault_join", join, envId);
+export const vaultLeave = (envId: string): Promise<null> => client.request("vault_leave", {}, envId);
+/** A move: the new vault's key, the old vault's handoff for it, the new one pulls. */
+export const vaultMoveOpen = (envId: string): Promise<VaultKey> => client.request("vault_move_open", {}, envId);
+export const vaultHandoff = (envId: string, key: VaultKey): Promise<{ token: string }> => client.request("vault_handoff", key, envId);
+export const vaultMovePull = (envId: string, pull: VaultPull): Promise<{ grants: number }> => client.request("vault_move_pull", pull, envId);
+/** The vault moves to `envId` without the old one's grants: every account asks for a sign-in. */
+export const vaultMoveEmpty = (envId: string): Promise<null> => client.request("vault_move_empty", {}, envId);
 
 /*
  * The servers each provider CLI already has, on one machine: every call goes
@@ -549,10 +581,10 @@ export const providerServerSignInCancel = (envId: string, state: string): Promis
 export const onProviderServers = (listener: (inventory: ProviderInventory[], envId: string) => void): (() => void) =>
   client.on("provider-servers", (payload, env) => listener(payload as ProviderInventory[], env ?? LOCAL));
 
-/** Every connector, whole, each time one changes. Only this Mac's daemon keeps them. */
+/** Every connector, whole, each time one changes: the vault's list; a machine leasing keeps a copy no one reads. */
 export function onConnectors(listener: (connectors: Connector[]) => void): () => void {
   return client.on("connectors", (payload, env) => {
-    if (env === undefined || env === LOCAL) listener(payload as Connector[]);
+    if ((env ?? LOCAL) === vaultEnv) listener(payload as Connector[]);
   });
 }
 

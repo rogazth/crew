@@ -21,6 +21,7 @@ import {
   vaultCallback,
 } from "../../../lib/api";
 import { abortSignIn, catchRedirect } from "../../../lib/signInWindow";
+import { ensureMembers, loadVault, watchMembers } from "./vault";
 import type { BindingScope, BuiltinConnector, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
 import { toast } from "../ui";
 
@@ -70,8 +71,18 @@ function start() {
   if (started) return;
   started = true;
   onConnectors((connectors) => set((s) => ({ ...s, loaded: true, error: null, connectors })));
-  void load();
-  void builtinList()
+  // Read from the vault, wherever it is; the machines online lease from it.
+  void loadVault().then(() => {
+    void reload();
+    void ensureMembers();
+    watchMembers();
+  });
+}
+
+/** The list and the built-ins, again: after the vault moved, from its new place. */
+export async function reload() {
+  await load();
+  await builtinList()
     .then((builtins) => set((s) => ({ ...s, builtins })))
     .catch(() => {});
 }
@@ -266,7 +277,7 @@ export const actions = {
     if (known) return known;
     const connector = await connectorAdd(
       source.kind === "registry"
-        ? { registryName: source.server.name, builtin: null, url: null, name: null }
+        ? { registryName: source.server.name, server: source.server, builtin: null, url: null, name: null }
         : source.kind === "builtin"
           ? { registryName: null, builtin: source.builtin.id, url: null, name: null }
           : { registryName: null, builtin: null, url: source.url, name: source.name },

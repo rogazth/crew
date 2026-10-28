@@ -12,6 +12,8 @@ import { useRegistry } from "./registry";
 import { conflictsOf, useCopies, useWatchMachines } from "./copies";
 import { listJoin, providerName } from "./servers";
 import { refusalOf, useIntegrations, type Account } from "./store";
+import { machineName, useVault } from "./vault";
+import { LOCAL } from "../../../lib/client/route";
 
 /* ── The tile ───────────────────────────────────────────────────────── */
 
@@ -262,15 +264,22 @@ export function Installed() {
 }
 
 /**
- * Where the sign-ins are kept: one quiet line at the end of Installed's title.
- * The vault is this Mac for now; choosing another machine comes with remote vaults.
+ * Where the sign-ins are kept: one quiet line at the end of Installed's
+ * title, which opens the machines and the vault among them.
  */
 function VaultLine() {
+  const { vaultEnv } = useVault();
+  const where = vaultEnv === LOCAL ? "this Mac" : machineName(vaultEnv);
   return (
-    <span title="Sign-ins are stored in the vault on this Mac" className="-mr-1 flex h-7 shrink-0 items-center gap-1.5 px-1.5 text-[12.5px] font-medium text-text-muted">
+    <button
+      type="button"
+      title="Where the sign-ins are kept"
+      onClick={() => ui.open({ kind: "vault" })}
+      className="-mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[12.5px] font-medium text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
+    >
       <LockIcon className="size-3.5" />
-      Stored on this Mac
-    </span>
+      Stored on {where}
+    </button>
   );
 }
 

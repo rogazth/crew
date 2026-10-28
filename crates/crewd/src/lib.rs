@@ -2398,7 +2398,8 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
 /// name, or a URL the user typed, checked before anything is fetched from it.
 fn connector_to_add(store: &Store, add: proto::ConnectorAdd) -> Result<connectors::NewConnector, String> {
     if let Some(name) = add.registry_name.filter(|n| !n.is_empty()) {
-        let server = crew_core::registry::server(store, &name)?.ok_or_else(|| format!("{name} is not in the registry"))?;
+        let known = crew_core::registry::server(store, &name)?;
+        let server = known.or(add.server.filter(|s| s.name == name)).ok_or_else(|| format!("{name} is not in the registry"))?;
         crew_core::connectors::net::check_url(&server.remote_url)?;
         return Ok(connectors::NewConnector {
             name: registry_display_name(&server),

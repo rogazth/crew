@@ -17,6 +17,7 @@ import { KEYFRAMES, ui, useUi, type Sheet } from "./lib";
 import { FromProviders } from "./clis";
 import { Installed } from "./sections";
 import { BuiltInDialog, BuiltinSummaryDialog } from "./builtin";
+import { VaultDialog } from "./vault-dialog";
 import { setConsumers, useIntegrations, type Consumer, type Source } from "./store";
 
 type Props = { workspaces: Workspace[]; bots: Session[] };
@@ -83,5 +84,7 @@ function Sheets({ sheet }: { sheet: Sheet }) {
       return <BuiltinSummaryDialog key={sheet.builtin.id} builtin={sheet.builtin} />;
     case "built-in":
       return <BuiltInDialog />;
+    case "vault":
+      return <VaultDialog />;
   }
 }

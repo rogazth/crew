@@ -214,6 +214,11 @@ pub struct VaultPull {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct ConnectorAdd {
     pub registry_name: Option<String>,
+    /// The registry's entry as the window read it from this Mac's copy: a
+    /// vault on another machine keeps no copy of the registry.
+    #[serde(default)]
+    #[ts(optional)]
+    pub server: Option<crate::RegistryServer>,
     /// One Crew builds in, by its id (`google.gmail`).
     pub builtin: Option<String>,
     pub url: Option<String>,

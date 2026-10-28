@@ -472,6 +472,11 @@ tools: Array<ConnectorTool>, toolsOff: Array<string>, createdAt: number, };
  */
 export type ConnectorAdd = { registryName: string | null, 
 /**
+ * The registry's entry as the window read it from this Mac's copy: a
+ * vault on another machine keeps no copy of the registry.
+ */
+server?: RegistryServer, 
+/**
  * One Crew builds in, by its id (`google.gmail`).
  */
 builtin: string | null, url: string | null, 

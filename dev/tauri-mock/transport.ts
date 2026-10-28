@@ -931,6 +931,19 @@ function mcpStatus(sessionId: string) {
 const commands: Record<string, (args: Row) => unknown> = {
   connectors_list: () => structuredClone(connectors),
   builtin_list: () => structuredClone(BUILTINS),
+  // One machine, the vault: nothing leases from it in the mock.
+  vault_status: () => ({
+    holds: true,
+    vaultName: null,
+    vaultAddress: null,
+    online: true,
+    offlineSince: null,
+    listening: null,
+    machines: [],
+    grants: connectors.flatMap((c) => c.accounts).filter((a) => a.state === "connected").length,
+  }),
+  vault_listen: () => null,
+  vault_unlisten: () => null,
   connector_add: (args) => structuredClone(addConnector(args)),
   connector_remove: ({ connectorId }) => {
     const at = connectors.findIndex((c) => c.id === connectorId);

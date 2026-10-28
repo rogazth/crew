@@ -16,7 +16,9 @@ export type Sheet =
   /** A built-in before it is installed, from its row in Browse (builtin.tsx). */
   | { kind: "builtin-summary"; builtin: BuiltinConnector }
   /** What a built-in connector is, from its summary or page (builtin.tsx). */
-  | { kind: "built-in" };
+  | { kind: "built-in" }
+  /** Where the sign-ins are kept, and moving them (vault-dialog.tsx). */
+  | { kind: "vault" };
 
 /** What a detail page is about: one of Crew's connectors, or one provider server on one machine (by its name). */
 export type Detail =
