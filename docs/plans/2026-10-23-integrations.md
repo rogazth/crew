@@ -170,6 +170,11 @@ does not: a machine spawns from its copy.
   takes it, DCR otherwise, one registration per server, reused), PKCE `S256`,
   `resource` on every request, rotating refresh tokens, and step-up on 403
   `insufficient_scope`.
+- **Lease connections.** A machine brings its lease token where the window
+  brings the daemon's own (`{auth}` on the vault's socket). Such a
+  connection answers `vault_lease` and `vault_config` and hears
+  `vault-config` when the config changes; nothing else. A handoff token
+  answers only `vault_handoff_take` and `vault_handoff_done`.
 - **Lease.** A machine asks `vault_lease {account}` and gets back
   `{access_token, expires_at, scopes}`. It keeps the token in memory, asks
   again at 80% of its life, and asks once more after a 401 from the service.
@@ -507,5 +512,6 @@ rotate, so its lease is a copy.
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
 | Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
 | Vault on this Mac: a binding change reaching opencode's shared server (per folder, next turn) | built |
-| Remote vault: scoped tokens, leases, join, move, Linux file | todo |
+| Remote vault: scoped tokens, leases, join, move, Linux file | built (2026-10-28): lease tokens kept hashed, revocable, rate limited and logged (`connectors/lease.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the sealed move from the window (`integrations/vault.ts`); tried between this Mac and falcon-heavy over Tailscale, there and back |
+| Remote vault: a lease limited to the accounts bound on that machine | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
 | Password managers as a kind | todo |

@@ -18,6 +18,7 @@ import {
   vaultMoveEmpty,
   vaultMoveOpen,
   vaultMovePull,
+  vaultRevoke,
   vaultStatus,
 } from "../../../lib/api";
 import { getLinks, subscribeLinks, type EnvLink } from "../../../lib/client/registry";
@@ -103,8 +104,10 @@ export async function loadVault(): Promise<string> {
   return env;
 }
 
-/** Joins `member` to the vault: a lease token minted for it, handed over. */
+/** Joins `member` to the vault: a lease token minted for it, handed over. Its old tokens are revoked. */
 async function join(member: EnvLink, vault: EnvLink, vaultAddress: string) {
+  const old = await vaultStatus(vault.id).catch(() => null);
+  for (const machine of old?.machines.filter((m) => m.name === nameOf(member)) ?? []) await vaultRevoke(vault.id, machine.id);
   const minted = await vaultMint(vault.id, nameOf(member));
   await vaultJoin(member.id, { address: vaultAddress, token: minted.token, vaultName: nameOf(vault) });
 }
@@ -133,6 +136,10 @@ export function ensureMembers(): Promise<void> {
         const stray = status.holds ? status.grants === 0 : status.vaultAddress !== address;
         if (stray) await join(member, vault, address).catch((e) => console.warn(`vault: ${nameOf(member)} didn't join: ${message(e)}`));
       }
+      // A machine removed from Crew leases no more.
+      const names = new Set(links.map(nameOf));
+      const leasing = (await vaultStatus(vault.id).catch(() => null))?.machines ?? [];
+      for (const gone of leasing.filter((m) => !names.has(m.name))) await vaultRevoke(vault.id, gone.id).catch(() => {});
     } finally {
       ensuring = null;
       void refreshVault();
