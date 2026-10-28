@@ -90,6 +90,19 @@ export function useIntegrations(): State {
   );
 }
 
+/** An account that waits on the person: signed out, short of a permission, or refused. A sign-in never finished is not one. */
+const NEEDS_YOU: ReadonlySet<AccountState> = new Set(["expired", "needs-scope", "failed"]);
+
+/** Whether a connector has an account that needs the person: the rail's Connectors icon wears a dot. */
+export const accountsNeedYou = (s: State) => s.connectors.some((c) => c.accounts.some((a) => NEEDS_YOU.has(a.state)));
+
+/** Follows the connectors, loading them the first time, for a view that reads only a part of them. */
+export function subscribeConnectors(listener: () => void): () => void {
+  start();
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 export function getState(): State {
   return state;
 }
@@ -215,12 +228,7 @@ export function dismissFlow(id: number) {
 export type Source = { kind: "registry"; server: RegistryServer } | { kind: "url"; url: string; name: string | null };
 
 /** Servers known to turn Crew's sign-in away: said before anyone tries, with where the vendor says so. */
-const KNOWN_REFUSALS: Record<string, { why: string; docs: string }> = {
-  "com.figma.mcp/mcp": {
-    why: "Figma only allows approved MCP clients.",
-    docs: "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server",
-  },
-};
+const KNOWN_REFUSALS: Record<string, { why: string; docs: string }> = {};
 
 /** Why a registry server could not be signed in to from Crew: known up front, or learned from a try this run. */
 const refusals = new Map<string, string>(Object.entries(KNOWN_REFUSALS).map(([name, { why }]) => [name, why]));

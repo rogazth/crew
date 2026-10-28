@@ -16,12 +16,13 @@ import {
   registryMatch,
 } from "../../../lib/api";
 import { client } from "../../../lib/client";
+import { LOCAL } from "../../../lib/client/registry";
 import { openUrl } from "../../../lib/host";
 import type { ProviderInventory, RegistryServer } from "../../../lib/protocol";
 import { openServerSignIn } from "../../../lib/remoteUi";
 import { runSignIn } from "../../../lib/signInWindow";
 import { toast } from "../ui";
-import { serverKey, type Busy, type RegistryOf, type Server } from "./servers";
+import { isBundled, isOff, serverKey, type Busy, type RegistryOf, type Server } from "./servers";
 
 /** One machine's lists, as last read. */
 export type MachineServers = {
@@ -166,6 +167,56 @@ export function useProviderServers(envId: string): MachineView {
     settled: machine.loaded && !machine.inventory.some((i) => i.servers.some((x) => s.matching.has(x.target))),
   };
 }
+
+let primed = false;
+/**
+ * Follows every machine's lists, taking this Mac's as the daemon read them
+ * when it started; reading the CLIs again is left to the page's first look.
+ */
+export function subscribeServers(listener: () => void): () => void {
+  hook();
+  if (!primed) {
+    primed = true;
+    void load(LOCAL, false);
+  }
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/**
+ * Whether a CLI's server on a machine whose lists this window has waits on a
+ * sign-in, or is still loaded in Crew's sessions beside one of Crew's
+ * connectors (`clashWith`, their URLs): the rail's Connectors icon wears a dot.
+ */
+export function serversNeedYou(clashWith: readonly string[], same: (a: string, b: string) => boolean): boolean {
+  return Object.values(state.machines).some((m) =>
+    m.inventory.some((i) =>
+      i.servers.some((x) => !isOff(x) && !isBundled(x) && (x.state === "needs_auth" || clashWith.some((url) => same(url, x.target)))),
+    ),
+  );
+}
+
+/** Every machine's lists this window has, and what it is doing to their servers: a connector's copies are read from these. */
+export function useAllMachines(): { machines: Record<string, MachineServers>; busy: (envId: string, server: Server) => Busy } {
+  const s = useSyncExternalStore(
+    (listener) => {
+      hook();
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => state,
+  );
+  return {
+    machines: s.machines,
+    busy: (envId, server) => s.work.find((w) => w.envId === envId && w.key === serverKey(server))?.busy ?? null,
+  };
+}
+
+/** Reads a machine's lists as the page's first look does, for a view that shows its servers without the page. */
+export const watchMachine = (envId: string) => ensure(envId);
+
+/** A machine's lists as it has them now, after a change made to them. */
+export const reloadMachine = (envId: string) => load(envId, false);
 
 /* ── Writing ──────────────────────────────────────────────────────── */
 

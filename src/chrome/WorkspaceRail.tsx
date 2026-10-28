@@ -30,6 +30,8 @@ type Props = {
   settingsOpen: boolean;
   routinesOpen: boolean;
   integrationsOpen: boolean;
+  /** A connector or a CLI's server waits on the person: the Connectors icon wears a dot. */
+  integrationsAlert: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRename: (id: string, name: string) => void;
@@ -172,6 +174,7 @@ export function WorkspaceRail(props: Props) {
         icon={PlugIcon}
         label="Connectors"
         active={props.integrationsOpen}
+        alert={props.integrationsAlert}
         onClick={props.onOpenIntegrations}
       />
       <RailButton
@@ -381,6 +384,7 @@ function RailButton({
   keys,
   active = false,
   dashed = false,
+  alert = false,
   onClick,
 }: {
   icon: Icon;
@@ -388,6 +392,8 @@ function RailButton({
   keys?: string;
   active?: boolean;
   dashed?: boolean;
+  /** A dot in its corner: something behind it waits on the person. */
+  alert?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -403,7 +409,7 @@ function RailButton({
           aria-label={label}
           aria-pressed={active}
           onClick={onClick}
-          className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
+          className={`relative grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
             dashed
               ? "rounded-[18px] border border-dashed border-border-strong text-text-muted hover:text-text"
               : `rounded-xl ${active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"}`
@@ -412,6 +418,7 @@ function RailButton({
       }
     >
       <Glyph className="size-[18px]" />
+      {alert && <span aria-hidden className="absolute top-1.5 right-1.5 size-2 rounded-full bg-warning ring-2 ring-rail" />}
     </Tooltip>
   );
 }
