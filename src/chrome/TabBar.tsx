@@ -709,8 +709,8 @@ function BrowserTabFace({
   const page = useBrowserPage(tab.id);
   const lease = useLease(tab.id);
   const driver = lease?.sessionId ? sessions.find((s) => s.id === lease.sessionId) : undefined;
-  // A file's page that hasn't named itself yet goes by the file's name, which its tab holds.
-  const named = page.webContentsId !== null && !(tab.file && !page.title);
+  // A page that hasn't named itself yet (a cold tab mounting, a file) keeps the name its tab saved.
+  const named = page.webContentsId !== null && page.title.trim() !== "";
   const title = named ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
   return (
     <>
