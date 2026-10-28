@@ -170,21 +170,16 @@ fn read_connector(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connec
 
 /* ── Accounts ─────────────────────────────────────────────────────────── */
 
-/// A new account, pending until its first sign-in lands. The first account
-/// of a connector is on everywhere; another starts on nowhere. Tools the
+/// A new account, pending until its first sign-in lands, named "Account N"
+/// until the service says who signed in. The first account of a connector
+/// is on everywhere; another starts on nowhere. Tools the
 /// server marks destructive start off once they are listed (`set_tools`).
 pub fn add_account(store: &Store, connector_id: &str, label: Option<&str>) -> Result<ConnectorAccount, String> {
     let id = uuid::Uuid::new_v4().to_string();
     store.with(|conn| {
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM connector_accounts WHERE connector_id = ?1", [connector_id], |row| row.get(0))?;
-        let label = label.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).unwrap_or_else(|| {
-            if count == 0 {
-                "Work".to_string()
-            } else {
-                format!("Account {}", count + 1)
-            }
-        });
+        let label = label.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Account {}", count + 1));
         conn.execute(
             "INSERT INTO connector_accounts (id, connector_id, label, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, connector_id, label, state_text(AccountState::Pending), now_millis()],
@@ -227,8 +222,21 @@ pub fn set_state(store: &Store, id: &str, state: AccountState, error: Option<&st
     })
 }
 
+/// Who signed in. An account still called "Account N" takes that as its name.
 pub fn set_identity(store: &Store, id: &str, identity: Option<&str>) -> Result<(), String> {
-    store.with(|conn| conn.execute("UPDATE connector_accounts SET identity = ?2 WHERE id = ?1", params![id, identity]).map(drop))
+    store.with(|conn| {
+        conn.execute("UPDATE connector_accounts SET identity = ?2 WHERE id = ?1", params![id, identity])?;
+        let Some(identity) = identity else { return Ok(()) };
+        let label: String = conn.query_row("SELECT label FROM connector_accounts WHERE id = ?1", [id], |row| row.get(0))?;
+        if is_default_label(&label) {
+            conn.execute("UPDATE connector_accounts SET label = ?2 WHERE id = ?1", params![id, identity])?;
+        }
+        Ok(())
+    })
+}
+
+fn is_default_label(label: &str) -> bool {
+    label.strip_prefix("Account ").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
 }
 
 pub fn rename(store: &Store, id: &str, label: &str) -> Result<(), String> {
@@ -591,10 +599,22 @@ mod tests {
         let c = notion(&store);
         let work = add_account(&store, &c.id, None).unwrap();
         let personal = add_account(&store, &c.id, Some("Personal")).unwrap();
-        assert_eq!((work.label.as_str(), personal.label.as_str()), ("Work", "Personal"));
+        assert_eq!((work.label.as_str(), personal.label.as_str()), ("Account 1", "Personal"));
         let s = session("s1", "w1", None);
         assert!(is_on(&work, &s));
         assert!(!is_on(&personal, &s));
+    }
+
+    #[test]
+    fn an_account_takes_who_signed_in_as_its_name_unless_it_was_named() {
+        let store = store();
+        let c = notion(&store);
+        let first = add_account(&store, &c.id, None).unwrap();
+        let named = add_account(&store, &c.id, Some("Personal")).unwrap();
+        set_identity(&store, &first.id, Some("ada@example.com")).unwrap();
+        set_identity(&store, &named.id, Some("ada@home.com")).unwrap();
+        assert_eq!(account(&store, &first.id).unwrap().unwrap().label, "ada@example.com");
+        assert_eq!(account(&store, &named.id).unwrap().unwrap().label, "Personal");
     }
 
     #[test]
@@ -629,7 +649,7 @@ mod tests {
         set_state(&store, &personal.id, AccountState::Connected, None).unwrap();
         set_binding(&store, &personal.id, &BindingScope::Everywhere, Some(true)).unwrap();
         let names: Vec<String> = bound_servers(&store, &s).unwrap().into_iter().map(|b| b.name).collect();
-        assert_eq!(names, ["notion_work", "notion_personal"]);
+        assert_eq!(names, ["notion_account_1", "notion_personal"]);
         assert_eq!(resolve(&store, &s, "notion_personal").unwrap().unwrap().account_id, personal.id);
         assert!(resolve(&store, &s, "notion").unwrap().is_none());
     }
@@ -644,7 +664,7 @@ mod tests {
         .unwrap();
         let a = add_account(&store, &c.id, None).unwrap();
         set_state(&store, &a.id, AccountState::Connected, None).unwrap();
-        assert_eq!(bound_servers(&store, &session("s", "w", None)).unwrap()[0].name, "crew_work");
+        assert_eq!(bound_servers(&store, &session("s", "w", None)).unwrap()[0].name, "crew_account_1");
     }
 
     #[test]

@@ -419,7 +419,7 @@ refused: string | null, accounts: Array<ConnectorAccount>, createdAt: number, };
  */
 export type ConnectorAccount = { id: string, connectorId: string, 
 /**
- * What the user calls it: "Work".
+ * What the user calls it: who signed in, else "Account 2", until renamed.
  */
 label: string, 
 /**

@@ -35,7 +35,7 @@ pub struct Connector {
 pub struct ConnectorAccount {
     pub id: String,
     pub connector_id: String,
-    /// What the user calls it: "Work".
+    /// What the user calls it: who signed in, else "Account 2", until renamed.
     pub label: String,
     /// Who the service says signed in (`email`, else `name`), when it says.
     pub identity: Option<String>,
