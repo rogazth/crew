@@ -21,12 +21,13 @@ import { flip, hostOf, inherited, ui, useEscape, useUi, type Detail } from "./li
 import { AccountRow } from "./manage";
 import { brandOf } from "./brand";
 import { ServiceMark } from "./mark";
-import { GooglePage } from "./prototype-google";
 import { OutsideGroup } from "./outside";
+import { UnofficialNote, vendorOf } from "./builtin";
 import { useProviderServers } from "./providers";
 import { groupsOf, providerName, serverLine } from "./servers";
 import {
   actions,
+  builtinOf,
   connectorOf,
   consumerOf,
   formatTokens,
@@ -44,7 +45,6 @@ const noop = () => {};
 export function DetailPage({ detail }: { detail: Detail }) {
   const { sheet } = useUi();
   useEscape(sheet ? noop : home);
-  if (detail.kind === "proto") return <GooglePage id={detail.id} />;
   return detail.kind === "connector" ? <ConnectorPage connectorId={detail.id} /> : <ServerPage envId={detail.envId} groupKey={detail.key} />;
 }
 
@@ -93,6 +93,10 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
   }, [gone]);
   if (!connector) return null;
   const account = accounts.find((a) => a.id === picked) ?? accounts[0];
+  const builtin = builtinOf(s, connector);
+  // A built-in asks which account first when its siblings have one; anything else goes straight to the sign-in.
+  const addAccount = () =>
+    builtin ? ui.open({ kind: "connect", source: { kind: "builtin", builtin } }) : actions.addAccount(connectorId);
   return (
     <SettingsPage title={connector.name} hideHeader>
       <Header
@@ -104,7 +108,9 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
             label={`Remove ${connector.name}`}
             confirm={{
               title: `Remove ${connector.name}?`,
-              description: "Signs out every account at the service. Can’t be undone.",
+              description: builtin
+                ? `Signs out every account here, except at ${vendorOf(builtin.family)} for its other apps. Can’t be undone.`
+                : "Signs out every account at the service. Can’t be undone.",
               action: "Remove",
               onConfirm: () => actions.removeConnector(connector.id),
             }}
@@ -125,7 +131,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
         <button
           type="button"
           disabled={adding.length > 0}
-          onClick={() => actions.addAccount(connectorId)}
+          onClick={addAccount}
           className="flex h-12 w-full items-center gap-1.5 text-left text-text-muted outline-none transition-colors hover:text-text focus-visible:text-text disabled:opacity-50 disabled:hover:text-text-muted"
         >
           <PlusIcon className="size-4" />
@@ -148,14 +154,14 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
           <ToolsGroup account={account} />
         </>
       )}
-      <OutsideGroup connector={connector} />
+      {!builtin && <OutsideGroup connector={connector} />}
       <Group title="About">
         <Row label="Publisher">
           <span className="text-text-muted">{connector.publisher}</span>
         </Row>
         <Row label="Server">
           <span className="truncate text-text-muted" title={connector.url}>
-            {hostOf(connector.url) || connector.url}
+            {builtin ? builtin.server : hostOf(connector.url) || connector.url}
           </span>
         </Row>
         {connector.registryName && (
@@ -169,6 +175,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
           </Row>
         )}
       </Group>
+      {builtin && <UnofficialNote vendor={vendorOf(builtin.family)} />}
     </SettingsPage>
   );
 }

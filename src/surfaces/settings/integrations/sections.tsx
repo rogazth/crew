@@ -12,7 +12,6 @@ import { useRegistry } from "./registry";
 import { conflictsOf, useCopies, useWatchMachines } from "./copies";
 import { listJoin, providerName } from "./servers";
 import { refusalOf, useIntegrations, type Account } from "./store";
-import { useProtoTiles } from "./prototype-google";
 
 /* ── The tile ───────────────────────────────────────────────────────── */
 
@@ -215,8 +214,7 @@ export function Installed() {
     return at === RANK.indexOf("connected") && conflictsOf(c, copies).length > 0 ? at - 0.5 : at;
   };
   const connectors = [...shown].sort((a, b) => rankOf(a) - rankOf(b));
-  const proto = useProtoTiles();
-  if (s.loaded && s.connectors.length === 0 && proto.length === 0) {
+  if (s.loaded && s.connectors.length === 0) {
     if (!s.error)
       return (
         <section className="flex flex-col gap-2.5">
@@ -231,10 +229,10 @@ export function Installed() {
       </section>
     );
   }
-  if (connectors.length === 0 && proto.length === 0) return null;
+  if (connectors.length === 0) return null;
   return (
-    <TileSection title="Installed" count={connectors.length + proto.length} action={<VaultLine />}>
-      {[...proto, ...connectors.map((connector) => {
+    <TileSection title="Installed" count={connectors.length} action={<VaultLine />}>
+      {connectors.map((connector) => {
         const mine = connector.accounts;
         const busy = s.flows.some((f) => f.connectorId === connector.id && f.stage !== "done" && f.stage !== "failed");
         const worst = mine.length === 0 ? "pending" : worstOf(mine);
@@ -258,7 +256,7 @@ export function Installed() {
             onOpen={() => openConnector(connector.id)}
           />
         );
-      })]}
+      })}
     </TileSection>
   );
 }

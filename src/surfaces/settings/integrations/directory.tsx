@@ -23,7 +23,7 @@ import { brandOfServer } from './brand';
 import { ServiceMark } from './mark';
 import { useRegistry } from './registry';
 import { refusalDocsOf, refusalOf, useIntegrations } from './store';
-import { ProtoDirectoryRows } from './prototype-google';
+import { BuiltinRows } from './builtin';
 
 // Going back from a summary finds the search as it was left.
 let lastQuery = '';
@@ -89,7 +89,7 @@ export function DirectoryPage() {
             </button>
           )}
         </label>
-        <ProtoDirectoryRows query={query} />
+        <BuiltinRows query={query} />
         <p className="mt-2 -mb-2.5 px-1 text-[13px] text-text-muted">
           {error
             ? 'Couldn’t reach the MCP Registry.'

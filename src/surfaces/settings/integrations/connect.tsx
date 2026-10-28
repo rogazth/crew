@@ -1,8 +1,10 @@
 // The connect dialog, the same small frame as a connector's: opened by Install,
 // it starts the sign-in at once, one row that moves through its stages, then
 // the new account with its name. A server that refuses Crew's sign-in says so
-// here, in the daemon's words.
-import { AlertCircleIcon, GlobeIcon, type LucideIcon } from "lucide-react";
+// here, in the daemon's words. A built-in whose siblings have an account
+// signed in first offers it ("Continue as …"), so a second Google app asks
+// Google only for its own access.
+import { AlertCircleIcon, GlobeIcon, UserPlusIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../../chrome/kit";
 import { AccountName } from "./bits";
@@ -10,7 +12,7 @@ import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./di
 import { hostOf, ui } from "./lib";
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
-import { accountOfFlow, actions, connectorOf, useIntegrations, type Account, type FlowStage, type Source } from "./store";
+import { accountOfFlow, actions, connectorOf, familyIdentities, useIntegrations, type Account, type FlowStage, type Source } from "./store";
 
 const STAGE: Record<Exclude<FlowStage, "done" | "failed">, string> = {
   opening: "Opening the sign-in window…",
@@ -29,11 +31,49 @@ function Glyph({ icon: Icon, tone = "text-icon" }: { icon: LucideIcon; tone?: st
 /** What the sheet shows before the connector exists: the registry's entry, or the URL typed. */
 function brandOfSource(source: Source): Brand {
   if (source.kind === "registry") return brandOfServer(source.server);
+  if (source.kind === "builtin") return { id: source.builtin.id, name: source.builtin.name, publisher: "Built in", logo: source.builtin.iconUrl };
   const host = hostOf(source.url);
   return { id: source.url, name: source.name ?? host, publisher: host, logo: null };
 }
 
 export function ConnectDialog({ source }: { source: Source }) {
+  const s = useIntegrations();
+  // A built-in asks which account first when its siblings have one it hasn't; picked, it signs in as that one.
+  const offered = source.kind === "builtin" && source.loginHint === undefined ? familyIdentities(s, source.builtin) : [];
+  const [choice] = useState(offered);
+  if (choice.length > 0 && source.kind === "builtin") return <ChooseAccount source={source} identities={choice} />;
+  return <Connecting source={source} />;
+}
+
+/** "Continue as …" for each account a sibling has, and a fresh sign-in. */
+function ChooseAccount({ source, identities }: { source: Source & { kind: "builtin" }; identities: string[] }) {
+  const brand = brandOfSource(source);
+  const go = (loginHint: string | null) => ui.open({ kind: "connect", source: { ...source, loginHint } });
+  const adding = !!connectorOf(useIntegrations(), `builtin:${source.builtin.id}`);
+  const title = adding ? `Add an account to ${brand.name}` : `Install ${brand.name}`;
+  return (
+    <Dialog label={title}>
+      <DialogHeader mark={<ServiceMark brand={brand} size={40} />} title={title} subtitle="Built in" />
+      <DialogGroup title="Sign in as">
+        {identities.map((identity) => (
+          <button key={identity} type="button" onClick={() => go(identity)} className="w-full text-left outline-none focus-visible:bg-hover hover:bg-hover">
+            <DialogRow icon={<Glyph icon={UserRoundIcon} />} title={`Continue as ${identity}`} subtitle={`Asks only for ${brand.name}’s access`} />
+          </button>
+        ))}
+        <button type="button" onClick={() => go(null)} className="w-full text-left outline-none focus-visible:bg-hover hover:bg-hover">
+          <DialogRow icon={<Glyph icon={UserPlusIcon} />} title="Use another account" />
+        </button>
+      </DialogGroup>
+      <DialogFooter>
+        <Button variant="ghost" onClick={ui.close}>
+          Cancel
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+function Connecting({ source }: { source: Source }) {
   const s = useIntegrations();
   const [made, setMade] = useState<{ connectorId: string; flowId: number } | null>(null);
   const [error, setError] = useState<string | null>(null);

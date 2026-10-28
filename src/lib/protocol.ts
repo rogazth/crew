@@ -334,6 +334,33 @@ workspaceId?: string, };
 export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
 
 /**
+ * A connector Crew builds in, for a service with no MCP server of its own,
+ * as Browse lists it before it is installed.
+ */
+export type BuiltinConnector = { 
+/**
+ * `google.gmail`.
+ */
+id: string, name: string, description: string, 
+/**
+ * The API it calls, shown as its server: `gmail.googleapis.com`.
+ */
+server: string, iconUrl: string | null, 
+/**
+ * The sign-in it shares with its siblings (`google`): one account
+ * signed in to one of them is offered to the others.
+ */
+family: string, 
+/**
+ * Why it can't be installed in this build (no OAuth client set up yet).
+ */
+unavailable: string | null, 
+/**
+ * What each tool does, before anything is installed.
+ */
+tools: Array<ConnectorTool>, };
+
+/**
  * The start of the user's message a rule cites, and when it was written.
  */
 export type CitedMessage = { excerpt: string, at: number, };
@@ -412,7 +439,12 @@ publisher: string,
  * Why Crew can't sign in to it (no client registration, or no public
  * clients), once a sign-in found out. It is then used through a CLI.
  */
-refused: string | null, accounts: Array<ConnectorAccount>, createdAt: number, };
+refused: string | null, 
+/**
+ * One Crew builds in (`google.gmail`), served by `crewd` itself; `None`
+ * for a remote MCP server.
+ */
+builtin: string | null, accounts: Array<ConnectorAccount>, createdAt: number, };
 
 /**
  * One sign-in to a connector.
@@ -438,7 +470,11 @@ tools: Array<ConnectorTool>, toolsOff: Array<string>, createdAt: number, };
 /**
  * Install a connector: a registry server by name, or a URL.
  */
-export type ConnectorAdd = { registryName: string | null, url: string | null, 
+export type ConnectorAdd = { registryName: string | null, 
+/**
+ * One Crew builds in, by its id (`google.gmail`).
+ */
+builtin: string | null, url: string | null, 
 /**
  * The name to show for one added by URL; the host otherwise.
  */
@@ -455,7 +491,12 @@ accountId: string | null,
 /**
  * The new account's label; filled in from the service otherwise.
  */
-label: string | null, };
+label: string | null, 
+/**
+ * Who to sign in as, when the service offers it (Google's "Continue as"):
+ * the identity of an account already signed in.
+ */
+loginHint: string | null, };
 
 export type ConnectorRef = { connectorId: string, };
 

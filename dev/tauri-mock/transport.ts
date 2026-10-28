@@ -515,9 +515,70 @@ type MockConnector = {
   description: string;
   publisher: string;
   refused: string | null;
+  builtin: string | null;
   accounts: MockAccount[];
   createdAt: number;
 };
+
+/** Google's apps, as crewd lists its built-ins (`connectors/google.rs`, `gws.rs`). */
+type MockBuiltin = { id: string; name: string; description: string; server: string; iconUrl: string; family: string; unavailable: string | null; tools: MockTool[] };
+const googleTool = (name: string, description: string, tokens: number, kind: "read" | "write" | "destructive" = "write"): MockTool => ({
+  name,
+  title: null,
+  description,
+  readOnly: kind === "read",
+  destructive: kind === "destructive",
+  tokens,
+});
+const google = (id: string, name: string, server: string, icon: string, description: string, tools: MockTool[]): MockBuiltin => ({
+  id: `google.${id}`,
+  name,
+  description,
+  server,
+  iconUrl: `https://ssl.gstatic.com/images/branding/product/2x/${icon}_2020q4_48dp.png`,
+  family: "google",
+  unavailable: null,
+  tools,
+});
+const BUILTINS: MockBuiltin[] = [
+  google("gmail", "Gmail", "gmail.googleapis.com", "gmail", "Search and read mail, draft and send messages, and sort threads with labels.", [
+    googleTool("search_threads", "Search the mailbox with Gmail's search syntax.", 420, "read"),
+    googleTool("read_thread", "Read a thread's messages and the text of each.", 310, "read"),
+    googleTool("list_labels", "List the mailbox's labels.", 160, "read"),
+    googleTool("create_draft", "Write a draft, new or as a reply.", 380),
+    googleTool("send_message", "Send an email, new or as a reply.", 450, "destructive"),
+    googleTool("modify_labels", "Add or remove labels on a thread.", 290),
+    googleTool("trash_thread", "Move a thread to the trash.", 180, "destructive"),
+  ]),
+  google("drive", "Google Drive", "www.googleapis.com/drive", "drive", "Search, read and upload files, make folders, and share or trash files.", [
+    googleTool("search_files", "Search Drive with its query syntax.", 400, "read"),
+    googleTool("read_file", "Read a file's text.", 260, "read"),
+    googleTool("list_folder", "List what a folder holds.", 210, "read"),
+    googleTool("upload_file", "Make a file in Drive from text.", 340),
+    googleTool("create_folder", "Make a folder.", 170),
+    googleTool("share_file", "Share a file with someone.", 330, "destructive"),
+    googleTool("trash_file", "Move a file or folder to the trash.", 160, "destructive"),
+  ]),
+  google("calendar", "Google Calendar", "www.googleapis.com/calendar", "calendar", "List events, find free time, and create, change or delete events.", [
+    googleTool("list_events", "List a calendar's events in a range.", 380, "read"),
+    googleTool("find_free_time", "Answer the busy blocks of calendars in a range.", 300, "read"),
+    googleTool("create_event", "Add an event.", 460),
+    googleTool("update_event", "Change an event.", 390),
+    googleTool("delete_event", "Delete an event.", 170, "destructive"),
+  ]),
+  google("docs", "Google Docs", "docs.googleapis.com", "docs", "Read documents, create new ones, and edit their text.", [
+    googleTool("read_document", "Read a document's title and text.", 240, "read"),
+    googleTool("create_document", "Make a document.", 280),
+    googleTool("edit_document", "Replace text throughout a document, and add text at its end.", 420),
+  ]),
+  google("sheets", "Google Sheets", "sheets.googleapis.com", "sheets", "Read and write ranges, list a spreadsheet's sheets, and create spreadsheets.", [
+    googleTool("read_range", "Read a range's values.", 280, "read"),
+    googleTool("list_sheets", "List a spreadsheet's sheets.", 190, "read"),
+    googleTool("create_spreadsheet", "Make a spreadsheet.", 230),
+    googleTool("write_range", "Write rows of values to a range.", 360),
+    googleTool("clear_range", "Clear a range's values.", 170, "destructive"),
+  ]),
+];
 
 // Linear is seeded, signed in, so an installed registry connector's page shows
 // without a sign-in; remove it to see the page empty.
@@ -540,6 +601,7 @@ const connectors: MockConnector[] = [
     description: "Issues, projects and cycles in Linear.",
     publisher: "linear.app",
     refused: null,
+    builtin: null,
     createdAt: Date.now() - 86_400_000,
     accounts: [
       {
@@ -566,7 +628,7 @@ const connectors: MockConnector[] = [
   },
 ];
 /** Sign-ins started and not yet redeemed, by state. */
-const signIns = new Map<string, { accountId: string; isNew: boolean }>();
+const signIns = new Map<string, { accountId: string; isNew: boolean; loginHint: string | null }>();
 let connectorSeq = 0;
 const IDENTITIES = ["you@example.com", "you@personal.example"];
 
@@ -600,7 +662,28 @@ function mockTools(connector: MockConnector): MockTool[] {
   ];
 }
 
-function addConnector({ registryName, url, name }: Row): MockConnector {
+function addConnector({ registryName, builtin, url, name }: Row): MockConnector {
+  const app = BUILTINS.find((b) => b.id === builtin);
+  if (app) {
+    const known = connectors.find((c) => c.builtin === app.id);
+    if (known) return known;
+    const connector: MockConnector = {
+      id: `builtin:${app.id}`,
+      name: app.name,
+      registryName: null,
+      url: `https://${app.server}`,
+      iconUrl: app.iconUrl,
+      description: app.description,
+      publisher: "Built in",
+      refused: null,
+      builtin: app.id,
+      accounts: [],
+      createdAt: Date.now(),
+    };
+    connectors.push(connector);
+    emitConnectors();
+    return connector;
+  }
   const known = connectors.find((c) => (registryName ? c.registryName === registryName : c.url === url));
   if (known) return known;
   let remote = typeof url === "string" ? url : "";
@@ -625,6 +708,7 @@ function addConnector({ registryName, url, name }: Row): MockConnector {
     description: "",
     publisher,
     refused: null,
+    builtin: null,
     accounts: [],
     createdAt: Date.now(),
   };
@@ -633,7 +717,7 @@ function addConnector({ registryName, url, name }: Row): MockConnector {
   return connector;
 }
 
-function connectConnector({ connectorId, accountId, label }: Row) {
+function connectConnector({ connectorId, accountId, label, loginHint }: Row) {
   const connector = connectors.find((c) => c.id === connectorId);
   if (!connector) throw new Error("mock: no such connector");
   // A server that refuses Crew's client, so the page's refusal shows.
@@ -662,14 +746,15 @@ function connectConnector({ connectorId, accountId, label }: Row) {
     connector.accounts.push(account);
     emitConnectors();
   }
-  signIns.set(state, { accountId: account.id, isNew });
+  signIns.set(state, { accountId: account.id, isNew, loginHint: typeof loginHint === "string" ? loginHint : null });
   const redirectUri = "http://127.0.0.1:53682/callback";
   return {
     state,
     authUrl: `${connector.url.replace(/\/mcp\/?$/, "")}/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`,
     redirectUri,
     accountId: account.id,
-    incognito: others.length > 0,
+    // Google's own picker shows the other accounts.
+    incognito: others.length > 0 && !connector.builtin,
   };
 }
 
@@ -683,9 +768,14 @@ function redeem({ state, url }: Row) {
   if (account.state === "pending") {
     // The first account of a connector is on everywhere; another starts on nowhere.
     account.bindings = first ? [{ scope: { kind: "everywhere" }, on: true }] : [];
-    account.tools = mockTools(connector);
+    const app = BUILTINS.find((b) => b.id === connector.builtin);
+    account.tools = app ? structuredClone(app.tools) : mockTools(connector);
     account.toolsOff = account.tools.filter((t) => t.destructive).map((t) => t.name);
-    account.identity = IDENTITIES[connector.accounts.indexOf(account) % IDENTITIES.length] ?? null;
+    // A built-in signs in as the account picked ("Continue as"), else as the next one Google's picker would offer.
+    const taken = new Set(connector.accounts.map((a) => a.identity));
+    account.identity = app
+      ? (pending.loginHint ?? IDENTITIES.find((i) => !taken.has(i)) ?? `you+${connector.accounts.length}@example.com`)
+      : (IDENTITIES[connector.accounts.indexOf(account) % IDENTITIES.length] ?? null);
     // Still called "Account N", it takes who signed in as its name.
     if (account.identity && /^Account \d+$/.test(account.label)) account.label = account.identity;
   }
@@ -840,6 +930,7 @@ function mcpStatus(sessionId: string) {
 
 const commands: Record<string, (args: Row) => unknown> = {
   connectors_list: () => structuredClone(connectors),
+  builtin_list: () => structuredClone(BUILTINS),
   connector_add: (args) => structuredClone(addConnector(args)),
   connector_remove: ({ connectorId }) => {
     const at = connectors.findIndex((c) => c.id === connectorId);

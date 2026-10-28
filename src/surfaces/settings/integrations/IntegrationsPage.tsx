@@ -16,9 +16,8 @@ import { CustomDialog, DirectoryPage, SummaryDialog } from "./directory";
 import { KEYFRAMES, ui, useUi, type Sheet } from "./lib";
 import { FromProviders } from "./clis";
 import { Installed } from "./sections";
-import { BuiltInDialog } from "./builtin";
-import { GoogleConnectDialog, GoogleSummaryDialog, useGoogleInstalled } from "./prototype-google";
-import { setConsumers, useIntegrations, type Consumer } from "./store";
+import { BuiltInDialog, BuiltinSummaryDialog } from "./builtin";
+import { setConsumers, useIntegrations, type Consumer, type Source } from "./store";
 
 type Props = { workspaces: Workspace[]; bots: Session[] };
 
@@ -26,8 +25,7 @@ export function IntegrationsPage({ workspaces, bots }: Props) {
   const { sheet, view, detail } = useUi();
   const s = useIntegrations();
   // With no connector yet, the empty state carries the one way to the registry.
-  const google = useGoogleInstalled();
-  const empty = s.loaded && s.connectors.length === 0 && !s.error && !google;
+  const empty = s.loaded && s.connectors.length === 0 && !s.error;
   // Who an account can be turned on for: every workspace, and its bots under it.
   useEffect(() => {
     const consumers: Consumer[] = [
@@ -65,18 +63,24 @@ export function IntegrationsPage({ workspaces, bots }: Props) {
   );
 }
 
+/** One connect sheet per source: picking an account for a built-in starts a new one. */
+const sourceKey = (source: Source) =>
+  source.kind === "registry"
+    ? source.server.name
+    : source.kind === "builtin"
+      ? `${source.builtin.id}:${source.loginHint === undefined ? "?" : (source.loginHint ?? "new")}`
+      : source.url;
+
 function Sheets({ sheet }: { sheet: Sheet }) {
   switch (sheet.kind) {
     case "connect":
-      return <ConnectDialog key={sheet.source.kind === "registry" ? sheet.source.server.name : sheet.source.url} source={sheet.source} />;
+      return <ConnectDialog key={sourceKey(sheet.source)} source={sheet.source} />;
     case "summary":
       return <SummaryDialog key={sheet.server.name} server={sheet.server} back={sheet.back} />;
     case "custom":
       return <CustomDialog />;
-    case "proto":
-      return <GoogleConnectDialog key={sheet.id} id={sheet.id} />;
-    case "proto-summary":
-      return <GoogleSummaryDialog id={sheet.id} />;
+    case "builtin-summary":
+      return <BuiltinSummaryDialog key={sheet.builtin.id} builtin={sheet.builtin} />;
     case "built-in":
       return <BuiltInDialog />;
   }

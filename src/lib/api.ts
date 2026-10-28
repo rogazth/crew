@@ -4,6 +4,7 @@ import { open } from "./host";
 import { base64OfFile, CHUNK, extensionFor, fileSource, upload } from "./upload";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
+  BuiltinConnector,
   BackgroundList,
   BackgroundOutput,
   BotRules,
@@ -479,6 +480,9 @@ export const registryMatch = (urls: string[]): Promise<RegistryMatched[]> => cli
 /* Crew's connectors, kept by the vault on this Mac. */
 
 export const connectorsList = (): Promise<Connector[]> => client.request("connectors_list", {});
+
+/** The connectors Crew builds in (Google's apps), installed or not. */
+export const builtinList = (): Promise<BuiltinConnector[]> => client.request("builtin_list", {});
 
 /** Installs a registry server by its name, or a server by URL. */
 export const connectorAdd = (add: ConnectorAdd): Promise<Connector> => client.request("connector_add", add);

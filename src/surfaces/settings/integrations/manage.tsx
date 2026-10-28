@@ -6,7 +6,7 @@ import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import type { MenuAction } from "../../../lib/menu";
 import { AccountName, Dot, RowAction, RowMenu } from "./bits";
 import { ACCOUNT_PROBLEM, ACCOUNT_TONE } from "./lib";
-import { actions, signingIn, useIntegrations, type Account } from "./store";
+import { actions, siblingsOf, signingIn, useIntegrations, type Account } from "./store";
 
 export function AccountRow({ account }: { account: Account }) {
   const s = useIntegrations();
@@ -22,12 +22,17 @@ export function AccountRow({ account }: { account: Account }) {
         ? { label: "Try now", run: () => void actions.refresh(account.id) }
         : null;
   const problem = account.state === "failed" ? (account.error ?? ACCOUNT_PROBLEM.failed) : ACCOUNT_PROBLEM[account.state];
+  // A Google account other apps share stays signed in for them.
+  const siblings = siblingsOf(s, account);
+  const shared = siblings.length > 0 ? `Also signed in for ${siblings.join(", ")}` : null;
   // Named after who signed in, the account doesn't say it twice.
-  const line = busy ? "Authenticating…" : [problem, account.identity === account.label ? null : account.identity].filter(Boolean).join(" · ");
+  const line = busy
+    ? "Authenticating…"
+    : [problem, account.identity === account.label ? null : account.identity, problem ? null : shared].filter(Boolean).join(" · ");
   const remove = () =>
     setConfirm({
       title: `Remove ${account.label}?`,
-      description: "Signs out at the service. Can’t be undone.",
+      description: shared ? `${siblings.join(", ")} stay signed in as ${account.identity}.` : "Signs out at the service. Can’t be undone.",
       action: "Remove",
       onConfirm: () => actions.removeAccount(account.id),
     });

@@ -101,12 +101,16 @@ and for whoever wants it. Not the default.
   and destructive hints, token cost, bindings. A remote session forwards its
   `tools/call` like a connector's today; the token never leaves the vault's
   machine, and nothing is installed anywhere else.
-- **gws does the calls.** A tool is a short entry: name, the `gws` command
-  it runs (`gws gmail +send`, `gws drive files list`…), hints. Its
-  `inputSchema` is built from `gws schema <service.resource.method>`, so
-  schemas aren't written by hand; helpers (`+send`, `+reply`, `--upload`)
-  spare MIME and multipart. `crewd` runs it with the lease in
-  `GOOGLE_WORKSPACE_CLI_TOKEN`.
+- **gws does the calls.** A tool is a short entry: name, the `gws` calls
+  it makes (`gws gmail +send`, `gws drive files list`…), hints, and a
+  small `inputSchema` written for a model (Google's own schemas are the
+  API's, too big to list). Helpers (`+send`, `+reply`, `--upload`) spare
+  MIME and multipart. `crewd` runs it with the token in
+  `GOOGLE_WORKSPACE_CLI_TOKEN`, in a folder of its own with no HOME of the
+  person's (`connectors/gws.rs`). `upload_file` takes text, not a path, so
+  a session on another machine can use it.
+- **Google can't give back one scope.** Removing an app keeps the account's
+  grant while another app uses it; the last one revokes it.
 - **gws pinned, not auto-updated.** It's 0.x and "not an officially
   supported Google product", and it holds the tokens: `crewd` downloads one
   version, checked by checksum, into its data folder on the vault's machine,
@@ -153,8 +157,9 @@ and for whoever wants it. Not the default.
 
 | Part | State |
 | --- | --- |
-| Prototype: an app per connector, Figma installable in the mock | done |
+| Prototype: an app per connector, Figma installable in the mock | done, replaced by the real pages (2026-10-28) |
 | Figma `client_name` override | built (`oauth::client_name`); consent and a tool call to try |
-| Google OAuth client and consent screen | todo |
-| Google apps served by `crewd` over `gws` | todo |
+| Google OAuth client and consent screen | todo (the owner's); the build reads `CREW_GOOGLE_CLIENT_ID` and `CREW_GOOGLE_CLIENT_SECRET` |
+| Google apps served by `crewd` over `gws` 0.22.5 (pinned, sha256-checked), one grant per Google account, pages and "Continue as" | built, tried against the fake Google and in the mock |
+| Bring your own client | todo |
 | Verification | todo |

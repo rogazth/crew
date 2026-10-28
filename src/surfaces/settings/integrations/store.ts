@@ -10,6 +10,7 @@ import {
   accountRemove,
   accountRename,
   bindingSet,
+  builtinList,
   connectorAdd,
   connectorConnect,
   connectorRemove,
@@ -20,7 +21,7 @@ import {
   vaultCallback,
 } from "../../../lib/api";
 import { abortSignIn, catchRedirect } from "../../../lib/signInWindow";
-import type { BindingScope, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
+import type { BindingScope, BuiltinConnector, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
 import { toast } from "../ui";
 
 export type Account = ConnectorAccount;
@@ -47,11 +48,13 @@ export type State = {
   /** Why the list could not be read. */
   error: string | null;
   connectors: Connector[];
+  /** What Crew builds in, installed or not: Browse lists them above the registry. */
+  builtins: BuiltinConnector[];
   consumers: Consumer[];
   flows: Flow[];
 };
 
-let state: State = { loaded: false, error: null, connectors: [], consumers: [], flows: [] };
+let state: State = { loaded: false, error: null, connectors: [], builtins: [], consumers: [], flows: [] };
 const listeners = new Set<() => void>();
 
 function set(next: (s: State) => State) {
@@ -68,6 +71,9 @@ function start() {
   started = true;
   onConnectors((connectors) => set((s) => ({ ...s, loaded: true, error: null, connectors })));
   void load();
+  void builtinList()
+    .then((builtins) => set((s) => ({ ...s, builtins })))
+    .catch(() => {});
 }
 
 async function load() {
@@ -177,7 +183,7 @@ const landed = new Map<number, string>();
  * A sign-in, start to end: a new account of the connector, or `accountId`
  * again. Resolves the flow's id at once; the flow itself moves on in the store.
  */
-function signIn(connectorId: string, accountId: string | null, label?: string): number {
+function signIn(connectorId: string, accountId: string | null, loginHint: string | null = null): number {
   const id = ++flowSeq;
   set((s) => ({
     ...s,
@@ -190,7 +196,7 @@ function signIn(connectorId: string, accountId: string | null, label?: string): 
   void (async () => {
     let started: SignIn | null = null;
     try {
-      started = await connectorConnect({ connectorId, accountId, label: label ?? null });
+      started = await connectorConnect({ connectorId, accountId, label: null, loginHint });
       running.set(id, started.state);
       stage(id, { accountId: started.accountId, stage: "waiting" });
       // The window catches the redirect itself; this Mac's vault redeems it.
@@ -224,8 +230,25 @@ export function dismissFlow(id: number) {
 
 /* ── Actions ──────────────────────────────────────────────────────────── */
 
-/** What a connector is installed from: a server in the registry, or a URL. */
-export type Source = { kind: "registry"; server: RegistryServer } | { kind: "url"; url: string; name: string | null };
+/**
+ * What a connector is installed from: a server in the registry, a URL, or one
+ * Crew builds in, signed in as `loginHint` when the person picked an account
+ * its siblings already have ("Continue as").
+ */
+export type Source =
+  | { kind: "registry"; server: RegistryServer }
+  | { kind: "url"; url: string; name: string | null }
+  | { kind: "builtin"; builtin: BuiltinConnector; loginHint?: string | null | undefined };
+
+/** The connector a source is, once installed. */
+const installedFrom = (s: State, source: Source) =>
+  s.connectors.find((c) =>
+    source.kind === "registry"
+      ? c.registryName === source.server.name
+      : source.kind === "builtin"
+        ? c.builtin === source.builtin.id
+        : c.registryName === null && c.builtin === null && c.url === source.url,
+  );
 
 /** Servers known to turn Crew's sign-in away: said before anyone tries, with where the vendor says so. */
 const KNOWN_REFUSALS: Record<string, { why: string; docs: string }> = {};
@@ -239,14 +262,14 @@ export const refusalDocsOf = (registryName: string | null | undefined) => (regis
 export const actions = {
   /** Installs a connector, or finds it already installed. */
   async install(source: Source): Promise<Connector> {
-    const known = state.connectors.find((c) =>
-      source.kind === "registry" ? c.registryName === source.server.name : c.registryName === null && c.url === source.url,
-    );
+    const known = installedFrom(state, source);
     if (known) return known;
     const connector = await connectorAdd(
       source.kind === "registry"
-        ? { registryName: source.server.name, url: null, name: null }
-        : { registryName: null, url: source.url, name: source.name },
+        ? { registryName: source.server.name, builtin: null, url: null, name: null }
+        : source.kind === "builtin"
+          ? { registryName: null, builtin: source.builtin.id, url: null, name: null }
+          : { registryName: null, builtin: null, url: source.url, name: source.name },
     );
     putConnector(connector);
     return connector;
@@ -258,9 +281,9 @@ export const actions = {
    * sheet and the directory can say it.
    */
   async installAndConnect(source: Source): Promise<{ connectorId: string; flowId: number; installed: boolean }> {
-    const before = state.connectors.some((c) => (source.kind === "registry" ? c.registryName === source.server.name : c.url === source.url));
+    const before = !!installedFrom(state, source);
     const connector = await actions.install(source);
-    const flowId = signIn(connector.id, null);
+    const flowId = signIn(connector.id, null, source.kind === "builtin" ? (source.loginHint ?? null) : null);
     if (!before) {
       const watch = () => {
         const flow = state.flows.find((f) => f.id === flowId);
@@ -282,8 +305,8 @@ export const actions = {
   },
 
   /** Another account of an installed connector; it opens where the signed-in one does not answer for it. */
-  addAccount(connectorId: string): number {
-    return signIn(connectorId, null);
+  addAccount(connectorId: string, loginHint: string | null = null): number {
+    return signIn(connectorId, null, loginHint);
   },
 
   /** Signs an account in again: expired, short of scope, or never finished. */
@@ -349,6 +372,42 @@ export const actions = {
 };
 
 /* ── Reading the model ──────────────────────────────────────────────── */
+
+/** The built-ins of a family (Google's apps) that are installed. */
+const familyOf = (s: State, family: string) =>
+  s.connectors.filter((c) => c.builtin !== null && s.builtins.find((b) => b.id === c.builtin)?.family === family);
+
+/**
+ * The accounts a built-in can sign in as without a new sign-in to the
+ * service: the ones its siblings have, that it has not yet. First signed in, first.
+ */
+export function familyIdentities(s: State, builtin: BuiltinConnector): string[] {
+  const own = new Set(
+    s.connectors
+      .find((c) => c.builtin === builtin.id)
+      ?.accounts.flatMap((a) => (a.identity ? [a.identity.toLowerCase()] : [])) ?? [],
+  );
+  const seen = familyOf(s, builtin.family)
+    .flatMap((c) => c.accounts)
+    .filter((a) => a.state !== "pending" && a.identity)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((a) => a.identity!);
+  return [...new Set(seen.map((i) => i.toLowerCase()))].filter((i) => !own.has(i)).map((i) => seen.find((x) => x.toLowerCase() === i)!);
+}
+
+/** The other built-ins of its family an account's identity is signed in for, by name. */
+export function siblingsOf(s: State, account: Account): string[] {
+  const connector = s.connectors.find((c) => c.id === account.connectorId);
+  const builtin = s.builtins.find((b) => b.id === connector?.builtin);
+  if (!builtin || !account.identity) return [];
+  const identity = account.identity.toLowerCase();
+  return familyOf(s, builtin.family)
+    .filter((c) => c.id !== account.connectorId && c.accounts.some((a) => a.identity?.toLowerCase() === identity))
+    .map((c) => c.name);
+}
+
+/** The built-in a connector is, when it is one. */
+export const builtinOf = (s: State, connector: Connector | undefined) => s.builtins.find((b) => b.id === connector?.builtin);
 
 export const connectorOf = (s: State, id: string | undefined) => s.connectors.find((c) => c.id === id);
 export const accountOf = (s: State, id: string | undefined) => s.connectors.flatMap((c) => c.accounts).find((a) => a.id === id);
