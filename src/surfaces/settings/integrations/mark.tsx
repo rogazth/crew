@@ -1,14 +1,20 @@
 // A connector's mark: its registry icon, else its publisher's favicon, else a
 // monogram on a hue drawn from its name.
 import { useState } from "react";
+import { crewHost } from "../../../lib/host";
+import { iconSrc } from "../../../lib/icons";
 import type { Brand } from "./brand";
 
-/** Where a logo can come from: the registry's icon, then the publisher's favicon through Google's resolver. */
+/**
+ * Where a logo can come from: the registry's icon, then the publisher's
+ * favicon through Google's resolver, each through the app's cache.
+ */
 function logosOf(brand: Brand): string[] {
   const favicon = brand.publisher.includes(".")
     ? [`https://www.google.com/s2/favicons?domain=${encodeURIComponent(brand.publisher)}&sz=128`]
     : [];
-  return brand.logo ? [brand.logo, ...favicon] : favicon;
+  const cached = !!crewHost();
+  return (brand.logo ? [brand.logo, ...favicon] : favicon).map((url) => iconSrc(url, cached));
 }
 
 const hueOf = (id: string) => [...id].reduce((n, ch) => n + ch.charCodeAt(0) * 13, 0) % 360;

@@ -227,7 +227,8 @@ declare global {
   }
 }
 
-function crewHost(): CrewHost | undefined {
+/** The app around the window, when there is one: not the mock in a browser. */
+export function crewHost(): CrewHost | undefined {
   return typeof window !== "undefined" ? window.crewHost : undefined;
 }
 

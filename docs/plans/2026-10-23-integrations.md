@@ -464,10 +464,11 @@ starts with the daemon, not with the page:
 - RPCs `registry_search {text, limit}` (empty text is the featured list) and
   `registry_status`, both local methods. HTTPS through `curl`, like the npm
   lookup; nothing under `CREW_SANDBOX`. A `crewd serve` keeps no copy.
-- Later: the daemon caches the icons and the page reads them through
-  `crew-file:`, so the CSP stays closed and Google never learns what the
-  user browses. Until then a logo is the registry's icon or the publisher's
-  favicon through Google's resolver.
+- Logos (the registry's icon, else the publisher's favicon through Google's
+  resolver) load through `crew-icon:`, which the app answers from a cache on
+  disk like an HTTP cache: the last answer at once, asked again
+  conditionally in the background once a day old, a miss remembered as long
+  (`electron/icons.ts`). The window's policy stays closed to the hosts.
 
 **2. Vault on this Mac.** The OAuth client in `crewd`, keychain writes,
 accounts and bindings, Connect,
@@ -499,7 +500,7 @@ rotate, so its lease is a copy.
 | Notarization and Team ID check in the updater, with a Developer ID | todo (account next week) |
 | Spike: provider controls, servers' registration, redirect catching | servers' registration checked (2026-10-24); redirect catching built |
 | Prototype of the page | done, removed (in history at `10784e6`) |
-| Registry cache in `crewd`, search and featured over RPC | built |
+| Registry cache in `crewd`, search and featured over RPC | built; logos cached on disk (2026-10-28) |
 | Provider servers: inventory, page, sign-in, Off in Crew | built, covered by tests; the chat's chip removed (2026-10-25) |
 | Provider copies: listed on a connector's page, conflicts, rail dot | built (2026-10-25), Grok's sign-in through its credential store included; adding to the CLIs' configs removed (2026-10-28) |
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |

@@ -3,7 +3,7 @@ import { statSync, watch, type FSWatcher } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ipcMain, net, protocol, shell, type Session, type WebContents } from "electron";
+import { ipcMain, net, protocol, shell, type CustomScheme, type Session, type WebContents } from "electron";
 import { FILE_CHANNELS, FILE_SCHEME } from "../../src/lib/browser/files";
 import { servedPath, urlFor, within } from "./serve";
 
@@ -25,13 +25,17 @@ export function setRemoteResolver(resolve: (envId: string) => Promise<RemoteRoot
   resolveRemote = resolve;
 }
 
-/** Before the app is ready: a standard, secure scheme gets relative URLs, fetch and storage like https. */
-export function registerFileScheme(): void {
+/**
+ * Before the app is ready: a standard, secure scheme gets relative URLs, fetch
+ * and storage like https. Electron takes one call, so the app's other schemes come along.
+ */
+export function registerFileScheme(others: CustomScheme[] = []): void {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: FILE_SCHEME,
       privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
     },
+    ...others,
   ]);
 }
 
