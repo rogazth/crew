@@ -442,8 +442,11 @@ pub fn authorize_url(d: &Discovery, client_id: &str, redirect_uri: &str, pkce: &
             .append_pair("redirect_uri", redirect_uri)
             .append_pair("code_challenge", &pkce.challenge)
             .append_pair("code_challenge_method", "S256")
-            .append_pair("state", &pkce.state)
-            .append_pair("resource", &d.resource);
+            .append_pair("state", &pkce.state);
+        // Google's sign-in takes no resource (its built-in apps have none).
+        if !d.resource.is_empty() {
+            q.append_pair("resource", &d.resource);
+        }
         if !d.scopes.is_empty() {
             q.append_pair("scope", &d.scopes.join(" "));
         }
@@ -460,18 +463,16 @@ pub async fn exchange(
     callback_url: &str,
 ) -> Result<Tokens, OAuthError> {
     let code = read_callback(d, redirect_uri, pkce, callback_url)?;
-    token_request(
-        &d.token_endpoint,
-        client,
-        &[
-            ("grant_type", "authorization_code"),
-            ("code", &code),
-            ("redirect_uri", redirect_uri),
-            ("code_verifier", &pkce.verifier),
-            ("resource", &d.resource),
-        ],
-    )
-    .await
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", redirect_uri),
+        ("code_verifier", pkce.verifier.as_str()),
+    ];
+    if !d.resource.is_empty() {
+        form.push(("resource", &d.resource));
+    }
+    token_request(&d.token_endpoint, client, &form).await
 }
 
 /// The code in a callback, once it is shown to answer this flow: sent to our
@@ -509,12 +510,11 @@ fn read_callback(d: &Discovery, redirect_uri: &str, pkce: &Pkce, callback_url: &
 /// A new access token. A server that rotates answers a new refresh token
 /// too; one that does not keeps the old one, which is kept here.
 pub async fn refresh(token_endpoint: &str, client: &Client, resource: &str, refresh_token: &str) -> Result<Tokens, OAuthError> {
-    let mut tokens = token_request(
-        token_endpoint,
-        client,
-        &[("grant_type", "refresh_token"), ("refresh_token", refresh_token), ("resource", resource)],
-    )
-    .await?;
+    let mut form = vec![("grant_type", "refresh_token"), ("refresh_token", refresh_token)];
+    if !resource.is_empty() {
+        form.push(("resource", resource));
+    }
+    let mut tokens = token_request(token_endpoint, client, &form).await?;
     if tokens.refresh_token.is_none() {
         tokens.refresh_token = Some(refresh_token.to_string());
     }

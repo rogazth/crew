@@ -11,9 +11,12 @@
 //! account: which account a name means is worked out here from the session,
 //! so a session cannot reach an account by naming it.
 
+pub mod builtin;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake_server;
 pub mod flow;
+pub mod google;
+pub mod gws;
 pub mod net;
 pub mod oauth;
 pub mod remote;
@@ -95,13 +98,18 @@ pub struct NewConnector {
 
 /// Installs a connector, or answers the one already installed with that URL.
 pub fn add(store: &Store, new: NewConnector) -> Result<Connector, String> {
+    let id = new.registry_name.clone().unwrap_or_else(|| format!("url:{}", uuid::Uuid::new_v4()));
+    add_as(store, id, new)
+}
+
+/// `add`, under an id the caller picked: a built-in's is `builtin:<its id>`.
+fn add_as(store: &Store, id: String, new: NewConnector) -> Result<Connector, String> {
     let id = store.with(|conn| {
         let existing: Option<String> =
             conn.query_row("SELECT id FROM connectors WHERE url = ?1", [&new.url], |row| row.get(0)).optional()?;
         if let Some(id) = existing {
             return Ok(id);
         }
-        let id = new.registry_name.clone().unwrap_or_else(|| format!("url:{}", uuid::Uuid::new_v4()));
         conn.execute(
             "INSERT INTO connectors (id, name, registry_name, url, icon_url, description, publisher, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -153,6 +161,7 @@ fn read_connector(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connec
                     description: row.get(5)?,
                     publisher: row.get(6)?,
                     refused: row.get(7)?,
+                    builtin: None,
                     accounts: Vec::new(),
                     created_at: row.get(8)?,
                 })
@@ -160,6 +169,7 @@ fn read_connector(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connec
         )
         .optional()?;
     let Some(mut connector) = row else { return Ok(None) };
+    connector.builtin = builtin::id_of(&connector.id).map(str::to_string);
     let ids: Vec<String> = conn
         .prepare("SELECT id FROM connector_accounts WHERE connector_id = ?1 ORDER BY created_at")?
         .query_map([id], |row| row.get(0))?

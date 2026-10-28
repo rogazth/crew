@@ -44,6 +44,7 @@ const LOCAL_METHODS = new Set([
   "registry_match",
   // Crew's connectors and the vault that signs them in: this Mac's, for now.
   "connectors_list",
+  "builtin_list",
   "connector_add",
   "connector_remove",
   "connector_connect",

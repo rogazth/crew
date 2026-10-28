@@ -35,13 +35,21 @@ pub struct Options {
     pub refuse_dcr: bool,
     /// Take only clients with a secret, sent as HTTP Basic, as Supabase does.
     pub confidential: bool,
+    /// Sign in as Google does, as this account: one client known up front
+    /// (`google-client`, its secret posted), no `resource`, an `id_token`
+    /// naming the account, and the scopes granted kept per grant across
+    /// sign-ins that ask for more (`include_granted_scopes`).
+    pub google: Option<String>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { access_ttl: Duration::from_secs(3600), sse: false, refuse_dcr: false, confidential: false }
+        Options { access_ttl: Duration::from_secs(3600), sse: false, refuse_dcr: false, confidential: false, google: None }
     }
 }
+
+/// The client the fake Google knows.
+pub const GOOGLE_CLIENT: (&str, &str) = ("google-client", "google-secret");
 
 /// One request the server took, as it came.
 #[derive(Clone, Debug)]
@@ -89,6 +97,17 @@ impl FakeServer {
         self.lock().opts.sse = sse;
     }
 
+    /// Who the fake Google signs in as from now on.
+    pub fn set_google_account(&self, email: &str) {
+        self.lock().opts.google = Some(email.to_string());
+    }
+
+    /// Whether a refresh token's grant was revoked.
+    pub fn is_revoked(&self, refresh_token: &str) -> bool {
+        let state = self.lock();
+        state.refresh.get(refresh_token).is_some_and(|(grant, _)| state.revoked.contains(grant))
+    }
+
     /// Forgets every MCP session, as a server that restarted would: the next
     /// call with an old session id gets 404.
     pub fn expire_sessions(&self) {
@@ -129,6 +148,9 @@ struct State {
     refresh: HashMap<String, (u64, bool)>,
     revoked: HashSet<u64>,
     next_grant: u64,
+    /// The fake Google's: each account's grant, and the scopes it holds.
+    google_grants: HashMap<String, u64>,
+    scopes: HashMap<u64, Vec<String>>,
     sessions: HashSet<String>,
     log: Vec<Recorded>,
 }
@@ -138,6 +160,7 @@ struct Code {
     redirect_uri: String,
     challenge: String,
     resource: String,
+    scope: String,
 }
 
 struct Reply {
@@ -284,6 +307,12 @@ fn register(state: &mut State, req: &Recorded) -> Reply {
 /// The client a token request proves itself as: its Basic credentials when
 /// the server takes only those, else the `client_id` it names.
 fn client_of(state: &State, req: &Recorded) -> Option<String> {
+    if state.opts.google.is_some() {
+        let form = form(&req.body);
+        let ok = form.get("client_id").map(String::as_str) == Some(GOOGLE_CLIENT.0)
+            && form.get("client_secret").map(String::as_str) == Some(GOOGLE_CLIENT.1);
+        return ok.then(|| GOOGLE_CLIENT.0.to_string());
+    }
     if !state.opts.confidential {
         return Some(form(&req.body).get("client_id").cloned().unwrap_or_default());
     }
@@ -297,7 +326,11 @@ fn authorize(state: &mut State, query: &str) -> Reply {
     let q = form(query);
     let get = |k: &str| q.get(k).cloned().unwrap_or_default();
     let client_id = get("client_id");
-    if state.clients.get(&client_id) != Some(&get("redirect_uri")) {
+    let known = match state.opts.google {
+        Some(_) => client_id == GOOGLE_CLIENT.0 && !q.contains_key("resource"),
+        None => state.clients.get(&client_id) == Some(&get("redirect_uri")),
+    };
+    if !known {
         return oauth_error("invalid_client");
     }
     if get("code_challenge_method") != "S256" || get("code_challenge").is_empty() || get("response_type") != "code" {
@@ -306,7 +339,7 @@ fn authorize(state: &mut State, query: &str) -> Reply {
     let code = format!("code-{}", uuid::Uuid::new_v4());
     state.codes.insert(
         code.clone(),
-        Code { client_id, redirect_uri: get("redirect_uri"), challenge: get("code_challenge"), resource: get("resource") },
+        Code { client_id, redirect_uri: get("redirect_uri"), challenge: get("code_challenge"), resource: get("resource"), scope: get("scope") },
     );
     let location = url::Url::parse_with_params(&get("redirect_uri"), [("code", code.as_str()), ("state", &get("state")), ("iss", &state.url)])
         .map(String::from)
@@ -315,6 +348,9 @@ fn authorize(state: &mut State, query: &str) -> Reply {
 }
 
 fn token(state: &mut State, client_id: &str, form: &HashMap<String, String>) -> Reply {
+    if let Some(email) = state.opts.google.clone() {
+        return google_token(state, &email, form);
+    }
     let get = |k: &str| form.get(k).cloned().unwrap_or_default();
     let resource = format!("{}/mcp", state.url);
     let grant = match get("grant_type").as_str() {
@@ -357,6 +393,61 @@ fn token(state: &mut State, client_id: &str, form: &HashMap<String, String>) -> 
             "refresh_token": refresh, "scope": "read",
         }),
     )
+}
+
+/// The fake Google's token endpoint: one grant per account, its scopes
+/// growing with each consent, a refresh token on every code (`prompt=consent`)
+/// and none on a refresh, which Google does not rotate.
+fn google_token(state: &mut State, email: &str, form: &HashMap<String, String>) -> Reply {
+    let get = |k: &str| form.get(k).cloned().unwrap_or_default();
+    if form.contains_key("resource") {
+        return oauth_error("invalid_request");
+    }
+    let (grant, fresh_refresh) = match get("grant_type").as_str() {
+        "authorization_code" => {
+            let Some(code) = state.codes.remove(&get("code")) else { return oauth_error("invalid_grant") };
+            if code.redirect_uri != get("redirect_uri") || code.challenge != s256(&get("code_verifier")) {
+                return oauth_error("invalid_grant");
+            }
+            let grant = match state.google_grants.get(email).filter(|g| !state.revoked.contains(g)) {
+                Some(&grant) => grant,
+                None => {
+                    state.next_grant += 1;
+                    state.google_grants.insert(email.to_string(), state.next_grant);
+                    state.next_grant
+                }
+            };
+            let scopes = state.scopes.entry(grant).or_default();
+            for scope in code.scope.split_whitespace() {
+                if !scopes.iter().any(|s| s == scope) {
+                    scopes.push(scope.to_string());
+                }
+            }
+            (grant, true)
+        }
+        "refresh_token" => {
+            let Some(&(grant, _)) = state.refresh.get(&get("refresh_token")) else { return oauth_error("invalid_grant") };
+            if state.revoked.contains(&grant) {
+                return oauth_error("invalid_grant");
+            }
+            (grant, false)
+        }
+        _ => return oauth_error("unsupported_grant_type"),
+    };
+    let access = format!("at-{}", uuid::Uuid::new_v4());
+    state.access.insert(access.clone(), (grant, Instant::now() + state.opts.access_ttl));
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json!({ "email": email, "sub": email }).to_string());
+    let mut answer = json!({
+        "access_token": access, "token_type": "Bearer", "expires_in": state.opts.access_ttl.as_secs(),
+        "scope": state.scopes.get(&grant).map(|s| s.join(" ")).unwrap_or_default(),
+        "id_token": format!("e30.{claims}.sig"),
+    });
+    if fresh_refresh {
+        let refresh = format!("rt-{}", uuid::Uuid::new_v4());
+        state.refresh.insert(refresh.clone(), (grant, true));
+        answer["refresh_token"] = json!(refresh);
+    }
+    reply(200, answer)
 }
 
 fn bearer(state: &State, req: &Recorded) -> bool {

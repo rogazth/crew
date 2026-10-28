@@ -701,6 +701,8 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
     toolbox.register(children.clone());
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
     toolbox.register(Arc::new(browser.clone()));
+    // `gws`, for Google's apps, is kept beside the vault: only the vault's machine runs it.
+    let tools_dir = config.vault.as_ref().and_then(|at| at.file.parent()).map(|dir| dir.join("bin"));
     let vault: Arc<dyn connectors::vault::VaultStore> = match config.vault.take() {
         Some(at) => connectors::vault::open(at),
         None => Arc::new(connectors::vault::MemoryVault::default()),
@@ -716,6 +718,9 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
             }
         }),
     )?;
+    if let Some(dir) = tools_dir {
+        connectors.set_gws(connectors::gws::Gws::kept_in(dir));
+    }
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
@@ -2128,8 +2133,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || connectors::list(&store)).await?)
         }
+        "builtin_list" => json(connectors::builtin::Builtin::all().map(|b| b.listing()).collect::<Vec<_>>()),
         "connector_add" => {
             let add: proto::ConnectorAdd = parse(params)?;
+            if let Some(id) = add.builtin.clone().filter(|id| !id.is_empty()) {
+                let store = hosts.store.clone();
+                let connector = block(move || connectors::builtin::install(&store, &id)).await?;
+                hosts.connectors.notify();
+                return json(connector);
+            }
             let store = hosts.store.clone();
             let added = block(move || connector_to_add(&store, add)).await?;
             let store = hosts.store.clone();

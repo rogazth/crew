@@ -14,6 +14,9 @@ use crew_protocol::{AccountState, ConnectorAccount, ConnectorConnect, SignIn};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
+use super::builtin::Builtin;
+use super::google;
+use super::gws::{self, Gws, GwsError};
 use super::oauth::{self, Client, ClientAuth, Discovery, OAuthError, Pkce, Tokens};
 use super::remote::{RemoteClient, RemoteError};
 use super::vault::{Grant, VaultStore};
@@ -34,6 +37,8 @@ struct PendingFlow {
     account_id: String,
     /// The account was made for this sign-in, so giving up on it removes it.
     new_account: bool,
+    /// A built-in's sign-in: Crew's own client, a grant shared by its family.
+    builtin: Option<Builtin>,
     discovery: Discovery,
     client: Client,
     pkce: Pkce,
@@ -50,6 +55,11 @@ pub struct Connectors {
     /// One lock per account, held across a refresh.
     refreshing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     remotes: Mutex<HashMap<String, RemoteClient>>,
+    /// Where Google signs in, and with which client: Google's own and the
+    /// build's, unless a test points them elsewhere.
+    google: Mutex<(google::Endpoints, Option<Client>)>,
+    /// The `gws` the Google apps' tools run.
+    gws: Mutex<Gws>,
     on_change: Arc<dyn Fn() + Send + Sync>,
     /// Its own: the bridge's calls come in on plain threads, and the window's
     /// on the daemon's runtime; both wait here for the network.
@@ -80,6 +90,8 @@ impl Connectors {
             flows: Mutex::new(HashMap::new()),
             refreshing: Mutex::new(HashMap::new()),
             remotes: Mutex::new(HashMap::new()),
+            google: Mutex::new((google::Endpoints::default(), None)),
+            gws: Mutex::new(Gws::default()),
             on_change,
             runtime: Some(runtime),
         }))
@@ -98,6 +110,16 @@ impl Connectors {
         Fut: std::future::Future<Output = Result<T, String>> + Send + 'static,
     {
         self.runtime().spawn(work(self.clone())).await.map_err(|e| e.to_string())?
+    }
+
+    /// Points Google's sign-in elsewhere, with another client: the fake server, in tests.
+    pub fn set_google(&self, at: google::Endpoints, client: Client) {
+        *self.google.lock().unwrap_or_else(|e| e.into_inner()) = (at, Some(client));
+    }
+
+    /// Where `gws` is kept, or which one to run.
+    pub fn set_gws(&self, gws: Gws) {
+        *self.gws.lock().unwrap_or_else(|e| e.into_inner()) = gws;
     }
 
     fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -123,6 +145,9 @@ impl Connectors {
     /// authorization server, and answers the URL for the window to open.
     pub async fn connect(&self, req: ConnectorConnect) -> Result<SignIn, String> {
         let connector = super::get(&self.store, &req.connector_id)?.ok_or("That connector is not installed")?;
+        if let Some(builtin) = Builtin::of(&connector) {
+            return self.connect_builtin(builtin, &connector, req);
+        }
         let found = match oauth::discover(&connector.url).await {
             Ok(discovery) => self.client_for(&discovery).await.map(|client| (discovery, client)),
             Err(e) => Err(e),
@@ -155,13 +180,48 @@ impl Connectors {
         flows.retain(|_, flow| now - flow.started_at < FLOW_TTL_MS);
         flows.insert(
             state.clone(),
-            PendingFlow { account_id: account.id.clone(), new_account, discovery, client, pkce, started_at: now },
+            PendingFlow { account_id: account.id.clone(), new_account, builtin: None, discovery, client, pkce, started_at: now },
         );
         drop(flows);
         if new_account {
             self.changed();
         }
         Ok(SignIn { state, auth_url, redirect_uri: REDIRECT_URI.into(), account_id: account.id, incognito })
+    }
+
+    /// A built-in's sign-in: Google's page, with Crew's client, for the
+    /// app's scopes. "Continue as" names the account to offer first; Google's
+    /// own picker shows the others, so it needs no private window.
+    fn connect_builtin(&self, builtin: Builtin, connector: &crew_protocol::Connector, req: ConnectorConnect) -> Result<SignIn, String> {
+        let Builtin::Google(app) = builtin;
+        let (at, client) = self.google.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let client = match client {
+            Some(client) => client,
+            None => google::require_client()?,
+        };
+        let discovery = google::discovery(app, &at, &client);
+        let (account, new_account) = match &req.account_id {
+            Some(id) => (super::account(&self.store, id)?.ok_or("That account is gone")?, false),
+            None => (super::add_account(&self.store, &connector.id, req.label.as_deref())?, true),
+        };
+        // Signing an account in again asks for the same Google account.
+        let hint = req.login_hint.as_deref().or(account.identity.as_deref());
+        let pkce = oauth::Pkce::new();
+        let auth_url = google::authorize_url(&discovery, &client, REDIRECT_URI, &pkce, hint)
+            .map_err(|e| format!("Couldn't start the sign-in to {}: {e}", connector.name))?;
+        let state = pkce.state.clone();
+        let mut flows = self.flows.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        flows.retain(|_, flow| now - flow.started_at < FLOW_TTL_MS);
+        flows.insert(
+            state.clone(),
+            PendingFlow { account_id: account.id.clone(), new_account, builtin: Some(builtin), discovery, client, pkce, started_at: now },
+        );
+        drop(flows);
+        if new_account {
+            self.changed();
+        }
+        Ok(SignIn { state, auth_url, redirect_uri: REDIRECT_URI.into(), account_id: account.id, incognito: false })
     }
 
     /// The redirect the window caught: redeem the code, keep the grant, and
@@ -176,6 +236,9 @@ impl Connectors {
                 return Err(e.to_string());
             }
         };
+        if let Some(builtin) = flow.builtin {
+            return self.land_builtin(builtin, &flow, &tokens).await;
+        }
         let grant = grant_from(&flow.discovery, &flow.client, &tokens, None);
         self.vault.put(&flow.account_id, &grant)?;
         let identity = oauth::identity(&flow.discovery, &tokens).await;
@@ -185,6 +248,37 @@ impl Connectors {
         // A sign-in that landed is connected even when the listing fails;
         // the account then shows why.
         let _ = self.list_tools(&flow.account_id).await;
+        self.changed();
+        super::account(&self.store, &flow.account_id)?.ok_or_else(|| "The account is gone".into())
+    }
+
+    /// A built-in's sign-in landed: the grant joins the one its Google
+    /// account has, if any, and the app's tools are its own list.
+    async fn land_builtin(&self, builtin: Builtin, flow: &PendingFlow, tokens: &Tokens) -> Result<ConnectorAccount, String> {
+        let Some(identity) = oauth::identity(&flow.discovery, tokens).await else {
+            self.give_up(flow);
+            return Err("Google didn't say which account signed in. Try again.".into());
+        };
+        let connector = super::connector_of(&self.store, &flow.account_id)?.ok_or("The connector is gone")?;
+        let taken = connector.accounts.iter().any(|a| {
+            a.id != flow.account_id && a.identity.as_deref().is_some_and(|other| other.eq_ignore_ascii_case(&identity))
+        });
+        if taken {
+            self.give_up(flow);
+            return Err(format!("{identity} is already added to {}.", connector.name));
+        }
+        let key = google::grant_key(&identity);
+        let lock = self.refresh_lock(&key);
+        let _held = lock.lock().await;
+        let old = self.vault.get(&key)?;
+        let mut grant = grant_from(&flow.discovery, &flow.client, tokens, old.as_ref());
+        grant.scope = google::scope_union(old.as_ref().and_then(|g| g.scope.as_deref()), tokens.scope.as_deref());
+        self.vault.put(&key, &grant)?;
+        drop(_held);
+        super::set_identity(&self.store, &flow.account_id, Some(&identity))?;
+        super::set_state(&self.store, &flow.account_id, AccountState::Connected, None)?;
+        super::set_raw_tools(&self.store, &flow.account_id, &builtin.tool_defs())?;
+        // Another app of the same account may have waited on this consent.
         self.changed();
         super::account(&self.store, &flow.account_id)?.ok_or_else(|| "The account is gone".into())
     }
@@ -246,7 +340,15 @@ impl Connectors {
     /// Revokes the grant at the service, then forgets it. A service that
     /// can't be reached doesn't keep the account: the user asked it gone.
     pub async fn remove_account(&self, account_id: &str) -> Result<(), String> {
-        if let Some(grant) = self.vault.get(account_id)? {
+        // A Google account's grant stays while another of its apps is installed.
+        let key = match self.grant_key(account_id)? {
+            Some(key) if key != account_id && !self.google_siblings(account_id)?.is_empty() => None,
+            key => key,
+        };
+        if let Some((key, grant)) = match &key {
+            Some(key) => self.vault.get(key)?.map(|grant| (key.clone(), grant)),
+            None => None,
+        } {
             if let Some(endpoint) = &grant.revocation_endpoint {
                 let client = grant.client();
                 // Said in the log, since nothing else shows whether the
@@ -262,7 +364,7 @@ impl Connectors {
                     }
                 }
             }
-            self.vault.delete(account_id)?;
+            self.vault.delete(&key)?;
         }
         self.remotes.lock().unwrap_or_else(|e| e.into_inner()).remove(account_id);
         super::remove_account(&self.store, account_id)?;
@@ -282,15 +384,41 @@ impl Connectors {
 
     /* ── Tokens ───────────────────────────────────────────────────────── */
 
+    /// Where an account's grant is kept: its own id, or for one of Google's
+    /// apps, the Google account it signed in as (none before it signs in).
+    fn grant_key(&self, account_id: &str) -> Result<Option<String>, String> {
+        let connector = super::connector_of(&self.store, account_id)?;
+        if connector.as_ref().and_then(Builtin::of).is_none_or(|b| b.family() != "google") {
+            return Ok(Some(account_id.to_string()));
+        }
+        Ok(super::account(&self.store, account_id)?.and_then(|a| a.identity).map(|identity| google::grant_key(&identity)))
+    }
+
+    /// The other accounts of Google's apps signed in as the same Google account.
+    fn google_siblings(&self, account_id: &str) -> Result<Vec<String>, String> {
+        let Some(identity) = super::account(&self.store, account_id)?.and_then(|a| a.identity) else { return Ok(Vec::new()) };
+        Ok(super::list(&self.store)?
+            .into_iter()
+            .filter(|c| Builtin::of(c).is_some_and(|b| b.family() == "google"))
+            .flat_map(|c| c.accounts)
+            .filter(|a| a.id != account_id && a.identity.as_deref().is_some_and(|i| i.eq_ignore_ascii_case(&identity)))
+            .map(|a| a.id)
+            .collect())
+    }
+
+    /// One lock per grant, held across a refresh.
+    fn refresh_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = self.refreshing.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(key.to_string()).or_default().clone()
+    }
+
     /// A live access token for an account, refreshed first when it is near
     /// its end, or when `stale` is the one a server just refused.
     async fn access_token(&self, account_id: &str, stale: Option<&str>) -> Result<String, Unavailable> {
-        let lock = {
-            let mut map = self.refreshing.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(account_id.to_string()).or_default().clone()
-        };
+        let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
+        let lock = self.refresh_lock(&key);
         let _held = lock.lock().await;
-        let grant = self.vault.get(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
+        let grant = self.vault.get(&key).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
         let fresh = grant.expires_at.is_none_or(|at| at - now_millis() > REFRESH_MARGIN_MS);
         // Someone refreshed while this waited for the lock: the token it holds now is new.
         if fresh && stale != Some(grant.access_token.as_str()) {
@@ -308,11 +436,11 @@ impl Connectors {
                     scope: tokens.scope.clone().or(grant.scope.clone()),
                     ..grant
                 };
-                self.vault.put(account_id, &next).map_err(Unavailable)?;
+                self.vault.put(&key, &next).map_err(Unavailable)?;
                 Ok(next.access_token)
             }
             Err(OAuthError::InvalidGrant) => {
-                let _ = self.vault.delete(account_id);
+                let _ = self.vault.delete(&key);
                 Err(self.expired(account_id))
             }
             Err(e) => Err(Unavailable(format!("{}: couldn't refresh its sign-in ({e})", self.label(account_id)))),
@@ -393,8 +521,13 @@ impl Connectors {
 
     /* ── Tools ────────────────────────────────────────────────────────── */
 
-    /// Lists the server's tools now and keeps them.
+    /// Lists the server's tools now and keeps them. A built-in's are its own.
     pub async fn list_tools(&self, account_id: &str) -> Result<(), String> {
+        if let Some(builtin) = super::connector_of(&self.store, account_id)?.as_ref().and_then(Builtin::of) {
+            super::set_raw_tools(&self.store, account_id, &builtin.tool_defs())?;
+            self.changed();
+            return Ok(());
+        }
         let listed = self
             .with_token(account_id, |remote, token| async move { remote.list_tools(&token).await })
             .await
@@ -426,6 +559,9 @@ impl Connectors {
             Ok(true) => return tool_error(&format!("{name} is switched off for {} in Crew.", self.label(account_id))),
             Err(e) => return tool_error(&e),
         }
+        if let Some(Builtin::Google(app)) = super::connector_of(&self.store, account_id).ok().flatten().as_ref().and_then(Builtin::of) {
+            return self.call_google(account_id, app, name, arguments).await.unwrap_or_else(|Unavailable(line)| tool_error(&line));
+        }
         let call = self
             .with_token(account_id, |remote, token| {
                 let arguments = arguments.clone();
@@ -433,6 +569,38 @@ impl Connectors {
             })
             .await;
         call.unwrap_or_else(|Unavailable(line)| tool_error(&line))
+    }
+
+    /// One of Google's apps' tools, run with `gws` and the account's token,
+    /// and once more with a refreshed one when Google refuses the first.
+    async fn call_google(&self, account_id: &str, app: google::App, name: &str, arguments: Value) -> Result<Value, Unavailable> {
+        let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
+        let scope = self.vault.get(&key).map_err(Unavailable)?.and_then(|g| g.scope);
+        if !google::covers(scope.as_deref(), app) {
+            self.mark(account_id, AccountState::NeedsScope, Some("Google hasn't allowed this app for the account yet"));
+            return Err(Unavailable(format!("{} needs a sign-in to allow it: Settings › Integrations › Reconnect.", self.label(account_id))));
+        }
+        let gws = self.gws.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let token = self.access_token(account_id, None).await?;
+        let result = match gws::call(&gws, app, name, &arguments, &token).await {
+            Err(GwsError::Unauthorized) => {
+                let token = self.access_token(account_id, Some(&token)).await?;
+                gws::call(&gws, app, name, &arguments, &token).await
+            }
+            other => other,
+        };
+        match result {
+            Ok(value) => {
+                self.mark(account_id, AccountState::Connected, None);
+                Ok(value)
+            }
+            Err(GwsError::Unauthorized) => Err(self.expired(account_id)),
+            Err(GwsError::Forbidden(line)) | Err(GwsError::Call(line)) => Ok(tool_error(&line)),
+            Err(GwsError::Setup(line)) => {
+                self.mark(account_id, AccountState::Failed, Some(&line));
+                Err(Unavailable(format!("{}: {line}", self.label(account_id))))
+            }
+        }
     }
 }
 
@@ -490,12 +658,99 @@ mod tests {
         )
         .unwrap();
         let account = c.block_on(async {
-            let sign_in = c.connect(ConnectorConnect { connector_id: connector.id, account_id: None, label: None }).await.unwrap();
+            let sign_in = c.connect(ConnectorConnect { connector_id: connector.id, account_id: None, label: None, login_hint: None }).await.unwrap();
             let answer = net::client().get(&sign_in.auth_url).send().await.unwrap();
             let caught = answer.headers()["location"].to_str().unwrap().to_string();
             c.callback(&sign_in.state, &caught).await.unwrap()
         });
         (c, vault, fake, account.id)
+    }
+
+    /// Gmail and Drive installed, over a fake Google signing in as Ada, and a
+    /// fake `gws` that answers with the token it was given.
+    fn google() -> (Arc<Connectors>, Arc<MemoryVault>, FakeServer, Store) {
+        use std::os::unix::fs::PermissionsExt;
+        net::allow_insecure_for_tests();
+        let dir = std::env::temp_dir().join(format!("cf-{}", uuid::Uuid::new_v4()));
+        let store = Store::open(dir.join("crew.db")).expect("store");
+        let vault = Arc::new(MemoryVault::default());
+        let c = Connectors::new(store.clone(), vault.clone(), Arc::new(|| {})).expect("connectors");
+        let fake = c.block_on(fake_server::start(Options { google: Some("ada@example.com".into()), ..Options::default() }));
+        let at = google::Endpoints {
+            issuer: fake.url.clone(),
+            authorize: format!("{}/authorize", fake.url),
+            token: format!("{}/token", fake.url),
+            revoke: format!("{}/revoke", fake.url),
+        };
+        let (id, secret) = fake_server::GOOGLE_CLIENT;
+        c.set_google(at, Client { id: id.into(), secret: Some(secret.into()), auth: ClientAuth::Post });
+        let script = dir.join("gws");
+        std::fs::write(&script, "#!/bin/sh\nprintf '{\"token\":\"%s\",\"args\":\"%s\"}' \"$GOOGLE_WORKSPACE_CLI_TOKEN\" \"$1 $2 $3 $4\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        c.set_gws(Gws::at(script));
+        for app in ["google.gmail", "google.drive"] {
+            super::super::builtin::install(&store, app).unwrap();
+        }
+        (c, vault, fake, store)
+    }
+
+    fn sign_in_google(c: &Connectors, connector_id: &str, hint: Option<&str>) -> Result<ConnectorAccount, String> {
+        c.block_on(async {
+            let req = ConnectorConnect { connector_id: connector_id.into(), account_id: None, label: None, login_hint: hint.map(str::to_string) };
+            let sign_in = c.connect(req).await?;
+            assert!(!sign_in.incognito, "Google's own picker shows the other accounts");
+            if let Some(hint) = hint {
+                assert!(sign_in.auth_url.contains(&format!("login_hint={}", hint.replace('@', "%40"))), "{}", sign_in.auth_url);
+            }
+            let answer = net::client().get(&sign_in.auth_url).send().await.unwrap();
+            let caught = answer.headers()["location"].to_str().unwrap().to_string();
+            c.callback(&sign_in.state, &caught).await
+        })
+    }
+
+    #[test]
+    fn googles_apps_share_one_sign_in_and_the_last_one_removed_revokes_it() {
+        let (c, vault, fake, _store) = google();
+        let gmail = sign_in_google(&c, "builtin:google.gmail", None).unwrap();
+        assert_eq!((gmail.state, gmail.label.as_str()), (AccountState::Connected, "ada@example.com"));
+        assert!(gmail.tools.iter().any(|t| t.name == "search_threads"));
+        assert!(gmail.tools_off.contains(&"send_message".to_string()), "what sends starts off");
+        let first = vault.get("google:ada@example.com").unwrap().expect("one grant for the Google account");
+        assert!(!first.scope.as_deref().unwrap().contains("auth/drive"));
+
+        let drive = sign_in_google(&c, "builtin:google.drive", Some("ada@example.com")).unwrap();
+        let grant = vault.get("google:ada@example.com").unwrap().unwrap();
+        assert!(google::covers(grant.scope.as_deref(), google::App::Gmail) && google::covers(grant.scope.as_deref(), google::App::Drive));
+        assert!(vault.get(&gmail.id).unwrap().is_none() && vault.get(&drive.id).unwrap().is_none(), "no grant per app");
+
+        let answer = c.block_on(c.call(&gmail.id, "search_threads", json!({ "query": "is:unread" })));
+        let text: Value = serde_json::from_str(answer["content"][0]["text"].as_str().unwrap()).unwrap_or_else(|_| panic!("{answer}"));
+        assert_eq!(text["token"], grant.access_token.as_str());
+        assert!(text["args"].as_str().unwrap().starts_with("gmail users threads list"));
+
+        let again = sign_in_google(&c, "builtin:google.gmail", Some("ada@example.com"));
+        assert_eq!(again.unwrap_err(), "ada@example.com is already added to Gmail.");
+        assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::Connected);
+
+        let refresh = grant.refresh_token.clone().unwrap();
+        c.block_on(c.remove_account(&gmail.id)).unwrap();
+        assert!(vault.get("google:ada@example.com").unwrap().is_some(), "Drive still uses it");
+        assert!(!fake.is_revoked(&refresh));
+        c.block_on(c.remove_account(&drive.id)).unwrap();
+        assert!(vault.get("google:ada@example.com").unwrap().is_none());
+        assert!(fake.is_revoked(&refresh), "the last app gives the grant back");
+    }
+
+    #[test]
+    fn a_google_app_without_its_consent_asks_for_a_sign_in() {
+        let (c, vault, _fake, _store) = google();
+        let gmail = sign_in_google(&c, "builtin:google.gmail", None).unwrap();
+        let mut grant = vault.get("google:ada@example.com").unwrap().unwrap();
+        grant.scope = Some("openid email".into());
+        vault.put("google:ada@example.com", &grant).unwrap();
+        let answer = c.block_on(c.call(&gmail.id, "list_labels", json!({})));
+        assert_eq!(answer["isError"], true);
+        assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope);
     }
 
     fn token_requests(fake: &FakeServer) -> usize {
@@ -559,7 +814,7 @@ mod tests {
         let (c, _vault, _fake, id) = signed_in(Options::default());
         let connector_id = c.account(&id).unwrap().connector_id;
         let sign_in = c
-            .block_on(c.connect(ConnectorConnect { connector_id: connector_id.clone(), account_id: None, label: Some("Personal".into()) }))
+            .block_on(c.connect(ConnectorConnect { connector_id: connector_id.clone(), account_id: None, label: Some("Personal".into()), login_hint: None }))
             .unwrap();
         assert!(sign_in.incognito, "the signed-in account would answer for the new one");
         assert_eq!(super::super::get(&c.store, &connector_id).unwrap().unwrap().accounts.len(), 2);
@@ -597,7 +852,7 @@ mod refused_tests {
         )
         .unwrap();
         let error = c
-            .block_on(c.connect(ConnectorConnect { connector_id: connector.id.clone(), account_id: None, label: None }))
+            .block_on(c.connect(ConnectorConnect { connector_id: connector.id.clone(), account_id: None, label: None, login_hint: None }))
             .unwrap_err();
         assert!(error.contains("doesn't let Crew sign in"), "{error}");
         let after = super::super::get(&store, &connector.id).unwrap().unwrap();

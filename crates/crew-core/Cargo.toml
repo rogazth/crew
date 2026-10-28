@@ -13,7 +13,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "cache"], default-featur
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2.189"
 base64 = "0.23.1"
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "process"] }
 # Connectors' OAuth and remote MCP calls. No native TLS and no system proxy:
 # every connection goes through `connectors::net`'s resolver, which a proxy
 # would bypass.
