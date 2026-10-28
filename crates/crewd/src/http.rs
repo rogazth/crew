@@ -50,6 +50,21 @@ pub async fn accept(mut stream: TcpStream, token: &str) -> Option<WebSocketStrea
     None
 }
 
+/// A WebSocket and nothing else: the vault's tailnet listener serves no file.
+pub async fn accept_socket_only(mut stream: TcpStream) -> Option<WebSocketStream<TcpStream>> {
+    let (head, rest) = tokio::time::timeout(HEAD_WAIT, read_head(&mut stream)).await.ok()??;
+    let upgrade = head.header("upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    let key = head.header("sec-websocket-key").filter(|_| upgrade);
+    let Some(key) = key else {
+        let _ = respond(&mut stream, 404, "Not Found", &[], b"").await;
+        return None;
+    };
+    let accept = derive_accept_key(key.as_bytes());
+    let reply = format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n");
+    stream.write_all(reply.as_bytes()).await.ok()?;
+    Some(WebSocketStream::from_partially_read(stream, rest, Role::Server, None).await)
+}
+
 /// The request line and headers, and whatever arrived after them.
 async fn read_head(stream: &mut TcpStream) -> Option<(Head, Vec<u8>)> {
     let mut buf = Vec::with_capacity(1024);

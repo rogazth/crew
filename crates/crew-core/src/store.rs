@@ -514,6 +514,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (44, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 45 {
+        let tx = conn.unchecked_transaction()?;
+        // The machines leasing from this daemon when it is the vault.
+        tx.execute_batch(crate::connectors::lease::MIGRATION_V45)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (45, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

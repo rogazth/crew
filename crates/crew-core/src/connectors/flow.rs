@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use super::builtin::Builtin;
 use super::google;
 use super::gws::{self, Gws, GwsError};
+use super::lease::{Held, Lease, LeaseError, Leaser};
 use super::oauth::{self, Client, ClientAuth, Discovery, OAuthError, Pkce, Tokens};
 use super::remote::{RemoteClient, RemoteError};
 use super::vault::{Grant, VaultStore};
@@ -60,6 +61,9 @@ pub struct Connectors {
     google: Mutex<(google::Endpoints, Option<Client>)>,
     /// The `gws` the Google apps' tools run.
     gws: Mutex<Gws>,
+    /// Set on a machine that is not the vault: it leases its tokens.
+    leaser: Mutex<Option<Arc<dyn Leaser>>>,
+    leases: Mutex<HashMap<String, Held>>,
     on_change: Arc<dyn Fn() + Send + Sync>,
     /// Its own: the bridge's calls come in on plain threads, and the window's
     /// on the daemon's runtime; both wait here for the network.
@@ -92,6 +96,8 @@ impl Connectors {
             remotes: Mutex::new(HashMap::new()),
             google: Mutex::new((google::Endpoints::default(), None)),
             gws: Mutex::new(Gws::default()),
+            leaser: Mutex::new(None),
+            leases: Mutex::new(HashMap::new()),
             on_change,
             runtime: Some(runtime),
         }))
@@ -120,6 +126,16 @@ impl Connectors {
     /// Where `gws` is kept, or which one to run.
     pub fn set_gws(&self, gws: Gws) {
         *self.gws.lock().unwrap_or_else(|e| e.into_inner()) = gws;
+    }
+
+    /// Leases from a vault on another machine; `None` makes this one the vault again.
+    pub fn set_leaser(&self, leaser: Option<Arc<dyn Leaser>>) {
+        *self.leaser.lock().unwrap_or_else(|e| e.into_inner()) = leaser;
+        self.leases.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    fn leaser(&self) -> Option<Arc<dyn Leaser>> {
+        self.leaser.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -335,6 +351,67 @@ impl Connectors {
         Ok(client)
     }
 
+    /* ── Moving the vault ─────────────────────────────────────────────── */
+
+    /// Everything a vault move carries: every grant, and the config whole.
+    /// Only ever sealed (`seal.rs`) before it leaves the daemon.
+    pub fn move_bundle(&self) -> Result<Vec<u8>, String> {
+        let bundle = MoveBundle { grants: self.vault.all()?, config: super::lease::snapshot(&self.store)? };
+        serde_json::to_vec(&bundle).map_err(|e| e.to_string())
+    }
+
+    /// The new vault takes a move's bundle: the grants into its storage, the
+    /// config over its copy. Then it refreshes every grant at once, so a
+    /// service that rotates refresh tokens retires the copy that travelled.
+    pub async fn land_move(&self, bundle: &[u8]) -> Result<usize, String> {
+        let bundle: MoveBundle = serde_json::from_slice(bundle).map_err(|_| "The vault's grants didn't read".to_string())?;
+        let count = bundle.grants.len();
+        self.set_leaser(None);
+        super::lease::import(&self.store, &bundle.config)?;
+        self.vault.replace(bundle.grants.clone())?;
+        self.remotes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        for (key, grant) in bundle.grants {
+            let Some(refresh_token) = grant.refresh_token.clone() else { continue };
+            match oauth::refresh(&grant.token_endpoint, &grant.client(), &grant.resource, &refresh_token).await {
+                Ok(tokens) => {
+                    let next = Grant {
+                        access_token: tokens.access_token,
+                        refresh_token: tokens.refresh_token.or(grant.refresh_token.clone()),
+                        expires_at: tokens.expires_at,
+                        scope: tokens.scope.or(grant.scope.clone()),
+                        ..grant
+                    };
+                    self.vault.put(&key, &next)?;
+                }
+                // An account that can't refresh now shows it at its next call.
+                Err(e) => eprintln!("[crewd] vault move: {key} didn't refresh: {e}"),
+            }
+        }
+        self.changed();
+        Ok(count)
+    }
+
+    pub fn grant_count(&self) -> Result<usize, String> {
+        Ok(self.vault.all()?.len())
+    }
+
+    /// The old vault, once the new one has the grants: it keeps none.
+    pub fn forget_grants(&self) -> Result<(), String> {
+        self.vault.replace(HashMap::new())
+    }
+
+    /// The vault moved here without the old one: the config this machine had
+    /// stays, and every account asks for a sign-in.
+    pub fn start_empty(&self) -> Result<(), String> {
+        self.set_leaser(None);
+        self.vault.replace(HashMap::new())?;
+        for account in super::list(&self.store)?.into_iter().flat_map(|c| c.accounts) {
+            super::set_state(&self.store, &account.id, AccountState::Expired, Some("The vault moved; sign in again"))?;
+        }
+        self.changed();
+        Ok(())
+    }
+
     /* ── Removing ─────────────────────────────────────────────────────── */
 
     /// Revokes the grant at the service, then forgets it. A service that
@@ -415,6 +492,61 @@ impl Connectors {
     /// A live access token for an account, refreshed first when it is near
     /// its end, or when `stale` is the one a server just refused.
     async fn access_token(&self, account_id: &str, stale: Option<&str>) -> Result<String, Unavailable> {
+        Ok(self.token_and_scope(account_id, stale).await?.0)
+    }
+
+    /// The token, and the scopes its grant holds: the vault's own, or a lease from it.
+    async fn token_and_scope(&self, account_id: &str, stale: Option<&str>) -> Result<(String, Option<String>), Unavailable> {
+        if let Some(leaser) = self.leaser() {
+            let held = self.leased(&leaser, account_id, stale).await?;
+            return Ok((held.access_token, held.scope));
+        }
+        let token = self.vault_token(account_id, stale).await?;
+        let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
+        let scope = self.vault.get(&key).map_err(Unavailable)?.and_then(|g| g.scope);
+        Ok((token, scope))
+    }
+
+    /// A lease, the one held while it is fresh. With the vault offline, the
+    /// one held serves until it runs out; then the call says since when.
+    async fn leased(&self, leaser: &Arc<dyn Leaser>, account_id: &str, stale: Option<&str>) -> Result<Lease, Unavailable> {
+        let lock = self.refresh_lock(account_id);
+        let _held = lock.lock().await;
+        let now = now_millis();
+        let kept = self.leases.lock().unwrap_or_else(|e| e.into_inner()).get(account_id).cloned();
+        let refused = |h: &Held| stale == Some(h.lease.access_token.as_str());
+        if let Some(h) = kept.as_ref().filter(|h| h.fresh(now) && !refused(h)) {
+            return Ok(h.lease.clone());
+        }
+        match leaser.lease(account_id, stale).await {
+            Ok(lease) => {
+                self.leases.lock().unwrap_or_else(|e| e.into_inner()).insert(account_id.into(), Held { lease: lease.clone(), at: now });
+                Ok(lease)
+            }
+            Err(LeaseError::Offline) => match kept.filter(|h| h.alive(now) && !refused(h)) {
+                Some(h) => Ok(h.lease),
+                None => {
+                    let since = leaser.offline_since().map(|t| format!(" since {}", super::lease::clock(t))).unwrap_or_default();
+                    Err(Unavailable(format!("{}: the vault on {} is offline{since}", self.label(account_id), leaser.vault_name())))
+                }
+            },
+            Err(LeaseError::Refused(line)) => {
+                self.leases.lock().unwrap_or_else(|e| e.into_inner()).remove(account_id);
+                Err(Unavailable(line))
+            }
+        }
+    }
+
+    /// A lease for another machine: the vault's live token, its end and its scopes.
+    pub async fn lease(&self, account_id: &str, stale: Option<&str>) -> Result<Lease, String> {
+        let token = self.vault_token(account_id, stale).await.map_err(|Unavailable(line)| line)?;
+        let key = self.grant_key(account_id)?.ok_or("That account isn't signed in")?;
+        let grant = self.vault.get(&key)?.ok_or("That account isn't signed in")?;
+        Ok(Lease { access_token: token, expires_at: grant.expires_at, scope: grant.scope })
+    }
+
+    /// The vault's own token for an account, refreshed when it is near its end.
+    async fn vault_token(&self, account_id: &str, stale: Option<&str>) -> Result<String, Unavailable> {
         let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
         let lock = self.refresh_lock(&key);
         let _held = lock.lock().await;
@@ -574,14 +706,12 @@ impl Connectors {
     /// One of Google's apps' tools, run with `gws` and the account's token,
     /// and once more with a refreshed one when Google refuses the first.
     async fn call_google(&self, account_id: &str, app: google::App, name: &str, arguments: Value) -> Result<Value, Unavailable> {
-        let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
-        let scope = self.vault.get(&key).map_err(Unavailable)?.and_then(|g| g.scope);
+        let (token, scope) = self.token_and_scope(account_id, None).await?;
         if !google::covers(scope.as_deref(), app) {
             self.mark(account_id, AccountState::NeedsScope, Some("Google hasn't allowed this app for the account yet"));
             return Err(Unavailable(format!("{} needs a sign-in to allow it: Settings › Integrations › Reconnect.", self.label(account_id))));
         }
         let gws = self.gws.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let token = self.access_token(account_id, None).await?;
         let result = match gws::call(&gws, app, name, &arguments, &token).await {
             Err(GwsError::Unauthorized) => {
                 let token = self.access_token(account_id, Some(&token)).await?;
@@ -602,6 +732,13 @@ impl Connectors {
             }
         }
     }
+}
+
+/// What a vault move carries, before it is sealed.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MoveBundle {
+    grants: HashMap<String, Grant>,
+    config: super::lease::Snapshot,
 }
 
 fn tool_error(line: &str) -> Value {
@@ -751,6 +888,57 @@ mod tests {
         let answer = c.block_on(c.call(&gmail.id, "list_labels", json!({})));
         assert_eq!(answer["isError"], true);
         assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope);
+    }
+
+    /// Another machine's connectors, leasing from `vault` in this process.
+    struct TestLeaser {
+        vault: Arc<Connectors>,
+        online: std::sync::atomic::AtomicBool,
+    }
+
+    impl Leaser for TestLeaser {
+        fn lease<'a>(
+            &'a self,
+            account_id: &'a str,
+            stale: Option<&'a str>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Lease, LeaseError>> + Send + 'a>> {
+            Box::pin(async move {
+                if !self.online.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(LeaseError::Offline);
+                }
+                let (id, stale) = (account_id.to_string(), stale.map(str::to_string));
+                self.vault.run(move |c| async move { c.lease(&id, stale.as_deref()).await }).await.map_err(LeaseError::Refused)
+            })
+        }
+        fn vault_name(&self) -> String {
+            "devbox".into()
+        }
+        fn offline_since(&self) -> Option<i64> {
+            Some(0)
+        }
+    }
+
+    #[test]
+    fn a_machine_that_is_not_the_vault_calls_with_leases_and_rides_out_an_offline_vault() {
+        let (vault, grants, _fake, id) = signed_in(Options::default());
+        let dir = std::env::temp_dir().join(format!("cf-{}", uuid::Uuid::new_v4()));
+        let store = Store::open(dir.join("crew.db")).unwrap();
+        super::super::lease::import(&store, &super::super::lease::snapshot(&vault.store).unwrap()).unwrap();
+        let machine = Connectors::new(store, Arc::new(MemoryVault::default()), Arc::new(|| {})).unwrap();
+        let link = Arc::new(TestLeaser { vault: vault.clone(), online: true.into() });
+        machine.set_leaser(Some(link.clone()));
+
+        let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "a" })));
+        assert!(answer["isError"] != true, "{answer}");
+        let held = machine.leases.lock().unwrap().get(&id).unwrap().lease.access_token.clone();
+        assert_eq!(held, grants.get(&id).unwrap().unwrap().access_token, "the vault's token, lent");
+
+        link.online.store(false, std::sync::atomic::Ordering::SeqCst);
+        let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "b" })));
+        assert!(answer["isError"] != true, "the token held still serves: {answer}");
+        machine.leases.lock().unwrap().get_mut(&id).unwrap().lease.expires_at = Some(now_millis() - 1);
+        let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "c" })));
+        assert!(answer["content"][0]["text"].as_str().unwrap().contains("the vault on devbox is offline since"), "{answer}");
     }
 
     fn token_requests(fake: &FakeServer) -> usize {

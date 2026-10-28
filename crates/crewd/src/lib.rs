@@ -46,6 +46,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod http;
 pub mod lock;
+mod vault;
 pub mod machine;
 mod socks;
 
@@ -79,6 +80,8 @@ struct Hosts {
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
     connectors: Arc<Connectors>,
+    /// Where the grants are: here, or another machine this one leases from.
+    vault: Arc<vault::VaultHost>,
     /// Installs, updates and sign-outs of this machine's agent CLIs, and the Codex device-code sign-in.
     provider_jobs: crew_core::provider_job::ProviderJobs,
     provider_logins: crew_core::provider_login::ProviderLogins,
@@ -701,14 +704,17 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
     toolbox.register(children.clone());
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
     toolbox.register(Arc::new(browser.clone()));
-    // `gws`, for Google's apps, is kept beside the vault: only the vault's machine runs it.
-    let tools_dir = config.vault.as_ref().and_then(|at| at.file.parent()).map(|dir| dir.join("bin"));
+    // `gws`, for Google's apps, and the link to a vault elsewhere are kept in the data dir.
+    let data_dir = config.vault.as_ref().and_then(|at| at.file.parent()).map(|dir| dir.to_path_buf());
+    let tools_dir = data_dir.as_ref().map(|dir| dir.join("bin"));
     let vault: Arc<dyn connectors::vault::VaultStore> = match config.vault.take() {
         Some(at) => connectors::vault::open(at),
         None => Arc::new(connectors::vault::MemoryVault::default()),
     };
     // Every window hears the whole list again after any change: it is short.
+    // The machines leasing from this one hear that it changed.
     let (told, listed) = (hub.clone(), config.store.clone());
+    let (bump, changes) = tokio::sync::watch::channel(0u64);
     let connectors = Connectors::new(
         config.store.clone(),
         vault,
@@ -716,8 +722,10 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
             if let Ok(list) = connectors::list(&listed) {
                 told.emit("connectors", list);
             }
+            bump.send_modify(|n| *n += 1);
         }),
     )?;
+    let vault_host = vault::VaultHost::new(config.store.clone(), connectors.clone(), data_dir, changes);
     if let Some(dir) = tools_dir {
         connectors.set_gws(connectors::gws::Gws::kept_in(dir));
     }
@@ -763,6 +771,7 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
         children,
         socks_port: 0,
         connectors,
+        vault: vault_host,
         provider_jobs,
         provider_logins,
     };
@@ -831,6 +840,7 @@ async fn run(
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let token = listen.token.clone();
+    hosts.vault.resume();
     let listener = match bind(&listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -981,7 +991,13 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         return;
     };
     if auth != token {
-        let _ = sink.close().await;
+        // Another machine leasing from this vault, or a new vault pulling from it.
+        match hosts.vault.peer_of(&auth) {
+            Some(peer) => hosts.vault.clone().serve_peer(peer, sink, source).await,
+            None => {
+                let _ = sink.close().await;
+            }
+        }
         return;
     }
     let hello = proto::event("hello", proto::Hello { protocol: proto::PROTOCOL, version: env!("CARGO_PKG_VERSION").to_string() });
@@ -2133,6 +2149,53 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || connectors::list(&store)).await?)
         }
+        "vault_status" => json(hosts.vault.status()?),
+        "vault_mint" => {
+            #[derive(Deserialize)]
+            struct Name {
+                name: String,
+            }
+            let Name { name } = parse(params)?;
+            json(hosts.vault.mint(&name)?)
+        }
+        "vault_revoke" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Machine {
+                machine_id: String,
+            }
+            let Machine { machine_id } = parse(params)?;
+            hosts.vault.revoke(&machine_id)?;
+            Ok(Value::Null)
+        }
+        "vault_listen" => {
+            #[derive(Deserialize)]
+            struct Addr {
+                address: String,
+            }
+            let Addr { address } = parse(params)?;
+            hosts.vault.listen(address).await?;
+            Ok(Value::Null)
+        }
+        "vault_unlisten" => {
+            hosts.vault.unlisten()?;
+            Ok(Value::Null)
+        }
+        "vault_join" => {
+            hosts.vault.join(parse(params)?)?;
+            Ok(Value::Null)
+        }
+        "vault_leave" => {
+            hosts.vault.leave()?;
+            Ok(Value::Null)
+        }
+        "vault_move_open" => json(hosts.vault.move_open()),
+        "vault_handoff" => json(serde_json::json!({ "token": hosts.vault.handoff(parse(params)?)? })),
+        "vault_move_pull" => json(serde_json::json!({ "grants": hosts.vault.move_pull(parse(params)?).await? })),
+        "vault_move_empty" => {
+            hosts.vault.move_empty()?;
+            Ok(Value::Null)
+        }
         "builtin_list" => json(connectors::builtin::Builtin::all().map(|b| b.listing()).collect::<Vec<_>>()),
         "connector_add" => {
             let add: proto::ConnectorAdd = parse(params)?;
@@ -2993,6 +3056,88 @@ mod tests {
         assert!(theirs.error.is_none());
         assert!(fake.requests().iter().any(|r| r.path.contains("revoke")), "disconnecting revokes at the service");
         handle.shutdown();
+    }
+
+    /// Two daemons, the way two machines would be: the second leases from the
+    /// first, its sessions calling a connector the first signed in; then the
+    /// vault moves to the second, sealed, and the first keeps nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_machine_leases_from_the_vault_and_the_vault_moves_to_it() {
+        use crew_core::connectors::{fake_server, net};
+        net::allow_insecure_for_tests();
+        let fake = fake_server::start(fake_server::Options::default()).await;
+        let (dir_a, dir_b) = (test_dir("vault-a"), test_dir("vault-b"));
+        let (a, _) = test_serve_bridged(&dir_a);
+        let (b, bridge_b) = test_serve_bridged(&dir_b);
+        let mut wa = connect_authed(&a).await;
+        let mut wb = connect_authed(&b).await;
+        let addr = |h: &Handle| h.url().trim_start_matches("ws://").trim_end_matches('/').to_string();
+
+        let added = rpc(&mut wa, 1, "connector_add", serde_json::json!({ "url": fake.mcp_url, "name": "Fake" })).await;
+        let connector: proto::Connector = serde_json::from_value(added.result.expect("added")).unwrap();
+        let started = rpc(&mut wa, 2, "connector_connect", serde_json::json!({ "connectorId": connector.id })).await;
+        let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
+        let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
+        let caught = answer.headers()["location"].to_str().unwrap().to_string();
+        let landed = rpc(&mut wa, 3, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await;
+        let account: proto::ConnectorAccount = serde_json::from_value(landed.result.expect("landed")).unwrap();
+
+        // B joins A with a token A minted for it.
+        let minted = rpc(&mut wa, 4, "vault_mint", serde_json::json!({ "name": "devbox" })).await;
+        let minted: proto::VaultMinted = serde_json::from_value(minted.result.expect("minted")).unwrap();
+        let join = serde_json::json!({ "address": addr(&a), "token": minted.token, "vaultName": "this Mac" });
+        assert!(rpc(&mut wb, 5, "vault_join", join).await.error.is_none());
+        let mut copied = false;
+        for _ in 0..100 {
+            let list = rpc(&mut wb, 6, "connectors_list", Value::Null).await.result.unwrap_or_default();
+            if list.as_array().is_some_and(|l| !l.is_empty()) {
+                copied = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(copied, "B copied A's connectors");
+        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 7, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        assert!(!status.holds && status.online && status.grants == 0, "{status:?}");
+
+        // A session on B calls the connector with a token leased from A.
+        let session_id = seed_bot(&mut wb, dir_b.to_str().unwrap()).await;
+        let info = bridge_b.info().expect("info");
+        let token = bridge_b.mint(&session_id);
+        let call = |text: &str| {
+            let socket = info.socket_path.clone();
+            let payload = serde_json::json!({ "token": token, "method": "tools/call",
+                "params": { "_crewConnector": "fake", "name": "search", "arguments": { "text": text } } });
+            std::thread::spawn(move || unix_call(&socket, &payload)).join().unwrap()
+        };
+        let called = call("hi");
+        assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "hi", "{called}");
+        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 8, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        assert!(status.holds && status.machines[0].last_lease.is_some(), "{status:?}");
+
+        // A lease token leases; it reads nothing else of the daemon.
+        let (mut peer, _) = connect_async(a.url()).await.expect("connect");
+        peer.send(Message::Text(serde_json::json!({ "auth": minted.token }).to_string().into())).await.unwrap();
+        let _hello = peer.next().await;
+        let other = rpc(&mut peer, 9, "connectors_list", Value::Null).await;
+        assert!(other.error.unwrap().contains("not for this connection"));
+
+        // The vault moves to B: B's key, A's handoff for it, B pulls.
+        let key = rpc(&mut wb, 10, "vault_move_open", Value::Null).await.result.unwrap();
+        let handoff = rpc(&mut wa, 11, "vault_handoff", key).await.result.unwrap();
+        let pull = serde_json::json!({ "address": addr(&a), "token": handoff["token"] });
+        let pulled = rpc(&mut wb, 12, "vault_move_pull", pull.clone()).await;
+        assert_eq!(pulled.result.expect("pulled")["grants"], 1);
+        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 13, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        assert!(status.grants == 0 && status.machines.is_empty(), "A keeps nothing: {status:?}");
+        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 14, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        assert!(status.holds && status.grants == 1, "{status:?}");
+        assert!(rpc(&mut wb, 15, "vault_move_pull", pull).await.error.is_some(), "a handoff works once");
+        let called = call("after");
+        assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "after", "B calls with its own grant: {called}");
+        let _ = account;
+        a.shutdown();
+        b.shutdown();
     }
 
     /// A workspace with one bot and one terminal session in it.

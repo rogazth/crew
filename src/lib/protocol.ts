@@ -2010,6 +2010,70 @@ export type VaultCallback = { state: string,
  */
 url: string, };
 
+/**
+ * Lease from the vault at `address` with `token` from now on.
+ */
+export type VaultJoin = { address: string, token: string, vaultName: string, };
+
+/**
+ * A vault move's step that carries the receiving vault's public key.
+ */
+export type VaultKey = { publicKey: string, };
+
+/**
+ * A machine leasing from this vault, by the token the vault minted for it.
+ */
+export type VaultMachine = { id: string, name: string, createdAt: number, 
+/**
+ * When it last leased a token.
+ */
+lastLease: number | null, };
+
+/**
+ * A machine's lease token, minted by the vault, shown once.
+ */
+export type VaultMinted = { machine: VaultMachine, token: string, };
+
+/**
+ * The new vault pulls the grants from the old one, at `address`, with the
+ * handoff token the old one gave the window.
+ */
+export type VaultPull = { address: string, token: string, };
+
+/**
+ * Where this daemon's connectors' grants are: here, or on another machine
+ * it leases from.
+ */
+export type VaultStatus = { 
+/**
+ * This daemon holds the grants (it is the vault); otherwise it leases.
+ */
+holds: boolean, 
+/**
+ * The vault's machine, as the window named it, when this one leases.
+ */
+vaultName: string | null, 
+/**
+ * The vault's address, when this one leases.
+ */
+vaultAddress: string | null, 
+/**
+ * Whether the vault answers, when this one leases.
+ */
+online: boolean, offlineSince: number | null, 
+/**
+ * Where this vault takes leases besides its own socket (this Mac's tailnet address).
+ */
+listening: string | null, 
+/**
+ * The machines leasing from this one, when it is the vault.
+ */
+machines: Array<VaultMachine>, 
+/**
+ * How many grants this daemon keeps.
+ */
+grants: number, };
+
 export type Workspace = { id: string, name: string, path: string, createdAt: number, 
 /**
  * Home: the window's own workspace, not a project the user opened.

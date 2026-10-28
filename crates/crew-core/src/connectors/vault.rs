@@ -74,6 +74,10 @@ pub trait VaultStore: Send + Sync {
     fn get(&self, account_id: &str) -> Result<Option<Grant>, String>;
     fn put(&self, account_id: &str, grant: &Grant) -> Result<(), String>;
     fn delete(&self, account_id: &str) -> Result<(), String>;
+    /// Every grant, by its key: what a vault move carries.
+    fn all(&self) -> Result<HashMap<String, Grant>, String>;
+    /// Puts many at once, and drops every other: a vault move landing.
+    fn replace(&self, grants: HashMap<String, Grant>) -> Result<(), String>;
 }
 
 /// Where the grants are kept, as `crewd` asks for it.
@@ -146,6 +150,18 @@ impl<B: Backing> VaultStore for Cached<B> {
 
     fn delete(&self, account_id: &str) -> Result<(), String> {
         self.with(|body| ((), body.grants.remove(account_id).is_some()))
+    }
+
+    fn all(&self) -> Result<HashMap<String, Grant>, String> {
+        self.with(|body| (body.grants.clone(), false))
+    }
+
+    fn replace(&self, grants: HashMap<String, Grant>) -> Result<(), String> {
+        self.with(|body| {
+            body.version = 1;
+            body.grants = grants;
+            ((), true)
+        })
     }
 }
 
@@ -255,6 +271,15 @@ impl VaultStore for MemoryVault {
 
     fn delete(&self, account_id: &str) -> Result<(), String> {
         self.grants.lock().unwrap_or_else(|e| e.into_inner()).remove(account_id);
+        Ok(())
+    }
+
+    fn all(&self) -> Result<HashMap<String, Grant>, String> {
+        Ok(self.grants.lock().unwrap_or_else(|e| e.into_inner()).clone())
+    }
+
+    fn replace(&self, grants: HashMap<String, Grant>) -> Result<(), String> {
+        *self.grants.lock().unwrap_or_else(|e| e.into_inner()) = grants;
         Ok(())
     }
 }

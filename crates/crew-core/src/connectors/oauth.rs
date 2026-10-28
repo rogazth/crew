@@ -690,7 +690,7 @@ fn host_text(url: &str) -> String {
 }
 
 /// 32 random bytes, base64url: a PKCE verifier (43 characters) or a state.
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
 }
 

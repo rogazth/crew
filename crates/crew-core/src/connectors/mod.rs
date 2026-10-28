@@ -17,9 +17,11 @@ pub mod fake_server;
 pub mod flow;
 pub mod google;
 pub mod gws;
+pub mod lease;
 pub mod net;
 pub mod oauth;
 pub mod remote;
+pub mod seal;
 pub mod vault;
 
 use crew_protocol::{AccountState, Binding, BindingScope, Connector, ConnectorAccount, ConnectorTool};

@@ -131,6 +131,81 @@ pub struct BuiltinConnector {
     pub tools: Vec<ConnectorTool>,
 }
 
+/// A machine leasing from this vault, by the token the vault minted for it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultMachine {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    /// When it last leased a token.
+    #[ts(type = "number | null")]
+    pub last_lease: Option<i64>,
+}
+
+/// Where this daemon's connectors' grants are: here, or on another machine
+/// it leases from.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultStatus {
+    /// This daemon holds the grants (it is the vault); otherwise it leases.
+    pub holds: bool,
+    /// The vault's machine, as the window named it, when this one leases.
+    pub vault_name: Option<String>,
+    /// The vault's address, when this one leases.
+    pub vault_address: Option<String>,
+    /// Whether the vault answers, when this one leases.
+    pub online: bool,
+    #[ts(type = "number | null")]
+    pub offline_since: Option<i64>,
+    /// Where this vault takes leases besides its own socket (this Mac's tailnet address).
+    pub listening: Option<String>,
+    /// The machines leasing from this one, when it is the vault.
+    pub machines: Vec<VaultMachine>,
+    /// How many grants this daemon keeps.
+    pub grants: u32,
+}
+
+/// A machine's lease token, minted by the vault, shown once.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultMinted {
+    pub machine: VaultMachine,
+    pub token: String,
+}
+
+/// Lease from the vault at `address` with `token` from now on.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultJoin {
+    pub address: String,
+    pub token: String,
+    pub vault_name: String,
+}
+
+/// A vault move's step that carries the receiving vault's public key.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultKey {
+    pub public_key: String,
+}
+
+/// The new vault pulls the grants from the old one, at `address`, with the
+/// handoff token the old one gave the window.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct VaultPull {
+    pub address: String,
+    pub token: String,
+}
+
 /* ── RPCs ─────────────────────────────────────────────────────────────── */
 
 /// Install a connector: a registry server by name, or a URL.
