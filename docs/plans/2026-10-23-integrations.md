@@ -77,7 +77,7 @@ the user picks. Update the status table at the bottom as each phase lands.
 | codex 0.163.0 | `codex mcp list --json`; `mcpServerStatus/list` | `mcpServer/oauth/login`, then `mcpServer/oauthLogin/completed` | `mcp_servers.<name>.enabled = false` override on `thread/start` | `config/mcpServer/reload` (reloads every server) |
 | opencode 2.1.2 | `GET /api/mcp` on the shared server | `opencode mcp auth`; an OAuth URL from the server | `mcp.<name>.enabled = false` in the run's config | `POST /api/experimental/mcp/{name}/connect` |
 | cursor-agent 2026.10.19 | `cursor-agent mcp list`, `list-tools` | `cursor-agent mcp login <id>` | none known | none; `mcp disable` writes its approved list |
-| grok 1.0.67 | `grok mcp list --json` | none in the CLI | none known | none; `mcp disable` writes its config |
+| grok 1.0.67 | `grok mcp list --json`; `grok mcp doctor <name> --json` for how one stands | none in the CLI; its TUI's `/mcps` (`i`), or ACP `_x.ai/mcp/auth_trigger`, which opens the system browser. Crew signs in itself and writes `mcp_credentials.json` (checked on 1.0.70, 2026-10-25) | none known | none; `mcp disable` writes its config |
 
 Claude's binary also reads `ENABLE_CLAUDEAI_MCP_SERVERS`, which presumably
 controls the claude.ai connectors. Everything in this table that Crew does not
@@ -113,8 +113,10 @@ points to the provider server.
    credential.
 3. **Nothing goes in the person's CLI configs** unless the user picks an
    action that says it does: turning a Cursor or Grok server off, which has
-   no per-spawn way. Crew's connectors, and the servers it turns off, are
-   handled per spawn.
+   no per-spawn way, or removing a server from its CLI. Crew never adds a
+   server to a CLI's config (Install's Per provider was taken out
+   2026-10-28). Crew's connectors, and the servers it turns off, are handled
+   per spawn.
 4. **Each account is its own MCP server to the CLI.** Its tools keep their
    names (`mcp__notion__…`), the CLI defers them like any server's, and
    `McpHost` reports each one's state.
@@ -278,10 +280,24 @@ Settings › Integrations, in the Tools group.
 - **Detail pane:** tools with switches and their annotations (read only,
   destructive), bindings, the machines signed in for a provider server, and
   Disconnect or Remove.
-- **In the chat**, the MCP chip gains an account label, a runtime switch
-  (Claude's `mcp_toggle`), and the new sign-in flow. A vault that is offline
-  or a grant that ran out shows there with a reconnect button, not only in
-  Settings.
+- **In the chat**, nothing for now: the composer's MCP chip was taken out
+  (2026-10-25). A problem shows as a dot on the rail's Connectors icon: an
+  account signed out or refused, a CLI's server waiting on a sign-in, or a
+  conflict.
+- **Install is always Crew's** (2026-10-28): Per provider, which added the
+  server to each picked CLI's user config (`provider_server_add`), was taken
+  out, front and back. A connector's page keeps "Duplicates in your
+  providers": the copies the CLIs already have, however they got there, that
+  Crew's sessions still load (one off in Crew or in its CLI isn't listed),
+  with Turn off in Crew and Remove. Grok signs in only in its TUI, so
+  Crew signs in for it in its own window and writes the grant into Grok's
+  store, `mcp_credentials.json`, keyed `<name>:<url>` with rmcp's
+  `StoredCredentials`; Grok uses it and refreshes it with Crew's client, and
+  Crew keeps no copy (`provider_servers/grok.rs`). A server that gives its
+  clients a secret can't be signed in this way.
+- **Conflict.** A copy with a connector's URL that Crew's sessions still load
+  shows its tools twice: a conflict on the connector's tile and page, with Turn off in Crew (Cursor's
+  and Grok's can only be removed there).
 
 UX, for the prototype to settle:
 
@@ -476,7 +492,8 @@ rotate, so its lease is a copy.
 | Spike: provider controls, servers' registration, redirect catching | servers' registration checked (2026-10-24); redirect catching built |
 | Prototype of the page | done, removed (in history at `10784e6`) |
 | Registry cache in `crewd`, search and featured over RPC | built |
-| Provider servers: inventory, page, sign-in, Off in Crew, chip switch | built, covered by tests |
+| Provider servers: inventory, page, sign-in, Off in Crew | built, covered by tests; the chat's chip removed (2026-10-25) |
+| Provider copies: listed on a connector's page, conflicts, rail dot | built (2026-10-25), Grok's sign-in through its credential store included; adding to the CLIs' configs removed (2026-10-28) |
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
 | Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
