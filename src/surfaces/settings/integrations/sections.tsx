@@ -9,7 +9,10 @@ import { ACCOUNT_PROBLEM, ACCOUNT_TONE, TONE_BG, TONE_SOFT, TONE_TEXT, accountsL
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
 import { useRegistry } from "./registry";
+import { conflictsOf, useCopies, useWatchMachines } from "./copies";
+import { listJoin, providerName } from "./servers";
 import { refusalOf, useIntegrations, type Account } from "./store";
+import { useProtoTiles } from "./prototype-google";
 
 /* ── The tile ───────────────────────────────────────────────────────── */
 
@@ -202,10 +205,18 @@ const RANK: Account["state"][] = ["expired", "needs-scope", "failed", "pending",
 export function Installed() {
   const s = useIntegrations();
   const u = useUi();
+  useWatchMachines();
+  const { copies } = useCopies();
   const shown = s.connectors.filter((c) => !u.hidden.includes(c.id));
   const worstOf = (accounts: Account[]) => RANK.find((state) => accounts.some((a) => a.state === state)) ?? "connected";
-  const connectors = [...shown].sort((a, b) => RANK.indexOf(worstOf(a.accounts)) - RANK.indexOf(worstOf(b.accounts)));
-  if (s.loaded && s.connectors.length === 0) {
+  // A conflict ranks with the problems, after an account that needs the person.
+  const rankOf = (c: (typeof shown)[number]) => {
+    const at = RANK.indexOf(worstOf(c.accounts));
+    return at === RANK.indexOf("connected") && conflictsOf(c, copies).length > 0 ? at - 0.5 : at;
+  };
+  const connectors = [...shown].sort((a, b) => rankOf(a) - rankOf(b));
+  const proto = useProtoTiles();
+  if (s.loaded && s.connectors.length === 0 && proto.length === 0) {
     if (!s.error)
       return (
         <section className="flex flex-col gap-2.5">
@@ -220,22 +231,26 @@ export function Installed() {
       </section>
     );
   }
-  if (connectors.length === 0) return null;
+  if (connectors.length === 0 && proto.length === 0) return null;
   return (
-    <TileSection title="Installed" count={connectors.length} action={<VaultLine />}>
-      {connectors.map((connector) => {
+    <TileSection title="Installed" count={connectors.length + proto.length} action={<VaultLine />}>
+      {[...proto, ...connectors.map((connector) => {
         const mine = connector.accounts;
         const busy = s.flows.some((f) => f.connectorId === connector.id && f.stage !== "done" && f.stage !== "failed");
         const worst = mine.length === 0 ? "pending" : worstOf(mine);
         const bad = mine.filter((a) => a.state === worst);
         const word = ACCOUNT_PROBLEM[worst];
         // With several accounts, say which one: "Work · Needs authentication".
-        const problem = word && (mine.length > 1 && bad.length < mine.length ? `${bad.map((a) => a.label).join(", ")} · ${word}` : word);
+        const account = word && (mine.length > 1 && bad.length < mine.length ? `${bad.map((a) => a.label).join(", ")} · ${word}` : word);
+        // Its page lists the copies that clash, and the fix for each.
+        const clashing = [...new Set(conflictsOf(connector, copies).map((c) => providerName(c.provider)))];
+        const conflict = clashing.length > 0 ? `Conflict · also in ${listJoin(clashing)}` : undefined;
+        const problem = account ?? conflict;
         return (
           <Tile
             key={connector.id}
             marks={[brandOf(connector)]}
-            tone={busy ? "info" : ACCOUNT_TONE[worst]}
+            tone={busy ? "info" : !account && conflict ? "warning" : ACCOUNT_TONE[worst]}
             title={connector.name}
             subtitle={busy ? "Authenticating…" : (problem ?? accountsLine(mine))}
             subtitleTone={busy ? "info" : undefined}
@@ -243,7 +258,7 @@ export function Installed() {
             onOpen={() => openConnector(connector.id)}
           />
         );
-      })}
+      })]}
     </TileSection>
   );
 }

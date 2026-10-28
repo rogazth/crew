@@ -22,6 +22,8 @@ export function AccountRow({ account }: { account: Account }) {
         ? { label: "Try now", run: () => void actions.refresh(account.id) }
         : null;
   const problem = account.state === "failed" ? (account.error ?? ACCOUNT_PROBLEM.failed) : ACCOUNT_PROBLEM[account.state];
+  // Named after who signed in, the account doesn't say it twice.
+  const line = busy ? "Authenticating…" : [problem, account.identity === account.label ? null : account.identity].filter(Boolean).join(" · ");
   const remove = () =>
     setConfirm({
       title: `Remove ${account.label}?`,
@@ -40,13 +42,15 @@ export function AccountRow({ account }: { account: Account }) {
     else remove();
   };
   return (
-    <div className="flex h-14 items-center gap-3">
+    <div className={`flex items-center gap-3 ${line ? "h-14" : "h-12"}`}>
       <div className="flex min-w-0 flex-1 flex-col">
         <AccountName account={account} edit={rename} />
-        <span className={`flex min-w-0 items-center gap-1.5 text-[12px] text-text-muted`} title={account.error ?? undefined}>
-          {!busy && tone !== "success" && <Dot tone={tone} />}
-          <span className={`truncate ${busy ? "crew-shimmer" : ""}`}>{busy ? "Authenticating…" : [problem, account.identity].filter(Boolean).join(" · ")}</span>
-        </span>
+        {line && (
+          <span className={`flex min-w-0 items-center gap-1.5 text-[12px] text-text-muted`} title={account.error ?? undefined}>
+            {!busy && tone !== "success" && <Dot tone={tone} />}
+            <span className={`truncate ${busy ? "crew-shimmer" : ""}`}>{line}</span>
+          </span>
+        )}
       </div>
       {fix && !busy && <RowAction label={fix.label} onClick={fix.run} />}
       <RowMenu label={`More for ${account.label}`} actions={menu} onPick={pick} />

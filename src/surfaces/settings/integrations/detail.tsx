@@ -10,17 +10,18 @@ import { ArrowLeftIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import { EnvGlyph } from "../../../chrome/EnvBits";
-import { Card, IconButton, Switch } from "../../../chrome/kit";
+import { Card, IconButton } from "../../../chrome/kit";
 import { useEnvLinks } from "../../../hooks/useEnvLinks";
 import { LOCAL } from "../../../lib/client/registry";
 import type { ConnectorTool } from "../../../lib/protocol";
 import { Group, Row, SettingsPage } from "../ui";
-import { Pills } from "./bits";
+import { Pills, SwitchRow } from "./bits";
 import { CliRow, ServerMark } from "./clis";
 import { flip, hostOf, inherited, ui, useEscape, useUi, type Detail } from "./lib";
 import { AccountRow } from "./manage";
 import { brandOf } from "./brand";
 import { ServiceMark } from "./mark";
+import { GooglePage } from "./prototype-google";
 import { OutsideGroup } from "./outside";
 import { useProviderServers } from "./providers";
 import { groupsOf, providerName, serverLine } from "./servers";
@@ -36,11 +37,14 @@ import {
 } from "./store";
 
 const home = () => ui.go("home");
+/** Figma's registry name: it signs Crew in under an approved client's name (`oauth::client_name`). */
+const FIGMA = "com.figma.mcp/mcp";
 const noop = () => {};
 
 export function DetailPage({ detail }: { detail: Detail }) {
   const { sheet } = useUi();
   useEscape(sheet ? noop : home);
+  if (detail.kind === "proto") return <GooglePage id={detail.id} />;
   return detail.kind === "connector" ? <ConnectorPage connectorId={detail.id} /> : <ServerPage envId={detail.envId} groupKey={detail.key} />;
 }
 
@@ -51,9 +55,11 @@ function Header({ mark, title, subtitle, action }: { mark: ReactNode; title: str
       <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-ml-2 size-8 self-start" onClick={home} />
       <div className="flex items-center gap-3">
         {mark}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col pr-6">
           <h1 className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
-          <p className="truncate text-[13px] text-text-muted">{subtitle}</p>
+          <p className="line-clamp-2 text-[13px] text-pretty text-text-muted" title={subtitle}>
+            {subtitle}
+          </p>
         </div>
         {action}
       </div>
@@ -92,7 +98,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
       <Header
         mark={<ServiceMark brand={brandOf(connector)} size={40} />}
         title={connector.name}
-        subtitle={connector.publisher}
+        subtitle={connector.description || connector.publisher}
         action={
           <RemoveButton
             label={`Remove ${connector.name}`}
@@ -143,7 +149,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
         </>
       )}
       <OutsideGroup connector={connector} />
-      <Group title="About" {...(connector.description ? { description: connector.description } : {})}>
+      <Group title="About">
         <Row label="Publisher">
           <span className="text-text-muted">{connector.publisher}</span>
         </Row>
@@ -155,6 +161,11 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
         {connector.registryName && (
           <Row label="Registry">
             <span className="text-text-muted">{connector.registryName}</span>
+          </Row>
+        )}
+        {connector.registryName === FIGMA && (
+          <Row label="Signs in as" description="Figma lets only approved clients sign in; Crew registers as one">
+            <span className="text-text-muted">Claude Code</span>
           </Row>
         )}
       </Group>
@@ -222,59 +233,53 @@ function Target({ text }: { text: string }) {
   return <span className="mt-0.5 block font-mono text-[12px] break-all text-text-muted select-text">{text}</span>;
 }
 
-/* ── Where it's on ──────────────────────────────────────────────────── */
+/* ── Workspaces ─────────────────────────────────────────────────────── */
 
 /**
- * Everywhere, then each workspace with its bots under it. A switch follows
- * the wider scope until it says otherwise; flipping it back drops its own
- * binding, so the fewest are kept.
+ * All workspaces, a toggle for every one: on, it's the only row. Off, each
+ * workspace with its bots under it; a bot follows its workspace until it says
+ * otherwise, and flipping it back drops its own binding, so the fewest are kept.
  */
 function WhereGroup({ account, consumers }: { account: Account; consumers: Consumer[] }) {
   const s = useIntegrations();
   const everywhere = isOn(account, null);
-  const hasEverywhere = account.bindings.some((b) => b.scope.kind === "everywhere");
   const workspaces = consumers.filter((c) => c.kind === "workspace");
   const set = (consumer: Consumer) => {
     const { scope, on } = flip(account, consumer);
     actions.bind(account.id, scope, on);
   };
-  const follows = (consumer: Consumer) => {
-    if (!inherited(account, consumer)) return undefined;
-    const parent = consumer.kind === "bot" && consumer.workspace ? consumerOf(s, consumer.workspace) : undefined;
-    return parent && !inherited(account, parent) ? `Follows ${parent.name}` : "Follows Everywhere";
+  // On for all is all there is: a workspace's or a bot's own say goes with it.
+  const setAll = (on: boolean) => {
+    if (on) for (const b of account.bindings) if (b.scope.kind !== "everywhere") actions.bind(account.id, b.scope, null);
+    // Off everywhere is no binding at all: no binding is off.
+    actions.bind(account.id, { kind: "everywhere" }, on ? true : null);
+  };
+  const follows = (bot: Consumer) => {
+    const parent = bot.workspace ? consumerOf(s, bot.workspace) : undefined;
+    return parent && inherited(account, bot) && !inherited(account, parent) ? `Follows ${parent.name}` : undefined;
   };
   return (
-    <Group title="Where it’s on">
-      <Row label="Everywhere" description={hasEverywhere ? undefined : "Off until it’s turned on here or below"}>
-        <Switch
-          label="Everywhere"
-          checked={everywhere}
-          // Off everywhere is no binding at all: no binding is off.
-          onChange={(on) => actions.bind(account.id, { kind: "everywhere" }, on ? true : null)}
-        />
-      </Row>
+    <Group title="Workspaces">
+      <SwitchRow label="All workspaces" checked={everywhere} onChange={setAll} />
       {/* One flat list, so the card's hairlines run between every row; a bot sits indented under its workspace. */}
-      {workspaces.flatMap((workspace) => [
-        <Row key={workspace.id} label={workspace.name} description={follows(workspace)}>
-          <Switch label={workspace.name} checked={isOn(account, workspace)} onChange={() => set(workspace)} />
-        </Row>,
-        ...consumers
-          .filter((c) => c.kind === "bot" && c.workspace === workspace.id)
-          .map((bot) => (
-            <div key={bot.id} className="pl-5">
-              <Row label={bot.name} description={follows(bot)}>
-                <Switch label={bot.name} checked={isOn(account, bot)} onChange={() => set(bot)} />
-              </Row>
-            </div>
-          )),
-      ])}
+      {!everywhere &&
+        workspaces.flatMap((workspace) => [
+          <SwitchRow key={workspace.id} label={workspace.name} checked={isOn(account, workspace)} onChange={() => set(workspace)} />,
+          ...consumers
+            .filter((c) => c.kind === "bot" && c.workspace === workspace.id)
+            .map((bot) => (
+              <div key={bot.id} className="pl-5">
+                <SwitchRow label={bot.name} description={follows(bot)} checked={isOn(account, bot)} onChange={() => set(bot)} />
+              </div>
+            )),
+        ])}
     </Group>
   );
 }
 
 /* ── Tools ──────────────────────────────────────────────────────────── */
 
-/** What each tool costs every session's context, and a switch; one that's off is left out of the list. */
+/** What the tools on cost every session's context, and a switch each; one that's off is left out of the list. */
 function ToolsGroup({ account }: { account: Account }) {
   if (account.tools.length === 0) {
     return (
@@ -283,28 +288,25 @@ function ToolsGroup({ account }: { account: Account }) {
       </Group>
     );
   }
-  const on = account.tools.filter((t) => !account.toolsOff.includes(t.name));
-  const tokens = on.reduce((n, t) => n + t.tokens, 0);
+  const tokens = account.tools.filter((t) => !account.toolsOff.includes(t.name)).reduce((n, t) => n + t.tokens, 0);
   return (
-    <Group title="Tools" description={`${on.length} of ${account.tools.length} on · ${formatTokens(tokens)} tokens per session`}>
+    <Group title="Tools" action={<span className="text-[12px] text-text-muted tabular-nums">{formatTokens(tokens)} tokens</span>}>
       {account.tools.map((tool) => (
-        <Row key={tool.name} label={<span className="font-mono text-[12.5px]">{tool.name}</span>} description={toolLine(tool)}>
-          <span className="text-[12px] text-text-muted tabular-nums">{formatTokens(tool.tokens)} tokens</span>
-          <Switch
-            label={tool.name}
-            checked={!account.toolsOff.includes(tool.name)}
-            onChange={(next) => actions.setTool(account.id, tool.name, next)}
-          />
-        </Row>
+        <SwitchRow
+          key={tool.name}
+          label={tool.name}
+          description={toolLine(tool)}
+          checked={!account.toolsOff.includes(tool.name)}
+          onChange={(next) => actions.setTool(account.id, tool.name, next)}
+        />
       ))}
     </Group>
   );
 }
 
-/** The server's hints first, then its own words, on one line. */
+/** The server's words, cut to their first sentence and without its full stop. */
 function toolLine(tool: ConnectorTool): string | undefined {
-  const hint = tool.readOnly ? "Read only" : tool.destructive ? "Can change or delete" : undefined;
-  const words = tool.title ?? tool.description.split("\n")[0]?.trim();
-  const line = [hint, words].filter(Boolean).join(" · ");
-  return line ? (line.length > 140 ? `${line.slice(0, 139)}…` : line) : undefined;
+  const words = (tool.title ?? tool.description).split("\n")[0]?.trim() ?? "";
+  const first = (words.split(/(?<=[.!?])\s/)[0] ?? "").replace(/\.$/, "");
+  return first ? (first.length > 140 ? `${first.slice(0, 139)}…` : first) : undefined;
 }

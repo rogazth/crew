@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { openLink } from '../../../lib/external';
-import { Button, Field, IconButton, TextInput } from '../../../chrome/kit';
+import { Button, Field, IconButton, TextInput, Tooltip } from '../../../chrome/kit';
 import type { RegistryServer } from '../../../lib/protocol';
 import { SettingsPage } from '../ui';
 import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from './dialog';
@@ -23,6 +23,7 @@ import { brandOfServer } from './brand';
 import { ServiceMark } from './mark';
 import { useRegistry } from './registry';
 import { refusalDocsOf, refusalOf, useIntegrations } from './store';
+import { ProtoDirectoryRows } from './prototype-google';
 
 // Going back from a summary finds the search as it was left.
 let lastQuery = '';
@@ -58,23 +59,10 @@ export function DirectoryPage() {
   useEscape(sheet ? noop : home);
   return (
     <SettingsPage title="Browse connectors" hideHeader>
-      <header className="flex items-start gap-2 px-1">
-        <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-mt-0.5 -ml-1.5 size-8" onClick={home} />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <h1 className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">Browse connectors</h1>
-          <p className="text-text-muted">
-            From the public{' '}
-            <button
-              type="button"
-              onClick={(e) => openLink('https://registry.modelcontextprotocol.io', e)}
-              className="font-medium underline decoration-text-muted/50 underline-offset-[3px] hover:no-underline"
-            >
-              MCP Registry
-            </button>
-            .
-          </p>
-        </div>
-        <Button icon={PlusIcon} className="-mt-0.5" onClick={() => ui.open({ kind: 'custom' })}>
+      <header className="flex items-center gap-2 px-1">
+        <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-ml-1.5 size-8" onClick={home} />
+        <h1 className="min-w-0 flex-1 truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">Browse connectors</h1>
+        <Button icon={PlusIcon} onClick={() => ui.open({ kind: 'custom' })}>
           Custom
         </Button>
       </header>
@@ -101,6 +89,7 @@ export function DirectoryPage() {
             </button>
           )}
         </label>
+        <ProtoDirectoryRows query={query} />
         <p className="mt-2 -mb-2.5 px-1 text-[13px] text-text-muted">
           {error
             ? 'Couldn’t reach the MCP Registry.'
@@ -146,13 +135,12 @@ export function DirectoryPage() {
 
 const noop = () => {};
 
-/** Install goes straight to the sign-in; the summary is for reading first. */
-// MOCKUP (install.tsx): Install asks where first.
-const install = (server: RegistryServer) => ui.open({ kind: 'install', server });
+/** Install signs in at once, in the vault; the summary is for reading first. */
+const install = (server: RegistryServer) => ui.open({ kind: 'connect', source: { kind: 'registry', server } });
 
-/** A vendor's own server installs from its row; anyone else's shows its summary, and its warning, first. */
+/** A vendor's own server installs from its row; anyone else's, or one Crew can't sign in to, shows its summary first. */
 const installFromRow = (server: RegistryServer) =>
-  server.firstParty ? install(server) : ui.open({ kind: 'summary', server, back: true });
+  server.firstParty && !refusalOf(server.name) ? install(server) : ui.open({ kind: 'summary', server, back: true });
 
 /** The name, with a check when the server is on its publisher's own domain. */
 function ServerName({ server, name, check = true }: { server: RegistryServer; name: string; check?: boolean }) {
@@ -160,9 +148,9 @@ function ServerName({ server, name, check = true }: { server: RegistryServer; na
     <span className="flex min-w-0 items-center gap-1">
       <span className="truncate">{name}</span>
       {check && server.firstParty && (
-        <span title={`Verified publisher: served from ${server.publisher}`} className="shrink-0">
+        <Tooltip content={`Verified publisher · served from ${server.publisher}`} render={<span className="shrink-0" />}>
           <BadgeCheckIcon aria-label="Verified publisher" className="size-3.5 text-info" />
-        </span>
+        </Tooltip>
       )}
     </span>
   );
@@ -240,7 +228,8 @@ export function SummaryDialog({ server, back = false }: { server: RegistryServer
       <DialogHeader
         mark={<ServiceMark brand={brand} size={40} />}
         title={<ServerName server={server} name={brand.name} check={!refused} />}
-        subtitle={server.firstParty && !refused ? `Verified publisher · ${server.publisher}` : `By ${server.publisher}`}
+        subtitle={server.description || `By ${server.publisher}`}
+        wrap
       />
       {refused ? (
         <div className="mx-4 mb-4 flex gap-2.5 rounded-xl bg-card px-3 py-2.5 text-[12.5px]">
@@ -259,24 +248,23 @@ export function SummaryDialog({ server, back = false }: { server: RegistryServer
           </p>
         </div>
       ) : (
-        <>
-          {server.description && <p className="px-5 pb-4 text-[13px] text-text-muted">{server.description}</p>}
-          <Trust server={server} />
-        </>
+        <Trust server={server} />
       )}
       <DialogGroup>
         <DialogRow title="Server" subtitle={hostOf(server.remoteUrl) || server.remoteUrl} />
         <DialogRow title="Registry" subtitle={server.name} />
       </DialogGroup>
       <DialogFooter>
-        {!back && (
+        {(!back || refused) && (
           <Button variant="ghost" onClick={ui.close}>
-            Cancel
+            {refused ? 'Close' : 'Cancel'}
           </Button>
         )}
-        <Button variant="primary" onClick={() => install(server)}>
-          Install
-        </Button>
+        {!refused && (
+          <Button variant="primary" onClick={() => install(server)}>
+            Install
+          </Button>
+        )}
       </DialogFooter>
     </Dialog>
   );
@@ -286,7 +274,7 @@ export function SummaryDialog({ server, back = false }: { server: RegistryServer
 function Trust({ server }: { server: RegistryServer }) {
   if (server.firstParty)
     return (
-      <p className="px-5 pb-4 text-[12.5px] text-text-muted">
+      <p className="px-5 pb-2 text-[12.5px] text-text-muted">
         Agents will act on your behalf in {server.title ?? server.publisher}.
       </p>
     );

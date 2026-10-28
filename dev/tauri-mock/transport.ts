@@ -519,8 +519,52 @@ type MockConnector = {
   createdAt: number;
 };
 
-// Nothing seeded: the page starts on its first open.
-const connectors: MockConnector[] = [];
+// Linear is seeded, signed in, so an installed registry connector's page shows
+// without a sign-in; remove it to see the page empty.
+const linearTool = (name: string, description: string, tokens: number, extra: Partial<MockTool> = {}): MockTool => ({
+  name,
+  title: null,
+  description,
+  readOnly: false,
+  destructive: false,
+  tokens,
+  ...extra,
+});
+const connectors: MockConnector[] = [
+  {
+    id: "connector-linear",
+    name: "Linear",
+    registryName: "app.linear/linear",
+    url: "https://mcp.linear.app/mcp",
+    iconUrl: null,
+    description: "Issues, projects and cycles in Linear.",
+    publisher: "linear.app",
+    refused: null,
+    createdAt: Date.now() - 86_400_000,
+    accounts: [
+      {
+        id: "account-linear-1",
+        connectorId: "connector-linear",
+        label: "you@example.com",
+        identity: "you@example.com",
+        state: "connected",
+        error: null,
+        bindings: [{ scope: { kind: "everywhere" }, on: true }],
+        tools: [
+          linearTool("list_issues", "List issues in the user's Linear workspace. Filter by team, assignee, state or label.\nReturns up to 50.", 820, { readOnly: true }),
+          linearTool("get_issue", "Retrieve a Linear issue by its ID, with comments and attachments.", 410, { readOnly: true }),
+          linearTool("list_projects", "List projects in the workspace. Archived ones are left out unless asked.", 380, { readOnly: true }),
+          linearTool("create_issue", "Create a new Linear issue. Title and team are required; the rest is optional.", 960),
+          linearTool("update_issue", "Update an existing issue's title, description, state, assignee or labels.", 880),
+          linearTool("create_comment", "Comment on an issue, in Markdown.", 340),
+          linearTool("delete_issue", "Delete an issue. It moves to the trash for 30 days.", 260, { destructive: true }),
+        ],
+        toolsOff: ["delete_issue"],
+        createdAt: Date.now() - 86_400_000,
+      },
+    ],
+  },
+];
 /** Sign-ins started and not yet redeemed, by state. */
 const signIns = new Map<string, { accountId: string; isNew: boolean }>();
 let connectorSeq = 0;
@@ -593,7 +637,7 @@ function connectConnector({ connectorId, accountId, label }: Row) {
   const connector = connectors.find((c) => c.id === connectorId);
   if (!connector) throw new Error("mock: no such connector");
   // A server that refuses Crew's client, so the page's refusal shows.
-  if (connector.registryName?.includes("figma")) {
+  if (connector.registryName?.includes("figma-refused")) {
     connector.refused = "it registers no public clients";
     emitConnectors();
     throw new Error(`${connector.name} doesn’t let Crew sign in. Use it through a CLI’s own sign-in.`);
@@ -606,7 +650,7 @@ function connectConnector({ connectorId, accountId, label }: Row) {
     account = {
       id: `account-${connector.id}-${connector.accounts.length + 1}-${Date.now().toString(36)}`,
       connectorId: connector.id,
-      label: typeof label === "string" && label ? label : others.length === 0 ? "Work" : `Account ${others.length + 1}`,
+      label: typeof label === "string" && label ? label : `Account ${others.length + 1}`,
       identity: null,
       state: "pending",
       error: null,
@@ -642,6 +686,8 @@ function redeem({ state, url }: Row) {
     account.tools = mockTools(connector);
     account.toolsOff = account.tools.filter((t) => t.destructive).map((t) => t.name);
     account.identity = IDENTITIES[connector.accounts.indexOf(account) % IDENTITIES.length] ?? null;
+    // Still called "Account N", it takes who signed in as its name.
+    if (account.identity && /^Account \d+$/.test(account.label)) account.label = account.identity;
   }
   account.state = "connected";
   account.error = null;
@@ -810,6 +856,7 @@ const commands: Record<string, (args: Row) => unknown> = {
     emitInventory();
     return null;
   },
+
   provider_server_remove: (args) => {
     const gone = needServer(args);
     for (const entry of inventory) entry.servers = entry.servers.filter((x) => x !== gone);

@@ -1,9 +1,11 @@
 // The page's small pieces: a state dot, pills with a sliding thumb, an
-// account's name edited in place, a row's one fix, and a row's ⋯ menu.
+// account's name edited in place, a row's one fix, a row whose name flips its
+// switch, and a row's ⋯ menu.
 import { EllipsisIcon, PenLineIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ActionMenu } from "../../../chrome/ActionMenu";
-import { IconButton } from "../../../chrome/kit";
+import { IconButton, Switch } from "../../../chrome/kit";
+import { Row } from "../ui";
 import type { MenuAction, MenuPoint } from "../../../lib/menu";
 import { TONE_BG, type Tone } from "./lib";
 import { actions, type Account } from "./store";
@@ -151,6 +153,32 @@ export function RowAction({ label, onClick }: { label: string; onClick: () => vo
     >
       {label}
     </button>
+  );
+}
+
+/** A row whose name flips its switch too. */
+export function SwitchRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string | undefined;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <Row
+      label={
+        <button type="button" onClick={() => onChange(!checked)} className="max-w-full truncate text-left outline-none focus-visible:underline">
+          {label}
+        </button>
+      }
+      description={description}
+    >
+      <Switch label={label} checked={checked} onChange={onChange} />
+    </Row>
   );
 }
 

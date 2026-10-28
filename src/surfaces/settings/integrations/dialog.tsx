@@ -44,13 +44,14 @@ export function Dialog({ label, width = "w-[460px]", children }: { label: string
   );
 }
 
-export function DialogHeader({ mark, title, subtitle }: { mark: ReactNode; title: ReactNode; subtitle?: ReactNode }) {
+/** `wrap` lets a long subtitle (a server's description) run to three lines instead of one. */
+export function DialogHeader({ mark, title, subtitle, wrap = false }: { mark: ReactNode; title: ReactNode; subtitle?: ReactNode; wrap?: boolean }) {
   return (
     <div className="flex items-start gap-3.5 px-5 pt-5 pb-4">
       {mark}
       <div className="flex min-w-0 flex-1 flex-col">
         <h2 className="truncate text-[16px] leading-6 font-semibold">{title}</h2>
-        {subtitle && <p className="truncate text-[13px] text-text-muted">{subtitle}</p>}
+        {subtitle && <p className={`text-[13px] text-text-muted ${wrap ? "line-clamp-3" : "truncate"}`}>{subtitle}</p>}
       </div>
       <IconButton icon={XIcon} label="Close" className="-mt-1 -mr-1 size-7" onClick={ui.close} />
     </div>

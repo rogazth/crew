@@ -3,7 +3,7 @@
 // the small motion helpers. No components.
 import { useEffect, useSyncExternalStore } from "react";
 import type { RegistryServer } from "../../../lib/protocol";
-import type { CliTarget } from "./outside";
+import { protoName, type ServiceId } from "./prototype-google";
 import { connectorOf, isOn, sameScope, useIntegrations, type Account, type AccountState, type Consumer, type Scope, type Source } from "./store";
 
 /* ── The page's own state ───────────────────────────────────────────── */
@@ -14,13 +14,19 @@ export type Sheet =
   /** A registry server before it is installed, over the directory. */
   | { kind: "summary"; server: RegistryServer; back?: boolean | undefined }
   | { kind: "custom" }
-  /** MOCKUP: adding a connector to a CLI's own config (outside.tsx). */
-  | { kind: "cli"; target: CliTarget }
-  /** MOCKUP: Install with its two places, Crew or your providers, as two cards (install.tsx). */
-  | { kind: "install"; server: RegistryServer };
+  /** PROTOTYPE: installing a Google app (prototype-google.tsx). */
+  | { kind: "proto"; id: ServiceId }
+  /** PROTOTYPE: a Google app's summary, from its row in Browse (prototype-google.tsx). */
+  | { kind: "proto-summary"; id: ServiceId }
+  /** What a built-in connector is, from its summary or page (builtin.tsx). */
+  | { kind: "built-in" };
 
 /** What a detail page is about: one of Crew's connectors, or one provider server on one machine (by its name). */
-export type Detail = { kind: "connector"; id: string } | { kind: "server"; envId: string; key: string; name: string };
+export type Detail =
+  | { kind: "connector"; id: string }
+  | { kind: "server"; envId: string; key: string; name: string }
+  /** PROTOTYPE: a Google app's page (prototype-google.tsx). */
+  | { kind: "proto"; id: ServiceId };
 
 type Ui = {
   /** The page on screen: the connectors, the directory to add one from, or one connector's or server's own page. */
@@ -97,7 +103,7 @@ export function useIntegrationsTrail(): (string | { label: string; onClick: () =
   const s = useIntegrations();
   const { view, detail } = useUi();
   const back = { label: "Connectors", onClick: () => ui.go("home") };
-  if (view === "detail" && detail) return [back, detail.kind === "connector" ? (connectorOf(s, detail.id)?.name ?? "Connector") : detail.name];
+  if (view === "detail" && detail) return [back, detail.kind === "connector" ? (connectorOf(s, detail.id)?.name ?? "Connector") : detail.kind === "proto" ? protoName(detail.id) : detail.name];
   return view === "directory" ? [back, "Browse"] : [];
 }
 
