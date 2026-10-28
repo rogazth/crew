@@ -467,6 +467,8 @@ pub fn parse_grok(list: &Value) -> Vec<ProviderServer> {
             }
             out.scope = string_field(Some(row), "scope");
             out.can_remove = true;
+            // Crew signs in for it and hands Grok the grant (`grok.rs`).
+            out.can_sign_in = matches!(out.transport.as_str(), "http" | "sse");
             out.state = if row.get("enabled") == Some(&Value::Bool(false)) { McpState::Disabled } else { McpState::Unknown };
             Some(out)
         })
@@ -547,7 +549,7 @@ pub fn loopback_get(url: &str) -> Result<(), String> {
     }
 }
 
-/* ── Removing from a config file ─────────────────────────────────────── */
+/* ── Editing a config file ───────────────────────────────────────────── */
 
 fn skip_ws(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && b[i].is_ascii_whitespace() {
@@ -946,8 +948,35 @@ fn read_cursor(bin: &str) -> Result<Vec<ProviderServer>, String> {
     Ok(parse_cursor(&text, cursor_config().as_ref()))
 }
 
+/// Grok's servers, each remote one that is on checked with `grok mcp
+/// doctor`, all at once, since its list says nothing of how they stand. A
+/// check that does not answer leaves its server Unknown.
 fn read_grok(bin: &str) -> Result<Vec<ProviderServer>, String> {
-    Ok(parse_grok(&run_json(bin, &["mcp", "list", "--json"], &home(), "Grok")?))
+    let mut servers = parse_grok(&run_json(bin, &["mcp", "list", "--json"], &home(), "Grok")?);
+    let checks: Vec<_> = servers
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.state == McpState::Unknown && matches!(s.transport.as_str(), "http" | "sse"))
+        .map(|(at, s)| {
+            let (bin, name) = (bin.to_string(), s.name.clone());
+            let check = thread::spawn(move || {
+                crate::provider_status::run_in(
+                    Path::new(&bin),
+                    &["mcp", "doctor", &name, "--json"],
+                    Some(&home()),
+                    grok::DOCTOR_TIMEOUT,
+                )
+                .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok())
+            });
+            (at, check)
+        })
+        .collect();
+    for (at, check) in checks {
+        if let Ok(Some(report)) = check.join() {
+            grok::apply_doctor(&mut servers[at], &report);
+        }
+    }
+    Ok(servers)
 }
 
 /// The binary a provider runs as.
@@ -1429,7 +1458,7 @@ impl ProviderServers {
             "claude" => self.claude_sign_in(name),
             "codex" => self.codex_sign_in(name),
             "cursor" => self.cursor_sign_in(name),
-            "grok" => Err("Grok has no sign-in for its servers.".into()),
+            "grok" => self.grok_sign_in(name),
             other => Err(format!("Crew does not sign in to {other}'s servers.")),
         }
     }
@@ -1534,6 +1563,39 @@ impl ProviderServers {
         });
         self.add_flow(&state, "codex", &redirect_uri, Answer::Process(tx));
         Ok(ProviderSignIn::Browser { state, auth_url, redirect_uri })
+    }
+
+    /// Grok signs in only from its TUI, so Crew signs in itself, in its own
+    /// window, and writes the grant into Grok's credential store, where Grok
+    /// uses and refreshes it (`grok.rs`). A thread holds the flow until its
+    /// redirect is in.
+    fn grok_sign_in(&self, name: &str) -> Result<ProviderSignIn, String> {
+        let server = self.server("grok", name).ok_or("Crew has not listed that server here; list again.")?;
+        if !server.can_sign_in {
+            return Err("Only a remote server signs in.".into());
+        }
+        let home = crate::provider_session::grok_home().ok_or("Grok's folder could not be found.")?;
+        let url = server.target.clone();
+        let redirect = crate::connectors::flow::REDIRECT_URI;
+        let start = {
+            let url = url.clone();
+            grok::on_runtime(async move { grok::start(&url, redirect).await })??
+        };
+        let (state, auth_url) = (start.pkce.state.clone(), start.auth_url.clone());
+        let (tx, rx) = mpsc::channel::<FlowMsg>();
+        let host = self.clone();
+        let key = state.clone();
+        let server = name.to_string();
+        thread::spawn(move || {
+            if let Ok(FlowMsg::Callback { url: caught, reply }) = rx.recv_timeout(FLOW_TTL) {
+                let done = grok::on_runtime(async move { grok::finish(&start, redirect, &caught, &home, &server, &url).await })
+                    .and_then(|done| done);
+                let _ = reply.send(done);
+            }
+            lock(&host.inner.flows).remove(&key);
+        });
+        self.add_flow(&state, "grok", redirect, Answer::Process(tx));
+        Ok(ProviderSignIn::Browser { state, auth_url, redirect_uri: redirect.to_string() })
     }
 
     /// Cursor has no sign-in to ask for but `cursor-agent mcp login`, which
@@ -1654,6 +1716,8 @@ impl ProviderServers {
         lock(&self.inner.flows).contains_key(state)
     }
 }
+
+mod grok;
 
 #[cfg(test)]
 mod tests;

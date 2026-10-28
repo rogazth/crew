@@ -208,14 +208,17 @@ fn cursors_lines_are_read_with_its_config_beside_them() {
 }
 
 #[test]
+/// The list says what is on, not how it stands (`grok mcp doctor` does);
+/// a remote server is one Crew can sign in to for Grok.
 fn groks_list_says_what_is_on_and_nothing_of_how_it_stands() {
     let servers = parse_grok(&value(GROK_LIST));
     no_secrets(&servers);
     let webby = named(&servers, "webby");
     assert_eq!((webby.transport.as_str(), webby.state, webby.scope.as_deref()), ("http", McpState::Unknown, Some("project")));
+    assert!(webby.can_sign_in);
     let locy = named(&servers, "locy");
     assert_eq!((locy.target.as_str(), locy.state), ("npx -y some-mcp --flag", McpState::Disabled));
-    assert!(servers.iter().all(|s| !s.can_sign_in));
+    assert!(!locy.can_sign_in, "a command has no sign-in");
 }
 
 #[test]
@@ -675,4 +678,76 @@ fn a_server_is_removed_through_its_cli_and_forgotten_by_off_in_crew() {
     assert!(!notion.can_remove && claude.servers.iter().find(|s| s.name == "lin").unwrap().can_remove);
     assert!(servers.remove("claude", "claude.ai Notion").is_err(), "claude.ai's are removed at claude.ai");
     assert!(servers.remove("claude", "nobody").is_err());
+}
+
+/* ── Grok ─────────────────────────────────────────────────────────────── */
+
+/// As `grok mcp doctor <name> --json` answers on grok 1.0.70 (details cut).
+const GROK_DOCTOR: &str = r#"{"servers":[
+  {"name":"linear","transport":"http","target":"https://mcp.linear.app/mcp","checks":[
+    {"label":"server started","passed":true,"detail":"0.1s"},
+    {"label":"handshake failed","passed":false,"detail":"Send message error Transport [rmcp::transport::worker::WorkerTransport<X>] error: Auth required, when send initialize request","hint":"check server logs"}],"healthy":false},
+  {"name":"context7","transport":"http","target":"https://mcp.context7.com/mcp","checks":[
+    {"label":"server started","passed":true,"detail":"0.8s"},
+    {"label":"handshake OK","passed":true,"detail":"protocol 2026-07-28"},
+    {"label":"2 tools discovered","passed":true,"detail":""}],"healthy":true},
+  {"name":"broken","transport":"http","target":"https://nonexistent.invalid/mcp","checks":[
+    {"label":"server started","passed":true,"detail":"5.0s"},
+    {"label":"handshake failed","passed":false,"detail":"Send message error Transport [rmcp::transport::worker::WorkerTransport<X>] error: Client error: error sending request for url (https://nonexistent.invalid/mcp), when send initialize request"}],"healthy":false}
+]}"#;
+
+#[test]
+fn grok_doctor_says_how_each_server_stands() {
+    let report: Value = serde_json::from_str(GROK_DOCTOR).unwrap();
+    let mut servers = parse_grok(&json!([
+        { "name": "linear", "url": "https://mcp.linear.app/mcp", "enabled": true, "scope": "user" },
+        { "name": "context7", "url": "https://mcp.context7.com/mcp", "enabled": true, "scope": "user" },
+        { "name": "broken", "url": "https://nonexistent.invalid/mcp", "enabled": true, "scope": "user" },
+        { "name": "local", "command": "npx", "args": ["x"], "enabled": true }
+    ]));
+    for server in &mut servers {
+        grok::apply_doctor(server, &report);
+    }
+    let by = |name: &str| servers.iter().find(|s| s.name == name).unwrap();
+    assert_eq!(by("linear").state, McpState::NeedsAuth);
+    assert!(by("linear").can_sign_in, "Crew signs in for a remote one");
+    assert_eq!((by("context7").state, by("context7").tools), (McpState::Connected, Some(2)));
+    assert_eq!(by("broken").state, McpState::Failed);
+    assert_eq!(
+        by("broken").error.as_deref(),
+        Some("Client error: error sending request for url (https://nonexistent.invalid/mcp)")
+    );
+    assert_eq!((by("local").state, by("local").can_sign_in), (McpState::Unknown, false), "not in the report, as it was");
+}
+
+/// Crew's sign-in against the fake server, in its own window's place: the
+/// grant lands in Grok's store as Grok writes one, beside what was there,
+/// owner-only.
+#[test]
+fn a_grok_sign_in_writes_the_grant_where_grok_keeps_it() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::connectors::net::allow_insecure_for_tests();
+    let home = temp_dir();
+    std::fs::write(home.join("mcp_credentials.json"), r#"{"other:https://x/mcp":{"client_id":"keep"}}"#).unwrap();
+    let redirect = crate::connectors::flow::REDIRECT_URI;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let fake = runtime.block_on(crate::connectors::fake_server::start(Default::default()));
+    runtime.block_on(async {
+        let start = grok::start(&fake.mcp_url, redirect).await.unwrap();
+        let answer = crate::connectors::net::client().get(&start.auth_url).send().await.unwrap();
+        let caught = answer.headers()["location"].to_str().unwrap().to_string();
+        grok::finish(&start, redirect, &caught, &home, "fake", &fake.mcp_url).await.unwrap();
+    });
+    let file = home.join("mcp_credentials.json");
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    let store: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(store["other:https://x/mcp"]["client_id"], "keep", "the other entries stay");
+    let entry = &store[format!("fake:{}", fake.mcp_url).as_str()];
+    assert!(entry["client_id"].as_str().is_some_and(|id| !id.is_empty()), "{entry}");
+    assert_eq!(entry["issuer"], fake.url.as_str());
+    assert_eq!(entry["token_response"]["token_type"], "bearer");
+    assert!(entry["token_response"]["access_token"].as_str().is_some());
+    assert!(entry["token_response"]["refresh_token"].as_str().is_some());
+    assert!(entry["token_response"]["expires_in"].as_i64().is_some_and(|s| s > 0));
+    assert!(entry["token_received_at"].as_i64().is_some_and(|s| s > 1_700_000_000));
 }

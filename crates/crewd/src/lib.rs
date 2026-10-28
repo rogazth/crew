@@ -3371,7 +3371,7 @@ elif args[:2] == ["mcp", "enable"]:
 
         let grok_sign_in =
             rpc(&mut ws, 7, "provider_server_sign_in", serde_json::json!({ "provider": "grok", "name": "a" })).await;
-        assert!(!grok_sign_in.ok, "Grok has no sign-in");
+        assert!(!grok_sign_in.ok, "a command server has no sign-in");
         let cursor =
             rpc(&mut ws, 8, "provider_server_sign_in", serde_json::json!({ "provider": "cursor", "name": "figma" })).await;
         assert!(!cursor.ok, "no Cursor on this machine");
