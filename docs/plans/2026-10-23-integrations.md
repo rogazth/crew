@@ -195,12 +195,24 @@ does not: a machine spawns from its copy.
   it over (`vault_join {address, token}`). The machine keeps it in the
   keychain on a Mac, or in a 0600 file on Linux. Removing the machine
   revokes the token.
-- **Moving the vault.** The window mints a one-use handoff token on the old
-  vault. The new vault pulls the grants with it, and the old vault deletes
-  them and starts leasing from the new one. Then the window points every
-  machine at the new vault. At no point do two machines hold a grant. If the
-  old vault is offline, the move offers to start empty, and every account
-  then asks for a sign-in.
+- **Moving the vault** moves the grants, sealed end to end (picked
+  2026-10-28; "start empty" is the other way, and the only one when the old
+  vault is offline, after which every account asks for a sign-in):
+  1. The new vault makes an ephemeral X25519 key pair and hands the window
+     its public key.
+  2. The window asks the old vault for a handoff: a token that works once,
+     for two minutes, for that public key only. The old vault stops
+     refreshing and leasing.
+  3. The new vault pulls with the token. The old vault seals the grants to
+     the public key (X25519, HKDF-SHA256, ChaCha20-Poly1305) and sends them,
+     over Tailscale besides. The window carries the token and the public key,
+     never a grant.
+  4. The new vault writes them to its storage and confirms; only then does
+     the old vault delete its copy and start leasing from the new one. A
+     move that fails before the confirmation leaves the old vault as it was.
+  5. The new vault refreshes every grant at once, so a service that rotates
+     refresh tokens retires the copy that travelled. Then the window points
+     every machine at the new vault and mints them new lease tokens.
 
 ### Signing in
 
@@ -339,7 +351,7 @@ UX, for the prototype to settle:
 - None of the probed servers gives an `id_token` or userinfo unasked, so an
   account's label is mostly typed.
 - The page is the top-level Connectors page. The prototype is gone; its
-  designs for the vault sheet and duplicates, which phases 3 and 4 build, are
+  designs for the vault sheet, which phase 3 builds, are
   in `src/surfaces/settings/integrations-prototype/` at commit `10784e6`.
 - Tried with Notion on 2026-10-25: consent in the sign-in window, the token
   exchange, `tools/list`, and calls through the shim from a Claude session.
@@ -348,8 +360,8 @@ UX, for the prototype to settle:
   After Disconnect, Notion answered the old access token with 401 and the
   old refresh token with `invalid_grant`.
 - The same session also had claude.ai's Notion (`claude_ai_Notion`), and the
-  agent picked that one first. Phase 4 has to cover claude.ai's connectors as
-  duplicates, not only the servers in the CLIs' configs.
+  agent picked that one first. claude.ai's connectors are listed as Claude's
+  servers, so a copy of a connector there is a duplicate like any other.
 
 ### Risks accepted
 
@@ -466,11 +478,7 @@ MCP server for tests and e2e.
 protocol, the Mac's lease listener, joining, moving the vault, the Linux
 file, and the offline states.
 
-**4. Duplicates and import.** "Move to Crew" makes a connector from a
-provider server's URL, signs it in through the vault, and turns the provider
-server off in Crew. It never deletes anything from the CLI's config.
-
-**5. Password managers** as a kind (`2026-10-15-password-providers.md`).
+**4. Password managers** as a kind (`2026-10-15-password-providers.md`).
 
 **Later.** Local stdio packages with API keys in the vault. A key does not
 rotate, so its lease is a copy.
@@ -499,5 +507,4 @@ rotate, so its lease is a copy.
 | Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
 | Vault on this Mac: a binding change reaching opencode's shared server (per folder, next turn) | built |
 | Remote vault: scoped tokens, leases, join, move, Linux file | todo |
-| Duplicates and import | todo |
 | Password managers as a kind | todo |
