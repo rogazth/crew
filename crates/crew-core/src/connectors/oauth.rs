@@ -366,12 +366,23 @@ fn endpoint(meta: &Value, key: &str) -> Result<Option<String>, OAuthError> {
 
 /* ── Registration and the authorization request ───────────────────────── */
 
+/// The name Crew registers under at an issuer that takes only the clients it
+/// approved, by name. Figma refuses "Crew" and takes "Claude Code" (checked
+/// 2026-10-28); remove it once Figma approves Crew.
+const CLIENT_NAMES: &[(&str, &str)] = &[("api.figma.com", "Claude Code")];
+
+/// The name Crew registers under at `issuer`: its own, unless the table says otherwise.
+fn client_name(issuer: &str) -> &'static str {
+    let host = Url::parse(issuer).ok().and_then(|u| u.host_str().map(str::to_string));
+    CLIENT_NAMES.iter().find(|(h, _)| host.as_deref() == Some(*h)).map_or("Crew", |(_, name)| name)
+}
+
 pub async fn register(d: &Discovery, redirect_uri: &str) -> Result<Client, OAuthError> {
     let endpoint = d.registration_endpoint.as_deref().ok_or_else(|| {
         OAuthError::Refused(format!("{} does not let Crew register as an app", host_text(&d.issuer)))
     })?;
     let body = json!({
-        "client_name": "Crew",
+        "client_name": client_name(&d.issuer),
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -753,6 +764,15 @@ mod tests {
         );
         let notion = Url::parse("https://mcp.notion.com/").unwrap();
         assert_eq!(issuer_candidates(&notion)[0], "https://mcp.notion.com/.well-known/oauth-authorization-server");
+    }
+
+    #[test]
+    fn crew_registers_as_itself_unless_the_issuer_takes_only_approved_names() {
+        assert_eq!(client_name("https://api.figma.com"), "Claude Code");
+        assert_eq!(client_name("https://api.figma.com/"), "Claude Code");
+        assert_eq!(client_name("https://auth.example.com"), "Crew");
+        assert_eq!(client_name("https://api.figma.com.example.com"), "Crew");
+        assert_eq!(client_name("not a url"), "Crew");
     }
 
     #[test]
