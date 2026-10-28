@@ -34,7 +34,6 @@ import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
 import type { Upload } from "../../hooks/useUploads";
 import { AttachmentStrip } from "./Attachments";
-import { McpSegment } from "./Mcp";
 import { hasWorktreePicker, openWorktreePicker, usePanePlace } from "./panePlace";
 import { activatePrompt, promptLetter, registerPrompt, type Prompt, type PromptPickers } from "../../chrome/promptKeys";
 import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
@@ -185,11 +184,10 @@ export function Composer({
     if (typingSlash) void refreshCommands(session.id);
   }, [typingSlash, session.id]);
 
-  // One sheet over the composer at a time: the queue's, the background work's or the MCP servers'.
-  const [sheet, setSheet] = useState<"queue" | "work" | "mcp" | null>(null);
+  // One sheet over the composer at a time: the queue's or the background work's.
+  const [sheet, setSheet] = useState<"queue" | "work" | null>(null);
   const openQueue = useCallback((open: boolean) => setSheet(open ? "queue" : null), []);
   const openWork = useCallback((open: boolean) => setSheet(open ? "work" : null), []);
-  const openMcp = useCallback((open: boolean) => setSheet(open ? "mcp" : null), []);
   const focusField = useCallback(() => field.current?.focus(), []);
 
   const model = useRef<Opener>(null);
@@ -514,7 +512,6 @@ export function Composer({
         {session.paused && <PausedSegment />}
         {/* Shells, processes and conversations with no agent to put a clip up still have their sheet: this opens it. */}
         {work && !hasClip && <WorkSegment segment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
-        <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
         {optionsPending ? (
           <span className="truncate text-info">
