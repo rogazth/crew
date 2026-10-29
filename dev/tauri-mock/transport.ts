@@ -380,6 +380,46 @@ function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
   return rulesOf(String(id));
 }
 
+/** Plan usage with every pace on show: in reserve, on pace, spending ahead, spent, and no plan windows. */
+function mockUsage() {
+  const at = Date.now();
+  const window = (id: string, label: string, usedPercent: number, windowMinutes: number, resetsIn: number) => ({
+    id,
+    label,
+    usedPercent,
+    windowMinutes,
+    resetsAt: at + resetsIn * 60_000,
+  });
+  const reading = (provider: string, plan: string | undefined, windows: ReturnType<typeof window>[]) => ({
+    provider,
+    account: `${provider}@crew.dev`,
+    plan,
+    windows,
+    updatedAt: at - 2 * 60_000,
+    source: "cli",
+  });
+  return {
+    readings: [
+      reading("claude", "max", [window("five_hour", "5 hours", 5, 300, 235), window("seven_day", "Weekly", 70, 10080, 2 * 1440)]),
+      reading("codex", "plus", [window("primary", "5 hours", 48, 300, 240), window("secondary", "Weekly", 100, 10080, 3 * 1440 + 300)]),
+      reading("cursor", "premium", [window("weekly", "Weekly", 3, 10080, 6 * 1440)]),
+      { ...reading("opencode", undefined, []), tokens: 20_400_000, cost: 1.25 },
+    ],
+    history: [
+      ["claude", [12, 24, 31, 40, 52, 61, 70]],
+      ["codex", [8, 30, 55, 70, 88, 100, 100]],
+      ["cursor", [0, 0, 0, 0, 0, 1, 3]],
+    ].flatMap(([provider, highs]) =>
+      (highs as number[]).map((percent, index) => ({
+        provider,
+        account: `${provider}@crew.dev`,
+        day: new Date(at - (6 - index) * 86_400_000).toISOString().slice(0, 10),
+        percent,
+      })),
+    ),
+  };
+}
+
 const commands: Record<string, (args: Row) => unknown> = {
   workspace_list: () => workspaces,
   workspace_home: () => {
@@ -455,6 +495,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_mark_read: ({ id }) =>
     void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
   state_get: ({ key }) => state.get(key as string) ?? null,
+  usage_read: () => mockUsage(),
   state_set: ({ key, value }) => void state.set(key as string, value as string),
   state_delete: ({ key }) => void state.delete(key as string),
   worktree_list: ({ path }) => worktreeList(path as string),

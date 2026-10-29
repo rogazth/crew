@@ -166,3 +166,20 @@ export function runsOutIn(window: Window): number | null {
   const left = ((100 - window.used) * elapsed) / window.used;
   return left < window.resetsIn ? left : null;
 }
+
+export type Pace = {
+  /** Where the share used would stand had the window been spent evenly so far, 0‥100. */
+  expected: number;
+  /** Points left in hand: under that even line (positive) or over it (negative). */
+  reserve: number;
+  /** Minutes until it is spent at this pace; null when it lasts until the reset. */
+  runsOutIn: number | null;
+};
+
+/** How the window is being spent against an even pace; null when its length or reset is unknown. */
+export function paceOf(window: Window): Pace | null {
+  if (window.length === null || window.resetsIn === null || window.length <= 0) return null;
+  const elapsed = Math.min(window.length, Math.max(0, window.length - window.resetsIn));
+  const expected = (elapsed / window.length) * 100;
+  return { expected, reserve: expected - window.used, runsOutIn: runsOutIn(window) };
+}

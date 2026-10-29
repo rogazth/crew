@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PlanUsage, UsageSnapshot } from "./protocol";
-import { crossings, mergeSnapshots, runsOutIn, weekOf, windowOf } from "./usageData";
+import { crossings, mergeSnapshots, paceOf, runsOutIn, weekOf, windowOf } from "./usageData";
 
 const NOW = Date.parse("2026-10-19T12:00:00Z");
 const MIN = 60_000;
@@ -87,6 +87,24 @@ describe("runsOutIn", () => {
   it("projects the pace, and is null when it lasts", () => {
     expect(runsOutIn({ id: "a", label: "a", used: 80, length: 300, resetsIn: 100 })).toBeCloseTo(50);
     expect(runsOutIn({ id: "a", label: "a", used: 10, length: 300, resetsIn: 100 })).toBeNull();
+  });
+});
+
+describe("paceOf", () => {
+  it("measures the share used against an even spend of the window", () => {
+    // Two of five hours gone: an even pace stands at 40%.
+    const under = paceOf({ id: "a", label: "a", used: 25, length: 300, resetsIn: 180 })!;
+    expect(under.expected).toBeCloseTo(40);
+    expect(under.reserve).toBeCloseTo(15);
+    expect(under.runsOutIn).toBeNull();
+    const over = paceOf({ id: "a", label: "a", used: 60, length: 300, resetsIn: 180 })!;
+    expect(over.reserve).toBeCloseTo(-20);
+    expect(over.runsOutIn).toBeCloseTo(80);
+  });
+
+  it("is unknown without a length or a reset", () => {
+    expect(paceOf({ id: "a", label: "a", used: 10, length: null, resetsIn: 60 })).toBeNull();
+    expect(paceOf({ id: "a", label: "a", used: 10, length: 300, resetsIn: null })).toBeNull();
   });
 });
 

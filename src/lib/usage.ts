@@ -9,8 +9,8 @@ import { notify } from "./host";
 import type { UsageSnapshot } from "./protocol";
 import { crossings, hasWindows, mergeSnapshots, peak, type Crossing, type Look, type Reading, type Window } from "./usageData";
 
-export { runsOutIn } from "./usageData";
-export type { Reading, Window } from "./usageData";
+export { paceOf, runsOutIn } from "./usageData";
+export type { Pace, Reading, Window } from "./usageData";
 
 /** How the rail shows it: one ring per provider, outermost first, like the Watch; or one ring with the tightest limit. */
 export const INDICATOR: "rings" | "single" = "rings";
