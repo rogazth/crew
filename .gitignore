@@ -19,3 +19,6 @@ out/
 # tsc incremental cache
 *.tsbuildinfo
 .DS_Store
+
+# Swift build output of the menu bar helper
+.build/

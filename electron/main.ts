@@ -35,9 +35,11 @@ import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
 import { registerLoginItemIpc } from "./login-item";
 import { buildMenu } from "./menu";
-import { registerNotifyIpc } from "./notifications";
+import { startMenuBar } from "./menu-bar";
+import { registerNotifyIpc, reveal } from "./notifications";
 import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
+import { NOTIFY_CHANNELS } from "../src/lib/notify";
 import { registerAppInfoIpc } from "./app-info";
 import { installStagedOnQuit, watchForUpdates } from "./update";
 
@@ -614,6 +616,13 @@ app.whenReady().then(async () => {
   }
   if (!app.isPackaged && !e2e && process.env.CREW_RUST_WATCH !== "0") restartOnRebuild();
   createWindow();
+  // The menu bar extra opens a session the way a banner's click does.
+  if (!e2e)
+    startMenuBar((target) => {
+      if (!win || win.isDestroyed()) return createWindow();
+      reveal(win);
+      win.webContents.send(NOTIFY_CHANNELS.click, target);
+    });
   // Crew works as before; the user only needs to know quitting stops things.
   if (notice && Notification.isSupported()) new Notification({ title: "Crew", body: notice }).show();
   // Agents drive pages through main, over its own connection; it follows crewd across restarts.

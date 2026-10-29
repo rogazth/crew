@@ -84,6 +84,9 @@ process.on("SIGTERM", () => shutdown(0));
 try {
   await waitForPort(PORT);
   await run("cargo", ["build", "-p", "crewd", "-p", "crew-cli"]);
+  // The menu bar extra; without Xcode's tools the app runs without it.
+  if (process.platform === "darwin")
+    await run("swift", ["build", "--package-path", "macos/menubar"]).catch((error) => console.warn(`crew: menu bar helper: ${error.message}`));
 } catch (error) {
   console.error(error);
   shutdown(1);

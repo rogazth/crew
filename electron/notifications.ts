@@ -154,7 +154,7 @@ function dismiss(sessionId: string): void {
 }
 
 /** In front and focused, even from behind another app or the Dock. */
-function reveal(win: BrowserWindow): void {
+export function reveal(win: BrowserWindow): void {
   if (win.isMinimized()) win.restore();
   win.show();
   if (process.platform === "darwin") app.focus({ steal: true });

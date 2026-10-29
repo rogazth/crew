@@ -17,6 +17,7 @@ function run(command, args) {
 
 // crew rides in the bundle beside crewd; Settings › General › Command line links to it.
 await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
+await run("swift", ["build", "-c", "release", "--package-path", "macos/menubar"]);
 await run("node", ["scripts/crewd-linux.mjs"]);
 await run("node", ["scripts/licenses.mjs"]);
 await run("npm", ["run", "build"]);

@@ -130,6 +130,12 @@
       }
     ],
     "mac": {
+      "extraResources": [
+        {
+          "from": "macos/menubar/.build/release/CrewMenuBar",
+          "to": "crew-menubar"
+        }
+      ],
       "target": [
         {
           "target": "dir",

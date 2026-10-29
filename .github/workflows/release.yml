@@ -135,6 +135,9 @@ jobs:
       # Artifacts drop the executable bit.
       - run: chmod +x target/release/crewd target/release/crew target/linux/crewd-linux-*
 
+      # The menu bar extra, macOS only: it rides in the bundle as crew-menubar.
+      - run: swift build -c release --package-path macos/menubar
+
       # The certificate scripts/signing-cert.mjs made, in a keychain of the run's own.
       # scripts/sign-mac.cjs signs with it; without it the app is signed ad hoc, and
       # macOS asks for the keychain password again after every update.
