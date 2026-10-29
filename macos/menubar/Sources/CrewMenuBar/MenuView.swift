@@ -78,10 +78,7 @@ private struct WaitingRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 8)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -91,14 +88,6 @@ private struct WaitingRow: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .padding(.horizontal, 6)
-    }
-
-    private var label: String {
-        switch item.session.status {
-        case "needs-input": "Needs input"
-        case "error": "Error"
-        default: "Done"
-        }
     }
 
     private var color: Color {
