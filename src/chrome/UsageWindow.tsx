@@ -51,7 +51,7 @@ function PaceBar({ left, pace, fill }: { left: number; pace: Pace | null; fill: 
       </div>
       {mark !== null && (
         <span
-          className={`absolute inset-y-0 w-[3px] -translate-x-1/2 rounded-full ring-2 ring-surface transition-[left] duration-500 ${pace!.reserve > -ON_PACE ? "bg-success" : "bg-warning"}`}
+          className={`absolute inset-y-0 w-[3px] -translate-x-1/2 rounded-full ring-2 ring-surface transition-[left] duration-500 ${pace!.reserve > -ON_PACE ? "bg-text" : "bg-warning"}`}
           style={{ left: `clamp(1.5px, ${mark}%, calc(100% - 1.5px))` }}
         />
       )}
@@ -66,7 +66,7 @@ function PaceLine({ window, pace }: { window: Window; pace: Pace | null }) {
   const points = Math.round(Math.abs(pace.reserve));
   const [lead, leadClass] =
     pace.reserve >= ON_PACE
-      ? [`${points}% in reserve`, "text-success"]
+      ? [`${points}% in reserve`, "text-text"]
       : pace.reserve > -ON_PACE
         ? ["On pace", "text-text"]
         : [`${points}% over pace`, "text-warning"];
