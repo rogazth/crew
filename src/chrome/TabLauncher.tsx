@@ -7,6 +7,7 @@ import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
+import { terminalView } from "../surfaces/load";
 import * as api from "../lib/api";
 import { launcherAddress, launcherPages } from "../lib/browser/launch";
 import { hostOf } from "../lib/browser/history";
@@ -130,6 +131,8 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
 
 /** Mounted only while open, so every open starts from an empty query. */
 function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (launch: Launch) => void }) {
+  // ⌘T ↵ before the window was ever idle: the terminal is fetched while the launcher is up.
+  useEffect(() => void terminalView.preload().catch(() => {}), []);
   const [query, setQuery] = useState("");
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);

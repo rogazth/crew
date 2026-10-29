@@ -1,15 +1,16 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 import { EmptyState } from "./EmptyState";
 import { HistoryView } from "./HistoryView";
+import { fileView, preloadFileTab } from "./load";
 import { StubView } from "./StubView";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { commandKeys } from "../lib/commands";
+import { preloadWhenIdle } from "../lib/preloadable";
 import type { ProjectFile, Session, Tab } from "../lib/types";
 
 export type ProcessTabOf = Extract<Tab, { kind: "process" }>;
 
-/** The file editors are the heaviest chunks in the app; only a file tab pays for them. */
-const FileView = lazy(() => import("./FileView").then((m) => ({ default: m.FileView })));
+const FileView = fileView.Component;
 
 type Props = {
   tab: Tab | null;
@@ -46,6 +47,10 @@ export function Surface({
   renderProcess,
   renderCommands,
 }: Props) {
+  // Before the first file tab, so it does not wait out Suspense's reveal
+  // throttle. ⌘P asks too, for a file opened before the window is idle.
+  useEffect(() => preloadWhenIdle(preloadFileTab), []);
+
   if (!hasWorkspace) {
     return (
       <EmptyState

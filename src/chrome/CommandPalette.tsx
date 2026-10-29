@@ -11,6 +11,7 @@ import { fuzzyMatch } from "../lib/fuzzy";
 import type { ProjectFile, Session, Workspace, Worktree } from "../lib/types";
 import { workspaceMark } from "../lib/workspaces";
 import { worktreeLabel, worktreeOf } from "../lib/worktrees";
+import { preloadFileTab } from "../surfaces/load";
 
 /** ⌘K bots, worktrees and commands; ⌘P files; ⇧⌘P commands; ⇧⌘O where to work: repo › worktree. */
 export type PaletteMode = "all" | "files" | "actions" | "context";
@@ -62,6 +63,8 @@ export function CommandPalette(props: Props) {
 
   // After commit, not at mount: a terminal that held the keyboard lets go of it by then.
   useEffect(() => search.current?.focus(), []);
+  // A file picked before the window was ever idle: its editor is fetched while the palette is up.
+  useEffect(() => void preloadFileTab().catch(() => {}), []);
 
   const forcedActions = raw.startsWith(">");
   const query = (forcedActions ? raw.slice(1) : raw).trim();

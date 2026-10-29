@@ -1,16 +1,17 @@
-import { lazy, Suspense, useCallback } from 'react';
+import { Suspense, useCallback, useEffect } from 'react';
 import { useCommands } from '../hooks/useCommand';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import { reconnectAfterSignIn } from '../lib/mcp';
+import { preloadWhenIdle } from '../lib/preloadable';
 import { restartAfterSignIn } from '../lib/providerSignIn';
 import { isTerminalTab, relativeTo } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
+import { terminalView } from './load';
 import type { MountedPane } from './WorkspacePanes';
 import type { ProjectFile } from '../lib/types';
 
-/** xterm and its addons are ~800 kB of the bundle; the window opens without them. */
-const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
+const TerminalView = terminalView.Component;
 
 type Props = {
   panes: MountedPane[];
@@ -27,6 +28,9 @@ type Props = {
  */
 export function Terminals({ panes, onOpenFile, onInputSent }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
+  // Before the first terminal, so its pane does not wait out Suspense's reveal
+  // throttle. The launcher asks too, for a ⌘T before the window is idle.
+  useEffect(() => preloadWhenIdle(terminalView.preload), []);
   const { prefs, update } = useTerminalPrefs();
   const zoom = (delta: number) =>
     update({

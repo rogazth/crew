@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { BookOpenIcon, ListIcon, PencilIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
@@ -8,6 +8,7 @@ import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
 import { TOKENIZE_MAX_LENGTH } from "../lib/highlighting";
 import type { ProjectFile } from "../lib/types";
+import * as editors from "./editor/load";
 import { FileNotice } from "./FileNotice";
 
 type Props = {
@@ -20,11 +21,8 @@ type Props = {
   actions?: ReactNode;
 };
 
-/** Each editor loads only when a file needs it: diffs and its highlighter are ~600 kB, CodeMirror ~330 kB. */
-const CodeEditor = lazy(() => import("./editor/CodeEditor").then((m) => ({ default: m.CodeEditor })));
-const MarkdownEditor = lazy(() =>
-  import("./editor/MarkdownEditor").then((m) => ({ default: m.MarkdownEditor })),
-);
+const { Component: CodeEditor } = editors.CodeEditor;
+const { Component: MarkdownEditor } = editors.MarkdownEditor;
 
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
