@@ -89,3 +89,17 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
   await explorer.getByText("t3code", { exact: true }).waitFor();
   await explorer.getByText("zeron", { exact: true }).waitFor();
 });
+
+test("an HTML file the reply names opens rendered in a page", async () => {
+  await writeFile(path.join(workspace.path, "page.html"), "<!doctype html><title>Page</title><h1>Hello</h1>");
+  await newSession(crew, workspace.id);
+  await sendInChat(crew, "built `page.html`");
+  const reply = crew.window.locator('[data-message="assistant"]').filter({ hasText: "Reply 1:" });
+  await reply.locator("[data-file-ref]").filter({ hasText: "page.html" }).click();
+
+  const served = () =>
+    crew.app.evaluate(({ webContents }) =>
+      webContents.getAllWebContents().some((wc) => wc.getURL().startsWith("crew-file://") && wc.getURL().endsWith("/page.html")),
+    );
+  await waitFor(served, { message: "the file is served in a page, not opened in the editor" });
+});
