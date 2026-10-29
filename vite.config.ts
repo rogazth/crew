@@ -16,6 +16,8 @@ export default defineConfig({
   },
   test: { include: ["src/lib/**/*.test.ts", "electron/**/*.test.ts", "scripts/**/*.test.mjs"], environment: "node" },
   clearScreen: false,
+  // The stress specs' render census names components; a minified build would name them `jt`.
+  ...(process.env.CREW_KEEP_NAMES ? { esbuild: { keepNames: true } } : {}),
   // The diffs worker lazy-loads Shiki grammars, so it needs a code-splittable
   // format. Vite's IIFE default cannot split.
   worker: { format: "es" },
