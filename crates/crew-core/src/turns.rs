@@ -546,10 +546,11 @@ struct ClaudeLive {
     applied: Launch,
     claude_session_id: String,
     /// Whether a result waits for the background commands: a child's turn
-    /// does, since its report is the last thing it says. The user's and a
-    /// bot's end on their result: the user's process stays up with the work,
-    /// and the turn the CLI starts by itself when it reports is taken as one
-    /// nobody sent ([`TurnHost::adopt_claude_turn`]).
+    /// does, since its report is the last thing it says, and a bot's, since
+    /// its process and the work go with the turn. The user's ends on its
+    /// result: its process stays up with the work, and the turn the CLI
+    /// starts by itself when it reports is taken as one nobody sent
+    /// ([`TurnHost::adopt_claude_turn`]).
     waits_for_background: bool,
     /// Results that ended nothing yet, so the grace timer can tell its own
     /// wait from a later one. Counts on for the life of the process: it is
@@ -3530,7 +3531,9 @@ impl TurnHost {
             Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
             _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         };
-        let waits_for_background = driven(session) == Some(Driven::Child);
+        // A bot's process goes with its turn, and what it ran in the
+        // background with it: the turn waits for that work instead.
+        let waits_for_background = matches!(driven(session), Some(Driven::Child | Driven::Bot));
         self.lock().insert(
             session_id.to_string(),
             Live::Claude(Box::new(ClaudeLive::new(claude_session_id, waits_for_background, applied))),

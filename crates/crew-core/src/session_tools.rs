@@ -3255,6 +3255,48 @@ while True:
         assert!(launches.iter().all(|launch| after_flag(launch, "--resume").is_none()), "{launches:?}");
     }
 
+    /// A bot's process goes with its turn, so the turn waits for what it left
+    /// running in the background, as a child's does: the CLI wakes on it, and
+    /// what the bot says then ends the turn and lets the process go.
+    #[test]
+    fn a_claude_bot_turn_waits_for_what_it_left_running_in_the_background() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "robin".into(),
+            "claude".into(),
+            "sonnet".into(),
+            String::new(),
+            "full".into(),
+        )
+        .expect("bot");
+        w.type_to(&bot, "BACKGROUND 1.5", None, None);
+        let said = |w: &World| -> Vec<String> {
+            w.blocks(&bot.id).into_iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text).collect()
+        };
+        for _ in 0..400 {
+            if said(&w).iter().any(|text| text == "started it in the background") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(w.row(&bot.id).status, "working", "the turn did not wait for its work");
+
+        // What the user writes meanwhile is answered, and the turn waits on.
+        let steered = w.type_to(&bot, "hello?", None, None);
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
+        w.settle(&bot.id);
+        assert_eq!(
+            said(&w),
+            ["started it in the background", "report: hello?", "report: BACKGROUND 1.5 + the background command finished"]
+        );
+        assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
+    }
+
     /// A `result` that comes while no turn runs belongs to none: it ends
     /// nothing, shows nothing, and the next message still starts a turn.
     #[test]

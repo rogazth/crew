@@ -196,8 +196,9 @@ them. Use those; do not start your own:
 - Look for problems: `read_logs` `{\"process\": \"web\", \"pattern\": \"error|warn\"}`
 - The one you need is not there: define it with `save_process` `{\"name\": \"web\", \"command\": \"npm run dev\"}`.
 
-Do not start a server from your shell with `&` or `nohup`: nobody can see it, stop it or read its logs. Commands you \
-leave running in the background end with your turn; for anything that must keep running, use a process.";
+Do not start a server from your shell with `&` or `nohup`: nobody can see it, stop it or read its logs. Your turn \
+waits for commands you leave running in the background, for ten minutes at most, and they end with it; for anything \
+that must keep running, use a process.";
 
 const BOT_BROWSER: &str = "### Browser
 
@@ -590,7 +591,7 @@ mod tests {
         let memory = text.split("### Your memory").nth(1).and_then(|rest| rest.split("###").next()).unwrap_or_default();
         assert!(!memory.contains("update_description"), "the description is not a notebook:\n{memory}");
         assert!(text.contains("and whether it may commit."), "{text}");
-        assert!(text.contains("Commands you leave running in the background end with your turn"), "{text}");
+        assert!(text.contains("Your turn waits for commands you leave running in the background"), "{text}");
         assert!(text.contains("If a call says Crew is not open, say so."), "{text}");
         assert!(text.contains(Harness::Mcp.deferred()), "{text}");
         // The two tools, each with its example: a subagent, one that waits, a session.
