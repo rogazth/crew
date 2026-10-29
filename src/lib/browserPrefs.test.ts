@@ -14,7 +14,6 @@ describe("parseBrowserPrefs", () => {
       parseBrowserPrefs(
         JSON.stringify({
           searchTemplate: template,
-          keep: 10,
           openLinksInCrew: true,
           devtoolsDock: "left",
           devtoolsWidth: 600,
@@ -23,7 +22,6 @@ describe("parseBrowserPrefs", () => {
       ),
     ).toEqual({
       searchTemplate: template,
-      keep: 10,
       openLinksInCrew: true,
       devtoolsDock: "left",
       devtoolsWidth: 600,
@@ -32,9 +30,10 @@ describe("parseBrowserPrefs", () => {
   });
 
   it("falls back field by field, and never takes a template it does not know", () => {
-    const raw = JSON.stringify({ searchTemplate: "javascript:alert(%s)", keep: 4 });
-    expect(parseBrowserPrefs(raw)).toEqual({ ...DEFAULT_BROWSER_PREFS, keep: 4 });
-    expect(parseBrowserPrefs(JSON.stringify({ keep: 1000 })).keep).toBe(DEFAULT_BROWSER_PREFS.keep);
+    const raw = JSON.stringify({ searchTemplate: "javascript:alert(%s)", openLinksInCrew: true });
+    expect(parseBrowserPrefs(raw)).toEqual({ ...DEFAULT_BROWSER_PREFS, openLinksInCrew: true });
+    // The background pages setting is gone; a saved one is ignored.
+    expect(parseBrowserPrefs(JSON.stringify({ keep: 10 }))).toEqual(DEFAULT_BROWSER_PREFS);
     expect(parseBrowserPrefs(JSON.stringify({ openLinksInCrew: "yes" })).openLinksInCrew).toBe(false);
     expect(parseBrowserPrefs(JSON.stringify({ devtoolsDock: "top" })).devtoolsDock).toBe("bottom");
   });

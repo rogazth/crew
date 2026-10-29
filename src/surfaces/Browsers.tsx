@@ -10,10 +10,10 @@ import { paneHandle } from "../lib/browser/handles";
 import { leases } from "../lib/browser/leases";
 import { pages } from "../lib/browser/pageStore";
 import { prompts } from "../lib/browser/prompts";
-import { liveGuests, touch } from "../lib/browser/retention";
+import { liveGuests, sweep, SWEEP_MS, touch, type MemoryPressure, type Warm } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
 import { newBrowserTab, paneId, type BrowserTabPatch } from "../lib/tabs";
-import type { Session, Tab } from "../lib/types";
+import type { Session, SessionStatus, Tab } from "../lib/types";
 import type { MountedPane } from "./WorkspacePanes";
 
 /** The toolbar, the address bar and the guest wiring load with the first page, not with the window. */
@@ -32,10 +32,14 @@ type Props = {
 
 const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind === "browser";
 
+/** A session still at it, or waiting on the person mid-task: its workspace's pages are in use. */
+const AT_WORK: ReadonlySet<SessionStatus> = new Set(["starting", "working", "background", "needs-input"]);
+
 /**
  * Every open page stays mounted, shown or not, like the terminals: a guest
- * that leaves the DOM loses its page. Only the most recently shown ones keep
- * a live guest; the rest go cold until they are looked at again.
+ * that leaves the DOM loses its page. Only the ones used lately keep a live
+ * guest, fewer as memory runs short; the rest go cold until they are looked
+ * at again.
  */
 export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props) {
   const { prefs } = useBrowserPrefs();
@@ -43,11 +47,13 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
   const visible = browsers.find((pane) => pane.visible) ?? null;
   const visibleId = visible?.id ?? null;
 
-  const [order, setOrder] = useState<readonly string[]>([]);
+  const [warm, setWarm] = useState<Warm>(() => new Map());
   const [shown, setShown] = useState<string | null>(null);
   if (shown !== visibleId) {
     setShown(visibleId);
-    if (visibleId) setOrder((current) => touch(current, visibleId));
+    // The page going out of sight was in use until now, so its idle clock starts here.
+    const used = [shown, visibleId].filter((id) => id !== null);
+    setWarm((current) => touch(current, used, Date.now()));
   }
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
   // A page with a download in flight keeps its guest: discarding it would cancel the download.
@@ -64,12 +70,10 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
   // A tab an agent drives stays live wherever it is, like one with DevTools open.
   const held = useHeldTabs();
   const driven = browsers.flatMap((pane) => (held.has(pane.tab.id) ? [pane.id] : []));
-  const live = liveGuests({
-    order: order.filter((id) => ids.has(id)),
-    visible: visibleId,
-    keep: prefs.keep,
-    pinned: new Set([...pinned, ...downloads, ...incognito, ...driven].filter((id) => ids.has(id))),
-  });
+  const pinnedIds = new Set([...pinned, ...downloads, ...incognito, ...driven].filter((id) => ids.has(id)));
+  const working = new Set(sessions.flatMap((s) => (AT_WORK.has(s.status) ? [s.workspaceId] : [])));
+  const busy = new Set(browsers.flatMap((pane) => (working.has(pane.workspaceId) ? [pane.id] : [])));
+  const live = liveGuests({ warm, visible: visibleId, pinned: pinnedIds });
 
   const active = () => (visible ? paneHandle(visible.tab.id) : undefined);
   // Bound only while a page fills the active tab, so ⌘[ and ⌘R mean nothing anywhere else.
@@ -129,10 +133,38 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
     known.current = now;
   });
 
-  const latest = useRef({ panes, browsers, visible, onOpenTab, onAdopt });
+  const latest = useRef({ panes, browsers, visible, onOpenTab, onAdopt, ids, pinnedIds, busy });
   useEffect(() => {
-    latest.current = { panes, browsers, visible, onOpenTab, onAdopt };
+    latest.current = { panes, browsers, visible, onOpenTab, onAdopt, ids, pinnedIds, busy };
   });
+
+  // Every so often hidden pages left alone long enough go cold, sooner when
+  // the OS says memory is short.
+  useEffect(() => {
+    if (!hasPages) return;
+    let stopped = false;
+    const tick = async () => {
+      const pressure: MemoryPressure = (await browserHost()?.memoryPressure().catch(() => null)) ?? "normal";
+      if (stopped) return;
+      const { ids: open, visible: front, pinnedIds: inUse, busy: atWork } = latest.current;
+      setWarm((current) =>
+        sweep({
+          warm: current,
+          ids: open,
+          visible: front?.id ?? null,
+          pinned: inUse,
+          busy: atWork,
+          pressure,
+          now: Date.now(),
+        }),
+      );
+    };
+    const timer = setInterval(() => void tick(), SWEEP_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [hasPages]);
 
   // An agent needs a tab live: pinning it builds its guest, which reports
   // itself to main on attach. A tab the window does not hold yet (made by
@@ -170,7 +202,7 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
         const tab = newBrowserTab(request.url, request.incognito);
         openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });
         // A tab opened behind the current one still loads, the way a middle-click does.
-        setOrder((current) => touch(current, paneId(opener.workspaceId, tab.id)));
+        setWarm((current) => touch(current, [paneId(opener.workspaceId, tab.id)], Date.now()));
       }),
     [],
   );

@@ -1,91 +1,113 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_KEEP, forget, liveGuests, touch } from "./retention";
+import { GRACE_MS, IDLE_MS, liveGuests, sweep, touch, type MemoryPressure, type Warm } from "./retention";
 
 const none: ReadonlySet<string> = new Set();
+const MIN = 60 * 1000;
+const NOW = 10 * IDLE_MS;
 
-function live(order: string[], visible: string | null, keep: number, pinned: ReadonlySet<string> = none) {
-  return [...liveGuests({ order, visible, keep, pinned })].sort();
+/** Each page with how long ago it was last used. */
+function warmFrom(ago: Record<string, number>): Warm {
+  return new Map(Object.entries(ago).map(([id, ms]) => [id, NOW - ms]));
+}
+
+function swept(
+  warm: Warm,
+  opts: { visible?: string | null; pinned?: string[]; busy?: string[]; pressure?: MemoryPressure; ids?: string[] } = {},
+) {
+  const result = sweep({
+    warm,
+    ids: new Set(opts.ids ?? [...warm.keys(), ...(opts.pinned ?? []), ...(opts.visible ? [opts.visible] : [])]),
+    visible: opts.visible ?? null,
+    pinned: new Set(opts.pinned),
+    busy: new Set(opts.busy),
+    pressure: opts.pressure ?? "normal",
+    now: NOW,
+  });
+  return { result, ids: [...result.keys()].sort() };
 }
 
 describe("touch", () => {
-  it("moves a page to the front", () => {
-    expect(touch(["a", "b", "c"], "c")).toEqual(["c", "a", "b"]);
+  it("marks pages used now", () => {
+    expect([...touch(new Map([["a", 1]]), ["a", "b"], 5)]).toEqual([
+      ["a", 5],
+      ["b", 5],
+    ]);
   });
 
-  it("adds a page it has not seen", () => {
-    expect(touch(["a"], "b")).toEqual(["b", "a"]);
-    expect(touch([], "a")).toEqual(["a"]);
-  });
-
-  it("returns the same array when the page is already first", () => {
-    const order = ["a", "b"];
-    expect(touch(order, "a")).toBe(order);
-  });
-
-  it("leaves one copy of the page it moves", () => {
-    expect(touch(["b", "a", "c", "a"], "a")).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("forget", () => {
-  it("removes a page", () => {
-    expect(forget(["a", "b", "c"], "b")).toEqual(["a", "c"]);
-  });
-
-  it("returns the same array when the page is absent", () => {
-    const order = ["a", "b"];
-    expect(forget(order, "z")).toBe(order);
-  });
-
-  it("removes every copy of a duplicated page", () => {
-    expect(forget(["a", "b", "a"], "a")).toEqual(["b"]);
+  it("returns the same map when nothing changes", () => {
+    const warm = new Map([["a", 5]]);
+    expect(touch(warm, ["a"], 5)).toBe(warm);
+    expect(touch(warm, [], 9)).toBe(warm);
   });
 });
 
 describe("liveGuests", () => {
-  it("keeps the visible page and the most recent hidden ones", () => {
-    expect(live(["a", "b", "c", "d", "e"], "a", 2)).toEqual(["a", "b", "c"]);
+  it("is the warm pages, the pinned ones and the visible one", () => {
+    const live = liveGuests({ warm: warmFrom({ a: 0, b: 0 }), visible: "v", pinned: new Set(["p"]) });
+    expect([...live].sort()).toEqual(["a", "b", "p", "v"]);
   });
 
-  it("does not count the visible page against the budget", () => {
-    expect(live(["b", "a", "c", "d"], "a", 2)).toEqual(["a", "b", "c"]);
+  it("is nothing with no page warm, pinned or visible", () => {
+    expect(liveGuests({ warm: new Map(), visible: null, pinned: none }).size).toBe(0);
+  });
+});
+
+describe("sweep", () => {
+  it("lets a hidden page go cold after an hour unused", () => {
+    expect(swept(warmFrom({ fresh: 59 * MIN, stale: IDLE_MS })).ids).toEqual(["fresh"]);
   });
 
-  it("keeps the visible page even when the order does not know it yet", () => {
-    expect(live(["b", "c"], "new", 1)).toEqual(["b", "new"]);
+  it("keeps any number of recent pages while memory is fine", () => {
+    const many = Object.fromEntries(Array.from({ length: 40 }, (_, n) => [`p${n}`, n * MIN]));
+    expect(swept(warmFrom(many)).ids).toHaveLength(40);
   });
 
-  it("keeps pinned pages without spending the budget on them", () => {
-    expect(live(["a", "b", "c", "d", "e"], "a", 1, new Set(["b", "e"]))).toEqual(["a", "b", "c", "e"]);
+  it("returns the same map when nothing goes cold", () => {
+    const warm = warmFrom({ a: MIN, b: 2 * MIN });
+    expect(swept(warm).result).toBe(warm);
   });
 
-  it("keeps a pinned page that the order does not know", () => {
-    expect(live(["a"], "a", 0, new Set(["downloading"]))).toEqual(["a", "downloading"]);
+  it("drops pages that were closed", () => {
+    expect(swept(warmFrom({ a: 0, gone: 0 }), { ids: ["a"] }).ids).toEqual(["a"]);
   });
 
-  it("keeps only the visible and pinned pages when the budget is zero or less", () => {
-    expect(live(["a", "b", "c"], "a", 0, new Set(["c"]))).toEqual(["a", "c"]);
-    expect(live(["a", "b", "c"], "a", -3)).toEqual(["a"]);
+  it("keeps the visible and pinned pages warm, however long ago they were first shown", () => {
+    const { result, ids } = swept(warmFrom({ v: 2 * IDLE_MS, p: 2 * IDLE_MS }), { visible: "v", pinned: ["p", "q"] });
+    expect(ids).toEqual(["p", "q", "v"]);
+    expect(result.get("v")).toBe(NOW);
+    expect(result.get("p")).toBe(NOW);
   });
 
-  it("keeps nothing extra when no page is visible and the budget is zero", () => {
-    expect(live(["a", "b"], null, 0)).toEqual([]);
+  it("spares a busy workspace's pages and restarts their clock", () => {
+    const { result, ids } = swept(warmFrom({ busy: 2 * IDLE_MS, idle: 2 * IDLE_MS }), { busy: ["busy"] });
+    expect(ids).toEqual(["busy"]);
+    expect(result.get("busy")).toBe(NOW);
   });
 
-  it("fills the budget from the hidden pages when none is visible", () => {
-    expect(live(["a", "b", "c"], null, 2)).toEqual(["a", "b"]);
+  it("does not warm a cold page because its workspace is busy", () => {
+    expect(swept(new Map(), { ids: ["cold"], busy: ["cold"] }).ids).toEqual([]);
   });
 
-  it("does not spend the budget twice on a duplicated page", () => {
-    expect(live(["a", "b", "b", "c", "d"], "a", 2)).toEqual(["a", "b", "c"]);
+  it("under moderate pressure lets the least recently used page past its grace go, one a sweep", () => {
+    const warm = warmFrom({ recent: GRACE_MS - 1, older: 10 * MIN, oldest: 20 * MIN });
+    const first = swept(warm, { pressure: "moderate" });
+    expect(first.ids).toEqual(["older", "recent"]);
+    expect(swept(first.result, { pressure: "moderate" }).ids).toEqual(["recent"]);
   });
 
-  it("keeps everything when there is room", () => {
-    expect(live(["a", "b", "c"], "a", DEFAULT_KEEP)).toEqual(["a", "b", "c"]);
+  it("under moderate pressure keeps pages shown within the grace", () => {
+    const warm = warmFrom({ a: MIN, b: 2 * MIN });
+    expect(swept(warm, { pressure: "moderate" }).result).toBe(warm);
   });
 
-  it("defaults to six hidden guests", () => {
-    const order = Array.from({ length: 10 }, (_, n) => `p${n}`);
-    expect(liveGuests({ order, visible: "p0", keep: DEFAULT_KEEP, pinned: none }).size).toBe(7);
+  it("under moderate pressure still spares busy pages", () => {
+    expect(swept(warmFrom({ busy: 30 * MIN, idle: 10 * MIN }), { pressure: "moderate", busy: ["busy"] }).ids).toEqual([
+      "busy",
+    ]);
+  });
+
+  it("under critical pressure keeps only the visible and pinned pages", () => {
+    const warm = warmFrom({ v: 0, p: 0, busy: 0, fresh: 0 });
+    expect(swept(warm, { pressure: "critical", visible: "v", pinned: ["p"], busy: ["busy"] }).ids).toEqual(["p", "v"]);
   });
 });

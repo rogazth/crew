@@ -34,7 +34,7 @@ type Options = {
    * URL is good for one run only.
    */
   file: { path: string; relative: string } | null;
-  /** False when the retention budget has sent this page cold: no guest, nothing running. */
+  /** False when the page went cold (unused a while, or memory ran short): no guest, nothing running. */
   live: boolean;
   /** Bumped to throw a dead guest away and build a new one. */
   generation: number;

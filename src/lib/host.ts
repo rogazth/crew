@@ -11,6 +11,7 @@ import type {
   SitePermissions,
 } from "./browser/bridge";
 import type { MachineRoute } from "./browser/machines";
+import type { MemoryPressure } from "./browser/retention";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
 import type { LoginItemState } from "./loginItem";
@@ -197,6 +198,8 @@ export type BrowserHost = {
   prepareRestore(token: string, entriesJson: string, index: number, machine: string | null): Promise<boolean>;
   /** Through the pages' session, so an icon behind a sign-in loads; an incognito page's through its in-memory one. */
   favicon(url: string, incognito?: boolean): Promise<string | null>;
+  /** How tight the machine's memory is, read from the OS. */
+  memoryPressure(): Promise<MemoryPressure>;
   /** Into every page's session; incognito pages never see them. */
   importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
   /** Every other machine a workspace lives on, so `<alias>.localhost` reaches its loopback. */

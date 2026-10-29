@@ -6,6 +6,7 @@ import { isMachineAlias } from "../../src/lib/browser/machines";
 import { importCookies } from "./cookies";
 import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
 import { downloadAction } from "./downloads";
+import { memoryPressure } from "./memory";
 import {
   ownedGuest,
   pageSession,
@@ -146,6 +147,7 @@ export function registerBrowserIpc(): void {
   ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, incognito: unknown) =>
     typeof url === "string" ? favicon(url, partitionFor(incognito === true)) : null,
   );
+  ipcMain.handle(CHANNELS.memoryPressure, () => memoryPressure());
 
   /** Takes the daemon's row as-is; parsing it here means main never trusts a renderer-built stack. */
   ipcMain.handle(CHANNELS.prepareRestore, (_event, token: unknown, entriesJson: unknown, index: unknown, machine: unknown) => {
