@@ -4,9 +4,9 @@
 // hooks feed, and asks git itself only for a folder nobody has listed yet or
 // when the window comes back, so a branch switched or a workspace renamed
 // shows here as it does there.
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useWorkspaceLink } from "../../hooks/useEnvLinks";
-import { placesVersion, readTrees, readWorkspaces, subscribePlaces, mainBranchOf, treeKnown, treesOf, watchPlaces, workspacesKnown } from "../../lib/placeStore";
+import { readTrees, readWorkspaces, subscribePlaces, mainBranchOf, treeKnown, treesSnapshot, watchPlaces, workspacesKnown } from "../../lib/placeStore";
 import type { Session, Worktree } from "../../lib/types";
 import { useChatActions } from "./context";
 
@@ -36,7 +36,8 @@ export function useWhere(session: Pick<Session, "workspaceId">): Where {
 /** Where a folder is, before any session runs in it: a workspace's first screen. */
 export function useWhereAt(root: string, workspaceId: string): Where {
   const link = useWorkspaceLink(workspaceId);
-  useSyncExternalStore(subscribePlaces, placesVersion);
+  // Redrawn only when what it shows changes, not on every answer the store gets for some other folder.
+  useSyncExternalStore(subscribePlaces, () => whereKey(root, workspaceId));
   const tree = root ? treeKnown(root) : undefined;
   const list = workspacesKnown();
 
@@ -60,6 +61,12 @@ export function useWhereAt(root: string, workspaceId: string): Where {
   };
 }
 
+/** What `useWhereAt` reads from the store, as one string that changes when it does. */
+function whereKey(root: string, workspaceId: string): string {
+  const workspace = workspacesKnown()?.find((one) => one.id === workspaceId);
+  return JSON.stringify([root ? treeKnown(root) : undefined, workspace?.name, workspace?.home, root ? mainBranchOf(root) : null]);
+}
+
 /** The branch a session works on, when it is a branch worth naming. */
 export function branchOf(where: Where): string | null {
   return where.tree?.branch ?? null;
@@ -67,11 +74,12 @@ export function branchOf(where: Where): string | null {
 
 /** Every checkout of the repository `root` is in, kept as fresh as `useWhere` keeps its own: what `#` can name. */
 export function useRepoTrees(root: string): readonly Worktree[] {
-  const version = useSyncExternalStore(subscribePlaces, placesVersion);
   const key = trim(root);
+  // Every mounted chat reads this: a list that stays the same object keeps them from redrawing whenever any repository is read.
+  const trees = useSyncExternalStore(subscribePlaces, () => treesSnapshot(key));
   useEffect(() => {
     if (key && treeKnown(key) === undefined) void readTrees(key);
     return watchPlaces(key || null);
   }, [key]);
-  return useMemo(() => (key ? treesOf(key) : []), [key, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  return trees;
 }

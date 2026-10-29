@@ -33,13 +33,18 @@ export const workspacesKnown = () => workspaces;
 /** The checkout at `root`: undefined until asked, null when it is not one git lists. */
 export const treeKnown = (root: string): Worktree | null | undefined => trees.get(trim(root));
 
+/** What the store holds, to tell an answer that changed something from one that repeats it. */
+const held = () => JSON.stringify([workspaces, [...trees], [...repoOf]]);
+
 export function publishWorkspaces(list: Workspace[]) {
+  const was = held();
   workspaces = list;
-  bump();
+  if (held() !== was) bump();
 }
 
 /** git's list for the repository at `root`: every checkout in it becomes known, and one that is gone no longer is. */
 export function publishWorktrees(root: string, list: Worktree[]) {
+  const was = held();
   const wanted = trim(root);
   const paths = new Set(list.map((tree) => trim(tree.path)));
   paths.add(wanted);
@@ -49,7 +54,8 @@ export function publishWorktrees(root: string, list: Worktree[]) {
   for (const path of paths) repoOf.set(path, repo);
   for (const path of paths) trees.set(path, null);
   for (const tree of list) trees.set(trim(tree.path), tree);
-  bump();
+  // Every reader redraws on a bump: git saying again what it said is no news.
+  if (held() !== was) bump();
 }
 
 /** Every checkout git lists for the repository `root` is in, the main one first; empty until git has answered. */
@@ -62,6 +68,24 @@ export function treesOf(root: string): Worktree[] {
     if (tree) list.push(tree);
   }
   return list.sort((a, b) => Number(b.main) - Number(a.main));
+}
+
+const treeLists = new Map<string, { at: number; list: Worktree[] }>();
+
+/**
+ * `treesOf`, as one list that stays the same object until the repository's
+ * checkouts change: what a reader subscribed to the store can return as its
+ * snapshot, so a change to another repository does not redraw it.
+ */
+export function treesSnapshot(root: string): readonly Worktree[] {
+  const key = trim(root);
+  const kept = treeLists.get(key);
+  if (kept?.at === version) return kept.list;
+  const list = key ? treesOf(key) : [];
+  const same = kept && JSON.stringify(kept.list) === JSON.stringify(list);
+  const entry = { at: version, list: same ? kept.list : list };
+  treeLists.set(key, entry);
+  return entry.list;
 }
 
 /** The branch the repository's main checkout is on, which is where its work lands: the real default, not a guess. */

@@ -1,4 +1,4 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import { DEFAULT_BOT_AVATAR, parseBotAvatar, type BotAvatarId } from "../lib/botAvatar";
 
@@ -28,7 +28,9 @@ export function BotAvatarProvider({ children }: { children: React.ReactNode }) {
     void api.stateSet(KEY, next).catch(() => {});
   }, []);
 
-  return createElement(Context.Provider, { value: { avatar, update } }, children);
+  // The window redraws this provider with everything else; a fresh value would redraw every reader.
+  const value = useMemo(() => ({ avatar, update }), [avatar, update]);
+  return createElement(Context.Provider, { value }, children);
 }
 
 export const useBotAvatar = () => useContext(Context);

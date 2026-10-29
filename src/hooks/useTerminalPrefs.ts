@@ -1,4 +1,4 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import {
   DEFAULT_TERMINAL_PREFS,
@@ -32,7 +32,9 @@ export function TerminalPrefsProvider({ children }: { children: React.ReactNode 
     void api.stateSet(KEY, JSON.stringify(next)).catch(() => {});
   }, []);
 
-  return createElement(Context.Provider, { value: { prefs, update } }, children);
+  // The window redraws this provider with everything else; a fresh value would redraw every reader.
+  const value = useMemo(() => ({ prefs, update }), [prefs, update]);
+  return createElement(Context.Provider, { value }, children);
 }
 
 export const useTerminalPrefs = () => useContext(Context);
