@@ -55,6 +55,11 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
     dismiss: () => setOpen(false),
   }));
 
+  // A navigation while the bar is unfocused replaces a left-behind draft, so it never sits over a new page.
+  useEffect(() => {
+    if (document.activeElement !== input.current) setDraft(null);
+  }, [url]);
+
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
@@ -143,10 +148,11 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
             suggest("");
           }
         }}
-        // Leaving the bar gives it back to the page's URL, so a navigation never lands behind stale text.
+        // Leaving the bar keeps what was typed; a blank bar goes back to the page's URL.
         onBlur={() => {
           setOpen(false);
-          setDraft(null);
+          setCursor(-1);
+          if (!draft?.trim()) setDraft(null);
         }}
         onChange={(event) => {
           const text = event.target.value;
