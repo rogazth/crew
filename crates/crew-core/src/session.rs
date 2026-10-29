@@ -739,12 +739,15 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
 }
 
 /// A turn that already started must keep its status, so only a finished or a
-/// failed one is cleared.
+/// failed one is cleared. Every other window, and the menu bar, hears it.
 pub fn mark_read(store: &Store, id: String) -> Result<(), String> {
-    store.with(|conn| {
+    let cleared = store.with(|conn| {
         conn.prepare_cached("UPDATE sessions SET status = 'idle' WHERE id = ?1 AND status IN ('done', 'error')")?
             .execute(params![id])
     })?;
+    if cleared > 0 {
+        store.session_changed(&id);
+    }
     Ok(())
 }
 
@@ -1153,6 +1156,25 @@ mod tests {
         set_status(&store, made.id.clone(), "working".into()).expect("working");
         mark_read(&store, made.id.clone()).expect("read");
         assert_eq!(get(&store, made.id).unwrap().unwrap().status, "working");
+    }
+
+    /// The menu bar lists what waits on the user; reading a session in the
+    /// window has to reach it then, not at its next sweep.
+    #[test]
+    fn reading_a_finished_turn_is_heard_once() {
+        let (store, workspace) = world();
+        let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
+        set_status(&store, made.id.clone(), "done".into()).expect("done");
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        store.set_listener(std::sync::Arc::new(move |what| {
+            if let crate::store::Changed::Session(id) = what {
+                log.lock().unwrap().push(id.to_string());
+            }
+        }));
+        mark_read(&store, made.id.clone()).expect("read");
+        mark_read(&store, made.id.clone()).expect("read again");
+        assert_eq!(*heard.lock().unwrap(), [made.id]);
     }
 
     #[test]

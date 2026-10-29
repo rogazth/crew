@@ -73,7 +73,7 @@ private struct WaitingRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(item.session.name.isEmpty ? "Untitled" : item.session.name)
                         .lineLimit(1)
-                    Text("\(item.workspace) · \(providerName(item.session.provider))")
+                    Text(item.workspace)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
