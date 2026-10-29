@@ -469,7 +469,9 @@ mod tests {
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         host.set_listener(Arc::new(move |_| *count.lock().unwrap() += 1));
-        let day = 1_792_457_829_939;
+        // The start of today: the snapshot keeps the last week from now, and
+        // the readings a few seconds apart stay on one day.
+        let day = now_millis().div_euclid(DAY_MS) * DAY_MS;
         host.record(reading(Some("a@x.dev"), vec![window("seven_day", 10.0, 10080)], day), true);
         host.record(reading(Some("a@x.dev"), vec![window("five_hour", 40.0, 300)], day + 1000), true);
         host.record(reading(Some("a@x.dev"), vec![window("seven_day", 25.0, 10080)], day + 2000), true);
@@ -499,10 +501,10 @@ mod tests {
     #[test]
     fn history_older_than_a_week_is_dropped() {
         let host = host();
-        let now = 1_792_457_829_939;
+        let now = now_millis();
         host.record(reading(Some("a"), vec![window("seven_day", 50.0, 10080)], now - 9 * DAY_MS), false);
         host.record(reading(Some("a"), vec![window("seven_day", 60.0, 10080)], now), false);
         let days: Vec<_> = host.snapshot().unwrap().history.iter().map(|d| d.day.clone()).collect();
-        assert_eq!(days, vec!["2026-10-20".to_string()]);
+        assert_eq!(days, vec![day_of(now)]);
     }
 }
