@@ -111,8 +111,8 @@ const RINGS_KEY = "usage:rings";
 const LEGACY_RINGS_KEY = "crew.proto.usageRings.v2";
 const ringWatchers = new Set<() => void>();
 /** The providers that report a plan, in the order a fresh setup shows them. */
-const PLANS = ["claude", "codex", "cursor"];
-const DEFAULT_COLORS: Record<string, RingColorId> = { claude: "clay", codex: "blue", cursor: "teal" };
+const PLANS = ["claude", "codex", "cursor", "grok"];
+const DEFAULT_COLORS: Record<string, RingColorId> = { claude: "clay", codex: "blue", cursor: "teal", grok: "violet" };
 const FALLBACK: RingConfig = { order: PLANS, shown: PLANS.slice(0, MAX_RINGS), colors: DEFAULT_COLORS };
 let rings: RingConfig = FALLBACK;
 let ringsLoaded = false;

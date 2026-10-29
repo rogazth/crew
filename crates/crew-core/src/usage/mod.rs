@@ -1,12 +1,13 @@
 //! What each provider account has spent of its plan: the latest reading per
 //! provider and account, and a week of daily highs, kept in the store. Claude
-//! reports its windows with a turn, Codex can be asked at any time, Cursor and
-//! opencode are read from their CLIs; each adapter lives in a module of its
-//! own and hands `record` a [`PlanUsage`].
+//! reports its windows with a turn, Codex can be asked at any time, Cursor,
+//! Grok and opencode are read from their CLIs; each adapter lives in a module
+//! of its own and hands `record` a [`PlanUsage`].
 
 mod claude;
 pub(crate) mod codex;
 mod cursor;
+mod grok;
 mod opencode;
 
 use std::io::Read;
@@ -259,6 +260,7 @@ impl UsageHost {
             scope.spawn(|| self.refresh_claude());
             scope.spawn(|| self.refresh_with("codex", codex::probe));
             scope.spawn(|| self.refresh_with("cursor-agent", cursor::read));
+            scope.spawn(|| self.refresh_with("grok", grok::read));
             scope.spawn(|| self.refresh_with("opencode", opencode::read));
         });
     }
@@ -350,16 +352,25 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Milliseconds since the epoch of `2026-11-07T02:51:47.912Z`.
+/// Milliseconds since the epoch of `2026-11-07T02:51:47.912Z`, or of one
+/// with an offset (`2026-11-07T02:51:47.912+00:00`).
 pub(crate) fn parse_iso_ms(text: &str) -> Option<i64> {
     let (date, time) = text.trim().trim_end_matches('Z').split_once('T')?;
     let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
     let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let (time, offset) = match time.find(['+', '-']) {
+        Some(at) => {
+            let (sign, zone) = (if &time[at..at + 1] == "-" { -1 } else { 1 }, &time[at + 1..]);
+            let (zh, zm) = zone.split_once(':').unwrap_or((zone, "0"));
+            (&time[..at], sign * (zh.parse::<i64>().ok()? * 60 + zm.parse::<i64>().ok()?))
+        }
+        None => (time, 0),
+    };
     let (clock, millis) = time.split_once('.').unwrap_or((time, "0"));
     let mut t = clock.split(':').map(|p| p.parse::<i64>().ok());
     let (h, mi, s) = (t.next()??, t.next()??, t.next()??);
     let millis: i64 = format!("{millis:0<3}")[..3].parse().ok()?;
-    Some((days_from_civil(y, m, day) * 86_400 + h * 3600 + mi * 60 + s) * 1000 + millis)
+    Some((days_from_civil(y, m, day) * 86_400 + h * 3600 + (mi - offset) * 60 + s) * 1000 + millis)
 }
 
 /// Runs a CLI to its end and returns what it printed, or nothing if it fails
@@ -438,6 +449,9 @@ mod tests {
         assert_eq!(day_of(1_792_457_829_939), "2026-10-20");
         assert_eq!(parse_iso_ms("2026-11-07T02:51:47.912Z"), Some(1_794_019_907_912));
         assert_eq!(day_of(parse_iso_ms("2026-11-07T02:51:47.912Z").unwrap()), "2026-11-07");
+        assert_eq!(parse_iso_ms("2026-11-07T02:51:47.912+00:00"), Some(1_794_019_907_912));
+        assert_eq!(parse_iso_ms("2026-11-06T23:51:47.912-03:00"), Some(1_794_019_907_912));
+        assert_eq!(parse_iso_ms("2026-11-07T02:51:47+00:00"), Some(1_794_019_907_000));
         assert_eq!(parse_iso_ms("nonsense"), None);
     }
 

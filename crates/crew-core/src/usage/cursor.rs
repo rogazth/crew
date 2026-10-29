@@ -3,7 +3,10 @@
 //! `cursor.com/api/usage-summary`, with the access token `cursor-agent login`
 //! stored (the macOS keychain's `cursor-access-token`, or `auth.json` under
 //! `~/.config/cursor`). A browser's cookies are never read. Without a token
-//! the reading has the plan and account and no window.
+//! the reading has the plan and account and no window. An account on the X
+//! subscription, which shares one plan between Cursor and Grok, is limited by
+//! a weekly pool instead: `get-sand-usage-status` says how much of it is
+//! spent, and `usage-summary` stays at zero for it.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -13,18 +16,25 @@ use base64::Engine;
 use crew_protocol::{PlanUsage, UsageWindow};
 use serde_json::Value;
 
-use super::{parse_iso_ms, run};
+use super::{parse_iso_ms, run, window_label};
 
 const SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
+const SAND_URL: &str = "https://cursor.com/api/dashboard/get-sand-usage-status";
 
 pub fn read(bin: &str) -> Option<PlanUsage> {
     let about = run(bin, &["about", "--format", "json"], Duration::from_secs(30)).and_then(|text| parse_about(&text));
-    let summary = access_token().and_then(|token| fetch_summary(&token)).and_then(|text| parse_summary(&text));
-    if about.is_none() && summary.is_none() {
+    let token = access_token();
+    let summary = token.as_deref().and_then(|token| fetch(token, SUMMARY_URL, "")).and_then(|text| parse_summary(&text));
+    let now = crate::store::now_millis();
+    let weekly = token.as_deref().and_then(|token| fetch(token, SAND_URL, SAND_REQUEST)).and_then(|text| parse_sand(&text, now));
+    if about.is_none() && summary.is_none() && weekly.is_none() {
         return None;
     }
     let (email, tier) = about.unwrap_or((None, None));
-    let (plan, windows) = summary.unwrap_or((None, Vec::new()));
+    let (plan, mut windows) = summary.unwrap_or((None, Vec::new()));
+    if let Some(weekly) = weekly {
+        windows = vec![weekly];
+    }
     Some(PlanUsage {
         provider: "cursor".into(),
         account: email,
@@ -35,7 +45,7 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         windows,
         tokens: None,
         cost: None,
-        updated_at: crate::store::now_millis(),
+        updated_at: now,
     })
 }
 
@@ -65,6 +75,26 @@ pub fn parse_summary(text: &str) -> Option<(Option<String>, Vec<UsageWindow>)> {
         .into_iter()
         .collect();
     (plan.is_some() || json.get("individualUsage").is_some()).then_some((plan, windows))
+}
+
+/// The weekly pool of an account whose Cursor and Grok share one plan
+/// (`isUnified`), while its period runs; none for any other account.
+pub fn parse_sand(text: &str, now: i64) -> Option<UsageWindow> {
+    let json: Value = serde_json::from_str(text.trim()).ok()?;
+    if json.get("isUnified").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let used = json.get("usagePercent").and_then(Value::as_f64)?;
+    let end = json.get("nextResetTimestampUtc").and_then(Value::as_str).and_then(parse_iso_ms).filter(|end| *end > now)?;
+    let start = json.get("currentPeriodStart").and_then(Value::as_str).and_then(parse_iso_ms).filter(|start| *start < end);
+    let minutes = start.map_or(10080, |start| (end - start) / 60_000);
+    Some(UsageWindow {
+        id: "weekly".into(),
+        label: window_label(minutes),
+        used_percent: used.clamp(0.0, 100.0),
+        window_minutes: Some(minutes),
+        resets_at: Some(end),
+    })
 }
 
 /// The token `cursor-agent login` stored, if it can be found cheaply.
@@ -107,8 +137,13 @@ fn session_value(token: &str) -> Option<String> {
     Some(format!("{}%3A%3A{token}", sub.rsplit('|').next()?))
 }
 
+/// The rest of a curl config that posts an empty body, as the dashboard's
+/// endpoints want, with the `Origin` they check.
+const SAND_REQUEST: &str =
+    "request = \"POST\"\nheader = \"Content-Type: application/json\"\nheader = \"Origin: https://cursor.com\"\ndata = \"{}\"\n";
+
 /// `curl` is given its request on stdin, so the token is not on a command line.
-fn fetch_summary(token: &str) -> Option<String> {
+fn fetch(token: &str, url: &str, extra: &str) -> Option<String> {
     let cookie = session_value(token)?;
     let mut child = Command::new("curl")
         .args(["-s", "-f", "-m", "15", "--config", "-"])
@@ -117,7 +152,7 @@ fn fetch_summary(token: &str) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let config = format!("url = \"{SUMMARY_URL}\"\nheader = \"Cookie: WorkosCursorSessionToken={cookie}\"\n");
+    let config = format!("url = \"{url}\"\nheader = \"Cookie: WorkosCursorSessionToken={cookie}\"\n{extra}");
     child.stdin.take()?.write_all(config.as_bytes()).ok()?;
     let out = child.wait_with_output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -150,6 +185,22 @@ mod tests {
         let (_, windows) = parse_summary(r#"{"membershipType":"free","individualUsage":{}}"#).unwrap();
         assert!(windows.is_empty());
         assert!(parse_summary(r#"{"error":"not_authenticated"}"#).is_none());
+    }
+
+    #[test]
+    fn a_unified_account_is_limited_by_its_weekly_pool() {
+        // As cursor.com answered an X subscription in October 2026, trimmed.
+        let text = r#"{"currentPeriodStart":"2026-10-28T03:38:09.637Z","nextResetTimestampUtc":"2026-11-04T03:38:09.637Z",
+            "usagePercent":3.2719393282773566,"hasAvailableUsage":true,"cursorPlanName":"Premium","isUnified":true}"#;
+        let now = parse_iso_ms("2026-10-29T00:00:00Z").unwrap();
+        let window = parse_sand(text, now).unwrap();
+        assert_eq!((window.id.as_str(), window.label.as_str(), window.window_minutes), ("weekly", "Weekly", Some(10080)));
+        assert!((window.used_percent - 3.27).abs() < 0.01);
+        assert_eq!(window.resets_at, parse_iso_ms("2026-11-04T03:38:09.637Z"));
+        // A pool whose week has ended says nothing about now.
+        assert!(parse_sand(text, parse_iso_ms("2026-11-05T00:00:00Z").unwrap()).is_none());
+        // Grok Bot on its own beside a Cursor plan is not the plan's limit.
+        assert!(parse_sand(&text.replace(r#""isUnified":true"#, r#""isUnified":false"#), now).is_none());
     }
 
     #[test]
