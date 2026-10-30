@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bearer, Bridge, ToolHost};
@@ -177,6 +177,7 @@ pub fn remove_daemon_file(dir: &std::path::Path, url: &str) {
 
 const OUT_CAP: usize = 1024;
 const SEND_WAIT: Duration = Duration::from_secs(5);
+const SEND_POLL: Duration = Duration::from_millis(5);
 
 enum Outgoing {
     Text(String),
@@ -195,7 +196,6 @@ struct Hub {
     /// host has no use for transcripts and statuses, and would pay for them.
     quiet: Mutex<HashSet<u64>>,
     next: AtomicU64,
-    runtime: Mutex<Option<tokio::runtime::Handle>>,
     /// Told when the last client watching a terminal goes.
     unwatch: std::sync::OnceLock<Box<dyn Fn(u32) + Send + Sync>>,
 }
@@ -207,13 +207,8 @@ impl Hub {
             pty_attached: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
-            runtime: Mutex::new(None),
             unwatch: std::sync::OnceLock::new(),
         }
-    }
-
-    fn set_runtime(&self, handle: tokio::runtime::Handle) {
-        *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     fn subscribe(&self) -> (u64, mpsc::Receiver<Outgoing>) {
@@ -271,24 +266,11 @@ impl Hub {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => self.unsubscribe(id),
             Err(mpsc::error::TrySendError::Full(msg)) => {
-                if !self.send_wait(&tx, msg) {
+                if !send_wait(&tx, msg) {
                     self.unsubscribe(id);
                 }
             }
         }
-    }
-
-    fn send_wait(&self, tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
-        let send = async { tokio::time::timeout(SEND_WAIT, tx.send(msg)).await };
-        let result = if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(send))
-        } else {
-            let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
-                return false;
-            };
-            handle.block_on(send)
-        };
-        matches!(result, Ok(Ok(())))
     }
 
     fn broadcast(&self, msg: Outgoing, to_quiet: bool) {
@@ -322,6 +304,31 @@ impl Hub {
             return;
         };
         self.broadcast(Outgoing::Text(text), to_quiet);
+    }
+}
+
+/// Room for one more message to a client that is behind. A thread of its own,
+/// a terminal's reader or an agent's, waits a while for the window to catch up,
+/// which slows what it reads to what the window can take. Code on the runtime
+/// never waits: a worker parked here holds back the writer that would make room
+/// and the timer that would end the wait, and once every worker was parked on a
+/// window that slept the daemon froze for good. That client is dropped instead;
+/// its window reconnects and replays.
+fn send_wait(tx: &mpsc::Sender<Outgoing>, mut msg: Outgoing) -> bool {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return false;
+    }
+    let deadline = Instant::now() + SEND_WAIT;
+    loop {
+        match tx.try_send(msg) {
+            Ok(()) => return true,
+            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+            Err(mpsc::error::TrySendError::Full(back)) if Instant::now() < deadline => {
+                msg = back;
+                thread::sleep(SEND_POLL);
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => return false,
+        }
     }
 }
 
@@ -745,7 +752,6 @@ async fn run(
         }
     }
     machine::start_sampler();
-    hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
     // Routines are the daemon's to fire: a standing order outlives the window.
@@ -2183,6 +2189,45 @@ mod tests {
 
     async fn send_json(ws: &mut Ws, value: &impl serde::Serialize) {
         ws.send(Message::Text(serde_json::to_string(value).unwrap().into())).await.expect("send");
+    }
+
+    fn fill(hub: &Hub, id: u64) {
+        for _ in 0..OUT_CAP {
+            hub.send(id, Outgoing::Pong(Vec::new()));
+        }
+    }
+
+    fn subscribed(hub: &Hub, id: u64) -> bool {
+        hub.clients.lock().unwrap().contains_key(&id)
+    }
+
+    /// A window that stops reading, a Mac that sleeps, never parks a worker:
+    /// enough of them waiting on it froze the daemon for good.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_behind_is_dropped_without_parking_the_runtime() {
+        let hub = Hub::new();
+        let (id, _rx) = hub.subscribe();
+        fill(&hub, id);
+        let started = Instant::now();
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!subscribed(&hub, id));
+    }
+
+    /// A terminal's reader waits for the window to catch up rather than drop it.
+    #[test]
+    fn a_reader_thread_waits_for_a_client_behind_to_catch_up() {
+        let hub = Hub::new();
+        let (id, mut rx) = hub.subscribe();
+        fill(&hub, id);
+        let reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            rx.blocking_recv();
+            rx
+        });
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(subscribed(&hub, id));
+        drop(reader.join());
     }
 
     #[tokio::test]
