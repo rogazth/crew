@@ -9,7 +9,7 @@
 // back in, and a tab closed with DevTools docked takes them along.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { launchCrew, MOD, servePages, stripTabIds, waitFor, webviewIn, type Crew } from "./harness.ts";
+import { holdsFor, launchCrew, MOD, servePages, stripTabIds, waitFor, webviewIn, type Crew } from "./harness.ts";
 
 type Rect = { x: number; y: number; width: number; height: number };
 type Frontend = { id: number; docked: boolean; inspects: string; bounds: Rect | null; visible: boolean };
@@ -203,4 +203,36 @@ test("L2: DevTools dock to a side of the page, move, resize, and close with it",
   await waitFor(async () => (await stripTabIds(crew)).length === 0, { message: "the tab closes" });
   await waitFor(async () => (await frontends(crew)).length === 0, { message: "its DevTools go with it" });
   assert.equal(await crew.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+});
+
+// A toast in the corner, its timer held while the keyboard is in the page:
+// the docked view opens and stays over it, instead of flashing and giving way
+// to an empty panel for as long as the toast stands.
+test("L2: a toast over the panel leaves docked DevTools on screen", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const server = await servePages({ "/inspect": "Inspected page" });
+  t.after(() => server.close());
+  const page = crew.window;
+  const address = `${server.origin}/inspect`.replace(/^http:\/\//, "");
+
+  await page.getByRole("button", { name: /^New tab/ }).click();
+  await page.getByRole("textbox", { name: "Open a tab" }).fill(address);
+  await page.getByRole("button", { name: `Open ${address}`, exact: true }).click();
+  await waitFor(() => server.requests.includes("/inspect"), { message: "the page loads" });
+
+  // A toast as the toaster lays one out: in its viewport, in the bottom right corner.
+  await page.evaluate(() => {
+    const viewport = document.querySelector("[data-toaster]");
+    if (!viewport) throw new Error("no toaster");
+    const toast = document.createElement("div");
+    toast.dataset.fakeToast = "";
+    toast.style.cssText = "position:absolute;right:0;bottom:0;width:340px;height:64px";
+    viewport.append(toast);
+  });
+
+  await page.getByRole("button", { name: "Developer tools", exact: true }).click();
+  await page.locator('[data-devtools="bottom"]').waitFor();
+  await frontend(crew, (it) => it.docked && it.visible, "docked DevTools show");
+  await holdsFor(1500, async () => (await frontends(crew))[0]?.visible === true, "the view hid under the toast");
 });

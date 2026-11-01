@@ -37,10 +37,17 @@ const EDGE: Record<Side, string> = {
 const FLOATING =
   '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [role="tooltip"], body > :not(#root) *';
 
+/**
+ * Toasts float too, but no one asked for them, and their timers stand still
+ * while the keyboard is in a page or in DevTools: one in the corner would hide
+ * the panel for good. They go under the view instead.
+ */
+const PASSIVE = "[data-toaster]";
+
 /** Whether anything floating is drawn over `area`. */
 function covered(area: DockBounds, panel: HTMLElement): boolean {
   for (const element of document.querySelectorAll(FLOATING)) {
-    if (panel.contains(element)) continue;
+    if (panel.contains(element) || element.closest(PASSIVE)) continue;
     const box = element.getBoundingClientRect();
     if (box.width === 0 || box.height === 0) continue;
     if (
