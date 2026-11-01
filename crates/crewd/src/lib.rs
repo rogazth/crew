@@ -175,7 +175,11 @@ pub fn remove_daemon_file(dir: &std::path::Path, url: &str) {
     }
 }
 
+/// What a thread of its own lets pile up for a client before it waits.
 const OUT_CAP: usize = 1024;
+/// Room past that for code on the runtime, which never waits: the replies and
+/// events a window gets while an agent keeps its queue at `OUT_CAP`.
+const OUT_ROOM: usize = 16 * OUT_CAP;
 const SEND_WAIT: Duration = Duration::from_secs(5);
 const SEND_POLL: Duration = Duration::from_millis(5);
 
@@ -212,7 +216,7 @@ impl Hub {
     }
 
     fn subscribe(&self) -> (u64, mpsc::Receiver<Outgoing>) {
-        let (tx, rx) = mpsc::channel(OUT_CAP);
+        let (tx, rx) = mpsc::channel(OUT_ROOM);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(id, tx);
         (id, rx)
@@ -262,14 +266,8 @@ impl Hub {
         let Some(tx) = tx else {
             return;
         };
-        match tx.try_send(msg) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => self.unsubscribe(id),
-            Err(mpsc::error::TrySendError::Full(msg)) => {
-                if !send_wait(&tx, msg) {
-                    self.unsubscribe(id);
-                }
-            }
+        if !send_wait(&tx, msg) {
+            self.unsubscribe(id);
         }
     }
 
@@ -307,29 +305,26 @@ impl Hub {
     }
 }
 
-/// Room for one more message to a client that is behind. A thread of its own,
-/// a terminal's reader or an agent's, waits a while for the window to catch up,
-/// which slows what it reads to what the window can take. Code on the runtime
-/// never waits: a worker parked here holds back the writer that would make room
-/// and the timer that would end the wait, and once every worker was parked on a
-/// window that slept the daemon froze for good. That client is dropped instead;
-/// its window reconnects and replays.
-fn send_wait(tx: &mpsc::Sender<Outgoing>, mut msg: Outgoing) -> bool {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        return false;
-    }
-    let deadline = Instant::now() + SEND_WAIT;
-    loop {
-        match tx.try_send(msg) {
-            Ok(()) => return true,
-            Err(mpsc::error::TrySendError::Closed(_)) => return false,
-            Err(mpsc::error::TrySendError::Full(back)) if Instant::now() < deadline => {
-                msg = back;
-                thread::sleep(SEND_POLL);
+/// Queues one message for a client; false when it is gone or too far behind.
+/// A thread of its own, a terminal's reader or an agent's, waits a while once
+/// `OUT_CAP` are queued, which slows what it reads to what the window can take.
+/// Code on the runtime never waits: a worker parked here holds back the writer
+/// that would make room and the timer that would end the wait, and once every
+/// worker was parked on a window that slept the daemon froze for good. It has
+/// the room past `OUT_CAP` instead, so a reply to a window a streaming agent
+/// keeps busy goes through; past that room the client is dropped, and its
+/// window reconnects and replays.
+fn send_wait(tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
+    if tokio::runtime::Handle::try_current().is_err() {
+        let deadline = Instant::now() + SEND_WAIT;
+        while tx.max_capacity() - tx.capacity() >= OUT_CAP {
+            if tx.is_closed() || Instant::now() >= deadline {
+                return false;
             }
-            Err(mpsc::error::TrySendError::Full(_)) => return false,
+            thread::sleep(SEND_POLL);
         }
     }
+    tx.try_send(msg).is_ok()
 }
 
 impl PtyEvents for Hub {
@@ -2191,8 +2186,8 @@ mod tests {
         ws.send(Message::Text(serde_json::to_string(value).unwrap().into())).await.expect("send");
     }
 
-    fn fill(hub: &Hub, id: u64) {
-        for _ in 0..OUT_CAP {
+    fn fill(hub: &Hub, id: u64, count: usize) {
+        for _ in 0..count {
             hub.send(id, Outgoing::Pong(Vec::new()));
         }
     }
@@ -2207,11 +2202,24 @@ mod tests {
     async fn a_client_behind_is_dropped_without_parking_the_runtime() {
         let hub = Hub::new();
         let (id, _rx) = hub.subscribe();
-        fill(&hub, id);
+        fill(&hub, id, OUT_ROOM);
         let started = Instant::now();
         hub.send(id, Outgoing::Pong(Vec::new()));
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(!subscribed(&hub, id));
+    }
+
+    /// An agent streaming faster than a remote window reads keeps the queue at
+    /// its share; the reply to the window's next call still goes through, it
+    /// does not drop the window, which then flashed "offline" as it reconnected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reply_to_a_client_a_reader_keeps_busy_is_queued() {
+        let hub = Arc::new(Hub::new());
+        let (id, _rx) = hub.subscribe();
+        let reader = hub.clone();
+        thread::spawn(move || fill(&reader, id, OUT_CAP)).join().unwrap();
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(subscribed(&hub, id));
     }
 
     /// A terminal's reader waits for the window to catch up rather than drop it.
@@ -2219,7 +2227,7 @@ mod tests {
     fn a_reader_thread_waits_for_a_client_behind_to_catch_up() {
         let hub = Hub::new();
         let (id, mut rx) = hub.subscribe();
-        fill(&hub, id);
+        fill(&hub, id, OUT_CAP);
         let reader = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
             rx.blocking_recv();
