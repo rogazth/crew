@@ -17,6 +17,7 @@ mod identity;
 pub mod launch_agent;
 mod output;
 mod processes;
+mod trace;
 
 use args::{Cli, Command, Global};
 use client::{Client, Reply};
@@ -150,6 +151,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<ExitCode, CliError> {
             output::say(String::from_utf8_lossy(&script).trim_end());
             Ok(ExitCode::SUCCESS)
         }
+        Command::Trace(args) => trace::run(ctx, &args),
         Command::Daemon { command } => daemon::run(ctx, command),
     }
 }

@@ -180,3 +180,52 @@ fn crew_says_when_crew_is_not_running() {
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(stdout(&out).contains("not running"), "{out:?}");
 }
+
+/// `crew trace` reads files: no daemon, and inside a session (CREW_SOCKET and
+/// CREW_TOKEN set, pointing nowhere) all the same.
+#[test]
+fn trace_reads_files_with_no_daemon_and_inside_a_session() {
+    let dir = std::env::temp_dir().join(format!("ccli-trace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let trace = dir.join("trace");
+    std::fs::create_dir_all(&trace).expect("dir");
+    let line = |ts: &str, level: &str, message: &str| {
+        format!(
+            r#"{{"timestamp":"{ts}","level":"{level}","fields":{{"message":"{message}","session_id":"s1"}},"target":"daemon"}}"#
+        )
+    };
+    std::fs::write(
+        trace.join("crewd.ndjson"),
+        format!(
+            "{}\n{}\n{{\"torn\n",
+            line("2026-11-02T10:00:00.000000Z", "INFO", "first"),
+            line("2026-11-02T10:00:02.000000Z", "WARN", "third")
+        ),
+    )
+    .expect("write");
+    std::fs::write(trace.join("app.ndjson"), format!("{}\n", line("2026-11-02T10:00:01.000Z", "INFO", "second"))).expect("write");
+
+    let run = |extra: &[&str], session: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_crew"));
+        cmd.arg("trace").args(extra).env("CREW_DATA_DIR", &dir).env("HOME", &dir);
+        if session {
+            cmd.env("CREW_SOCKET", dir.join("nothing.sock")).env("CREW_TOKEN", "not-a-token");
+        } else {
+            cmd.env_remove("CREW_SOCKET").env_remove("CREW_TOKEN");
+        }
+        let out = cmd.output().expect("crew trace");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for session in [false, true] {
+        let all = run(&[], session);
+        let order: Vec<&str> = ["first", "second", "third"].iter().copied().filter(|m| all.contains(m)).collect();
+        assert_eq!(order, ["first", "second", "third"], "{all}");
+        assert!(all.find("first") < all.find("second") && all.find("second") < all.find("third"), "{all}");
+        assert!(run(&["--level", "warn"], session).contains("third"));
+        assert!(!run(&["--level", "warn"], session).contains("first"));
+        assert!(run(&["--json", "--session", "s1", "--limit", "1"], session).starts_with('{'));
+    }
+    assert_eq!(run(&["path"], true).trim(), trace.to_string_lossy());
+    std::fs::remove_dir_all(&dir).ok();
+}
