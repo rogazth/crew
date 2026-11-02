@@ -18,6 +18,7 @@ import { LOGIN_ITEM_CHANNELS } from "../src/lib/loginItem";
 import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
 import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
+import { TRACE_CHANNELS, type TraceRecord } from "../src/lib/trace";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, value: T) => cb(value);
@@ -78,6 +79,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     status: () => ipcRenderer.invoke(CLI_CHANNELS.status),
     install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
     uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
+  },
+  // Over IPC and not the WebSocket: the socket may be what is failing.
+  trace: {
+    write: (records: TraceRecord[]) => ipcRenderer.send(TRACE_CHANNELS.window, records),
   },
   loginItem: {
     get: () => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.get),

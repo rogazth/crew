@@ -21,6 +21,7 @@ import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState, SshHost, Tailnet } from "./remotes";
 import type { AppInfo } from "./appInfo";
 import type { ReleaseList, UpdateState } from "./update";
+import type { TraceHost } from "./trace";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
 
@@ -44,6 +45,8 @@ type CrewHost = {
   keybindings?: KeybindingsHost;
   cli?: CliHost;
   loginItem?: LoginItemHost;
+  /** The window's events for the trace main keeps. Absent outside Electron. */
+  trace?: TraceHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
