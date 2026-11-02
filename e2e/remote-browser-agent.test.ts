@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { BrowserLeases, Workspace } from "../src/lib/protocol.ts";
-import { addRemote, launchCrew, remoteRequest, savedStrip, waitFor, type RemoteDaemon } from "./harness.ts";
+import { addRemote, enableSsh, launchCrew, remoteRequest, savedStrip, SSH_USER, waitFor, type RemoteDaemon } from "./harness.ts";
 
 type Block = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
@@ -164,12 +164,13 @@ test("two Macs on one machine: a tab opens where the user was last, each drives 
   try {
     remote = await addRemote(ada, "devbox");
     const machine = remote;
+    await enableSsh(studio);
     await studio.window.evaluate((input) => window.crewHost!.remotes!.add(input), {
       id: "",
       name: "devbox",
       host: "127.0.0.1",
       port: machine.port,
-      user: "agent",
+      user: SSH_USER,
       token: machine.token,
     });
     const web = await ada.makeRepo("web");

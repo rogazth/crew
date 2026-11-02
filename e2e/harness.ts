@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { createRequire } from "node:module";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -35,6 +36,7 @@ const ELECTRON: string = createRequire(import.meta.url)("electron");
 const FAKE_CLAUDE = path.join(ROOT, "e2e/bin/claude");
 const FAKE_CODEX = path.join(ROOT, "e2e/bin/codex");
 const FAKE_OPENCODE = path.join(ROOT, "e2e/bin/opencode");
+const SSH_WRAPPER = path.join(ROOT, "e2e/bin/ssh");
 const run = promisify(execFile);
 
 export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
@@ -170,6 +172,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   let handedOff = false;
   const cleanup = async () => {
     if (!owns || handedOff) return;
+    await stopSshd(root);
     if (process.env.E2E_KEEP === "1") {
       await unlink(path.join(root, OWNER_FILE)).catch(() => {});
       console.log(`e2e: kept ${root}`);
@@ -238,6 +241,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
     await quit(app, async () => {
       if (agent) await stopAgentDaemon(userData);
       await killStragglers(home);
+      await closeSshMasters(userData);
     });
   };
   const close = async () => {
@@ -390,6 +394,10 @@ async function prepareSandbox(home: string, config: string, repos: string): Prom
     await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${path.join(home, "xdg-open.log")}"\n`);
     await chmod(opener, 0o755);
   }
+  // `ssh` with the sandbox's config when a spec started its sshd (see enableSsh).
+  const ssh = path.join(home, "bin/ssh");
+  await writeFile(ssh, await readFile(SSH_WRAPPER, "utf8"));
+  await chmod(ssh, 0o755);
   // The fake runs on this Node too, named outright.
   const claude = path.join(bin, "claude");
   const source = await readFile(FAKE_CLAUDE, "utf8");
@@ -504,6 +512,17 @@ async function killStragglers(home: string): Promise<void> {
     try {
       process.kill(pid, "SIGKILL");
     } catch {}
+  }
+}
+
+/**
+ * The ssh connections the app left open to a machine: a command's connection waits five minutes for
+ * the next (ControlPersist), past the app quitting. Each is asked to exit through its control socket.
+ */
+async function closeSshMasters(userData: string): Promise<void> {
+  const dir = path.join(userData, "tmp/ssh");
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    await run("/usr/bin/ssh", ["-o", `ControlPath="${path.join(dir, name)}"`, "-O", "exit", "127.0.0.1"]).catch(() => {});
   }
 }
 
@@ -696,12 +715,11 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
-/** ⇧⌘O and the row of the worktree named `label`: the window comes to work in it. */
+/** The worktree named `label` in the sidebar panel: the window comes to work in it. */
 export async function goToWorktree(crew: Crew, label: string): Promise<void> {
-  await pressChord(crew, `${MOD}+Shift+o`);
-  const palette = crew.window.getByRole("dialog", { name: "Command palette" });
-  await palette.getByRole("button").filter({ hasText: label }).first().click();
-  await palette.waitFor({ state: "detached" });
+  const header = worktreeHeader(crew, label);
+  await header.click();
+  await header.and(currentWorktree(crew)).waitFor();
 }
 
 /** Narrows a worktree's line to the one the window works in: `worktreeHeader(crew, label).and(currentWorktree(crew))`. */
@@ -1079,12 +1097,156 @@ export async function servePages(titles: Record<string, string> = {}): Promise<P
   };
 }
 
+/** The account the sandbox's sshd lets in: the current user, since it cannot run as another. */
+export const SSH_USER = userInfo().username;
+
+type Sshd = { port: number; child: ChildProcess; machineHome: string };
+/** One sshd per sandbox, for as long as its spec runs. */
+const sshds = new Map<string, Sshd>();
+
+/**
+ * What a machine reached over ssh sees: its own home, beside the sandbox's, with the fake CLIs
+ * and the stand-ins for the services a Linux machine has (e2e/bin/systemctl and the rest).
+ */
+export function machineHomeOf(crew: Pick<Crew, "root">): string {
+  return path.join(crew.root, "machine");
+}
+
+/**
+ * Makes `ssh` work from this sandbox to "a machine" on 127.0.0.1, with nothing of the real account's
+ * touched: a private sshd (the system's, started by its path) listening on a free high port of the
+ * loopback, as the current user, with host and client keys made here and public key auth only. The sandbox's
+ * `ssh` (e2e/bin/ssh, first on PATH) runs the system ssh with the config written here: that port, that key,
+ * a known_hosts of its own. What sshd starts sees the machine's home and PATH, not the account's (server
+ * side `SetEnv`), so nothing the machine writes lands in the real home. The sshd and the guard that watches
+ * the spec die with it; the guard stops sshd when the spec's pid is gone, however it went.
+ */
+export async function enableSsh(crew: Pick<Crew, "root" | "home">): Promise<{ user: string; port: number; machineHome: string }> {
+  const have = sshds.get(crew.root);
+  if (have && have.child.exitCode === null) return { user: SSH_USER, port: have.port, machineHome: have.machineHome };
+  const dir = path.join(crew.root, "ssh");
+  await mkdir(dir, { recursive: true });
+  const machineHome = machineHomeOf(crew);
+  await prepareSandbox(machineHome, path.join(crew.root, "config"), path.join(crew.root, "repos"));
+  const host = path.join(dir, "host_key");
+  const client = path.join(dir, "client_key");
+  for (const key of [host, client]) {
+    if (!existsSync(key)) await run("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "crew-e2e", "-f", key]);
+  }
+  await writeFile(path.join(dir, "authorized_keys"), await readFile(`${client}.pub`, "utf8"));
+  const port = await freePort();
+  const system = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+  const machinePath = [path.join(machineHome, ".local/bin"), path.join(machineHome, "bin"), ...system].join(":");
+  await writeFile(
+    path.join(dir, "sshd_config"),
+    [
+      `Port ${port}`,
+      "ListenAddress 127.0.0.1",
+      `HostKey ${host}`,
+      `PidFile ${path.join(dir, "sshd.pid")}`,
+      `AuthorizedKeysFile ${path.join(dir, "authorized_keys")}`,
+      `AllowUsers ${SSH_USER}`,
+      "AuthenticationMethods publickey",
+      "PubkeyAuthentication yes",
+      "PasswordAuthentication no",
+      "KbdInteractiveAuthentication no",
+      "PermitRootLogin no",
+      "UsePAM no",
+      // The files are the current user's own, in a temporary folder.
+      "StrictModes no",
+      // The tunnel's -L forwards, nothing else.
+      "AllowTcpForwarding local",
+      "GatewayPorts no",
+      "X11Forwarding no",
+      "PermitUserEnvironment no",
+      // Wins over the account's HOME and PATH, and over anything the client sends.
+      `SetEnv HOME=${machineHome} PATH=${machinePath} XDG_CONFIG_HOME=${path.join(machineHome, ".config")} CREW_SANDBOX=1 CREW_E2E_OWNER_PID=${process.pid}`,
+      "",
+    ].join("\n"),
+  );
+  // The client's side: only this key, only this known_hosts, and none of the account's agent or config.
+  await mkdir(path.join(crew.home, ".e2e-ssh"), { recursive: true });
+  await writeFile(
+    path.join(crew.home, ".e2e-ssh/config"),
+    [
+      "Host 127.0.0.1",
+      `  Port ${port}`,
+      `  IdentityFile ${client}`,
+      "  IdentitiesOnly yes",
+      "  IdentityAgent none",
+      `  UserKnownHostsFile ${path.join(dir, "known_hosts")}`,
+      "  GlobalKnownHostsFile /dev/null",
+      "",
+    ].join("\n"),
+  );
+  // sshd, and a shell beside it that ends it when the spec's process is gone: a spec killed on a timeout never stops it.
+  const log = path.join(dir, "sshd.log");
+  const guard = spawn(
+    "/bin/sh",
+    [
+      "-c",
+      '/usr/sbin/sshd -D -e -f "$1" -E "$2" & sshd=$!; while kill -0 "$3" 2>/dev/null && kill -0 "$sshd" 2>/dev/null; do sleep 1; done; kill "$sshd" 2>/dev/null; wait',
+      "sh",
+      path.join(dir, "sshd_config"),
+      log,
+      String(process.pid),
+    ],
+    { stdio: "ignore" },
+  );
+  guard.unref();
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if (await listeningOn(port)) break;
+    if (guard.exitCode !== null || Date.now() > deadline) {
+      const said = await readFile(log, "utf8").catch(() => "");
+      guard.kill("SIGTERM");
+      throw new Error(`the sandbox's sshd did not start on port ${port}: ${said.trim().split("\n").slice(-5).join(" | ")}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  sshds.set(crew.root, { port, child: guard, machineHome });
+  return { user: SSH_USER, port, machineHome };
+}
+
+async function stopSshd(root: string): Promise<void> {
+  const sshd = sshds.get(root);
+  sshds.delete(root);
+  if (!sshd || sshd.child.exitCode !== null) return;
+  const exited = new Promise((resolve) => sshd.child.once("exit", resolve));
+  const pid = Number(await readFile(path.join(root, "ssh/sshd.pid"), "utf8").catch(() => ""));
+  // The sshd this sandbox started (its pid file), then the guard that watched it.
+  if (pid > 1) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+  sshd.child.kill("SIGTERM");
+  await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 3_000))]);
+}
+
+function listeningOn(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = tcpConnect({ host: "127.0.0.1", port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
 export type RemoteDaemon = {
   /** The machine's id in Crew, once `addTo` paired it. */
   id: string;
   name: string;
   port: number;
-  /** The port Crew dials: the daemon's, or the delaying proxy's in front of it. */
+  /**
+   * The port the window dials: this Mac's end of the ssh tunnel to the machine (its sockets' URLs
+   * carry it), which reaches the daemon's port, or the delaying proxy's in front of it.
+   */
   dialPort: number;
   token: string;
   dataDir: string;
@@ -1101,6 +1263,8 @@ export type RemoteDaemon = {
  * added to Crew's address book the way Settings would, and the window reloads.
  */
 export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?: number } = {}): Promise<RemoteDaemon> {
+  // The machine is reached through an ssh tunnel, as a real one without Tailscale is.
+  await enableSsh(crew);
   const dataDir = path.join(crew.root, `remote-${name}`);
   await mkdir(dataDir, { recursive: true });
   const port = await freePort();
@@ -1145,7 +1309,7 @@ export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?:
       name,
       host: "127.0.0.1",
       port: proxy?.port ?? port,
-      user: "agent",
+      user: SSH_USER,
       token,
     })
     .catch(async (error: unknown) => {
@@ -1153,7 +1317,9 @@ export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?:
       throw error;
     });
   await crew.reload();
-  return { id: row.id, name, port, dialPort: proxy?.port ?? port, token, dataDir, stop: stopAll, start };
+  // Opens the tunnel if it is not up; it keeps these ports while the app runs.
+  const dialled = new URL(await crew.window.evaluate((id) => window.crewHost!.remotes!.endpoint(id), row.id));
+  return { id: row.id, name, port, dialPort: Number(dialled.port), token, dataDir, stop: stopAll, start };
 }
 
 /** One RPC straight to the remote daemon, the way a second window would. */
@@ -1198,24 +1364,49 @@ async function delayProxy(target: number, ms: number): Promise<{ port: number; d
     from.on("close", () => setTimeout(() => to.destroy(), ms));
     from.on("error", () => to.destroy());
   };
-  const server = createTcpServer((client) => {
-    const upstream = tcpConnect(target, "127.0.0.1");
-    open.add(client);
-    open.add(upstream);
-    client.on("close", () => open.delete(client));
-    upstream.on("close", () => open.delete(upstream));
-    pipe(client, upstream);
-    pipe(upstream, client);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  server.unref();
-  return {
-    port: (server.address() as AddressInfo).port,
-    server,
-    drop: () => {
-      for (const socket of open) socket.destroy();
-    },
-  };
+  const serve = (to: number) =>
+    createTcpServer((client) => {
+      const upstream = tcpConnect(to, "127.0.0.1");
+      open.add(client);
+      open.add(upstream);
+      client.on("close", () => open.delete(client));
+      upstream.on("close", () => open.delete(upstream));
+      pipe(client, upstream);
+      pipe(upstream, client);
+    });
+  // A machine's SOCKS5 proxy is on the port after its daemon's, and Crew finds it there on any
+  // address it dials (the tunnel forwards both), so the proxy takes two ports in a row as well.
+  for (let tries = 0; ; tries += 1) {
+    const port = await freePort();
+    const server = serve(target);
+    const socks = serve(target + 1);
+    const bound = await Promise.all(
+      [
+        [server, port],
+        [socks, port + 1],
+      ].map(
+        ([one, at]) =>
+          new Promise<boolean>((resolve) => {
+            (one as Server).once("error", () => resolve(false));
+            (one as Server).listen(at as number, "127.0.0.1", () => resolve(true));
+          }),
+      ),
+    );
+    if (bound.every(Boolean)) {
+      server.unref();
+      socks.unref();
+      return {
+        port,
+        server,
+        drop: () => {
+          for (const socket of open) socket.destroy();
+        },
+      };
+    }
+    server.close();
+    socks.close();
+    if (tries >= 20) throw new Error("no two free ports in a row for the delaying proxy");
+  }
 }
 
 /** A port nothing listens on now, and the one after it (crewd serve's SOCKS proxy) free too, most likely. */
