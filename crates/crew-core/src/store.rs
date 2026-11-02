@@ -50,25 +50,41 @@ pub struct Store {
     listener: Arc<Mutex<Option<Listener>>>,
 }
 
+/// A failed step of opening the database, written down before it is handed back as text.
+fn failed(stage: &'static str) -> impl Fn(rusqlite::Error) -> String {
+    move |error| {
+        let error = error.to_string();
+        tracing::error!(stage, error = %crate::trace::error_text(&error), "store.failed");
+        error
+    }
+}
+
 impl Store {
     pub fn open(path: PathBuf) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        let conn = Connection::open(path).map_err(failed("open"))?;
         // WAL keeps reads from blocking the write that persists a turn.
-        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "journal_mode", "WAL").map_err(failed("pragma"))?;
         // With WAL a NORMAL sync only loses the last transactions on power loss, never
         // integrity; FULL would fsync on every tab switch and status change.
-        conn.pragma_update(None, "synchronous", "NORMAL").map_err(|e| e.to_string())?;
-        conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "synchronous", "NORMAL").map_err(failed("pragma"))?;
+        conn.pragma_update(None, "foreign_keys", "ON").map_err(failed("pragma"))?;
         // 8 MiB instead of 2: browser history at its cap is just over the default,
         // and every suggestion scan re-read it from the OS.
-        conn.pragma_update(None, "cache_size", -8192).map_err(|e| e.to_string())?;
-        migrate(&conn).map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "cache_size", -8192).map_err(failed("pragma"))?;
+        let began = std::time::Instant::now();
+        let (from, to) = migrate(&conn).map_err(failed("migrate"))?;
+        if from != to {
+            tracing::info!(from, to, took_ms = crate::trace::ms(began.elapsed()), "store.migrated");
+        }
         // Letters a turn was carrying when the daemon stopped: that turn is
         // gone, so they are handed over again (`TurnHost::deliver_waiting`).
-        crate::mailbox::release_unfinished(&conn).map_err(|e| e.to_string())?;
+        let handed_back = crate::mailbox::release_unfinished(&conn).map_err(|e| e.to_string())?;
+        if handed_back > 0 {
+            tracing::info!(letters = handed_back, "store.recovered_letters");
+        }
         // The seeded design profile keeps its working and waiting rows as seeded,
         // so every status can be looked at without a live turn behind it.
         if !keep_status() {
@@ -131,7 +147,23 @@ fn migrate_remotes_ssh(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+/// Brings the schema up to date and says which version it found and which it left.
+fn migrate(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    let version = |conn: &Connection| -> rusqlite::Result<i64> {
+        // The table is not there yet in a database that is new.
+        let known: bool =
+            conn.query_row("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations')", [], |row| row.get(0))?;
+        if !known {
+            return Ok(0);
+        }
+        conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))
+    };
+    let from = version(conn)?;
+    migrate_all(conn)?;
+    Ok((from, version(conn)?))
+}
+
+fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
            version    INTEGER PRIMARY KEY,
@@ -729,6 +761,7 @@ fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
         crate::messages::sync(conn, &id, &settled, &mut prior)?;
         let status = if kind == "child" { "starting" } else { "idle" };
         conn.execute("UPDATE sessions SET status = ?3, updated_at = ?2 WHERE id = ?1", params![id, now_millis(), status])?;
+        tracing::info!(session_id = %id, kind = %kind, "store.settled_open_turn");
     }
     Ok(())
 }
@@ -1676,5 +1709,52 @@ mod archived_column_tests {
         let has = store.with(|conn| has_column(conn, "sessions", "archived")).expect("column");
         assert!(!has, "the column is gone");
         assert!(crate::session::get(&store, id).expect("get").is_some());
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+    use crate::trace::capture;
+
+    /// A database made now was migrated from nothing; one opened again, from where it was left;
+    /// one that is not a database is a line with the step that failed.
+    #[test]
+    fn opening_a_database_traces_the_versions_it_migrated_and_why_it_could_not() {
+        capture::install();
+        let dir = std::env::temp_dir().join(format!("crew-store-trace-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let latest = {
+            let store = Store::open(path.clone()).expect("open");
+            store
+                .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0)))
+                .expect("latest")
+        };
+        let fresh = capture::all("store.migrated")
+            .into_iter()
+            .any(|e| e.get("from") == Some("0") && e.get("to") == Some(latest.to_string().as_str()));
+        assert!(fresh, "{:?}", capture::all("store.migrated"));
+        // One step behind: only that step is a migration.
+        {
+            let store = Store::open(path.clone()).expect("open");
+            store.with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version = 43;")).expect("downgrade");
+        }
+        Store::open(path.clone()).expect("reopen");
+        let behind = capture::all("store.migrated").into_iter().any(|e| {
+            e.get("from") == Some((latest - 1).to_string().as_str()) && e.get("to") == Some(latest.to_string().as_str())
+        });
+        assert!(behind, "{:?}", capture::all("store.migrated"));
+
+        let broken = dir.join("broken.sqlite3");
+        std::fs::write(&broken, "this is not a database, and SECRET-CONTENT says so, at length ".repeat(80)).expect("garbage");
+        let before = capture::all("store.failed").len();
+        assert!(Store::open(broken).is_err());
+        let failed = capture::all("store.failed");
+        assert!(failed.len() > before);
+        let last = failed.last().expect("a failure");
+        assert_eq!(last.level, tracing::Level::ERROR);
+        assert!(matches!(last.get("stage"), Some("pragma" | "migrate" | "open")), "{last:?}");
+        assert!(failed.iter().all(|e| e.fields.values().all(|v| !v.contains("SECRET-CONTENT"))));
     }
 }
