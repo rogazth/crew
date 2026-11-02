@@ -23,10 +23,11 @@ the user picks. Update the status table at the bottom as each phase lands.
   them off for its own sessions. It does not replace or hide them.
 - **One vault, not a grant per machine.** Rule 2 of the old plan had each
   machine sign in on its own. Now one machine, which the user picks, holds
-  Crew's grants, and every other machine leases access tokens from it. A
-  rotating refresh token can have one holder only: a copy that refreshes
-  invalidates the others, and reuse detection can revoke the whole grant
-  (RFC 9700 §4.14.2).
+  Crew's grants, and every other machine sends it its tool calls. A rotating
+  refresh token can have one holder only: a copy that refreshes invalidates
+  the others, and reuse detection can revoke the whole grant (RFC 9700
+  §4.14.2). No token leaves the vault for another machine
+  (`2026-11-02-vault-calls.md`).
 - **Accounts, each for some workspaces,** are new. The old plan had one
   connection per connector and a per-workspace switch. A connector has no
   switch of its own (2026-10-28): a workspace no account of it is for doesn't
@@ -109,8 +110,10 @@ points to the provider server.
 1. **The service authenticates the person.** Sign-in happens on the
    service's page. Crew sees a code and a token, never a password.
 2. **One vault holds Crew's grants.** The user picks the machine: this Mac
-   by default, or any remote. Only the vault refreshes. Every other machine
-   leases access tokens from it. A provider server's credential stays in its
+   by default, or any remote. Only the vault holds tokens, refreshes them and
+   calls services with them. Every other machine sends it its tool calls. The
+   only time grants cross between machines is a move the user asked for,
+   sealed. A provider server's credential stays in its
    CLI's store on each machine: Crew drives that sign-in but never copies the
    credential.
 3. **Nothing goes in the person's CLI configs** unless the user picks an
@@ -122,8 +125,9 @@ points to the provider server.
 4. **Each account is its own MCP server to the CLI.** Its tools keep their
    names (`mcp__notion__…`), the CLI defers them like any server's, and
    `McpHost` reports each one's state.
-5. **The CLI never sees a token.** The shim forwards calls to its machine's
-   `crewd`, which holds the leased access token in memory.
+5. **The CLI never sees a token, and neither does a machine that is not the
+   vault.** The shim forwards calls to its machine's `crewd`, which runs them
+   or sends them to the vault.
 6. **A session's autonomy decides,** as for any tool. Crew adds no bypass.
 7. **The phone holds no credential.** Nothing here may need a window to be
    open.
@@ -173,30 +177,33 @@ does not: a machine spawns from its copy.
   takes it, DCR otherwise, one registration per server, reused), PKCE `S256`,
   `resource` on every request, rotating refresh tokens, and step-up on 403
   `insufficient_scope`.
-- **Lease connections.** A machine brings its lease token where the window
-  brings the daemon's own (`{auth}` on the vault's socket). Such a
-  connection answers `vault_lease` and `vault_config` and hears
-  `vault-config` when the config changes; nothing else. A handoff token
-  answers only `vault_handoff_take` and `vault_handoff_done`.
-- **Lease.** A machine asks `vault_lease {account}` and gets back
-  `{access_token, expires_at, scopes}`. It keeps the token in memory, asks
-  again at 80% of its life, and asks once more after a 401 from the service.
-  The vault refreshes when its own access token is near expiry, and leases
-  that ask at the same time share one refresh.
-- **Vault offline.** A machine keeps using the token it holds until it
-  expires. After that, the account's server answers a tool call with one
-  line ("Notion · Work: the vault on devbox is offline since 14:02"), and
-  `McpHost` shows it Failed, with that reason.
+- **Machines' connections.** A machine brings its token where the window
+  brings the daemon's own (`{auth}` on the vault's socket). Such a connection
+  answers `vault_call`, `vault_tools_refresh` and `vault_config` and hears
+  `vault-config` when the config changes; nothing else. Its token is checked
+  at each request, so revoking a machine stops what it has open. A handoff
+  token answers only `vault_handoff_take` and `vault_handoff_done`.
+- **A call.** A machine sends `vault_call {accountId, tool, arguments}` and
+  gets the MCP result. The vault runs it with its own token, so its tool
+  switches and scopes decide. Requests on a connection run side by side, at
+  most 600 a minute and 32 at once per machine. Arguments or answers over
+  8 MiB are a tool error, not a dropped connection. A machine's `tools/list`
+  answers from its copy and asks the vault to list again if its list is old.
+  The vault refreshes when its access token is near expiry, and calls that
+  ask at the same time share one refresh.
+- **Vault offline.** A machine's call answers at once with one line ("Notion ·
+  Work: the vault on devbox is offline since 14:02"). A call that was sent and
+  lost its connection says it may have run, and is never tried again.
 - **Reaching the vault.** This is new: machines connect to the vault, and
   the vault never connects out.
-  - *A remote vault* takes leases on its `crewd serve` socket, over
+  - *A remote vault* takes machines on its `crewd serve` socket, over
     Tailscale.
-  - *This Mac as the vault* listens on its Tailscale address for leases
+  - *This Mac as the vault* listens on its Tailscale address for machines
     only, on the build's port. It does this only while it is the vault, and
     it takes no other call there.
   - **Only over Tailscale** (decided 2026-10-28): connectors reach your other
     machines by Tailscale. Any machine on the tailnet can be the vault or
-    lease from it, either way. A machine reached over SSH still works as a
+    use it, either way. A machine reached over SSH still works as a
     machine, but it doesn't join the vault and its sessions get no Crew
     connectors; the vault dialog says "Needs Tailscale" beside it, and so
     does a workspace of it in an account's workspaces. Why: the SSH keys
@@ -207,10 +214,10 @@ does not: a machine spawns from its copy.
     connectors keep working with the Mac off). Bridging it (`-R`, a relay
     on the Mac, a route per pair, the tunnels moved into `crewd`) was
     weighed and left out.
-  - Each machine leases with a **scoped token**: lease and config read only,
-    minted by the vault for that machine, and revocable on its own. This is
-    new, because `crewd serve` has one full-access token today. The Mac's
-    own `crewd` leases the same way as any machine.
+  - Each machine comes with a **scoped token**: tool calls and config read
+    only, minted by the vault for that machine, and revocable on its own. This
+    is new, because `crewd serve` has one full-access token today. The Mac's
+    own `crewd` uses a remote vault the same way as any machine.
 - **Joining.** When the vault is chosen, or a machine is added, the window,
   which reaches both, asks the vault for a token for that machine and hands
   it over (`vault_join {address, token}`). The machine keeps it in the
@@ -222,18 +229,20 @@ does not: a machine spawns from its copy.
   1. The new vault makes an ephemeral X25519 key pair and hands the window
      its public key.
   2. The window asks the old vault for a handoff: a token that works once,
-     for two minutes, for that public key only. The old vault stops
-     refreshing and leasing.
+     for two minutes, for that public key only. The old vault refuses new
+     calls and waits up to 30 s for the ones running, so no refresh spends a
+     token after it is sealed; if they outlast that, the move is refused.
   3. The new vault pulls with the token. The old vault seals the grants to
      the public key (X25519, HKDF-SHA256, ChaCha20-Poly1305) and sends them,
      over Tailscale besides. The window carries the token and the public key,
      never a grant.
   4. The new vault writes them to its storage and confirms; only then does
-     the old vault delete its copy and start leasing from the new one. A
-     move that fails before the confirmation leaves the old vault as it was.
+     the old vault delete its copy and start using the new one. A move that
+     fails before the confirmation leaves the old vault as it was, and its
+     calls start again when the handoff runs out.
   5. The new vault refreshes every grant at once, so a service that rotates
      refresh tokens retires the copy that travelled. Then the window points
-     every machine at the new vault and mints them new lease tokens.
+     every machine at the new vault and mints them new tokens.
 
 ### Signing in
 
@@ -272,13 +281,14 @@ listen on the redirect URI.
   `crewd --mcp-connector <account>`, a stdio shim with the session's
   `CREW_TOKEN`. The shim forwards `tools/list` and `tools/call` to its
   machine's `crewd`, which calls the remote server over streamable HTTP (SSE
-  when that is all the server has) with the leased token.
+  when that is all the server has). On a machine that is not the vault, that
+  `crewd` sends the call to the vault, which does this instead.
 - **Server names.** A server is named after the connector (`notion`). When
   that name is taken (two accounts for the workspace, or a provider server of
   the same name), it becomes `notion_work`.
-- **Tools.** `tools/list` is cached per account on each machine, and
-  refreshed on connect, on `listChanged`, and hourly, so a spawn does not
-  wait on the network. A tool switched off is left out of `tools/list` and
+- **Tools.** `tools/list` is cached per account, kept fresh by the vault on
+  connect, on `listChanged`, and hourly, and copied to each machine with the
+  config, so a spawn does not wait on the network. A tool switched off is left out of `tools/list` and
   costs no context.
 - **Workspaces** are resolved at spawn, from the machine's copy. A change
   reaches a kept Claude process at its next turn through `mcp_set_servers`,
@@ -301,10 +311,9 @@ listen on the redirect URI.
 Settings › Integrations, in the Tools group.
 
 - **Header:** the vault ("Credentials on devbox ●"), its state, the machines
-  leasing from it, and Change. Choosing a vault opens one sheet that says
-  what it costs: who can read the file, and that with this Mac as the vault
-  the remotes lose Crew's connectors about an access token's life after the
-  Mac sleeps or shuts down.
+  using it, and Change. Choosing a vault opens one sheet that says what it
+  costs: who can read the file, and that with this Mac as the vault the remotes
+  lose Crew's connectors as soon as the Mac sleeps or shuts down.
 - **Crew:** each connector with its accounts (label, state, how many
   workspaces it's for), Connect, Add account, and a registry search. Add
   account asks for its workspaces first, all picked; an account's ⋯ →
@@ -349,8 +358,8 @@ UX, for the prototype to settle:
 
 - The phone signs in through the same RPCs and holds nothing.
 - With a remote as the vault, Crew's connectors keep working with the Mac
-  off. With this Mac as the vault, they keep working for about one access
-  token's life, which is the risk the user accepted.
+  off. With this Mac as the vault, the remotes' connectors stop when it sleeps,
+  which the user accepted so that no token leaves the vault.
 - Out of scope here: moving the address book and preferences off the Mac,
   and push notifications.
 
@@ -390,9 +399,12 @@ UX, for the prototype to settle:
 
 - Whoever reads the vault reads every Crew account. On Linux, that is root
   and the user the vault runs as.
-- Sessions run as the user's UID, so one can read its machine's lease token
-  file, as it can read `daemon.json` today.
-- Leases are bearer tokens in a `crewd`'s memory, and they never reach a CLI.
+- Sessions run as the user's UID, so one can read its machine's token file,
+  as it can read `daemon.json` today. Until a machine's calls are limited to
+  its workspaces' accounts, that token runs any account's tools that are on,
+  until it is revoked. It can't get a service's token out.
+- A tool call's arguments and answer cross between machines inside Tailscale,
+  over `ws://`, and the vault logs neither.
 
 ## Security
 
@@ -437,9 +449,10 @@ phase that builds the part.
   - The vault sits behind a storage trait: a 0600 file first, the keychain
     on macOS next. This is what Claude Code and Codex do on Linux.
 - **Phase 3.**
-  - A machine's lease token leases only the accounts bound on that machine,
-    at a limited rate, and every lease is logged where the page shows it.
-  - The Mac's lease listener binds to its Tailscale address only, as
+  - A machine's token calls only the accounts bound on that machine, at a
+    limited rate, and every call is logged by who and what, without its
+    arguments or answer.
+  - The Mac's listener binds to its Tailscale address only, as
     `crewd serve` already does on remotes (`remote-ssh.ts`).
 - **CIMD.** The client document is static, in a repository only the owner
   can push to, behind two-factor sign-in. Whoever edits it can add a redirect
@@ -458,8 +471,7 @@ phase that builds the part.
 - *opencode:* `enabled = false` per run; its auth URL and callback.
 - *Cursor and Grok:* any per-spawn disable; how each signs in.
 - *Servers (Atlassian, Notion, Sentry, Linear, Figma):* CIMD, DCR or
-  refused; access-token lifetimes, which set how long a vault outage is
-  survived; whether each gives an `id_token` or userinfo.
+  refused; access-token lifetimes; whether each gives an `id_token` or userinfo.
 - *Electron:* catching a loopback redirect that nothing serves.
 
 **1. Provider servers.** A thrown-away prototype of the page first. Then: the
@@ -498,14 +510,15 @@ accounts and their workspaces, Connect,
 `crewd --mcp-connector`, tool switches, and the tools cache. A fake OAuth and
 MCP server for tests and e2e.
 
-**3. Remote vault and leases.** Scoped tokens on `crewd serve`, the lease
-protocol, the Mac's lease listener, joining, moving the vault, the Linux
+**3. Remote vault and calls on it.** Scoped tokens on `crewd serve`, calls
+sent to the vault, the Mac's listener, joining, moving the vault, the Linux
 file, and the offline states.
 
 **4. Password managers** as a kind (`2026-10-15-password-providers.md`).
 
 **Later.** Local stdio packages with API keys in the vault. A key does not
-rotate, so its lease is a copy.
+rotate, so handing one to a package on another machine would be a copy; that
+needs its own decision against rule 2.
 
 ## Open questions
 
@@ -530,7 +543,8 @@ rotate, so its lease is a copy.
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
 | Vault on this Mac: a change of workspaces reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
 | Vault on this Mac: a change of workspaces reaching opencode's shared server (per folder, next turn) | built |
-| Remote vault: scoped tokens, leases, join, move, Linux file | built (2026-10-28): lease tokens kept hashed, revocable, rate limited and logged (`connectors/lease.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the sealed move from the window (`integrations/vault.ts`); tried between this Mac and falcon-heavy over Tailscale, there and back |
+| Remote vault: scoped tokens, join, move, Linux file | built (2026-10-28): machine tokens kept hashed, revocable, rate limited and logged (`connectors/machines.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the sealed move from the window (`integrations/vault.ts`) |
+| Remote vault: calls run on the vault, no token leaves it (`2026-11-02-vault-calls.md`) | built (2026-11-02): replaces leases; tried between this Mac and falcon-heavy over Tailscale with the fake service, not yet with a real one |
 | Remote vault: only over Tailscale; a machine reached over SSH says "Needs Tailscale" and is left out of joins and moves | built (2026-10-28) |
-| Remote vault: a lease limited to the accounts for that machine's workspaces | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
+| Remote vault: a machine's calls limited to the accounts for its workspaces | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
 | Password managers as a kind | todo |
