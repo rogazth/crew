@@ -2252,10 +2252,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     .await?,
             )
         }
-        "binding_set" => {
-            let proto::BindingSet { account_id, scope, on } = parse(params)?;
+        "account_workspaces_set" => {
+            let proto::AccountWorkspaces { account_id, workspaces } = parse(params)?;
             let store = hosts.store.clone();
-            block(move || connectors::set_binding(&store, &account_id, &scope, on)).await?;
+            block(move || connectors::set_workspaces(&store, &account_id, workspaces.as_deref())).await?;
             hosts.connectors.notify();
             Ok(Value::Null)
         }
@@ -3045,13 +3045,18 @@ mod tests {
         assert_eq!(off["result"]["isError"], true, "{off}");
         let other = shim("tools/call", serde_json::json!({ "_crewConnector": "notion", "name": "search", "arguments": {} }));
         assert!(other["result"]["content"][0]["text"].as_str().unwrap().contains("not on for this session"), "{other}");
-        // Off for its workspace: the session lists nothing and calls nothing.
+        assert_eq!(account.workspaces, None, "signed in without saying where, it's for every workspace");
+        // For another workspace only: the session lists nothing and calls nothing.
         let store = Store::open(dir.join("crew.sqlite3")).expect("store");
         let workspace = session::get(&store, session_id.clone()).unwrap().unwrap().workspace_id;
-        let unbind = serde_json::json!({ "accountId": account.id, "scope": { "kind": "workspace", "id": workspace }, "on": false });
-        assert!(rpc(&mut ws, 64, "binding_set", unbind).await.error.is_none());
+        let elsewhere = serde_json::json!({ "accountId": account.id, "workspaces": ["elsewhere"] });
+        assert!(rpc(&mut ws, 64, "account_workspaces_set", elsewhere).await.error.is_none());
         let listed = shim("tools/list", serde_json::json!({ "_crewConnector": "fake" }));
         assert_eq!(listed["result"]["tools"], serde_json::json!([]), "{listed}");
+        let here = serde_json::json!({ "accountId": account.id, "workspaces": [workspace] });
+        assert!(rpc(&mut ws, 66, "account_workspaces_set", here).await.error.is_none());
+        let listed = shim("tools/list", serde_json::json!({ "_crewConnector": "fake" }));
+        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(2), "{listed}");
         // No call from the window's own token: connectors answer sessions.
         let theirs = rpc(&mut ws, 65, "account_remove", serde_json::json!({ "accountId": account.id })).await;
         assert!(theirs.error.is_none());

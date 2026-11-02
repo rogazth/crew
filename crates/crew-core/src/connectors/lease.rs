@@ -231,13 +231,7 @@ pub fn import(store: &Store, snap: &Snapshot) -> Result<(), String> {
                         a.created_at
                     ],
                 )?;
-                for b in &a.bindings {
-                    let (kind, id) = super::scope_key(&b.scope);
-                    tx.execute(
-                        "INSERT INTO connector_bindings (account_id, scope_kind, scope_id, is_on) VALUES (?1, ?2, ?3, ?4)",
-                        params![a.id, kind, id, b.on],
-                    )?;
-                }
+                super::write_workspaces(&tx, &a.id, a.workspaces.as_deref())?;
                 if let Some(raw) = snap.tools_raw.get(&a.id) {
                     tx.execute("INSERT INTO connector_tools_raw (account_id, tools_raw) VALUES (?1, ?2)", params![a.id, raw])?;
                 }
@@ -251,7 +245,7 @@ pub fn import(store: &Store, snap: &Snapshot) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::connectors::{self, NewConnector};
-    use crew_protocol::{AccountState, BindingScope};
+    use crew_protocol::AccountState;
 
     fn store() -> Store {
         Store::open(std::env::temp_dir().join(format!("lease-{}", uuid::Uuid::new_v4())).join("crew.db")).unwrap()
@@ -278,9 +272,9 @@ mod tests {
             NewConnector { name: "Notion".into(), registry_name: Some("com.notion/mcp".into()), url: "https://mcp.notion.com/mcp".into(), icon_url: None, description: String::new(), publisher: "notion.com".into() },
         )
         .unwrap();
-        let a = connectors::add_account(&vault, &c.id, None).unwrap();
+        let a = connectors::add_account(&vault, &c.id, None, None).unwrap();
         connectors::set_state(&vault, &a.id, AccountState::Connected, None).unwrap();
-        connectors::set_binding(&vault, &a.id, &BindingScope::Workspace { id: "w1".into() }, Some(true)).unwrap();
+        connectors::set_workspaces(&vault, &a.id, Some(&["w1".into()])).unwrap();
         connectors::set_raw_tools(&vault, &a.id, &[serde_json::json!({ "name": "search", "annotations": { "readOnlyHint": true } })]).unwrap();
         let copy = store();
         connectors::add(&copy, NewConnector { name: "Stale".into(), registry_name: None, url: "https://x.dev/mcp".into(), icon_url: None, description: String::new(), publisher: "x.dev".into() }).unwrap();

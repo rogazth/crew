@@ -1,5 +1,5 @@
 import { XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { IconButton, PageHeadingContext, Tooltip, type PageHeading } from "../chrome/kit";
 import { TOGGLE_RESERVE } from "../lib/chrome";
@@ -24,8 +24,6 @@ type Props = {
   workspaces: Workspace[];
   activeWorkspace: Workspace | null;
   sessions: Session[];
-  /** Every workspace's sessions, for what spans them (where a connector is on). */
-  allSessions: Session[];
   onConfirm: (confirm: Confirm) => void;
   onOpenTerminal: (envId: string, input?: string) => Promise<void>;
   /** The sidebar is closed: the strip leaves room for its toggle, as the tabs do. */
@@ -42,7 +40,6 @@ export function Pages({
   workspaces,
   activeWorkspace,
   sessions,
-  allSessions,
   onConfirm,
   onOpenTerminal,
   inset,
@@ -85,7 +82,7 @@ export function Pages({
     );
   }
   if (page.kind === "integrations")
-    return sheet(<Integrations workspaces={workspaces} sessions={allSessions} />);
+    return sheet(<IntegrationsPage workspaces={workspaces} />);
   return null;
 }
 
@@ -156,8 +153,3 @@ function PageStrip({
   );
 }
 
-/** The bots are every workspace's, picked once per change of the list. */
-function Integrations({ workspaces, sessions }: { workspaces: Workspace[]; sessions: Session[] }) {
-  const bots = useMemo(() => sessions.filter((session) => session.kind === "bot"), [sessions]);
-  return <IntegrationsPage workspaces={workspaces} bots={bots} />;
-}

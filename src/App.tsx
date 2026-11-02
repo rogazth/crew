@@ -472,7 +472,6 @@ export function App() {
           workspaces={workspaces.workspaces}
           activeWorkspace={active}
           sessions={sessions}
-          allSessions={all}
           onConfirm={confirms.ask}
           onOpenTerminal={envs.openTerminalOn}
           inset={!sidebarOpen}

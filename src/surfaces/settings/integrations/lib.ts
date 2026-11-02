@@ -3,7 +3,7 @@
 // the small motion helpers. No components.
 import { useEffect, useSyncExternalStore } from "react";
 import type { BuiltinConnector, RegistryServer } from "../../../lib/protocol";
-import { connectorOf, isOn, sameScope, useIntegrations, type Account, type AccountState, type Consumer, type Scope, type Source } from "./store";
+import { actions, builtinOf, connectorOf, useIntegrations, type Account, type AccountState, type Place, type Source, type State } from "./store";
 
 /* ── The page's own state ───────────────────────────────────────────── */
 
@@ -18,7 +18,11 @@ export type Sheet =
   /** What a built-in connector is, from its summary or page (builtin.tsx). */
   | { kind: "built-in" }
   /** Where the sign-ins are kept, and moving them (vault-dialog.tsx). */
-  | { kind: "vault" };
+  | { kind: "vault" }
+  /** A new account's workspaces, before its sign-in (workspaces.tsx). */
+  | { kind: "add-account"; connectorId: string }
+  /** An account's workspaces, from its ⋯ (workspaces.tsx). */
+  | { kind: "account-workspaces"; accountId: string };
 
 /** What a detail page is about: one of Crew's connectors, or one provider server on one machine (by its name). */
 export type Detail =
@@ -104,6 +108,17 @@ export function useIntegrationsTrail(): (string | { label: string; onClick: () =
   return view === "directory" ? [back, "Browse"] : [];
 }
 
+/**
+ * Signs a new account in for `workspaces`: a built-in through its connect sheet, anything else straight away.
+ * With one workspace or none there is nothing to ask, and it's for all of them.
+ */
+export function startAddAccount(s: State, connectorId: string, workspaces: string[] | null) {
+  const builtin = builtinOf(s, connectorOf(s, connectorId));
+  if (builtin) return ui.open({ kind: "connect", source: { kind: "builtin", builtin, workspaces } });
+  actions.addAccount(connectorId, workspaces);
+  ui.close();
+}
+
 /** A click on an installed connector, or on a provider server, opens its page. */
 export const openConnector = (connectorId: string) => ui.detail({ kind: "connector", id: connectorId });
 export const openServer = (envId: string, key: string, name: string) => ui.detail({ kind: "server", envId, key, name });
@@ -153,19 +168,11 @@ export const TONE_SOFT: Record<Tone, string> = {
   neutral: "bg-fill text-text-muted",
 };
 
-export const scopeOf = (consumer: Consumer): Scope => ({ kind: consumer.kind, id: consumer.id });
-
-/** Whether a consumer gets the account only because a wider scope says so. */
-export function inherited(account: Account, consumer: Consumer): boolean {
-  return !account.bindings.some((b) => sameScope(b.scope, scopeOf(consumer)));
-}
-
-/** Flip a consumer, leaving the fewest bindings: drop its own when the wider scope already says the same. */
-export function flip(account: Account, consumer: Consumer): { scope: Scope; on: boolean | null } {
-  const scope = scopeOf(consumer);
-  const next = !isOn(account, consumer);
-  const without = { ...account, bindings: account.bindings.filter((b) => !sameScope(b.scope, scope)) };
-  return { scope, on: isOn(without, consumer) === next ? null : next };
+/** What an account's row says about where it's for. */
+export function workspacesLine(account: Account, known: Place[]): string {
+  if (account.workspaces === null) return "All workspaces";
+  const n = known.filter((w) => account.workspaces!.includes(w.id)).length;
+  return n === 0 ? "No workspace" : `${n} ${n === 1 ? "workspace" : "workspaces"}`;
 }
 
 /** One line for a connector's tile: the account's identity, or how many there are. */

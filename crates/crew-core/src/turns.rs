@@ -4973,7 +4973,7 @@ mod mailbox_tests {
             },
         )
         .expect("connector");
-        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        let account = crate::connectors::add_account(store, &connector.id, None, None).expect("account");
         crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
         let coder = bot(&world, &ws, "Coder");
         turn(&world, &coder, "hello");
@@ -5008,7 +5008,7 @@ mod mailbox_tests {
             },
         )
         .expect("connector");
-        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        let account = crate::connectors::add_account(store, &connector.id, None, None).expect("account");
         crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
         let coder = bot(&world, &ws, "Coder");
         let changes = |world: &World| -> Vec<Value> {
@@ -5027,14 +5027,13 @@ mod mailbox_tests {
         turn(&world, &coder, "hello");
         assert!(changes(&world).is_empty(), "the launch already had it: {:?}", changes(&world));
 
-        let scope = crew_protocol::BindingScope::Workspace { id: ws.clone() };
-        crate::connectors::set_binding(store, &account.id, &scope, Some(false)).expect("off");
+        crate::connectors::set_workspaces(store, &account.id, Some(&[])).expect("off");
         turn(&world, &coder, "again");
         let after_off = changes(&world);
         assert_eq!(after_off.len(), 1, "{after_off:?}");
         assert_eq!((&after_off[0]["method"], &after_off[0]["path"]), (&json!("DELETE"), &json!("/api/experimental/mcp/notion")));
 
-        crate::connectors::set_binding(store, &account.id, &scope, Some(true)).expect("on");
+        crate::connectors::set_workspaces(store, &account.id, Some(&[ws.clone()])).expect("on");
         turn(&world, &coder, "once more");
         let after_on = changes(&world);
         assert_eq!(after_on.len(), 2, "{after_on:?}");

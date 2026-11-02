@@ -493,7 +493,6 @@ async function registrySearch(text: string, limit: number): Promise<Row[]> {
 /* ── Crew's connectors and the vault, in memory ───────────────────────── */
 
 type MockTool = { name: string; title: string | null; description: string; readOnly: boolean; destructive: boolean; tokens: number };
-type MockScope = { kind: "everywhere" } | { kind: "workspace" | "bot" | "session"; id: string };
 type MockAccount = {
   id: string;
   connectorId: string;
@@ -501,7 +500,8 @@ type MockAccount = {
   identity: string | null;
   state: "pending" | "connected" | "expired" | "needs-scope" | "failed";
   error: string | null;
-  bindings: { scope: MockScope; on: boolean }[];
+  /** The workspaces it is for; `null` is every one. */
+  workspaces: string[] | null;
   tools: MockTool[];
   toolsOff: string[];
   createdAt: number;
@@ -611,7 +611,7 @@ const connectors: MockConnector[] = [
         identity: "you@example.com",
         state: "connected",
         error: null,
-        bindings: [{ scope: { kind: "everywhere" }, on: true }],
+        workspaces: null,
         tools: [
           linearTool("list_issues", "List issues in the user's Linear workspace. Filter by team, assignee, state or label.\nReturns up to 50.", 820, { readOnly: true }),
           linearTool("get_issue", "Retrieve a Linear issue by its ID, with comments and attachments.", 410, { readOnly: true }),
@@ -639,7 +639,6 @@ function needAccount(id: unknown): MockAccount {
   if (!account) throw new Error("mock: no such account");
   return account;
 }
-const sameMockScope = (a: MockScope, b: MockScope) => a.kind === b.kind && (a.kind === "everywhere" || (b.kind !== "everywhere" && a.id === b.id));
 
 /** A plausible tool list from the connector's name; a delete is destructive and starts off. */
 function mockTools(connector: MockConnector): MockTool[] {
@@ -717,7 +716,7 @@ function addConnector({ registryName, builtin, url, name }: Row): MockConnector 
   return connector;
 }
 
-function connectConnector({ connectorId, accountId, label, loginHint }: Row) {
+function connectConnector({ connectorId, accountId, label, loginHint, workspaces }: Row) {
   const connector = connectors.find((c) => c.id === connectorId);
   if (!connector) throw new Error("mock: no such connector");
   // A server that refuses Crew's client, so the page's refusal shows.
@@ -738,7 +737,7 @@ function connectConnector({ connectorId, accountId, label, loginHint }: Row) {
       identity: null,
       state: "pending",
       error: null,
-      bindings: [],
+      workspaces: Array.isArray(workspaces) ? (workspaces as string[]) : null,
       tools: [],
       toolsOff: [],
       createdAt: Date.now(),
@@ -764,10 +763,7 @@ function redeem({ state, url }: Row) {
   signIns.delete(state as string);
   const account = needAccount(pending.accountId);
   const connector = connectors.find((c) => c.id === account.connectorId)!;
-  const first = connector.accounts.filter((a) => a.state !== "pending").length === 0;
   if (account.state === "pending") {
-    // The first account of a connector is on everywhere; another starts on nowhere.
-    account.bindings = first ? [{ scope: { kind: "everywhere" }, on: true }] : [];
     const app = BUILTINS.find((b) => b.id === connector.builtin);
     account.tools = app ? structuredClone(app.tools) : mockTools(connector);
     account.toolsOff = account.tools.filter((t) => t.destructive).map((t) => t.name);
@@ -1002,10 +998,9 @@ const commands: Record<string, (args: Row) => unknown> = {
     emitConnectors();
     return structuredClone(account);
   },
-  binding_set: ({ accountId, scope, on }) => {
+  account_workspaces_set: ({ accountId, workspaces }) => {
     const account = needAccount(accountId);
-    const rest = account.bindings.filter((b) => !sameMockScope(b.scope, scope as MockScope));
-    account.bindings = on === null ? rest : [...rest, { scope: scope as MockScope, on: on as boolean }];
+    account.workspaces = Array.isArray(workspaces) ? (workspaces as string[]) : null;
     emitConnectors();
     return null;
   },

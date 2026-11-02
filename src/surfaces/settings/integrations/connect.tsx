@@ -3,7 +3,8 @@
 // the new account with its name. A server that refuses Crew's sign-in says so
 // here, in the daemon's words. A built-in whose siblings have an account
 // signed in first offers it ("Continue as …"), so a second Google app asks
-// Google only for its own access.
+// Google only for its own access. With more than one workspace, which ones
+// it's for is asked first (workspaces.tsx).
 import { AlertCircleIcon, GlobeIcon, UserPlusIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../../chrome/kit";
@@ -13,6 +14,7 @@ import { hostOf, ui } from "./lib";
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
 import { accountOfFlow, actions, connectorOf, familyIdentities, useIntegrations, type Account, type FlowStage, type Source } from "./store";
+import { InstallWorkspacesDialog } from "./workspaces";
 
 const STAGE: Record<Exclude<FlowStage, "done" | "failed">, string> = {
   opening: "Opening the sign-in window…",
@@ -41,6 +43,7 @@ export function ConnectDialog({ source }: { source: Source }) {
   // A built-in asks which account first when its siblings have one it hasn't; picked, it signs in as that one.
   const offered = source.kind === "builtin" && source.loginHint === undefined ? familyIdentities(s, source.builtin) : [];
   const [choice] = useState(offered);
+  if (source.workspaces === undefined && s.workspaces.length > 1) return <InstallWorkspacesDialog source={source} brand={brandOfSource(source)} />;
   if (choice.length > 0 && source.kind === "builtin") return <ChooseAccount source={source} identities={choice} />;
   return <Connecting source={source} />;
 }

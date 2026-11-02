@@ -1,11 +1,12 @@
-// One account on a connector's page: its name (editable), where it stands only
-// when something's off (a dot and a word), its one fix on the row, and the
-// rest (rename, list the tools again, remove) behind ⋯.
+// One account on a connector's page: its name (editable), how many workspaces
+// it's for (when there are several), where it stands only when something's
+// off (a dot and a word), its one fix on the row, and the rest (its
+// workspaces, rename, remove) behind ⋯.
 import { useState } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import type { MenuAction } from "../../../lib/menu";
 import { AccountName, Dot, RowAction, RowMenu } from "./bits";
-import { ACCOUNT_PROBLEM, ACCOUNT_TONE } from "./lib";
+import { ACCOUNT_PROBLEM, ACCOUNT_TONE, ui, workspacesLine } from "./lib";
 import { actions, siblingsOf, signingIn, useIntegrations, type Account } from "./store";
 
 export function AccountRow({ account }: { account: Account }) {
@@ -28,7 +29,9 @@ export function AccountRow({ account }: { account: Account }) {
   // Named after who signed in, the account doesn't say it twice.
   const line = busy
     ? "Authenticating…"
-    : [problem, account.identity === account.label ? null : account.identity, problem ? null : shared].filter(Boolean).join(" · ");
+    : [problem, account.identity === account.label ? null : account.identity, problem || s.workspaces.length < 2 ? null : workspacesLine(account, s.workspaces), problem ? null : shared]
+        .filter(Boolean)
+        .join(" · ");
   const remove = () =>
     setConfirm({
       title: `Remove ${account.label}?`,
@@ -37,13 +40,13 @@ export function AccountRow({ account }: { account: Account }) {
       onConfirm: () => actions.removeAccount(account.id),
     });
   const menu: Omit<MenuAction, "hotkey">[] = [
+    ...(s.workspaces.length > 1 ? [{ id: "workspaces", label: "Workspaces", icon: "settings" as const }] : []),
     { id: "rename", label: "Rename", icon: "edit" },
-    ...(account.state === "connected" ? [{ id: "refresh", label: "Refresh tools", icon: "reopen" as const }] : []),
     { id: "remove", label: "Remove", icon: "delete", danger: true },
   ];
   const pick = (id: string) => {
-    if (id === "rename") setRename((n) => n + 1);
-    else if (id === "refresh") void actions.refresh(account.id);
+    if (id === "workspaces") ui.open({ kind: "account-workspaces", accountId: account.id });
+    else if (id === "rename") setRename((n) => n + 1);
     else remove();
   };
   return (

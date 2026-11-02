@@ -34,7 +34,7 @@ export type Machine = {
   envId: string;
   name: string;
   online: boolean;
-  /** Where the other machines reach it; null when they can't (no Tailscale, an ssh tunnel). */
+  /** Where the other machines reach it; null when they can't (reached over ssh, or this Mac off the tailnet). */
   address: string | null;
   status: VaultStatus | null;
 };
@@ -76,10 +76,22 @@ async function macAddress(): Promise<string | null> {
   return ip ? `${ip}:${port}` : null;
 }
 
+/**
+ * Whether the other machines reach it without this Mac: on the tailnet. One reached over ssh, through this Mac's
+ * tunnel, is left out of the vault: every path to it runs through this Mac, which is what moving the vault is to
+ * spare. It still works as a machine; its sessions get no connectors of Crew's.
+ */
+const direct = (link: EnvLink) => link.id === LOCAL || (!!link.host && !!link.port && !isLoopback(link.host));
+
+/** A machine reached over ssh, which shares no connectors. */
+export function needsTailscale(envId: string): boolean {
+  const link = getLinks().find((l) => l.id === envId);
+  return !!link && !direct(link);
+}
+
 async function addressOf(link: EnvLink): Promise<string | null> {
   if (link.id === LOCAL) return macAddress();
-  if (!link.host || !link.port || isLoopback(link.host)) return null;
-  return `${link.host}:${link.port}`;
+  return direct(link) ? `${link.host}:${link.port}` : null;
 }
 
 /** Each machine's place: reads every daemon the window reaches. */
@@ -125,7 +137,7 @@ export function ensureMembers(): Promise<void> {
       const links = getLinks();
       const vault = links.find((l) => l.id === getVaultEnv());
       if (!vault || (vault.id !== LOCAL && vault.status !== "online")) return;
-      const others = links.filter((l) => l.id !== vault.id && (l.id === LOCAL || l.status === "online"));
+      const others = links.filter((l) => l.id !== vault.id && direct(l) && (l.id === LOCAL || l.status === "online"));
       if (others.length === 0) return;
       const address = await addressOf(vault);
       if (!address) return;
@@ -178,8 +190,9 @@ export async function moveVault(to: string, onMoved: () => void): Promise<void> 
   if (!target) throw new Error("That machine is gone.");
   set({ busy: to, error: null });
   try {
+    if (!direct(target)) throw new Error(`${nameOf(target)} needs Tailscale to keep the sign-ins.`);
     const address = await addressOf(target);
-    const others = links.filter((l) => l.id !== to);
+    const others = links.filter((l) => l.id !== to && direct(l));
     if (!address && others.length > 0) throw new Error(`The other machines can’t reach ${nameOf(target)}: it has no Tailscale address.`);
     const fromOnline = !!from && (from.id === LOCAL || from.status === "online");
     if (from && fromOnline) {

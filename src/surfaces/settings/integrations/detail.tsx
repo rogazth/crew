@@ -1,9 +1,9 @@
 // A connector's own page, or a provider server's (the strip above says
 // Connectors › Linear). It keeps the connectors' width, so the page doesn't
 // jump and back stays where it was. What's wrong sits on the row it's about
-// (an account, a CLI's copy), with its fix there. Below a connector's
-// accounts, where one account is on and which of its tools a session gets;
-// with several accounts, pills pick the one those show. A server's page has
+// (an account, a CLI's copy), with its fix there. Each account says how many
+// workspaces it's for, changed from its ⋯; below them, which of its tools a
+// session gets, with pills to pick the account when there are several. A server's page has
 // its copy in each CLI on its machine.
 // Escape and the arrow above the mark go back to the connectors.
 import { ArrowLeftIcon, PlusIcon, Trash2Icon } from "lucide-react";
@@ -17,7 +17,7 @@ import type { ConnectorTool } from "../../../lib/protocol";
 import { Group, Row, SettingsPage } from "../ui";
 import { Pills, SwitchRow } from "./bits";
 import { CliRow, ServerMark } from "./clis";
-import { flip, hostOf, inherited, ui, useEscape, useUi, type Detail } from "./lib";
+import { hostOf, startAddAccount, ui, useEscape, useUi, type Detail } from "./lib";
 import { AccountRow } from "./manage";
 import { brandOf } from "./brand";
 import { ServiceMark } from "./mark";
@@ -25,17 +25,7 @@ import { OutsideGroup } from "./outside";
 import { UnofficialNote, vendorOf } from "./builtin";
 import { useProviderServers } from "./providers";
 import { groupsOf, providerName, serverLine } from "./servers";
-import {
-  actions,
-  builtinOf,
-  connectorOf,
-  consumerOf,
-  formatTokens,
-  isOn,
-  useIntegrations,
-  type Account,
-  type Consumer,
-} from "./store";
+import { actions, builtinOf, connectorOf, formatTokens, useIntegrations, type Account } from "./store";
 
 const home = () => ui.go("home");
 /** Figma's registry name: it signs Crew in under an approved client's name (`oauth::client_name`). */
@@ -94,9 +84,8 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
   if (!connector) return null;
   const account = accounts.find((a) => a.id === picked) ?? accounts[0];
   const builtin = builtinOf(s, connector);
-  // A built-in asks which account first when its siblings have one; anything else goes straight to the sign-in.
-  const addAccount = () =>
-    builtin ? ui.open({ kind: "connect", source: { kind: "builtin", builtin } }) : actions.addAccount(connectorId);
+  // Its workspaces first, when there are several; then a built-in asks which account when its siblings have one.
+  const addAccount = () => (s.workspaces.length > 1 ? ui.open({ kind: "add-account", connectorId }) : startAddAccount(s, connectorId, null));
   return (
     <SettingsPage title={connector.name} hideHeader>
       <Header
@@ -127,7 +116,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
             <span className="crew-shimmer self-start text-[12px]">Authenticating…</span>
           </div>
         ))}
-        {/* Straight to the sign-in, private so the account already signed in doesn't answer. */}
+        {/* Its workspaces, then the sign-in, private so the account already signed in doesn't answer. */}
         <button
           type="button"
           disabled={adding.length > 0}
@@ -150,7 +139,6 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
               options={accounts.map((a) => ({ value: a.id, label: a.label }))}
             />
           )}
-          <WhereGroup account={account} consumers={s.consumers} />
           <ToolsGroup account={account} />
         </>
       )}
@@ -238,50 +226,6 @@ function ServerPage({ envId, groupKey }: { envId: string; groupKey: string }) {
 /** A URL or a command line under its label, wrapping wherever it must: a long one is read whole, not cut. */
 function Target({ text }: { text: string }) {
   return <span className="mt-0.5 block font-mono text-[12px] break-all text-text-muted select-text">{text}</span>;
-}
-
-/* ── Workspaces ─────────────────────────────────────────────────────── */
-
-/**
- * All workspaces, a toggle for every one: on, it's the only row. Off, each
- * workspace with its bots under it; a bot follows its workspace until it says
- * otherwise, and flipping it back drops its own binding, so the fewest are kept.
- */
-function WhereGroup({ account, consumers }: { account: Account; consumers: Consumer[] }) {
-  const s = useIntegrations();
-  const everywhere = isOn(account, null);
-  const workspaces = consumers.filter((c) => c.kind === "workspace");
-  const set = (consumer: Consumer) => {
-    const { scope, on } = flip(account, consumer);
-    actions.bind(account.id, scope, on);
-  };
-  // On for all is all there is: a workspace's or a bot's own say goes with it.
-  const setAll = (on: boolean) => {
-    if (on) for (const b of account.bindings) if (b.scope.kind !== "everywhere") actions.bind(account.id, b.scope, null);
-    // Off everywhere is no binding at all: no binding is off.
-    actions.bind(account.id, { kind: "everywhere" }, on ? true : null);
-  };
-  const follows = (bot: Consumer) => {
-    const parent = bot.workspace ? consumerOf(s, bot.workspace) : undefined;
-    return parent && inherited(account, bot) && !inherited(account, parent) ? `Follows ${parent.name}` : undefined;
-  };
-  return (
-    <Group title="Workspaces">
-      <SwitchRow label="All workspaces" checked={everywhere} onChange={setAll} />
-      {/* One flat list, so the card's hairlines run between every row; a bot sits indented under its workspace. */}
-      {!everywhere &&
-        workspaces.flatMap((workspace) => [
-          <SwitchRow key={workspace.id} label={workspace.name} checked={isOn(account, workspace)} onChange={() => set(workspace)} />,
-          ...consumers
-            .filter((c) => c.kind === "bot" && c.workspace === workspace.id)
-            .map((bot) => (
-              <div key={bot.id} className="pl-5">
-                <SwitchRow label={bot.name} description={follows(bot)} checked={isOn(account, bot)} onChange={() => set(bot)} />
-              </div>
-            )),
-        ])}
-    </Group>
-  );
 }
 
 /* ── Tools ──────────────────────────────────────────────────────────── */

@@ -53,7 +53,7 @@ const LOCAL_METHODS = new Set([
   "account_rename",
   "account_remove",
   "account_refresh",
-  "binding_set",
+  "account_workspaces_set",
   "tool_set",
 ]);
 

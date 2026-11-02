@@ -1,6 +1,6 @@
 //! Crew's connectors: remote MCP servers installed from Crew, each signed in
-//! to once per account, with the grants in the vault and the accounts turned
-//! on per scope (plan `2026-10-23-integrations.md`).
+//! to once per account, with the grants in the vault and each account for
+//! the workspaces picked (plan `2026-10-23-integrations.md`).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -45,7 +45,9 @@ pub struct ConnectorAccount {
     pub state: AccountState,
     /// Why it is not connected, in one line, when it is not.
     pub error: Option<String>,
-    pub bindings: Vec<Binding>,
+    /// The workspaces it's for; `None` is every one, those added later too.
+    /// A workspace no account of a connector is for doesn't get it.
+    pub workspaces: Option<Vec<String>>,
     /// The server's tools as last listed, switched off ones included.
     pub tools: Vec<ConnectorTool>,
     pub tools_off: Vec<String>,
@@ -66,30 +68,6 @@ pub enum AccountState {
     NeedsScope,
     /// The server could not be reached or answered with an error.
     Failed,
-}
-
-/// Where a binding applies. The most specific one wins: a session, then its
-/// bot, then its workspace, then everywhere.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, TS)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub enum BindingScope {
-    #[serde(rename = "everywhere")]
-    Everywhere,
-    #[serde(rename = "workspace")]
-    Workspace { id: String },
-    #[serde(rename = "bot")]
-    Bot { id: String },
-    #[serde(rename = "session")]
-    Session { id: String },
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct Binding {
-    pub scope: BindingScope,
-    pub on: bool,
 }
 
 /// A tool as the server lists it, with what Crew shows beside it.
@@ -253,6 +231,9 @@ pub struct ConnectorConnect {
     /// Who to sign in as, when the service offers it (Google's "Continue as"):
     /// the identity of an account already signed in.
     pub login_hint: Option<String>,
+    /// The workspaces a new account is for; `None` is every one.
+    #[serde(default)]
+    pub workspaces: Option<Vec<String>>,
 }
 
 /// What the window opens for a sign-in. The tab catches the navigation to
@@ -295,15 +276,13 @@ pub struct AccountRename {
     pub label: String,
 }
 
-/// Turn an account on or off for a scope; `on: None` drops the binding, so
-/// the scope follows the next less specific one.
+/// Which workspaces an account is for; `None` is every one, those added later too.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct BindingSet {
+pub struct AccountWorkspaces {
     pub account_id: String,
-    pub scope: BindingScope,
-    pub on: Option<bool>,
+    pub workspaces: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

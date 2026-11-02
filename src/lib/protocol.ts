@@ -6,6 +6,11 @@ export type AccountRename = { accountId: string, label: string, };
 
 export type AccountState = "pending" | "connected" | "expired" | "needs-scope" | "failed";
 
+/**
+ * Which workspaces an account is for; `None` is every one, those added later too.
+ */
+export type AccountWorkspaces = { accountId: string, workspaces: Array<string> | null, };
+
 export type AgentBinary = { path: string, };
 
 /**
@@ -141,20 +146,6 @@ truncated: boolean, };
 export type BackgroundRequest = { sessionId: string, id: string, };
 
 export type BackgroundState = "running" | "completed" | "failed" | "stopped";
-
-export type Binding = { scope: BindingScope, on: boolean, };
-
-/**
- * Where a binding applies. The most specific one wins: a session, then its
- * bot, then its workspace, then everywhere.
- */
-export type BindingScope = { "kind": "everywhere" } | { "kind": "workspace", id: string, } | { "kind": "bot", id: string, } | { "kind": "session", id: string, };
-
-/**
- * Turn an account on or off for a scope; `on: None` drops the binding, so
- * the scope follows the next less specific one.
- */
-export type BindingSet = { accountId: string, scope: BindingScope, on: boolean | null, };
 
 export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, 
 /**
@@ -461,7 +452,12 @@ identity: string | null, state: AccountState,
 /**
  * Why it is not connected, in one line, when it is not.
  */
-error: string | null, bindings: Array<Binding>, 
+error: string | null, 
+/**
+ * The workspaces it's for; `None` is every one, those added later too.
+ * A workspace no account of a connector is for doesn't get it.
+ */
+workspaces: Array<string> | null, 
 /**
  * The server's tools as last listed, switched off ones included.
  */
@@ -501,7 +497,11 @@ label: string | null,
  * Who to sign in as, when the service offers it (Google's "Continue as"):
  * the identity of an account already signed in.
  */
-loginHint: string | null, };
+loginHint: string | null, 
+/**
+ * The workspaces a new account is for; `None` is every one.
+ */
+workspaces: Array<string> | null, };
 
 export type ConnectorRef = { connectorId: string, };
 

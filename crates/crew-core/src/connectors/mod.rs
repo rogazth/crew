@@ -1,8 +1,9 @@
 //! Crew's connectors: remote MCP servers installed from Crew, signed in to
-//! once per account, and turned on per scope (plan `2026-10-23-integrations.md`).
+//! once per account, each account for the workspaces picked (plan
+//! `2026-10-23-integrations.md`).
 //!
 //! What lives here is what concerns the person: the connectors, their
-//! accounts, the bindings and the tool switches, in the vault's store. The
+//! accounts, the workspaces each is for and the tool switches, in the vault's store. The
 //! grants (refresh and access tokens) are not here: they are in the vault
 //! (`vault.rs`), which this store never copies.
 //!
@@ -24,7 +25,7 @@ pub mod remote;
 pub mod seal;
 pub mod vault;
 
-use crew_protocol::{AccountState, Binding, BindingScope, Connector, ConnectorAccount, ConnectorTool};
+use crew_protocol::{AccountState, Connector, ConnectorAccount, ConnectorTool};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 
@@ -183,10 +184,10 @@ fn read_connector(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connec
 /* ── Accounts ─────────────────────────────────────────────────────────── */
 
 /// A new account, pending until its first sign-in lands, named "Account N"
-/// until the service says who signed in. The first account of a connector
-/// is on everywhere; another starts on nowhere. Tools the
-/// server marks destructive start off once they are listed (`set_tools`).
-pub fn add_account(store: &Store, connector_id: &str, label: Option<&str>) -> Result<ConnectorAccount, String> {
+/// until the service says who signed in, and for the workspaces given
+/// (`None`, every one). Tools the server marks destructive start off once
+/// they are listed (`set_tools`).
+pub fn add_account(store: &Store, connector_id: &str, label: Option<&str>, workspaces: Option<&[String]>) -> Result<ConnectorAccount, String> {
     let id = uuid::Uuid::new_v4().to_string();
     store.with(|conn| {
         let count: i64 =
@@ -196,10 +197,7 @@ pub fn add_account(store: &Store, connector_id: &str, label: Option<&str>) -> Re
             "INSERT INTO connector_accounts (id, connector_id, label, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, connector_id, label, state_text(AccountState::Pending), now_millis()],
         )?;
-        if count == 0 {
-            write_binding(conn, &id, &BindingScope::Everywhere, Some(true))?;
-        }
-        Ok(())
+        write_workspaces(conn, &id, workspaces)
     })?;
     account(store, &id)?.ok_or_else(|| "The account was not saved".to_string())
 }
@@ -362,7 +360,7 @@ fn read_account(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connecto
                     identity: row.get(3)?,
                     state: parse_state(&state),
                     error: row.get(5)?,
-                    bindings: Vec::new(),
+                    workspaces: None,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
                     tools_off: serde_json::from_str(&off).unwrap_or_default(),
                     created_at: row.get(8)?,
@@ -371,16 +369,16 @@ fn read_account(conn: &Connection, id: &str) -> rusqlite::Result<Option<Connecto
         )
         .optional()?;
     let Some(mut account) = row else { return Ok(None) };
-    account.bindings = conn
-        .prepare("SELECT scope_kind, scope_id, is_on FROM connector_bindings WHERE account_id = ?1 ORDER BY scope_kind, scope_id")?
-        .query_map([id], |row| {
-            let kind: String = row.get(0)?;
-            let scope_id: String = row.get(1)?;
-            let on: bool = row.get(2)?;
-            Ok(scope_of(&kind, scope_id).map(|scope| Binding { scope, on }))
-        })?
-        .filter_map(|row| row.transpose())
+    // One `everywhere` row, or one `workspace` row each (`write_workspaces`).
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT scope_kind, scope_id FROM connector_bindings WHERE account_id = ?1 AND is_on = 1 ORDER BY scope_id")?
+        .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    account.workspaces = if rows.iter().any(|(kind, _)| kind == "everywhere") {
+        None
+    } else {
+        Some(rows.into_iter().filter(|(kind, _)| kind == "workspace").map(|(_, id)| id).collect())
+    };
     Ok(Some(account))
 }
 
@@ -432,61 +430,36 @@ fn tokens_of(def: &Value) -> u32 {
     (def.to_string().len() as u32).div_ceil(4)
 }
 
-/* ── Bindings ─────────────────────────────────────────────────────────── */
+/* ── Workspaces ───────────────────────────────────────────────────────── */
 
-pub fn set_binding(store: &Store, account_id: &str, scope: &BindingScope, on: Option<bool>) -> Result<(), String> {
-    store.with(|conn| write_binding(conn, account_id, scope, on))
-}
-
-fn write_binding(conn: &Connection, account_id: &str, scope: &BindingScope, on: Option<bool>) -> rusqlite::Result<()> {
-    let (kind, id) = scope_key(scope);
-    match on {
-        Some(on) => conn.execute(
-            "INSERT INTO connector_bindings (account_id, scope_kind, scope_id, is_on) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(account_id, scope_kind, scope_id) DO UPDATE SET is_on = excluded.is_on",
-            params![account_id, kind, id, on],
-        )?,
-        None => conn.execute(
-            "DELETE FROM connector_bindings WHERE account_id = ?1 AND scope_kind = ?2 AND scope_id = ?3",
-            params![account_id, kind, id],
-        )?,
-    };
-    Ok(())
-}
-
-fn scope_key(scope: &BindingScope) -> (&'static str, &str) {
-    match scope {
-        BindingScope::Everywhere => ("everywhere", ""),
-        BindingScope::Workspace { id } => ("workspace", id),
-        BindingScope::Bot { id } => ("bot", id),
-        BindingScope::Session { id } => ("session", id),
-    }
-}
-
-fn scope_of(kind: &str, id: String) -> Option<BindingScope> {
-    Some(match kind {
-        "everywhere" => BindingScope::Everywhere,
-        "workspace" => BindingScope::Workspace { id },
-        "bot" => BindingScope::Bot { id },
-        "session" => BindingScope::Session { id },
-        _ => return None,
+/// Which workspaces an account is for: `None` is every one, those added later too.
+pub fn set_workspaces(store: &Store, account_id: &str, workspaces: Option<&[String]>) -> Result<(), String> {
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        write_workspaces(&tx, account_id, workspaces)?;
+        tx.commit()
     })
 }
 
-/// Whether an account is on for a session: the most specific binding wins,
-/// a session's own, then its bot's, then its workspace's, then everywhere.
-/// No binding at all is off.
+/// Kept as one `everywhere` row, or one `workspace` row each.
+pub(crate) fn write_workspaces(conn: &Connection, account_id: &str, workspaces: Option<&[String]>) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM connector_bindings WHERE account_id = ?1", [account_id])?;
+    let rows: Vec<(&str, &str)> = match workspaces {
+        None => vec![("everywhere", "")],
+        Some(ids) => ids.iter().map(|id| ("workspace", id.as_str())).collect(),
+    };
+    for (kind, id) in rows {
+        conn.execute(
+            "INSERT OR IGNORE INTO connector_bindings (account_id, scope_kind, scope_id, is_on) VALUES (?1, ?2, ?3, 1)",
+            params![account_id, kind, id],
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether an account is for a session's workspace.
 pub fn is_on(account: &ConnectorAccount, session: &Session) -> bool {
-    let chain = [
-        BindingScope::Session { id: session.id.clone() },
-        session.bot_id.clone().map(|id| BindingScope::Bot { id }).unwrap_or(BindingScope::Session { id: String::new() }),
-        BindingScope::Workspace { id: session.workspace_id.clone() },
-        BindingScope::Everywhere,
-    ];
-    chain
-        .iter()
-        .find_map(|scope| account.bindings.iter().find(|binding| &binding.scope == scope).map(|binding| binding.on))
-        .unwrap_or(false)
+    account.workspaces.as_ref().is_none_or(|ids| ids.contains(&session.workspace_id))
 }
 
 /* ── What a session gets ──────────────────────────────────────────────── */
@@ -606,23 +579,25 @@ mod tests {
     }
 
     #[test]
-    fn the_first_account_is_on_everywhere_and_another_on_nowhere() {
+    fn a_new_account_is_for_the_workspaces_it_was_given() {
         let store = store();
         let c = notion(&store);
-        let work = add_account(&store, &c.id, None).unwrap();
-        let personal = add_account(&store, &c.id, Some("Personal")).unwrap();
+        let work = add_account(&store, &c.id, None, None).unwrap();
+        let personal = add_account(&store, &c.id, Some("Personal"), Some(&["w2".into()])).unwrap();
         assert_eq!((work.label.as_str(), personal.label.as_str()), ("Account 1", "Personal"));
+        assert_eq!((work.workspaces.clone(), personal.workspaces.clone()), (None, Some(vec!["w2".to_string()])));
         let s = session("s1", "w1", None);
-        assert!(is_on(&work, &s));
+        assert!(is_on(&work, &s), "every workspace, one added later too");
         assert!(!is_on(&personal, &s));
+        assert!(is_on(&personal, &session("s2", "w2", Some("b1"))), "a bot follows its workspace");
     }
 
     #[test]
     fn an_account_takes_who_signed_in_as_its_name_unless_it_was_named() {
         let store = store();
         let c = notion(&store);
-        let first = add_account(&store, &c.id, None).unwrap();
-        let named = add_account(&store, &c.id, Some("Personal")).unwrap();
+        let first = add_account(&store, &c.id, None, None).unwrap();
+        let named = add_account(&store, &c.id, Some("Personal"), None).unwrap();
         set_identity(&store, &first.id, Some("ada@example.com")).unwrap();
         set_identity(&store, &named.id, Some("ada@home.com")).unwrap();
         assert_eq!(account(&store, &first.id).unwrap().unwrap().label, "ada@example.com");
@@ -630,36 +605,33 @@ mod tests {
     }
 
     #[test]
-    fn the_most_specific_binding_wins() {
+    fn an_account_set_to_no_workspace_reaches_none_and_every_one_again_after() {
         let store = store();
         let c = notion(&store);
-        let a = add_account(&store, &c.id, None).unwrap();
-        set_binding(&store, &a.id, &BindingScope::Workspace { id: "w1".into() }, Some(false)).unwrap();
-        set_binding(&store, &a.id, &BindingScope::Bot { id: "b1".into() }, Some(true)).unwrap();
+        let a = add_account(&store, &c.id, None, None).unwrap();
+        set_workspaces(&store, &a.id, Some(&["w1".into(), "w3".into()])).unwrap();
         let a = account(&store, &a.id).unwrap().unwrap();
-        assert!(!is_on(&a, &session("s1", "w1", None)), "the workspace's off beats everywhere");
-        assert!(is_on(&a, &session("s2", "w1", Some("b1"))), "the bot's on beats its workspace's off");
-        assert!(is_on(&a, &session("s3", "w2", None)), "another workspace follows everywhere");
-        set_binding(&store, &a.id, &BindingScope::Session { id: "s2".into() }, Some(false)).unwrap();
+        assert_eq!(a.workspaces, Some(vec!["w1".to_string(), "w3".to_string()]));
+        assert!(is_on(&a, &session("s1", "w1", None)) && !is_on(&a, &session("s2", "w2", None)));
+        set_workspaces(&store, &a.id, Some(&[])).unwrap();
         let a = account(&store, &a.id).unwrap().unwrap();
-        assert!(!is_on(&a, &session("s2", "w1", Some("b1"))));
-        set_binding(&store, &a.id, &BindingScope::Session { id: "s2".into() }, None).unwrap();
-        let a = account(&store, &a.id).unwrap().unwrap();
-        assert!(is_on(&a, &session("s2", "w1", Some("b1"))), "dropping a binding falls back to the next");
+        assert_eq!(a.workspaces, Some(vec![]));
+        assert!(!is_on(&a, &session("s1", "w1", None)));
+        set_workspaces(&store, &a.id, None).unwrap();
+        assert_eq!(account(&store, &a.id).unwrap().unwrap().workspaces, None);
     }
 
     #[test]
     fn a_pending_account_is_left_out_and_two_accounts_take_their_labels() {
         let store = store();
         let c = notion(&store);
-        let work = add_account(&store, &c.id, None).unwrap();
+        let work = add_account(&store, &c.id, None, None).unwrap();
         let s = session("s1", "w1", None);
         assert!(bound_servers(&store, &s).unwrap().is_empty());
         set_state(&store, &work.id, AccountState::Connected, None).unwrap();
         assert_eq!(bound_servers(&store, &s).unwrap()[0].name, "notion");
-        let personal = add_account(&store, &c.id, Some("Personal")).unwrap();
+        let personal = add_account(&store, &c.id, Some("Personal"), None).unwrap();
         set_state(&store, &personal.id, AccountState::Connected, None).unwrap();
-        set_binding(&store, &personal.id, &BindingScope::Everywhere, Some(true)).unwrap();
         let names: Vec<String> = bound_servers(&store, &s).unwrap().into_iter().map(|b| b.name).collect();
         assert_eq!(names, ["notion_account_1", "notion_personal"]);
         assert_eq!(resolve(&store, &s, "notion_personal").unwrap().unwrap().account_id, personal.id);
@@ -674,7 +646,7 @@ mod tests {
             NewConnector { name: "Crew".into(), registry_name: None, url: "https://x.dev/mcp".into(), icon_url: None, description: String::new(), publisher: "x.dev".into() },
         )
         .unwrap();
-        let a = add_account(&store, &c.id, None).unwrap();
+        let a = add_account(&store, &c.id, None, None).unwrap();
         set_state(&store, &a.id, AccountState::Connected, None).unwrap();
         assert_eq!(bound_servers(&store, &session("s", "w", None)).unwrap()[0].name, "crew_account_1");
     }
@@ -683,7 +655,7 @@ mod tests {
     fn a_destructive_tool_starts_off_once_and_stays_as_the_user_left_it() {
         let store = store();
         let c = notion(&store);
-        let a = add_account(&store, &c.id, None).unwrap();
+        let a = add_account(&store, &c.id, None, None).unwrap();
         let listed = vec![
             serde_json::json!({ "name": "search", "annotations": { "readOnlyHint": true } }),
             serde_json::json!({ "name": "delete", "annotations": { "destructiveHint": true } }),
@@ -702,7 +674,7 @@ mod tests {
     fn a_tool_added_or_reworded_later_waits_off_for_the_user() {
         let store = store();
         let c = notion(&store);
-        let a = add_account(&store, &c.id, None).unwrap();
+        let a = add_account(&store, &c.id, None, None).unwrap();
         let read = |d: &str| serde_json::json!({ "name": "search", "description": d, "annotations": { "readOnlyHint": true } });
         set_raw_tools(&store, &a.id, &[read("Search pages")]).unwrap();
         assert!(account(&store, &a.id).unwrap().unwrap().tools_off.is_empty());

@@ -3,8 +3,8 @@
 Decided 2026-10-23. Replaces `2026-10-15-integrations.md`, none of which was
 built. One page shows every MCP server a session can get, from wherever it
 comes: the ones each provider CLI already has, and connectors installed from
-Crew. Crew's connectors are signed in once, can hold several accounts, and are
-turned on per workspace, bot or session. Their credentials live on one machine
+Crew. Crew's connectors are signed in once, can hold several accounts, and
+each account is for the workspaces picked. Their credentials live on one machine
 the user picks. Update the status table at the bottom as each phase lands.
 
 ## Why
@@ -27,8 +27,10 @@ the user picks. Update the status table at the bottom as each phase lands.
   rotating refresh token can have one holder only: a copy that refreshes
   invalidates the others, and reuse detection can revoke the whole grant
   (RFC 9700 §4.14.2).
-- **Accounts and bindings** are new. The old plan had one connection per
-  connector and a per-workspace switch.
+- **Accounts, each for some workspaces,** are new. The old plan had one
+  connection per connector and a per-workspace switch. A connector has no
+  switch of its own (2026-10-28): a workspace no account of it is for doesn't
+  get it, so there is one control, not two that can disagree.
 - **The sign-in redirect is intercepted, not routed.** The old plan sent the
   redirect through `remote-proxy.ts` to the machine's loopback. Now Crew's
   browser catches the redirect and hands the URL to the daemon that waits for
@@ -141,13 +143,14 @@ points to the provider server.
   authorization server's `id_token` or userinfo (`email`, `name`) when it
   gives one, and typed otherwise.
 - **Grant.** An account's refresh token, kept in the vault.
-- **Binding.** An account turned on, or off, for a scope: everywhere, a
-  workspace, a bot, or a session. The most specific binding wins. A bot
-  follows its workspace unless it has its own binding.
+- **Workspaces of an account.** Every workspace (those added later too), or
+  a list of them. A session gets the accounts its workspace is in; a bot
+  follows its workspace. Kept as `connector_bindings` rows, one `everywhere`
+  row or one `workspace` row each (2026-10-28).
 - **Off in Crew.** A provider server left out of Crew's spawns on one
   machine, for one provider.
 
-What concerns the person (connectors, accounts, bindings, tool switches)
+What concerns the person (connectors, accounts, their workspaces, tool switches)
 lives in the vault's `crewd`, and every machine keeps a copy on disk. What
 concerns one machine (its provider servers and what is off in Crew) lives in
 that machine's `crewd`. Editing a connector needs the vault online. Spawning
@@ -191,6 +194,19 @@ does not: a machine spawns from its copy.
   - *This Mac as the vault* listens on its Tailscale address for leases
     only, on the build's port. It does this only while it is the vault, and
     it takes no other call there.
+  - **Only over Tailscale** (decided 2026-10-28): connectors reach your other
+    machines by Tailscale. Any machine on the tailnet can be the vault or
+    lease from it, either way. A machine reached over SSH still works as a
+    machine, but it doesn't join the vault and its sessions get no Crew
+    connectors; the vault dialog says "Needs Tailscale" beside it, and so
+    does a workspace of it in an account's workspaces. Why: the SSH keys
+    are on the Mac alone, a remote's `crewd` listens on its loopback, and
+    the Mac sits behind NAT, so every SSH path between two machines runs
+    through a tunnel the Mac opened. A vault reached that way would work
+    only while the Mac is on, which undoes the point of moving it (that
+    connectors keep working with the Mac off). Bridging it (`-R`, a relay
+    on the Mac, a route per pair, the tunnels moved into `crewd`) was
+    weighed and left out.
   - Each machine leases with a **scoped token**: lease and config read only,
     minted by the vault for that machine, and revocable on its own. This is
     new, because `crewd serve` has one full-access token today. The Mac's
@@ -252,20 +268,19 @@ listen on the redirect URI.
 
 ### Use
 
-- Each account bound to a session is one more server in that spawn's config:
+- Each account for a session's workspace is one more server in that spawn's config:
   `crewd --mcp-connector <account>`, a stdio shim with the session's
   `CREW_TOKEN`. The shim forwards `tools/list` and `tools/call` to its
   machine's `crewd`, which calls the remote server over streamable HTTP (SSE
   when that is all the server has) with the leased token.
 - **Server names.** A server is named after the connector (`notion`). When
-  that name is taken (two bound accounts, or a provider server of the same
-  name), it becomes `notion_work`. By default, a consumer gets one account
-  per connector.
+  that name is taken (two accounts for the workspace, or a provider server of
+  the same name), it becomes `notion_work`.
 - **Tools.** `tools/list` is cached per account on each machine, and
   refreshed on connect, on `listChanged`, and hourly, so a spawn does not
   wait on the network. A tool switched off is left out of `tools/list` and
   costs no context.
-- **Bindings** are resolved at spawn, from the machine's copy. A change
+- **Workspaces** are resolved at spawn, from the machine's copy. A change
   reaches a kept Claude process at its next turn through `mcp_set_servers`,
   without a relaunch. The set replaces all of `--mcp-config`'s servers,
   Crew's own too, and leaves the user's and claude.ai's alone; the first one
@@ -290,12 +305,15 @@ Settings › Integrations, in the Tools group.
   what it costs: who can read the file, and that with this Mac as the vault
   the remotes lose Crew's connectors about an access token's life after the
   Mac sleeps or shuts down.
-- **Crew:** each connector with its accounts (label, state, where it is
-  on), Connect, Add account, and a registry search.
+- **Crew:** each connector with its accounts (label, state, how many
+  workspaces it's for), Connect, Add account, and a registry search. Add
+  account asks for its workspaces first, all picked; an account's ⋯ →
+  Workspaces changes them. Installing a connector signs its first account in
+  for every workspace.
 - **Providers on <machine>:** a machine picker, as on Providers, then each
   provider's servers: state, scope, tool count, Sign in, and Off in Crew.
 - **Detail pane:** tools with switches and their annotations (read only,
-  destructive), bindings, the machines signed in for a provider server, and
+  destructive), the machines signed in for a provider server, and
   Disconnect or Remove.
 - **In the chat**, nothing for now: the composer's MCP chip was taken out
   (2026-10-25). A problem shows as a dot on the rail's Connectors icon: an
@@ -324,8 +342,8 @@ UX, for the prototype to settle:
   from pending to connected in place.
 - **Machines.** One dot per machine for a provider server, filling in as
   each one signs in.
-- **Consumers.** The cost in context, shown when an account is turned on for
-  a consumer.
+- **Workspaces.** The cost in context, shown when an account is set to a
+  workspace.
 
 ### What this leaves for mobile
 
@@ -338,7 +356,7 @@ UX, for the prototype to settle:
 
 ### Built in phase 2, and how
 
-- `crew-core/src/connectors/`: `mod.rs` (model, migration 44, bindings,
+- `crew-core/src/connectors/`: `mod.rs` (model, migration 44, workspaces,
   server names), `oauth.rs`, `remote.rs` (streamable HTTP; the 2024-11-05
   HTTP+SSE transport is refused with a clear error), `net.rs` (one `reqwest`
   client: HTTPS only, private and local addresses refused in its resolver,
@@ -476,7 +494,7 @@ starts with the daemon, not with the page:
   (`electron/icons.ts`). The window's policy stays closed to the hosts.
 
 **2. Vault on this Mac.** The OAuth client in `crewd`, keychain writes,
-accounts and bindings, Connect,
+accounts and their workspaces, Connect,
 `crewd --mcp-connector`, tool switches, and the tools cache. A fake OAuth and
 MCP server for tests and e2e.
 
@@ -495,7 +513,6 @@ rotate, so its lease is a copy.
   Pages on the repo, or a domain). Until then, Crew uses DCR only, and each
   vault registers its own client.
 - Should Off in Crew be per workspace too, or per machine only, as here?
-- Should a second account start on nowhere (as here) or ask where?
 
 ## Status
 
@@ -509,9 +526,11 @@ rotate, so its lease is a copy.
 | Provider servers: inventory, page, sign-in, Off in Crew | built, covered by tests; the chat's chip removed (2026-10-25) |
 | Provider copies: listed on a connector's page, conflicts, rail dot | built (2026-10-25), Grok's sign-in through its credential store included; adding to the CLIs' configs removed (2026-10-28) |
 | Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
+| Accounts for some workspaces: asked on Add account, changed from ⋯, no switch per connector, bot and session bindings dropped | built (2026-10-28), e2e `connector-workspaces` |
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
-| Vault on this Mac: a binding change reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
-| Vault on this Mac: a binding change reaching opencode's shared server (per folder, next turn) | built |
+| Vault on this Mac: a change of workspaces reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
+| Vault on this Mac: a change of workspaces reaching opencode's shared server (per folder, next turn) | built |
 | Remote vault: scoped tokens, leases, join, move, Linux file | built (2026-10-28): lease tokens kept hashed, revocable, rate limited and logged (`connectors/lease.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the sealed move from the window (`integrations/vault.ts`); tried between this Mac and falcon-heavy over Tailscale, there and back |
-| Remote vault: a lease limited to the accounts bound on that machine | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
+| Remote vault: only over Tailscale; a machine reached over SSH says "Needs Tailscale" and is left out of joins and moves | built (2026-10-28) |
+| Remote vault: a lease limited to the accounts for that machine's workspaces | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
 | Password managers as a kind | todo |

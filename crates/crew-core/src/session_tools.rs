@@ -4311,7 +4311,7 @@ time.sleep(600)
             },
         )
         .expect("connector");
-        let account = crate::connectors::add_account(store, &connector.id, None).expect("account");
+        let account = crate::connectors::add_account(store, &connector.id, None, None).expect("account");
         crate::connectors::set_state(store, &account.id, crew_protocol::AccountState::Connected, None).expect("state");
         let parent = w.session("terminal", "shell", "full");
         let (id, log) = w.codex(&parent, "one", None);

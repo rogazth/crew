@@ -9,7 +9,7 @@ import { RowAction } from "./bits";
 import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./dialog";
 import { plural, ui } from "./lib";
 import { reload } from "./store";
-import { machineName, moveVault, refreshVault, useVault, type Machine } from "./vault";
+import { machineName, moveVault, needsTailscale, refreshVault, useVault, type Machine } from "./vault";
 
 function Glyph({ envId }: { envId: string }) {
   const Icon = envId === LOCAL ? LaptopIcon : ServerIcon;
@@ -23,6 +23,7 @@ function Glyph({ envId }: { envId: string }) {
 /** One line on where a machine stands with the vault. */
 function standing(machine: Machine, vaultEnv: string): string {
   if (!machine.online) return "Offline";
+  if (needsTailscale(machine.envId)) return "Reached over SSH";
   const status = machine.status;
   if (machine.envId === vaultEnv) {
     const leasing = status?.machines.length ?? 0;
@@ -40,15 +41,15 @@ function costOf(to: Machine, from: Machine | undefined): string[] {
   const lines =
     to.envId === LOCAL
       ? [
-          "Sign-ins move to this Mac’s keychain.",
-          "Your other machines lease from it over Tailscale, so their connectors work only while this Mac is on and awake.",
+          "Kept in this Mac’s keychain.",
+          "Other machines’ connectors work only while this Mac is awake.",
         ]
       : [
-          `Sign-ins move to ${to.name}, sealed so only it can open them. There they’re kept in a file that its user and root can read.`,
-          "Connectors keep working with this Mac off.",
+          `Sealed to ${to.name}, in a file its user and root can read.`,
+          "Connectors work with this Mac off.",
         ];
   if (from && !from.online)
-    lines.push(`${from.name} is offline, so its sign-ins can’t move: ${to.name} starts empty, and every account asks you to sign in again.`);
+    lines.push(`${from.name} is offline: every account signs in again.`);
   return lines;
 }
 
@@ -100,8 +101,7 @@ export function VaultDialog() {
           </span>
         }
         title="Where sign-ins are kept"
-        subtitle="One machine keeps them; the others lease a token from it for each call."
-        wrap
+        subtitle="One machine keeps them for the others."
       />
       <DialogGroup>
         {v.machines.map((m) => (
@@ -113,6 +113,8 @@ export function VaultDialog() {
           >
             {m.envId === v.vaultEnv ? (
               <span className="shrink-0 text-[12.5px] font-medium text-text-muted">Vault</span>
+            ) : needsTailscale(m.envId) ? (
+              <span className="shrink-0 text-[12.5px] text-text-muted">Needs Tailscale</span>
             ) : (
               m.online && !v.busy && (m.envId === LOCAL || m.address) && <RowAction label="Keep here" onClick={() => setPicked(m.envId)} />
             )}

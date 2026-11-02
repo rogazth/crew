@@ -342,9 +342,6 @@ export function CustomDialog() {
           />
         </Field>
         <button type="submit" hidden />
-        <p className="text-[12.5px] text-text-muted">
-          Custom servers are unreviewed. Connect only if you trust the author.
-        </p>
       </form>
       <DialogFooter
         start={

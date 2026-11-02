@@ -1,6 +1,6 @@
 // The Connectors page's model: Crew's connectors and their accounts as this
 // Mac's vault keeps them (`connectors_list`, then every `connectors` event),
-// the workspaces and bots an account can be turned on for, and the sign-ins
+// the workspaces an account can be for, and the sign-ins
 // this window has running. Every action is a daemon call; the few that a
 // switch makes are shown at once and put back if the daemon refuses.
 // See docs/plans/2026-10-23-integrations.md.
@@ -9,7 +9,7 @@ import {
   accountRefresh,
   accountRemove,
   accountRename,
-  bindingSet,
+  accountWorkspacesSet,
   builtinList,
   connectorAdd,
   connectorConnect,
@@ -22,15 +22,14 @@ import {
 } from "../../../lib/api";
 import { abortSignIn, catchRedirect } from "../../../lib/signInWindow";
 import { ensureMembers, loadVault, watchMembers } from "./vault";
-import type { BindingScope, BuiltinConnector, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
+import type { BuiltinConnector, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
 import { toast } from "../ui";
 
 export type Account = ConnectorAccount;
 export type AccountState = Account["state"];
-export type Scope = BindingScope;
 
-/** Who an account can be turned on for: a workspace, or a bot in one. */
-export type Consumer = { kind: "workspace" | "bot"; id: string; name: string; workspace?: string | undefined };
+/** A workspace an account can be for. */
+export type Place = { id: string; name: string };
 
 /** A sign-in this window started: the window opens, the person consents, the daemon redeems the code. */
 export type FlowStage = "opening" | "waiting" | "redeeming" | "done" | "failed";
@@ -51,11 +50,12 @@ export type State = {
   connectors: Connector[];
   /** What Crew builds in, installed or not: Browse lists them above the registry. */
   builtins: BuiltinConnector[];
-  consumers: Consumer[];
+  /** The app's workspaces, as the page last saw them. */
+  workspaces: Place[];
   flows: Flow[];
 };
 
-let state: State = { loaded: false, error: null, connectors: [], builtins: [], consumers: [], flows: [] };
+let state: State = { loaded: false, error: null, connectors: [], builtins: [], workspaces: [], flows: [] };
 const listeners = new Set<() => void>();
 
 function set(next: (s: State) => State) {
@@ -124,10 +124,9 @@ export function getState(): State {
   return state;
 }
 
-/** The app's workspaces and bots, as the page last saw them. */
-export function setConsumers(consumers: Consumer[]) {
-  if (JSON.stringify(consumers) === JSON.stringify(state.consumers)) return;
-  set((s) => ({ ...s, consumers }));
+export function setWorkspaces(workspaces: Place[]) {
+  if (JSON.stringify(workspaces) === JSON.stringify(state.workspaces)) return;
+  set((s) => ({ ...s, workspaces }));
 }
 
 /* ── Writing back what the daemon answered ─────────────────────────────── */
@@ -194,7 +193,7 @@ const landed = new Map<number, string>();
  * A sign-in, start to end: a new account of the connector, or `accountId`
  * again. Resolves the flow's id at once; the flow itself moves on in the store.
  */
-function signIn(connectorId: string, accountId: string | null, loginHint: string | null = null): number {
+function signIn(connectorId: string, accountId: string | null, loginHint: string | null = null, workspaces: string[] | null = null): number {
   const id = ++flowSeq;
   set((s) => ({
     ...s,
@@ -207,7 +206,7 @@ function signIn(connectorId: string, accountId: string | null, loginHint: string
   void (async () => {
     let started: SignIn | null = null;
     try {
-      started = await connectorConnect({ connectorId, accountId, label: null, loginHint });
+      started = await connectorConnect({ connectorId, accountId, label: null, loginHint, workspaces });
       running.set(id, started.state);
       stage(id, { accountId: started.accountId, stage: "waiting" });
       // The window catches the redirect itself; this Mac's vault redeems it.
@@ -244,12 +243,14 @@ export function dismissFlow(id: number) {
 /**
  * What a connector is installed from: a server in the registry, a URL, or one
  * Crew builds in, signed in as `loginHint` when the person picked an account
- * its siblings already have ("Continue as").
+ * its siblings already have ("Continue as"). Its account is for `workspaces`,
+ * `null` every one; not asked yet while `undefined`.
  */
-export type Source =
+export type Source = (
   | { kind: "registry"; server: RegistryServer }
   | { kind: "url"; url: string; name: string | null }
-  | { kind: "builtin"; builtin: BuiltinConnector; loginHint?: string | null | undefined };
+  | { kind: "builtin"; builtin: BuiltinConnector; loginHint?: string | null | undefined }
+) & { workspaces?: string[] | null | undefined };
 
 /** The connector a source is, once installed. */
 const installedFrom = (s: State, source: Source) =>
@@ -294,7 +295,7 @@ export const actions = {
   async installAndConnect(source: Source): Promise<{ connectorId: string; flowId: number; installed: boolean }> {
     const before = !!installedFrom(state, source);
     const connector = await actions.install(source);
-    const flowId = signIn(connector.id, null, source.kind === "builtin" ? (source.loginHint ?? null) : null);
+    const flowId = signIn(connector.id, null, source.kind === "builtin" ? (source.loginHint ?? null) : null, source.workspaces ?? null);
     if (!before) {
       const watch = () => {
         const flow = state.flows.find((f) => f.id === flowId);
@@ -315,9 +316,9 @@ export const actions = {
     return { connectorId: connector.id, flowId, installed: !before };
   },
 
-  /** Another account of an installed connector; it opens where the signed-in one does not answer for it. */
-  addAccount(connectorId: string, loginHint: string | null = null): number {
-    return signIn(connectorId, null, loginHint);
+  /** Another account of an installed connector, for `workspaces` (or every one); it opens where the signed-in one does not answer for it. */
+  addAccount(connectorId: string, workspaces: string[] | null): number {
+    return signIn(connectorId, null, null, workspaces);
   },
 
   /** Signs an account in again: expired, short of scope, or never finished. */
@@ -356,16 +357,12 @@ export const actions = {
     );
   },
 
-  /** Turns an account on or off for a scope; `null` drops the scope's own binding. */
-  bind(accountId: string, scope: Scope, on: boolean | null) {
+  /** Which workspaces an account is for; `null` is every one. */
+  setWorkspaces(accountId: string, workspaces: string[] | null) {
     void optimistic(
-      () =>
-        patchAccount(accountId, (a) => {
-          const rest = a.bindings.filter((b) => !sameScope(b.scope, scope));
-          return { ...a, bindings: on === null ? rest : [...rest, { scope, on }] };
-        }),
-      () => bindingSet({ accountId, scope, on }),
-      "Couldn’t change where it’s on",
+      () => patchAccount(accountId, (a) => ({ ...a, workspaces })),
+      () => accountWorkspacesSet(accountId, workspaces),
+      "Couldn’t change its workspaces",
     );
   },
 
@@ -425,31 +422,10 @@ export const accountOf = (s: State, id: string | undefined) => s.connectors.flat
 /** A sign-in's account: its flow's, or, once the flow is let go, the one it landed on. */
 export const accountOfFlow = (s: State, flowId: number | undefined) =>
   accountOf(s, s.flows.find((f) => f.id === flowId)?.accountId ?? (flowId === undefined ? undefined : landed.get(flowId)));
-export const consumerOf = (s: State, id: string) => s.consumers.find((c) => c.id === id);
-
-export const sameScope = (a: Scope, b: Scope) => a.kind === b.kind && (a.kind === "everywhere" || (b.kind !== "everywhere" && a.id === b.id));
 
 /** A sign-in of this window still running on the account. */
 export const signingIn = (s: State, accountId: string) =>
   s.flows.some((f) => f.accountId === accountId && f.stage !== "done" && f.stage !== "failed");
-
-/** Whether an account is on for a consumer: its bot's binding, else its workspace's, else everywhere's; none is off. */
-export function isOn(account: Account, consumer: Consumer | null): boolean {
-  const find = (scope: Scope) => account.bindings.find((b) => sameScope(b.scope, scope));
-  if (consumer?.kind === "bot") {
-    const own = find({ kind: "bot", id: consumer.id });
-    if (own) return own.on;
-    if (consumer.workspace) {
-      const workspace = find({ kind: "workspace", id: consumer.workspace });
-      if (workspace) return workspace.on;
-    }
-  }
-  if (consumer?.kind === "workspace") {
-    const own = find({ kind: "workspace", id: consumer.id });
-    if (own) return own.on;
-  }
-  return find({ kind: "everywhere" })?.on ?? false;
-}
 
 export function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);

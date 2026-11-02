@@ -183,7 +183,7 @@ impl Connectors {
         }
         let (account, new_account) = match &req.account_id {
             Some(id) => (super::account(&self.store, id)?.ok_or("That account is gone")?, false),
-            None => (super::add_account(&self.store, &connector.id, req.label.as_deref())?, true),
+            None => (super::add_account(&self.store, &connector.id, req.label.as_deref(), req.workspaces.as_deref())?, true),
         };
         // Another account of this connector is signed in to the browser's
         // shared session, and would answer for this one.
@@ -218,7 +218,7 @@ impl Connectors {
         let discovery = google::discovery(app, &at, &client);
         let (account, new_account) = match &req.account_id {
             Some(id) => (super::account(&self.store, id)?.ok_or("That account is gone")?, false),
-            None => (super::add_account(&self.store, &connector.id, req.label.as_deref())?, true),
+            None => (super::add_account(&self.store, &connector.id, req.label.as_deref(), req.workspaces.as_deref())?, true),
         };
         // Signing an account in again asks for the same Google account.
         let hint = req.login_hint.as_deref().or(account.identity.as_deref());
@@ -795,7 +795,7 @@ mod tests {
         )
         .unwrap();
         let account = c.block_on(async {
-            let sign_in = c.connect(ConnectorConnect { connector_id: connector.id, account_id: None, label: None, login_hint: None }).await.unwrap();
+            let sign_in = c.connect(ConnectorConnect { connector_id: connector.id, account_id: None, label: None, login_hint: None, workspaces: None }).await.unwrap();
             let answer = net::client().get(&sign_in.auth_url).send().await.unwrap();
             let caught = answer.headers()["location"].to_str().unwrap().to_string();
             c.callback(&sign_in.state, &caught).await.unwrap()
@@ -833,7 +833,7 @@ mod tests {
 
     fn sign_in_google(c: &Connectors, connector_id: &str, hint: Option<&str>) -> Result<ConnectorAccount, String> {
         c.block_on(async {
-            let req = ConnectorConnect { connector_id: connector_id.into(), account_id: None, label: None, login_hint: hint.map(str::to_string) };
+            let req = ConnectorConnect { connector_id: connector_id.into(), account_id: None, label: None, login_hint: hint.map(str::to_string), workspaces: None };
             let sign_in = c.connect(req).await?;
             assert!(!sign_in.incognito, "Google's own picker shows the other accounts");
             if let Some(hint) = hint {
@@ -1002,7 +1002,7 @@ mod tests {
         let (c, _vault, _fake, id) = signed_in(Options::default());
         let connector_id = c.account(&id).unwrap().connector_id;
         let sign_in = c
-            .block_on(c.connect(ConnectorConnect { connector_id: connector_id.clone(), account_id: None, label: Some("Personal".into()), login_hint: None }))
+            .block_on(c.connect(ConnectorConnect { connector_id: connector_id.clone(), account_id: None, label: Some("Personal".into()), login_hint: None, workspaces: None }))
             .unwrap();
         assert!(sign_in.incognito, "the signed-in account would answer for the new one");
         assert_eq!(super::super::get(&c.store, &connector_id).unwrap().unwrap().accounts.len(), 2);
@@ -1040,7 +1040,7 @@ mod refused_tests {
         )
         .unwrap();
         let error = c
-            .block_on(c.connect(ConnectorConnect { connector_id: connector.id.clone(), account_id: None, label: None, login_hint: None }))
+            .block_on(c.connect(ConnectorConnect { connector_id: connector.id.clone(), account_id: None, label: None, login_hint: None, workspaces: None }))
             .unwrap_err();
         assert!(error.contains("doesn't let Crew sign in"), "{error}");
         let after = super::super::get(&store, &connector.id).unwrap().unwrap();

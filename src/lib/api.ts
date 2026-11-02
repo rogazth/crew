@@ -13,7 +13,6 @@ import type {
   BackgroundList,
   BackgroundOutput,
   BotRules,
-  BindingSet,
   BotRulesSave,
   BrowserLeases,
   CommandCatalog,
@@ -526,8 +525,9 @@ export const accountRemove = (accountId: string): Promise<null> => client.reques
 export const accountRefresh = (accountId: string): Promise<ConnectorAccount> =>
   client.request("account_refresh", { accountId }, vaultEnv);
 
-/** `on: null` drops the binding, so the scope follows the next less specific one. */
-export const bindingSet = (binding: BindingSet): Promise<null> => client.request("binding_set", binding, vaultEnv);
+/** Which workspaces an account is for; `null` is every one, those added later too. */
+export const accountWorkspacesSet = (accountId: string, workspaces: string[] | null): Promise<null> =>
+  client.request("account_workspaces_set", { accountId, workspaces }, vaultEnv);
 
 export const toolSet = (tool: ToolSet): Promise<null> => client.request("tool_set", tool, vaultEnv);
 
