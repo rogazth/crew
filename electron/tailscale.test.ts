@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { lines, named } from "./trace-recorder";
+
+vi.mock("./trace", async () => (await import("./trace-recorder")).mockedTrace());
 import { cliEnv, devicesFrom, tailnetFrom, tailnetFromOutput } from "./tailscale";
 
 const status = {
@@ -118,5 +121,19 @@ describe("cliEnv", () => {
 
   it("keeps a TERM it already has", () => {
     expect(cliEnv({ TERM: "xterm" }).TERM).toBe("xterm");
+  });
+});
+
+describe("tailscale's trace", () => {
+  it("says what the CLI could not tell, in a line, and a device with no address once while the count stays", () => {
+    lines.length = 0;
+    tailnetFromOutput("failed to connect to local tailscaled\nsecond line", new Set());
+    expect(named("tailscale.status_failed")[0]?.fields.error).toBe("failed to connect to local tailscaled");
+    const noAddress = { ...status, Peer: { ...status.Peer, b: { HostName: "ghost", OS: "linux", Online: true, TailscaleIPs: ["fd7a::9"] } } };
+    devicesFrom(noAddress, new Set());
+    devicesFrom(noAddress, new Set());
+    expect(named("tailscale.no_address")).toHaveLength(1);
+    expect(named("tailscale.no_address")[0]?.fields).toEqual({ devices: 1 });
+    expect(JSON.stringify(lines)).not.toContain("ghost");
   });
 });

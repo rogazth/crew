@@ -4,14 +4,9 @@ import { createServer, type Server } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isLoopback, Tunnels, tunnelArgs } from "./ssh-tunnel";
 
-const lines = vi.hoisted(() => [] as Array<{ level: string; message: string; fields: Record<string, unknown> }>);
-vi.mock("./trace", async () => {
-  const real = await vi.importActual<typeof import("../src/lib/trace")>("../src/lib/trace");
-  const at = (level: string) => (message: string, fields: Record<string, unknown> = {}) => {
-    lines.push({ level, message, fields: real.sanitizeFields(fields as never) });
-  };
-  return { errorText: real.errorText, trace: { info: at("INFO"), warn: at("WARN"), error: at("ERROR") } };
-});
+import { lines, named } from "./trace-recorder";
+
+vi.mock("./trace", async () => (await import("./trace-recorder")).mockedTrace());
 
 describe("ssh tunnels", () => {
   it("takes a crewd on the machine's loopback as one reached over ssh", () => {
@@ -64,7 +59,6 @@ function fakeSsh(mode: "dies" | "listens", said = "ssh: connect to host atlas po
 }
 
 const target = { destination: "atlas", user: "root", port: 22 };
-const named = (message: string) => lines.filter((line) => line.message === message);
 
 describe("tunnel trace", () => {
   beforeEach(() => {

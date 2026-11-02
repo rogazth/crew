@@ -410,7 +410,7 @@ function userctl(command: string): string {
   return `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ${command}`;
 }
 
-async function step<T>(
+export async function step<T>(
   report: (step: StepUpdate) => void,
   id: StepId,
   run: () => Promise<T>,
