@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stands in for loginctl on the e2e machine: lingering is on, as Crew's install asks.
+case "${1:-}" in
+  show-user) echo "Linger=yes" ;;
+esac
+exit 0

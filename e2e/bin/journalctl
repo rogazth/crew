@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stands in for `journalctl --user -u UNIT` on the e2e machine: what the stand-in systemctl logged.
+unit=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "-u" ] && unit="$2"
+  shift
+done
+cat "$HOME/.fake-systemd/$unit.log" 2>/dev/null
+exit 0

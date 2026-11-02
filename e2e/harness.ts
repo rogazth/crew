@@ -5,6 +5,12 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 //
+// A machine reached over ssh (`addRemote`, `enableSsh`) is this Mac again, behind
+// a private sshd the harness runs for the spec: loopback only, a free port, its
+// own keys, public key auth, as the current user. `ssh` is the sandbox's own
+// (e2e/bin/ssh, with that sshd's config), so ~/.ssh is neither read nor written,
+// and the machine's shell has a home of its own under the sandbox.
+//
 // A spec finds what it checks by role and accessible name (getByRole,
 // getByLabel, getByText) or by a `data-*` hook the component sets for it
 // (`[data-composer]`, `[data-work-trigger]`), never by a style class (`.ds-*`,
@@ -17,7 +23,7 @@
 // `webview`) is reached through the helpers below, and so is a locator more
 // than one spec needs.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { appendFile, chmod, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, constants as fsConstants, copyFile, mkdir, readdir, symlink, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
@@ -1128,6 +1134,12 @@ export async function enableSsh(crew: Pick<Crew, "root" | "home">): Promise<{ us
   await mkdir(dir, { recursive: true });
   const machineHome = machineHomeOf(crew);
   await prepareSandbox(machineHome, path.join(crew.root, "config"), path.join(crew.root, "repos"));
+  // What a Linux machine has and a Mac does not: systemd's user manager, as far as Crew asks of it.
+  for (const name of ["systemctl", "loginctl", "journalctl", "tailscale"]) {
+    const stand = path.join(machineHome, "bin", name);
+    await writeFile(stand, await readFile(path.join(ROOT, "e2e/bin", name), "utf8"));
+    await chmod(stand, 0o755);
+  }
   const host = path.join(dir, "host_key");
   const client = path.join(dir, "client_key");
   for (const key of [host, client]) {
@@ -1135,7 +1147,8 @@ export async function enableSsh(crew: Pick<Crew, "root" | "home">): Promise<{ us
   }
   await writeFile(path.join(dir, "authorized_keys"), await readFile(`${client}.pub`, "utf8"));
   const port = await freePort();
-  const system = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+  // Not /usr/local: that is where this Mac's Homebrew and Tailscale are, and a machine reached over ssh has neither.
+  const system = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
   const machinePath = [path.join(machineHome, ".local/bin"), path.join(machineHome, "bin"), ...system].join(":");
   await writeFile(
     path.join(dir, "sshd_config"),
@@ -1205,7 +1218,35 @@ export async function enableSsh(crew: Pick<Crew, "root" | "home">): Promise<{ us
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   sshds.set(crew.root, { port, child: guard, machineHome });
+  // Whatever Crew runs there writes under HOME (an install, a wipe): it must be the machine's, never the account's.
+  const home = await run("/usr/bin/ssh", ["-F", path.join(crew.home, ".e2e-ssh/config"), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-l", SSH_USER, "127.0.0.1", "echo $HOME"]).then(
+    (done) => done.stdout.trim(),
+  );
+  if (home !== machineHome) {
+    await stopSshd(crew.root);
+    throw new Error(`the sandbox's sshd gave a shell HOME=${home}, not ${machineHome}`);
+  }
   return { user: SSH_USER, port, machineHome };
+}
+
+/**
+ * An install uploads the Linux build of crewd from `target/linux/crewd-linux-<arch>` (electron/remotes.ts,
+ * `linuxBinary`). The machine here is this Mac, so that file is a copy of the debug crewd, put there for
+ * the spec and taken away after. A real cross-built crewd already there is left alone and nothing is
+ * staged: it cannot run on this machine, and `null` says so.
+ */
+export async function stageMachineBinary(): Promise<{ unstage(): Promise<void> } | null> {
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const file = path.join(ROOT, "target/linux", `crewd-linux-${arch}`);
+  if (existsSync(file)) return null;
+  await mkdir(path.dirname(file), { recursive: true });
+  try {
+    await copyFile(path.join(ROOT, "target/debug/crewd"), file, fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
+    throw error;
+  }
+  return { unstage: () => rm(file, { force: true }) };
 }
 
 async function stopSshd(root: string): Promise<void> {
@@ -1410,7 +1451,7 @@ async function delayProxy(target: number, ms: number): Promise<{ port: number; d
 }
 
 /** A port nothing listens on now, and the one after it (crewd serve's SOCKS proxy) free too, most likely. */
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;

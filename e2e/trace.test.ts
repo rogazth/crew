@@ -9,7 +9,22 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { chatLine, crewdPid, launchCrew, MOD, newSession, pressChord, sendInChat, waitFor, workspaceMark, type Crew } from "./harness.ts";
+import {
+  chatLine,
+  crewdPid,
+  enableSsh,
+  freePort,
+  launchCrew,
+  MOD,
+  newSession,
+  pressChord,
+  sendInChat,
+  SSH_USER,
+  stageMachineBinary,
+  waitFor,
+  workspaceMark,
+  type Crew,
+} from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -300,4 +315,114 @@ test("a prompt, a reply and a keystroke with a marker in them reach no file unde
   assert.ok(lines.some((one) => one.fields.message === "session.status"));
   // The names are the trace's own: nothing else was made beside them.
   assert.ok(files.every((file) => /^(app|crewd|errors)\.ndjson(\.\d+)?$/.test(file)), files.join(", "));
+});
+
+/** The lines of the trace named `message`, from the app's file. */
+async function lines(crew: Crew, message: string): Promise<Line[]> {
+  return (await read(crew)).lines.filter((one) => one.file.startsWith("app.ndjson") && one.fields.message === message);
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+test("a machine installed over ssh, restarted, revived and removed leaves its lines, and none holds an address, a key or a command", async (t) => {
+  // The machine is this Mac, reached by the sandbox's own sshd; the install uploads a crewd (see stageMachineBinary).
+  const staged = await stageMachineBinary();
+  if (!staged) return t.skip("target/linux holds a real Linux crewd, which cannot run on this machine");
+  t.after(() => staged.unstage());
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const { machineHome } = await enableSsh(crew);
+  const remotes = (fn: string, ...args: unknown[]) =>
+    crew.window.evaluate(([name, rest]) => (window.crewHost!.remotes as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[name as string]!(...(rest as unknown[])), [fn, args] as const);
+
+  // Install: over ssh, the real way, ending in a crewd the machine's (stand-in) systemd runs.
+  const port = await freePort();
+  const row = (await remotes("install", { name: "box", ssh: "127.0.0.1", user: SSH_USER, port })) as { id: string };
+  const dataDir = path.join(machineHome, ".crew-dev/data");
+  const token = (await readFile(path.join(dataDir, "token"), "utf8")).trim();
+  const unitPid = () => readFile(path.join(machineHome, ".fake-systemd/crewd-dev.pid"), "utf8").then((text) => Number(text.trim()));
+  const first = await unitPid();
+  assert.ok(alive(first), "the uploaded crewd runs on the machine");
+  const start = await line(crew, "app.ndjson", "install.start");
+  assert.deepEqual([start.target, start.level, start.fields.update, start.fields.reuse], ["app.main", "INFO", false, true]);
+  const done = await line(crew, "app.ndjson", "install.done");
+  assert.ok(typeof done.fields.took_ms === "number" && typeof done.fields.version === "string", JSON.stringify(done));
+  const steps = (await lines(crew, "install.step")).map((one) => one.fields.step);
+  assert.deepEqual(steps, ["reach", "ssh", "existing", "upload", "service", "pair", "clis"]);
+  const added = await line(crew, "app.ndjson", "machine.added", (one) => one.fields.via === "install");
+  assert.equal(added.fields.machine, row.id);
+  assert.ok(start.timestamp <= done.timestamp && done.timestamp <= added.timestamp, "start, done, added in that order");
+  // The install's own tunnel, and then the machine's.
+  await line(crew, "app.ndjson", "tunnel.up", (one) => one.fields.machine === "install");
+  await crew.reload();
+  await line(crew, "app.ndjson", "tunnel.up", (one) => one.fields.machine === row.id);
+
+  // Restart: systemd's restart verb, a new crewd, and a line that says so.
+  await remotes("restart", row.id);
+  const restarted = await line(crew, "app.ndjson", "machine.restarted");
+  assert.equal(restarted.fields.machine, row.id);
+  assert.ok(typeof restarted.fields.took_ms === "number");
+  const second = await unitPid();
+  assert.notEqual(second, first, "restarting started another crewd");
+  await waitFor(() => !alive(first), { message: "the old crewd is gone" });
+
+  // Revive: a crewd that stopped is started again. The window asks for it as soon as it sees the machine
+  // down, and a machine is revived once a minute, so whichever asks first does it and the other is told no.
+  process.kill(second, "SIGTERM");
+  await waitFor(() => !alive(second), { message: "the machine's crewd stopped" });
+  await remotes("revive", row.id);
+  const revived = await line(crew, "app.ndjson", "machine.revive", (one) => one.fields.result === "started");
+  assert.equal(revived.fields.machine, row.id);
+  const third = await unitPid();
+  assert.ok(alive(third) && third !== second, "revive started it");
+
+  // The failures that are cheap to cause: an account sshd does not let in.
+  const stranger = "crew-e2e-nobody";
+  await assert.rejects(remotes("install", { name: "nope", ssh: "127.0.0.1", user: stranger, port: await freePort() }));
+  const failed = await line(crew, "app.ndjson", "install.failed");
+  assert.equal(failed.level, "WARN");
+  assert.ok(typeof failed.fields.error === "string" && failed.fields.error.length > 0, JSON.stringify(failed));
+  const notInstalled = await line(crew, "app.ndjson", "machine.install_failed");
+  assert.equal(notInstalled.level, "WARN");
+  const lost = (await remotes("add", { id: "", name: "lost", host: "127.0.0.1", port: await freePort(), user: stranger, token: "t" })) as { id: string };
+  assert.equal(await remotes("revive", lost.id), false);
+  const reviveFailed = await line(crew, "app.ndjson", "machine.revive_failed", (one) => one.fields.machine === lost.id);
+  assert.equal(reviveFailed.level, "WARN");
+  assert.ok(typeof reviveFailed.fields.error === "string" && reviveFailed.fields.error.length > 0, JSON.stringify(reviveFailed));
+  assert.equal((await line(crew, "app.ndjson", "machine.revive", (one) => one.fields.machine === lost.id)).fields.result, "unreachable");
+
+  // Remove: the unit goes with the machine, and the line says it went clean.
+  const removed = (await remotes("remove", row.id, false)) as { warning: string | null };
+  assert.equal(removed.warning, null);
+  const gone = await line(crew, "app.ndjson", "machine.removed", (one) => one.fields.machine === row.id);
+  assert.deepEqual([gone.fields.wipe, gone.fields.clean], [false, true]);
+  await waitFor(() => !alive(third), { message: "removing the machine stopped its crewd" });
+  assert.ok(!(await readdir(path.join(machineHome, ".config/systemd/user")).catch(() => [])).includes("crewd-dev.service"), "the unit is gone");
+
+  // Nothing in what main wrote about all this is an address, a key, a token or a command.
+  await crew.window.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  const wanted = /^(machine|install|tunnel)\./;
+  const written = (await read(crew)).lines.filter((one) => one.file.startsWith("app.ndjson") && wanted.test(String(one.fields.message)));
+  const seen = new Set(written.map((one) => one.fields.message));
+  for (const message of ["machine.added", "machine.removed", "machine.revive", "machine.restarted", "machine.install_failed", "machine.revive_failed", "install.start", "install.done", "install.failed", "tunnel.up"]) {
+    assert.ok(seen.has(message), `${message} was not written`);
+  }
+  const key = (await readFile(path.join(crew.root, "ssh/client_key"), "utf8")).split("\n").filter((one) => one && !one.startsWith("-----"));
+  assert.ok(key.length > 0);
+  const everything = JSON.stringify(written);
+  assert.ok(!everything.includes("://"), "a URL in the machine lines");
+  assert.ok(!everything.includes(token), "the machine's token is in a line");
+  assert.ok(!/PRIVATE KEY/.test(everything) && !key.some((piece) => everything.includes(piece)), "key material in a line");
+  assert.ok(!/systemctl|loginctl|journalctl|enable-linger|mkdir -p|cat >|XDG_RUNTIME_DIR|\$HOME/.test(everything), "a command in a line");
+  for (const file of (await read(crew)).files) {
+    const text = await readFile(path.join(traceDir(crew), file), "utf8");
+    assert.ok(!text.includes(token) && !key.some((piece) => text.includes(piece)), `${file} holds the token or the key`);
+  }
 });
