@@ -298,6 +298,7 @@ dependencies = [
  "aes",
  "base64",
  "cbc",
+ "crew-core",
  "crew-protocol",
  "globset",
  "grep-matcher",
@@ -315,6 +316,7 @@ dependencies = [
  "sha2",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

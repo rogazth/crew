@@ -90,7 +90,6 @@ pub struct Query {
 /// between its `turn.start` and its `turn.end`.
 #[derive(Debug, Clone)]
 pub struct TurnWindow {
-    pub id: String,
     pub session: String,
     pub from: i128,
     /// None: the turn has no end in the trace, so the window runs to its end.
@@ -154,7 +153,7 @@ impl Query {
         let Some((from, session, _)) = starts.iter().find(|(_, _, turn)| *turn == id).cloned() else { return self };
         // No end: until the session's next turn began, or the trace ends.
         let to = end.or_else(|| starts.iter().filter(|(at, who, _)| *who == session && *at > from).map(|(at, _, _)| *at).min());
-        self.window = Some(TurnWindow { id, session, from, to });
+        self.window = Some(TurnWindow { session, from, to });
         self
     }
 

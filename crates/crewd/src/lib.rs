@@ -1106,7 +1106,7 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         Err(error) => return Some(encode(&proto::err(0, format!("Bad request: {error}")))),
     };
     if request.method == "pty_attach" {
-        let span = rpc_span(client_id, request.id, "pty_attach");
+        let span = rpc_span(client_id, request.id, "pty_attach", None);
         attach_pty(hosts, hub, client_id, request.id, request.params).instrument(span).await;
         return None;
     }
@@ -1166,7 +1166,7 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
             Err(error) => proto::err(request.id, error),
         }));
     }
-    let span = rpc_span(client_id, request.id, &request.method);
+    let span = rpc_span(client_id, request.id, &request.method, session_of(&request.params));
     let started = Instant::now();
     let result = dispatch(hosts, request.method.as_str(), request.params).instrument(span.clone()).await;
     span.in_scope(|| rpc_done(&request.method, started, result.as_ref().err()));
@@ -1222,12 +1222,21 @@ fn is_hot(method: &str) -> bool {
 
 /// One span per call: `client_id` and `method`, so whatever the call does is
 /// found by either. Hot calls get a DEBUG one, which costs nothing unless asked for.
-fn rpc_span(client_id: u64, req_id: u32, method: &str) -> tracing::Span {
+fn rpc_span(client_id: u64, req_id: u32, method: &str, session_id: Option<&str>) -> tracing::Span {
     if is_hot(method) {
-        tracing::debug_span!("rpc", client_id, req_id, method)
+        tracing::debug_span!("rpc", client_id, req_id, method, session_id)
     } else {
-        tracing::info_span!("rpc", client_id, req_id, method)
+        tracing::info_span!("rpc", client_id, req_id, method, session_id)
     }
+}
+
+/// The session a call is about, so `crew trace --session` finds the call. It is
+/// the one thing read out of a call's params, and only when it has the shape of
+/// an id (at most 64 of `A-Za-z0-9-_`); anything else is ignored, never cut or quoted.
+fn session_of(params: &Value) -> Option<&str> {
+    let id = params.get("sessionId").or_else(|| params.get("session_id"))?.as_str()?;
+    let shaped = !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    shaped.then_some(id)
 }
 
 /// `rpc.done` or `rpc.failed`, with the method, how long it took and, for a failure, why.
@@ -2283,6 +2292,19 @@ mod tests {
 
     fn test_serve(dir: &std::path::Path) -> Handle {
         test_serve_bridged(dir).0
+    }
+
+    /// The trace of this test binary, to files and to memory ([`crew_core::trace::capture`]):
+    /// a process has one subscriber, so every test that wants a line shares this one.
+    /// The directory holding the files is returned.
+    fn traced() -> &'static std::path::Path {
+        static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let dir = test_dir("trace-shared");
+            std::env::set_var("CREW_TRACE", "trace");
+            trace::init(&dir).expect("trace");
+            dir
+        })
     }
 
     /// The bridge too, for a test that has to hold a session's token. Nothing
@@ -4380,8 +4402,7 @@ for line in sys.stdin:
     async fn nothing_a_user_typed_or_a_model_said_reaches_the_trace_files() {
         const MARKER: &str = "CANARY-5d1e9f3a7c2b";
         let dir = test_dir("trace-canary");
-        std::env::set_var("CREW_TRACE", "trace");
-        trace::init(&dir).expect("trace");
+        let trace_dir = traced().to_path_buf();
         let (handle, bridge) = test_serve_bridged(&dir);
         handle.override_agent_binary("claude", write_fake_claude_echo(&dir).to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
@@ -4435,13 +4456,17 @@ for line in sys.stdin:
             );
             assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
         }
+        // A call whose params name a session with something that is not an id.
+        let polluted =
+            rpc(&mut ws, 30, "no_such_method_canary", serde_json::json!({ "sessionId": format!("not an id {MARKER}") })).await;
+        assert!(!polluted.ok);
         drop(ws);
         handle.shutdown();
         trace::flush();
 
         let mut seen = String::new();
         let mut files = 0;
-        for entry in std::fs::read_dir(dir.join(trace::DIR)).expect("trace dir").flatten() {
+        for entry in std::fs::read_dir(trace_dir.join(trace::DIR)).expect("trace dir").flatten() {
             let text = std::fs::read_to_string(entry.path()).expect("read");
             assert!(
                 !text.contains(MARKER),
@@ -4454,8 +4479,45 @@ for line in sys.stdin:
         }
         assert!(files >= 2, "the files are there");
         // Not an empty pass: the boundaries it is about did write.
-        for line in ["turn.start", "turn.end", "tool.call", "rpc.done", "pty.spawn", "conn.accepted", "session.status"] {
+        for line in
+            ["turn.start", "turn.end", "tool.call", "rpc.done", "rpc.failed", "pty.spawn", "conn.accepted", "session.status"]
+        {
             assert!(seen.contains(line), "no {line} in the trace:\n{seen}");
         }
+    }
+
+    /// `crew trace --session` finds a call by the session its params name, and a
+    /// param that is not shaped like an id is not written down at all.
+    #[tokio::test]
+    async fn an_rpc_line_carries_the_session_its_params_name_when_that_is_an_id() {
+        use crew_core::trace::capture;
+        traced();
+        let dir = test_dir("rpc-session");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session = format!("rpc-sess-{}_A1", std::process::id());
+        let snake = rpc(&mut ws, 1, "no_such_method_snake", serde_json::json!({ "session_id": session })).await;
+        let camel = rpc(&mut ws, 2, "no_such_method_camel", serde_json::json!({ "sessionId": session })).await;
+        let spaced = rpc(&mut ws, 3, "no_such_method_spaced", serde_json::json!({ "sessionId": "has a space" })).await;
+        let long = rpc(&mut ws, 4, "no_such_method_long", serde_json::json!({ "sessionId": "a".repeat(65) })).await;
+        let number = rpc(&mut ws, 5, "no_such_method_number", serde_json::json!({ "sessionId": 7, "text": "private" })).await;
+        let other = rpc(&mut ws, 6, "no_such_method_other", serde_json::json!({ "id": "a-pty", "text": "private" })).await;
+        for reply in [&snake, &camel, &spaced, &long, &number, &other] {
+            assert!(!reply.ok);
+        }
+        let failed = |method: &str| capture::expect("rpc.failed", "method", method);
+        assert_eq!(failed("no_such_method_snake").get("session_id"), Some(session.as_str()));
+        assert_eq!(failed("no_such_method_camel").get("session_id"), Some(session.as_str()));
+        for method in ["no_such_method_spaced", "no_such_method_long", "no_such_method_number", "no_such_method_other"] {
+            let line = failed(method);
+            assert_eq!(line.get("session_id"), None, "{method}: {line:?}");
+            assert!(line.fields.values().all(|v| !v.contains("private") && !v.contains("has a space")), "{line:?}");
+        }
+        // The same goes for a call that works.
+        let ok = rpc(&mut ws, 7, "mailbox_pending", serde_json::json!({ "sessionId": session })).await;
+        assert!(ok.ok, "{:?}", ok.error);
+        let done = capture::expect("rpc.done", "method", "mailbox_pending");
+        assert_eq!(done.get("session_id"), Some(session.as_str()));
+        handle.shutdown();
     }
 }

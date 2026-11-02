@@ -284,12 +284,14 @@ pub fn init(data_dir: &Path) -> Result<(), String> {
         filter_fn(|meta| meta.target() != "daemon.exit" && (*meta.level() <= tracing::Level::WARN || meta.target() == "daemon")),
     );
 
-    tracing_subscriber::registry()
+    let registry = tracing_subscriber::registry()
         .with(main.map(|writer| json_layer(writer).with_filter(main_filter())))
         .with(errors.map(|writer| json_layer(writer).with_filter(LevelFilter::WARN)))
-        .with(human)
-        .try_init()
-        .map_err(|e| e.to_string())?;
+        .with(human);
+    // Tests prove a line is written by finding it here, next to the files.
+    #[cfg(test)]
+    let registry = registry.with(crew_core::trace::capture::CaptureLayer);
+    registry.try_init().map_err(|e| e.to_string())?;
 
     *lock(&SINKS) = Some(Sinks { _guards: guards });
     install_panic_hook();
