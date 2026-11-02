@@ -146,6 +146,30 @@ describe("what a record may hold", () => {
     expect(sanitizeFields({ error: "no answer from http://127.0.0.1:9 at all" }).error).toBe("no answer from <url> at all");
   });
 
+  it("keeps ssh's cause and not where it was going", () => {
+    expect(errorText("crew-e2e-nobody@127.0.0.1: Permission denied (publickey).")).toBe("<destination>: Permission denied (publickey).");
+    expect(errorText("ssh: connect to host 10.0.0.5 port 22: Connection refused")).toBe("ssh: connect to host <host> port 22: Connection refused");
+    expect(errorText("ssh: Could not resolve hostname box.example.com: Name or service not known")).toBe(
+      "ssh: Could not resolve hostname <host>: Name or service not known",
+    );
+    expect(errorText("git@github.com:org/repo.git: not found")).toBe("<destination>:org/repo.git: not found");
+    expect(errorText("write to a@b failed")).toBe("write to <destination> failed");
+    expect(errorText("no @ here, nor @mention")).toBe("no @ here, nor @mention");
+  });
+
+  it("skips ssh's warnings for the cause, and redacts the one it keeps when there is nothing else", () => {
+    const warning = "Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.";
+    expect(errorText(`${warning}\nme@127.0.0.1: Permission denied (publickey).`)).toBe("<destination>: Permission denied (publickey).");
+    expect(errorText(new Error(`${warning}\n\nssh: connect to host 127.0.0.1 port 22: Connection refused`))).toBe(
+      "ssh: connect to host <host> port 22: Connection refused",
+    );
+    expect(errorText(warning)).toBe("Warning: Permanently added '<host>' (ED25519) to the list of known hosts.");
+    expect(sanitizeFields({ said: `${warning}\nu@h: Permission denied (publickey).`, reason: "x@y: no" })).toEqual({
+      said: "<destination>: Permission denied (publickey).",
+      reason: "<destination>: no",
+    });
+  });
+
   it("accepts a record from the window and refuses what is not one", () => {
     expect(readRecord({ level: "WARN", message: "m", fields: { a: 1 } })?.level).toBe("WARN");
     expect(readRecord({ level: "LOUD", message: "m" })?.level).toBe("INFO");

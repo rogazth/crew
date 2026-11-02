@@ -73,7 +73,7 @@ describe("tunnel trace", () => {
     for (const message of ["tunnel.open", "tunnel.down", "tunnel.failed"]) {
       expect(named(message).map((line) => line.fields.attempt ?? "-")).toEqual(message === "tunnel.down" ? ["-", "-", "-", "-", "-", "-", "-"] : [1, 2, 3, 4, 5, 30, 60]);
     }
-    expect(named("tunnel.failed")[0]?.fields.error).toBe("ssh: connect to host atlas port 22: Connection refused");
+    expect(named("tunnel.failed")[0]?.fields.error).toBe("ssh: connect to host <host> port 22: Connection refused");
   });
 
   it("starts being loud again once the machine has been up", async () => {

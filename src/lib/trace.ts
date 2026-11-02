@@ -71,15 +71,27 @@ export function sanitizeFields(fields: TraceFields | undefined): Record<string, 
   return out;
 }
 
+/** `user@host`, as ssh and git print it: the host is a name, an address or a bracketed one. */
+const DESTINATION = /[A-Za-z0-9._+-]+@(?:\[[0-9A-Fa-f:.%]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g;
+
 /**
  * An error as a record holds it. A parse error quotes the value it choked on,
  * and that value is the user's, so what sits in quotes goes (as in crewd), and so
- * does any URL. One line, cut.
+ * does any URL, and where ssh or git was asked to go: `user@host`, the host ssh
+ * could not reach or resolve, the address it adds to known_hosts. The cause stays.
+ * One line, cut: the first that is not an ssh `Warning:` (a first connection prints
+ * one before the real error), or the first warning when there is nothing else.
  */
 export function errorText(error: unknown): string {
   const text = error instanceof Error ? error.message : typeof error === "string" ? error : safeString(error);
+  const lines = text.split("\n");
+  const first = lines.find((one) => one.trim() !== "" && !/^\s*Warning:/.test(one)) ?? lines[0] ?? "";
   // An address is not recorded: an error that names the URL it asked ("<url> answered 503") keeps the rest.
-  const line = (text.split("\n", 1)[0] ?? "").replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s)"'<>\]]+/gi, "<url>");
+  const line = first
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s)"'<>\]]+/gi, "<url>")
+    .replace(/(Permanently added )'[^']*'/g, "$1'<host>'")
+    .replace(/\b(connect to host |Could not resolve hostname )(\S+?)(?=:\s|\s|$)/g, "$1<host>")
+    .replace(DESTINATION, "<destination>");
   const parse = /^(invalid (type|value|length)|unknown (variant|field)|missing field|expected |trailing)|, expected /.test(line);
   return cut(parse ? line.replace(/"[^"]*"/g, '"…"').replace(/`[^`]*`/g, "`…`") : line);
 }

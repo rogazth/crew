@@ -422,6 +422,11 @@ test("a machine installed over ssh, restarted, revived and removed leaves its li
   assert.ok(!everything.includes("://"), "a URL in the machine lines");
   assert.ok(!everything.includes(token), "the machine's token is in a line");
   assert.ok(!/PRIVATE KEY/.test(everything) && !key.some((piece) => everything.includes(piece)), "key material in a line");
+  // ssh's own text names where it went; the lines keep its cause and not the destination. (`socket.connect`'s `host` is another, accepted field.)
+  const said = written.flatMap((one) => [one.fields.error, one.fields.said]).filter((value): value is string => typeof value === "string");
+  assert.ok(said.some((value) => /Permission denied/.test(value)), `the cause of the refused login is kept: ${JSON.stringify(said)}`);
+  for (const value of said) assert.ok(!value.includes("127.0.0.1") && !value.includes("@"), `a destination in an error: ${value}`);
+  assert.ok(!everything.includes(`${stranger}@`) && !everything.includes(`${SSH_USER}@`), "an ssh user@ in a machine line");
   assert.ok(!/systemctl|loginctl|journalctl|enable-linger|mkdir -p|cat >|XDG_RUNTIME_DIR|\$HOME/.test(everything), "a command in a line");
   for (const file of (await read(crew)).files) {
     const text = await readFile(path.join(traceDir(crew), file), "utf8");
