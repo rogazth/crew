@@ -10,6 +10,7 @@ import {
   lastUsed,
   newFileBrowserTab,
   newSignInTab,
+  offPages,
   openTab,
   parseTabs,
   patchBrowserTab,
@@ -43,6 +44,24 @@ const visit = (state: TabState, ...ids: string[]) =>
 const bot = (id: string, name = id): Session =>
   ({ id, kind: "bot", name }) as Session;
 const terminal = (id: string): Session => ({ id, kind: "terminal", name: id, provider: "claude" }) as Session;
+
+describe("offPages", () => {
+  const page = { id: "browser:a", kind: "browser", url: "https://a.com", title: "" } as const;
+  const other = { id: "browser:b", kind: "browser", url: "https://b.com", title: "" } as const;
+  const session = { id: "stub:x", kind: "stub", stub: "x" } as unknown as TabState["tabs"][number];
+  const strip = (tabs: TabState["tabs"], activeId: string | null, recent?: string[]): TabState => ({ tabs, activeId, closed: [], ...(recent && { recent }) });
+
+  it("hands the screen to the tab used last that is no page", () => {
+    expect(offPages(strip([session, page, other], page.id, [page.id, other.id, session.id])).activeId).toBe(session.id);
+  });
+  it("shows nothing when every tab is a page", () => {
+    expect(offPages(strip([page, other], page.id)).activeId).toBeNull();
+  });
+  it("leaves a strip alone when no page is on screen", () => {
+    const state = strip([session, page], session.id);
+    expect(offPages(state)).toBe(state);
+  });
+});
 
 describe("openTab", () => {
   it("adds a tab and focuses it", () => {

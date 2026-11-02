@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../lib/api';
+import { safeStart } from '../lib/browser/safeStart';
 import {
   activateTab,
   closeSessionTab,
   closeTab,
   lastUsed,
   NO_TABS,
+  offPages,
   openTab,
   panesOf,
   patchBrowserTab,
@@ -58,6 +60,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
       .then(() => api.stateGet(`tabs:${id}`))
       .then(parseTabs)
       .catch(() => NO_TABS)
+      .then(async (saved) => ((await safeStart()) ? offPages(saved) : saved))
       // A tab opened into this context before its saved ones arrived joins them.
       .then((restored) => {
         restoredIds.current.add(id);

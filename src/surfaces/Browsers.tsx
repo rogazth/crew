@@ -10,6 +10,7 @@ import { paneHandle } from "../lib/browser/handles";
 import { leases } from "../lib/browser/leases";
 import { pages } from "../lib/browser/pageStore";
 import { prompts } from "../lib/browser/prompts";
+import { safeStart } from "../lib/browser/safeStart";
 import { liveGuests, sweep, SWEEP_MS, touch, type MemoryPressure, type Warm } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
 import { newBrowserTab, paneId, type BrowserTabPatch } from "../lib/tabs";
@@ -69,7 +70,10 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
   const incognito = browsers.flatMap((pane) => (pane.tab.incognito ? [pane.id] : []));
   // A tab an agent drives stays live wherever it is, like one with DevTools open.
   const held = useHeldTabs();
-  const driven = browsers.flatMap((pane) => (held.has(pane.tab.id) ? [pane.id] : []));
+  // Unless the last launch died: the page an agent held may be what took the app down.
+  const [safe, setSafe] = useState(true);
+  useEffect(() => void safeStart().then(setSafe), []);
+  const driven = safe ? [] : browsers.flatMap((pane) => (held.has(pane.tab.id) ? [pane.id] : []));
   const pinnedIds = new Set([...pinned, ...downloads, ...incognito, ...driven].filter((id) => ids.has(id)));
   const working = new Set(sessions.flatMap((s) => (AT_WORK.has(s.status) ? [s.workspaceId] : [])));
   const busy = new Set(browsers.flatMap((pane) => (working.has(pane.workspaceId) ? [pane.id] : [])));
