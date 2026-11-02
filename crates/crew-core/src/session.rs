@@ -864,15 +864,16 @@ pub fn bypass_permissions(store: &Store) -> bool {
 }
 
 /// The sessions last touched before `before`, less the ones deleting would
-/// cost something: a routine goes with its session, a tab would open onto
-/// nothing, and anything but idle still has a turn, a question or an unread
-/// answer in it. A process still running is the caller's to spare.
+/// cost something: a bot's history is its memory, a routine goes with its
+/// session, a tab would open onto nothing, and anything but idle still has a
+/// turn, a question or an unread answer in it. A process still running is the
+/// caller's to spare.
 pub fn stale(store: &Store, before: i64) -> Result<Vec<String>, String> {
     let (ids, tabs) = store.with(|conn| {
         let ids = conn
             .prepare(
                 "SELECT id FROM sessions
-                 WHERE updated_at < ?1 AND status = 'idle'
+                 WHERE updated_at < ?1 AND status = 'idle' AND kind <> 'bot'
                    AND id NOT IN (SELECT session_id FROM routines)
                  ORDER BY updated_at ASC",
             )?
@@ -1216,17 +1217,18 @@ mod tests {
     }
 
     #[test]
-    fn stale_spares_the_recent_the_busy_the_open_and_the_scheduled() {
+    fn stale_spares_the_recent_the_busy_the_open_the_scheduled_and_every_bot() {
         let (store, workspace) = world();
         let old = terminal(&store, &workspace, "Old", "codex");
         let recent = terminal(&store, &workspace, "Recent", "codex");
         let busy = terminal(&store, &workspace, "Busy", "codex");
         let unread = terminal(&store, &workspace, "Unread", "codex");
         let open = terminal(&store, &workspace, "Open", "codex");
-        let scheduled = bot(&store, &workspace, "Nightly", "ask").expect("bot");
+        let scheduled = terminal(&store, &workspace, "Nightly", "codex");
+        let idle_bot = bot(&store, &workspace, "Keeper", "ask").expect("bot");
         set_status(&store, busy.id.clone(), "working".into()).expect("busy");
         set_status(&store, unread.id.clone(), "done".into()).expect("unread");
-        for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id] {
+        for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id, &idle_bot.id] {
             age(&store, id, 1_000);
         }
         age(&store, &recent.id, 5_000);

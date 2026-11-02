@@ -74,7 +74,7 @@ export function GeneralPage() {
         <Row
           id="retention"
           label="Delete inactive sessions"
-          description="Working, unread, open and scheduled sessions are kept."
+          description="Bots, and working, unread, open and scheduled sessions, are kept."
         >
           <Select<Retention>
             label="Delete inactive sessions"
