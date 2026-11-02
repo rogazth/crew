@@ -392,6 +392,8 @@ test("a machine installed over ssh, restarted, revived and removed leaves its li
   const notInstalled = await line(crew, "app.ndjson", "machine.install_failed");
   assert.equal(notInstalled.level, "WARN");
   const lost = (await remotes("add", { id: "", name: "lost", host: "127.0.0.1", port: await freePort(), user: stranger, token: "t" })) as { id: string };
+  const manual = await line(crew, "app.ndjson", "machine.added", (one) => one.fields.machine === lost.id);
+  assert.deepEqual([manual.fields.via, manual.fields.edit], ["manual", false]);
   assert.equal(await remotes("revive", lost.id), false);
   const reviveFailed = await line(crew, "app.ndjson", "machine.revive_failed", (one) => one.fields.machine === lost.id);
   assert.equal(reviveFailed.level, "WARN");
@@ -404,7 +406,7 @@ test("a machine installed over ssh, restarted, revived and removed leaves its li
   const gone = await line(crew, "app.ndjson", "machine.removed", (one) => one.fields.machine === row.id);
   assert.deepEqual([gone.fields.wipe, gone.fields.clean], [false, true]);
   await waitFor(() => !alive(third), { message: "removing the machine stopped its crewd" });
-  assert.ok(!(await readdir(path.join(machineHome, ".config/systemd/user")).catch(() => [])).includes("crewd-dev.service"), "the unit is gone");
+  assert.ok(!(await readdir(path.join(machineHome, ".config/systemd/user")).catch(() => [] as string[])).includes("crewd-dev.service"), "the unit is gone");
 
   // Nothing in what main wrote about all this is an address, a key, a token or a command.
   await crew.window.evaluate(() => window.dispatchEvent(new Event("pagehide")));
