@@ -49,6 +49,7 @@ mod http;
 pub mod lock;
 pub mod machine;
 mod socks;
+mod stall;
 pub mod trace;
 
 pub struct Config {
@@ -762,6 +763,7 @@ async fn run(
         }
     }
     machine::start_sampler();
+    tokio::spawn(stall::watch("daemon", stall::TICK, stall::STALL_AT));
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
     // Routines are the daemon's to fire: a standing order outlives the window.
@@ -2299,7 +2301,7 @@ mod tests {
     /// The trace of this test binary, to files and to memory ([`crew_core::trace::capture`]):
     /// a process has one subscriber, so every test that wants a line shares this one.
     /// The directory holding the files is returned.
-    fn traced() -> &'static std::path::Path {
+    pub(crate) fn traced() -> &'static std::path::Path {
         static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
         DIR.get_or_init(|| {
             let dir = test_dir("trace-shared");
