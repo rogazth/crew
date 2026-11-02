@@ -84,28 +84,27 @@ export function EmptyHead({
 export function IntroHead({ session }: { session: Session }) {
   const where = useWhere(session);
   const pane = usePanePlace(session.id);
-  if (session.kind === "bot") {
-    return (
-      <EmptyHead
-        mark={<BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />}
-        title={session.name || "New session"}
-        line={session.description}
-      />
-    );
-  }
   const branch = branchOf(where);
+  const bot = session.kind === "bot";
   return (
     <EmptyHead
-      mark={<CrewGlyph className="size-14" />}
-      title="What are we working on?"
+      mark={
+        bot ? (
+          <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />
+        ) : (
+          <CrewGlyph className="size-14" />
+        )
+      }
+      title={bot ? session.name || "New session" : "What are we working on?"}
       facts={
         <>
-          {/* A session nobody has written to can still start in another worktree: its badge is the way to. */}
-          {pane ? (
-            <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
-          ) : (
-            branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
-          )}
+          {/* A bot lives outside any worktree: only a plain session can start in one. */}
+          {!bot &&
+            (pane ? (
+              <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
+            ) : (
+              branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
+            ))}
           <Fact icon={machineIcon(where.remote)}>{where.machine}</Fact>
         </>
       }
@@ -163,7 +162,7 @@ const INTRO_KEYS: [string, string][] = [
 export function IntroWaysFrame({ children }: { children?: ReactNode }) {
   return (
     <div className="mx-auto flex w-full max-w-chat flex-col gap-6 px-6 pt-2 pb-8">
-      {children && <div className="grid grid-cols-3 gap-2 px-1">{children}</div>}
+      {children ? <div className="grid grid-cols-3 gap-2 px-1">{children}</div> : null}
       <KeyHints keys={INTRO_KEYS} />
     </div>
   );
@@ -179,11 +178,13 @@ export function Starters({ where, onPick }: { where: Where; onPick: (text: strin
 /** Ways in under the composer: starters and the keys. */
 export function IntroWays({ session, onPick }: { session: Session; onPick: (text: string) => void }) {
   const where = useWhere(session);
+  const starters = startersFor(session.kind, where);
   return (
     <IntroWaysFrame>
-      {startersFor(session.kind, where).map((starter) => (
-        <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
-      ))}
+      {starters.length > 0 &&
+        starters.map((starter) => (
+          <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
+        ))}
     </IntroWaysFrame>
   );
 }
