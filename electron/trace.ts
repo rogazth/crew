@@ -32,6 +32,7 @@ export type AppTraceOptions = {
 };
 
 export class AppTrace {
+  private readonly options: AppTraceOptions;
   private readonly path: string;
   private readonly maxBytes: number;
   private readonly keep: number;
@@ -46,7 +47,8 @@ export class AppTrace {
   private failures = 0;
   private reported = 0;
 
-  constructor(private readonly options: AppTraceOptions) {
+  constructor(options: AppTraceOptions) {
+    this.options = options;
     this.path = path.join(options.dir, options.file ?? TRACE_FILE);
     this.maxBytes = options.maxBytes ?? MAX_BYTES;
     this.keep = Math.max(1, options.keep ?? KEEP);

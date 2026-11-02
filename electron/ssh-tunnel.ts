@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { isLoopback } from "../src/lib/remotes";
 import { BASE_OPTIONS, controlOption, controlPath, options, who, type SshTarget } from "./ssh-options";
+import { errorText, trace } from "./trace";
 
 export { isLoopback };
 
@@ -43,6 +44,8 @@ export class Tunnels {
   private readonly open = new Map<string, Entry>();
   /** Each machine keeps its local ports while the app runs, so its address stays the same. */
   private readonly ports = new Map<string, Forward>();
+  /** Children asked to go, to tell their exit from a tunnel that dropped. */
+  private readonly closing = new WeakSet<ChildProcess>();
 
   /** The machine's tunnel, opened if it is not up. Rejects with what ssh said when it cannot be. */
   ensure(key: string, target: SshTarget, remotePort: number): Promise<Forward> {
@@ -53,7 +56,12 @@ export class Tunnels {
   }
 
   close(key: string): void {
-    this.open.get(key)?.child?.kill();
+    const entry = this.open.get(key);
+    if (entry?.child) {
+      this.closing.add(entry.child);
+      trace.info("tunnel.close", { machine: key });
+    }
+    entry?.child?.kill();
     this.open.delete(key);
   }
 
@@ -68,17 +76,34 @@ export class Tunnels {
       this.ports.set(key, forward);
       const child = spawn("ssh", tunnelArgs(target, forward, remotePort), { stdio: ["ignore", "ignore", "pipe"] });
       entry.child = child;
+      const opened = Date.now();
+      trace.info("tunnel.open", { machine: key, pid: child.pid });
       let said = "";
       child.stderr?.setEncoding("utf8");
       child.stderr?.on("data", (chunk: string) => {
         said = (said + chunk).slice(-2_000);
       });
-      child.on("exit", () => {
+      child.on("exit", (code, signal) => {
+        trace.info("tunnel.down", {
+          machine: key,
+          code,
+          signal,
+          up_ms: Date.now() - opened,
+          dropped: !this.closing.has(child),
+          // ssh's last words, which say why (a refused key, a port taken).
+          said: said.trim().split("\n").at(-1),
+        });
         if (this.open.get(key) === entry) this.open.delete(key);
         // Ports another program took are not asked for again.
         if (/Address already in use|cannot listen to port/i.test(said)) this.ports.delete(key);
       });
-      await listening(forward.port, child, () => said);
+      try {
+        await listening(forward.port, child, () => said);
+      } catch (error) {
+        trace.warn("tunnel.failed", { machine: key, error: errorText(error), waited_ms: Date.now() - opened });
+        throw error;
+      }
+      trace.info("tunnel.up", { machine: key, took_ms: Date.now() - opened });
       return forward;
     })();
     this.open.set(key, entry);

@@ -26,6 +26,8 @@ export type TraceHost = { write(records: TraceRecord[]): void };
 const MAX_TEXT = 300;
 const MAX_FIELDS = 24;
 const MAX_KEY = 40;
+/** A stack is the one field worth more room: it is how a crash is found. */
+const MAX_STACK = 2000;
 export const MAX_BATCH = 100;
 const LEVELS: readonly string[] = ["DEBUG", "INFO", "WARN", "ERROR"];
 
@@ -40,7 +42,7 @@ export function sanitizeFields(fields: TraceFields | undefined): Record<string, 
     const name = key.slice(0, MAX_KEY);
     if (typeof value === "number") out[name] = Number.isFinite(value) ? value : null;
     else if (typeof value === "boolean" || value === null) out[name] = value;
-    else out[name] = cut(typeof value === "string" ? value : safeString(value));
+    else out[name] = cut(typeof value === "string" ? value : safeString(value), name === "stack" ? MAX_STACK : MAX_TEXT);
   }
   return out;
 }
@@ -57,8 +59,8 @@ export function errorText(error: unknown): string {
   return cut(parse ? line.replace(/"[^"]*"/g, '"…"').replace(/`[^`]*`/g, "`…`") : line);
 }
 
-function cut(text: string): string {
-  return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text;
+function cut(text: string, max = MAX_TEXT): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 function safeString(value: unknown): string {

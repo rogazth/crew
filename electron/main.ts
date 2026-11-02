@@ -44,6 +44,8 @@ import { CHANNELS } from "../src/lib/browser/bridge";
 import { NOTIFY_CHANNELS } from "../src/lib/notify";
 import { registerAppInfoIpc } from "./app-info";
 import { installStagedOnQuit, watchForUpdates } from "./update";
+import { errorText, initTrace, trace } from "./trace";
+import { TRACE_CHANNELS } from "../src/lib/trace";
 
 type DaemonInfo = { url: string; token: string };
 type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -126,10 +128,13 @@ async function connectDaemon(): Promise<string | null> {
         });
       });
   let launch = decideLaunch(viaAgent);
+  trace.info("daemon.decision", { run: launch.run, agent_ok: viaAgent.ok, error: viaAgent.ok ? undefined : errorText(viaAgent.error) });
   if (launch.run === "try-child") {
     if (!viaAgent.ok) console.error(`crewd LaunchAgent unavailable; running crewd as Crew's child: ${viaAgent.error}`);
     await unloadAgent(uid, app.getPath("userData"));
-    launch = decideLaunch(viaAgent, await attempt(startDaemon));
+    const child = await attempt(startDaemon);
+    launch = decideLaunch(viaAgent, child);
+    trace.info("daemon.fallback", { run: launch.run, child_ok: child.ok, error: child.ok ? undefined : errorText(child.error) });
   }
   switch (launch.run) {
     case "agent":
@@ -248,10 +253,12 @@ function recover(error: unknown): Promise<void> {
   if (stopping) return Promise.resolve();
   if (restarts === 0 || (upSince > 0 && Date.now() - upSince > STEADY_MS)) {
     restarts = 1;
+    trace.warn("daemon.child_restart", { error: errorText(error) });
     return startDaemon().then(() => {
       win?.reload();
     });
   }
+  trace.error("daemon.child_gave_up", { error: errorText(error) });
   return Promise.reject(error instanceof Error ? error : new Error(String(error)));
 }
 
@@ -264,8 +271,10 @@ async function startDaemon(): Promise<void> {
       detached: true,
     });
     child = proc;
+    trace.info("daemon.child_spawn", { pid: proc.pid });
     const exited = new Promise<Error>((resolve) => {
-      proc.once("exit", (code) => {
+      proc.once("exit", (code, signal) => {
+        trace.info("daemon.child_exit", { pid: proc.pid, code, signal, expected: stopping || restartingChild });
         if (child === proc) child = null;
         resolve(new Error(`crewd exited ${code ?? ""}`.trim()));
       });
@@ -273,6 +282,7 @@ async function startDaemon(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<Error>((resolve) => {
       timer = setTimeout(() => {
+        trace.error("daemon.child_handshake_timeout", { pid: proc.pid });
         resolve(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
       }, 10_000);
     });
@@ -326,6 +336,7 @@ async function stopDaemon(): Promise<void> {
 
 /** Settings' "Restart" for this Mac's crewd: the LaunchAgent's, or dev's child. */
 async function restartLocalDaemon(): Promise<void> {
+  trace.info("daemon.restart_requested", { via: agent ? "agent" : "child" });
   if (agent) return agent.restart();
   if (stopping) throw new Error("Crew is quitting");
   if (starting) await starting.catch(() => {});
@@ -456,9 +467,42 @@ function createWindow(): void {
   } else {
     void win.loadURL(DEV_ORIGIN);
   }
+  win.on("unresponsive", () => trace.warn("window.unresponsive"));
+  win.on("responsive", () => trace.info("window.responsive"));
   win.on("closed", () => {
     win = null;
   });
+}
+
+/**
+ * What brings the app or a part of it down, written before it goes. None of
+ * this changes what happens: a throw still shows Electron's error box (the
+ * monitor only watches), and a rejection that nobody handles is still
+ * printed and survived, as Electron does without a listener.
+ */
+function watchProcessFailures(): void {
+  process.on("uncaughtExceptionMonitor", (error, origin) => {
+    trace.error("main.uncaught", { origin, error: errorText(error), stack: error instanceof Error ? error.stack : undefined });
+  });
+  process.on("unhandledRejection", (reason) => {
+    trace.error("main.unhandled_rejection", { error: errorText(reason), stack: reason instanceof Error ? reason.stack : undefined });
+    // A listener replaces Electron's own warning; print it as it would have.
+    console.error("UnhandledPromiseRejectionWarning:", reason);
+  });
+  app.on("render-process-gone", (_event, _contents, details) => {
+    trace.error("renderer.gone", { reason: details.reason, exit_code: details.exitCode });
+  });
+  app.on("child-process-gone", (_event, details) => {
+    trace.error("child_process.gone", {
+      type: details.type,
+      reason: details.reason,
+      exit_code: details.exitCode,
+      name: details.name,
+      service: details.serviceName,
+    });
+  });
+  // Last chance to write what is buffered, on any exit that runs handlers.
+  process.on("exit", () => trace.flush());
 }
 
 function registerIpc(): void {
@@ -509,6 +553,11 @@ function registerIpc(): void {
     return filePath;
   });
   ipcMain.handle("home-dir", () => homedir());
+  // The window's events: over IPC and not the WebSocket, which may be what is failing.
+  // Only the app's own window: a page in a webview has no say in the trace.
+  ipcMain.on(TRACE_CHANNELS.window, (event, records: unknown) => {
+    if (win && event.sender === win.webContents) trace.window(records);
+  });
   // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
   ipcMain.handle("app-zoom", (event, delta: number) => {
     const contents = event.sender;
@@ -570,6 +619,21 @@ writeLayout(app.isPackaged && release);
 // brings the first one forward. crewd refuses a folder in use as well.
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.exit(0);
+else {
+  initTrace(path.join(app.getPath("userData"), "trace"));
+  trace.info("app.start", {
+    version: app.getVersion(),
+    sha,
+    channel: channelOf(app.isPackaged, release),
+    packaged: app.isPackaged,
+    e2e,
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    pid: process.pid,
+  });
+  watchProcessFailures();
+}
 app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: app.getVersion(), version: sha });
 if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
 // The sandboxed HOME has no login keychain; remote tokens go through a mock one.
@@ -655,8 +719,13 @@ app.on("window-all-closed", () => {
 
 // A release the user downloaded but did not restart into goes in as Crew closes.
 app.on("will-quit", installStagedOnQuit);
+app.on("will-quit", () => {
+  trace.info("app.will_quit");
+  trace.flush();
+});
 
 app.on("before-quit", (event) => {
+  trace.info("app.quit", { daemon: agent ? "agent" : child ? "child" : "none" });
   // Packaged: crewd and everything it runs stay up; the app only lets go.
   if (agent) {
     agent.release();
