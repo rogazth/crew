@@ -2723,6 +2723,8 @@ mod tests {
     /// its own socket. Either only asks: the request lands where `main` waits.
     #[tokio::test]
     async fn only_the_user_and_the_window_can_ask_the_daemon_to_stop() {
+        use crew_core::trace::capture;
+        traced();
         let dir = test_dir("shutdown");
         let (handle, bridge) = test_serve_bridged(&dir);
         let requests = handle.exit_requests().expect("requests");
@@ -2742,6 +2744,11 @@ mod tests {
         let reply = rpc(&mut ws, 900, "daemon_shutdown", serde_json::json!({})).await;
         assert!(reply.ok, "{:?}", reply.error);
         requests.recv_timeout(Duration::from_secs(2)).expect("the window's request");
+        // Each way of asking, and the one refused, is a line saying so.
+        let vias: Vec<_> = capture::all("daemon.shutdown_requested").iter().filter_map(|e| e.get("via").map(String::from)).collect();
+        assert!(vias.iter().any(|v| v == "cli") && vias.iter().any(|v| v == "window"), "{vias:?}");
+        let refused = capture::all("daemon.shutdown_refused");
+        assert!(refused.iter().any(|e| e.get("caller") == Some("Bot") && e.level == tracing::Level::WARN), "{refused:?}");
         handle.shutdown();
     }
 
@@ -4522,6 +4529,56 @@ for line in sys.stdin:
         assert!(ok.ok, "{:?}", ok.error);
         let done = capture::expect("rpc.done", "method", "mailbox_pending");
         assert_eq!(done.get("session_id"), Some(session.as_str()));
+        handle.shutdown();
+    }
+
+    /// What goes wrong between the window and the daemon is a line each time: a client that
+    /// cannot prove who it is, one that falls too far behind, keystrokes with nowhere to go.
+    #[tokio::test]
+    async fn a_connection_that_fails_leaves_a_warning_saying_how() {
+        use crew_core::trace::capture;
+        traced();
+        let dir = test_dir("conn-failures");
+        let handle = test_serve(&dir);
+        let count = |reason: &str| capture::all("conn.auth_failed").iter().filter(|e| e.get("reason") == Some(reason)).count();
+        let before = (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame"));
+
+        // Wrong token; a frame that is not an auth frame; nothing said at all.
+        let (mut wrong, _) = connect_async(handle.url()).await.expect("connect");
+        wrong.send(Message::Text(r#"{"auth":"not-the-token-SECRET-TOKEN"}"#.into())).await.expect("send");
+        let (mut garbled, _) = connect_async(handle.url()).await.expect("connect");
+        garbled.send(Message::Text("not json at all".into())).await.expect("send");
+        let (mut silent, _) = connect_async(handle.url()).await.expect("connect");
+        silent.close(None).await.expect("close");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame")) < (before.0 + 1, before.1 + 1, before.2 + 1) {
+            assert!(Instant::now() < deadline, "not all three were traced: {:?}", capture::all("conn.auth_failed"));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        for event in capture::all("conn.auth_failed") {
+            assert_eq!(event.level, tracing::Level::WARN);
+            assert!(event.fields.values().all(|v| !v.contains("SECRET-TOKEN")), "{event:?}");
+        }
+
+        // Keystrokes for a terminal that is not there.
+        let mut ws = connect_authed(&handle).await;
+        let mut frame = Vec::from(987_654u32.to_le_bytes());
+        frame.extend_from_slice(b"KEYSTROKES-SECRET");
+        ws.send(Message::Binary(frame.into())).await.expect("write");
+        let failed = capture::expect("pty.input_failed", "id", "987654");
+        assert_eq!(failed.level, tracing::Level::WARN);
+        assert!(failed.fields.values().all(|v| !v.contains("KEYSTROKES")), "{failed:?}");
+
+        // A client whose queue is full is let go, and the line says how deep it was.
+        let hub = Hub::new();
+        let (id, _held) = hub.subscribe();
+        for _ in 0..OUT_ROOM + 8 {
+            hub.send(id, Outgoing::Pong(Vec::new()));
+        }
+        let dropped = capture::expect("conn.dropped", "client_id", &id.to_string());
+        assert_eq!(dropped.level, tracing::Level::WARN);
+        assert!(dropped.get("queued").is_some_and(|q| q.parse::<usize>().unwrap() > 0), "{dropped:?}");
+        assert!(!hub.contains(id), "the client was not unsubscribed");
         handle.shutdown();
     }
 }
