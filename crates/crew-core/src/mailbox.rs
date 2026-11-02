@@ -1345,7 +1345,11 @@ mod tests {
         assert_eq!(drop_waiting(&store, &reader).expect("drop"), 0);
         assert_eq!(capture::find("mailbox.set_aside", "to_session", &reader).len(), 1);
 
-        for event in capture::find("mailbox.disposed", "letter_id", &one.id).into_iter().chain(capture::find("mailbox.set_aside", "to_session", &reader)) {
+        for event in capture::find("mailbox.disposed", "letter_id", &one.id).into_iter().chain(capture::find(
+            "mailbox.set_aside",
+            "to_session",
+            &reader,
+        )) {
             assert!(event.fields.values().all(|v| !v.contains(body)), "{event:?}");
         }
     }

@@ -447,7 +447,10 @@ mod tests {
         hub.apply(&session, HarnessEvent::ApprovalResolved { request_id: 7, decision: ApprovalResolution::Always });
         hub.apply(
             &session,
-            HarnessEvent::QuestionResolved { request_id: 8, answers: Some(HashMap::from([("q".into(), "SECRET-ANSWER".into())])) },
+            HarnessEvent::QuestionResolved {
+                request_id: 8,
+                answers: Some(HashMap::from([("q".into(), "SECRET-ANSWER".into())])),
+            },
         );
         hub.apply(&session, HarnessEvent::QuestionResolved { request_id: 9, answers: None });
         let settled = crate::trace::capture::find("request.settled", "session_id", &session);
@@ -457,7 +460,11 @@ mod tests {
             .collect();
         assert_eq!(
             seen,
-            [("7", "approval", Some("Always"), None), ("8", "question", None, Some("true")), ("9", "question", None, Some("false"))]
+            [
+                ("7", "approval", Some("Always"), None),
+                ("8", "question", None, Some("true")),
+                ("9", "question", None, Some("false"))
+            ]
         );
         assert!(settled.iter().all(|line| line.level == tracing::Level::INFO));
         assert!(settled.iter().all(|line| line.fields.values().all(|value| !value.contains("SECRET"))));

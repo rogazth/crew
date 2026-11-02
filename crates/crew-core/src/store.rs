@@ -1729,9 +1729,18 @@ mod trace_tests {
             let store = Store::open(path.clone()).expect("open");
             let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
             let bot = |name: &str| {
-                crate::session::create(&store, workspace.id.clone(), "bot".into(), name.into(), "claude".into(), "m".into(), "".into(), "ask".into())
-                    .expect("session")
-                    .id
+                crate::session::create(
+                    &store,
+                    workspace.id.clone(),
+                    "bot".into(),
+                    name.into(),
+                    "claude".into(),
+                    "m".into(),
+                    "".into(),
+                    "ask".into(),
+                )
+                .expect("session")
+                .id
             };
             let (working, resting) = (bot("Working"), bot("Resting"));
             crate::session::set_status(&store, working.clone(), "working".into()).expect("status");

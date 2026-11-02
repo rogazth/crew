@@ -116,7 +116,8 @@ fn redact_urls(text: &str) -> String {
     let mut rest = text;
     while let Some(at) = rest.find("://") {
         let head = &rest[..at];
-        let scheme_start = head.rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).map_or(0, |i| i + 1);
+        let scheme_start =
+            head.rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).map_or(0, |i| i + 1);
         let scheme = &head[scheme_start..];
         let after = &rest[at + 3..];
         if !scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) || after.is_empty() {
@@ -126,7 +127,8 @@ fn redact_urls(text: &str) -> String {
         }
         out.push_str(&head[..scheme_start]);
         out.push_str("<url>");
-        let end = after.find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>' | ']')).unwrap_or(after.len());
+        let end =
+            after.find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>' | ']')).unwrap_or(after.len());
         rest = &after[end..];
     }
     out.push_str(rest);
