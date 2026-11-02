@@ -187,5 +187,63 @@ describe("Connection", () => {
       expect(JSON.stringify(calls(trace.warn))).not.toContain("secret keystrokes");
       live.stop();
     });
+
+    it("records an endpoint that could not be had, a socket that errored and one that never answered, each with the attempt", async () => {
+      const lost = new Connection("vps", () => Promise.reject(new Error("tailscale is not running")), true);
+      await expect(lost.connect()).rejects.toThrow("tailscale is not running");
+      expect(calls(trace.warn)).toContainEqual(["socket.no_endpoint", { machine: "vps", attempt: 1, error: "tailscale is not running" }]);
+      lost.stop();
+
+      const errored = new Connection("vps", endpoint, true);
+      const failed = errored.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().onerror?.();
+      await expect(failed).rejects.toThrow("Could not reach");
+      // The host and port it tried, never the URL or the token.
+      expect(calls(trace.warn)).toContainEqual(["socket.error", { machine: "vps", attempt: 1, host: "100.64.0.2:17877" }]);
+      errored.stop();
+
+      const silent = new Connection("vps", endpoint, true);
+      const waiting = silent.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
+      vi.advanceTimersByTime(8_000);
+      await expect(waiting).rejects.toThrow("No answer from");
+      expect(calls(trace.warn)).toContainEqual(["socket.timeout", { machine: "vps", attempt: 1, waited_ms: 8_000 }]);
+      silent.stop();
+      expect(JSON.stringify(calls(trace.warn))).not.toContain("tok");
+    });
+
+    it("says once that a request met a machine that is down, however many follow", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().onerror?.();
+      await expect(opened).rejects.toThrow("Could not reach");
+      await expect(conn.request("pty_write", { id: "t1", data: "secret keystrokes" })).rejects.toBeInstanceOf(EnvDown);
+      await expect(conn.request("session_list", {})).rejects.toBeInstanceOf(EnvDown);
+      const down = calls(trace.warn).filter(([message]) => message === "request.machine_down");
+      // The method and the machine, never the params.
+      expect(down).toEqual([["request.machine_down", { machine: "vps", method: "pty_write" }]]);
+      expect(JSON.stringify(calls(trace.warn))).not.toContain("secret keystrokes");
+      conn.stop();
+    });
+
+    it("records a heartbeat nobody answered before it closes the socket", async () => {
+      // The ping runs only where there is a window.
+      vi.stubGlobal("window", {});
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().open();
+      latest().hello();
+      await opened;
+      const socket = latest();
+      await vi.waitFor(() => expect(socket.sent.some((frame) => frame.includes('"method":"ping"'))).toBe(true));
+      expect(calls(trace.warn).map(([message]) => message)).not.toContain("socket.ping_timeout");
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(calls(trace.warn)).toContainEqual(["socket.ping_timeout", { machine: "vps", waited_ms: 15_000 }]);
+      expect(socket.readyState).toBe(3);
+      conn.stop();
+    });
   });
 });

@@ -66,6 +66,68 @@ test("the app, the window and crewd each write their first lines", async (t) => 
   }
 });
 
+test("main spawns crewd and crewd says it is ready, by pid and where it listens and never a URL", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+
+  const spawned = await line(crew, "app.ndjson", "daemon.child_spawn");
+  assert.equal(spawned.target, "app.main");
+  assert.equal(spawned.level, "INFO");
+  assert.ok(Number.isInteger(spawned.fields.pid), JSON.stringify(spawned));
+  // The pid main started is the pid crewd says it is, and the one running.
+  const started = await line(crew, "crewd.ndjson", "daemon.start", (one) => one.fields.pid === spawned.fields.pid);
+  assert.equal(await crewdPid(crew), spawned.fields.pid);
+  const ready = await line(crew, "crewd.ndjson", "daemon.ready");
+  assert.equal(ready.target, "daemon");
+  assert.equal(ready.level, "INFO");
+  assert.equal(ready.fields.supervisor, "Parent");
+  assert.ok(ready.timestamp >= started.timestamp, "ready comes after start");
+  // Where it listens, as host:port: not a URL.
+  assert.match(String(ready.fields.addr), /^127\.0\.0\.1:\d+$/);
+  assert.ok(!("url" in ready.fields) && !JSON.stringify(ready).includes("://"), JSON.stringify(ready));
+});
+
+test("a promise nobody in main caught is main.unhandled_rejection, the app goes on, and the stack is frames alone", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+
+  await crew.app.evaluate(() => {
+    void Promise.reject(new Error("E2E-MAIN-REJECTED: nobody caught this"));
+  });
+  const rejected = await line(crew, "app.ndjson", "main.unhandled_rejection", (one) => String(one.fields.error).includes("E2E-MAIN-REJECTED"));
+  assert.equal(rejected.level, "ERROR");
+  assert.equal(rejected.target, "app.main");
+  assert.ok(typeof rejected.fields.stack === "string" && /^\s*at /m.test(rejected.fields.stack), "the frames are there");
+  assert.ok(!String(rejected.fields.stack).includes("E2E-MAIN-REJECTED"), "the message that heads a stack is not");
+  // What is not an Error is text, with no stack.
+  await crew.app.evaluate(() => {
+    void Promise.reject("E2E-MAIN-STRING-REASON");
+  });
+  const text = await line(crew, "app.ndjson", "main.unhandled_rejection", (one) => one.fields.error === "E2E-MAIN-STRING-REASON");
+  assert.ok(!("stack" in text.fields), JSON.stringify(text));
+  // It was survived, as without the listener: the window still answers.
+  assert.equal(await crew.window.evaluate(() => 1 + 1), 2);
+});
+
+test("quitting is app.quit and then app.will_quit, both on the disk before the process is gone", async (t) => {
+  let crew = await launchCrew();
+  t.after(() => crew.close());
+
+  const before = crew;
+  let seen: Array<Line & { file: string }> = [];
+  // `between` runs with the app down, on the files as the quit left them.
+  crew = await crew.restart(async () => {
+    seen = (await read(before)).lines.filter((one) => one.file.startsWith("app.ndjson"));
+  });
+  const quit = seen.findIndex((one) => one.fields.message === "app.quit");
+  const willQuit = seen.findIndex((one) => one.fields.message === "app.will_quit");
+  assert.ok(quit >= 0, "app.quit was written");
+  assert.ok(willQuit > quit, "app.will_quit comes after app.quit");
+  assert.equal(seen[willQuit]?.target, "app.main");
+  assert.equal(seen[willQuit]?.level, "INFO");
+  assert.ok(seen[willQuit]!.timestamp >= seen[quit]!.timestamp);
+});
+
 test("a command run from the keyboard is a ui.command line with how it was triggered", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());

@@ -96,6 +96,21 @@ describe("tunnel trace", () => {
     live.close();
   });
 
+  it("says that a tunnel was closed on purpose, before its exit says it did not drop", async () => {
+    const live = fakeSsh("listens");
+    const tunnels = new Tunnels(live.run);
+    // Nothing open for the machine: nothing to close, nothing said.
+    tunnels.close("atlas");
+    expect(named("tunnel.close")).toEqual([]);
+    await tunnels.ensure("atlas", target, 17877);
+    tunnels.close("atlas");
+    expect(named("tunnel.close")).toEqual([{ level: "INFO", message: "tunnel.close", fields: { machine: "atlas" } }]);
+    const order = lines.map((line) => line.message);
+    expect(order.indexOf("tunnel.close")).toBeLessThan(order.indexOf("tunnel.down"));
+    expect(named("tunnel.down")[0]?.fields.dropped).toBe(false);
+    live.close();
+  });
+
   it("always says when a tunnel that was up drops, and keeps ssh's last words to one line", async () => {
     const live = fakeSsh("listens");
     const tunnels = new Tunnels(live.run);
