@@ -8,6 +8,7 @@ import { classifyInstallFailure } from "./install-errors.ts";
 import { resolveSsh } from "./ssh-config.ts";
 import { BASE_OPTIONS, controlOption, controlPath, options, PERSIST_S, who, type SshTarget } from "./ssh-options.ts";
 import { isLoopback, Tunnels } from "./ssh-tunnel.ts";
+import { errorText, trace } from "./trace.ts";
 
 export type StepId = "reach" | "ssh" | "existing" | "upload" | "service" | "pair" | "clis";
 
@@ -156,7 +157,26 @@ export function lingerWarning(output: string, user: string): string | null {
   );
 }
 
-export async function installDaemon(opts: {
+/**
+ * Installs or updates crewd on a machine over ssh. Written to the trace: that it began, each step by its name
+ * and how it ended, and how long it all took. Never the commands run, the destination or what ssh printed
+ * beyond one line of why a step failed.
+ */
+export async function installDaemon(opts: Parameters<typeof installDaemonSteps>[0]): Promise<Paired> {
+  const began = Date.now();
+  trace.info("install.start", { update: opts.keepOnFailure === true, reuse: opts.reuseProtocol !== undefined });
+  try {
+    const paired = await installDaemonSteps(opts);
+    trace.info("install.done", { took_ms: Date.now() - began, version: paired.version || undefined });
+    return paired;
+  } catch (error) {
+    if (error instanceof InstallCancelled) trace.info("install.cancelled", { took_ms: Date.now() - began });
+    else trace.warn("install.failed", { took_ms: Date.now() - began, error: errorText(error) });
+    throw error;
+  }
+}
+
+async function installDaemonSteps(opts: {
   target: SshTarget;
   port?: number;
   /** Aborting it stops the install: the ssh runs end and the half-uploaded file goes. */
@@ -397,14 +417,17 @@ async function step<T>(
   describe?: (result: T) => string | undefined,
 ): Promise<T> {
   report({ id, state: "running" });
+  const began = Date.now();
   try {
     const result = await run();
     const detail = describe ? describe(result) : typeof result === "string" ? result : undefined;
     report(detail ? { id, state: "done", detail } : { id, state: "done" });
+    trace.info("install.step", { step: id, state: "done", took_ms: Date.now() - began });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     report({ id, state: "error", detail: message });
+    trace.warn("install.step", { step: id, state: "error", took_ms: Date.now() - began, error: errorText(error) });
     throw error instanceof Error ? error : new Error(message);
   }
 }

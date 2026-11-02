@@ -1,4 +1,5 @@
 import type { Tailnet, TailscaleDevice } from "../src/lib/remotes";
+import { errorText, trace } from "./trace";
 
 type Peer = {
   HostName?: string;
@@ -34,6 +35,7 @@ export function tailnetFromOutput(stdout: string, added: ReadonlySet<string>): T
     raw = JSON.parse(stdout);
   } catch {
     const message = stdout.trim().split("\n")[0] || "Tailscale said nothing";
+    trace.warn("tailscale.status_failed", { error: errorText(message) });
     return { state: "error", account: null, message, devices: [] };
   }
   return tailnetFrom(raw, added);
@@ -63,6 +65,8 @@ export function devicesFrom(raw: unknown, added: ReadonlySet<string>): Tailscale
     const self = device(status.Self, added, true);
     if (self) rows.push(self);
   }
+  const everyone = [...(status.Self ? [status.Self] : []), ...Object.values(status.Peer ?? {})];
+  noteWithoutAddress(everyone.filter((peer) => !ipOf(peer)).length);
   const peers = Object.values(status.Peer ?? {})
     .map((peer) => device(peer, added, false))
     .filter((row): row is TailscaleDevice => row !== null)
@@ -72,8 +76,18 @@ export function devicesFrom(raw: unknown, added: ReadonlySet<string>): Tailscale
   return rows;
 }
 
+const ipOf = (peer: Peer) => (peer.TailscaleIPs ?? []).find((item) => item.includes(".") && !item.includes(":"));
+
+/** Devices Tailscale lists with no IPv4 address cannot be added. Said when the count changes, not at every look. */
+let withoutAddress = 0;
+function noteWithoutAddress(count: number): void {
+  if (count === withoutAddress) return;
+  withoutAddress = count;
+  if (count > 0) trace.info("tailscale.no_address", { devices: count });
+}
+
 function device(peer: Peer, added: ReadonlySet<string>, self: boolean): TailscaleDevice | null {
-  const ip = (peer.TailscaleIPs ?? []).find((item) => item.includes(".") && !item.includes(":"));
+  const ip = ipOf(peer);
   if (!ip) return null;
   const host = peer.HostName?.trim() || ip;
   const dns = (peer.DNSName ?? "").replace(/\.$/, "");
