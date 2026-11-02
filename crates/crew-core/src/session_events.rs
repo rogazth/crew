@@ -88,11 +88,42 @@ pub fn record_reporting(
         }
         tx.commit()
     })?;
+    trace_event(session_id, cursor, kind, outcome, request, letter.is_some());
     store.session_changed(session_id);
     if let Some(letter) = letter {
         store.mailbox_changed(&letter.to_session);
     }
     Ok(())
+}
+
+/// One line for each event a session records, which is where its turns end, it needs
+/// the user, fails or exits. The outcome is a class, never the report or the request:
+/// an error's text is cut to a line, and who stopped an exit is not said.
+fn trace_event(session_id: &str, cursor: i64, kind: &str, outcome: &str, request: Option<&Value>, letter: bool) {
+    match kind {
+        "error" => {
+            tracing::warn!(session_id, cursor, kind, outcome = "failed", error = %crate::trace::error_text(outcome), letter, "session.event")
+        }
+        "exited" => {
+            let class = if outcome.starts_with("idle for") {
+                "idle_timeout"
+            } else if outcome.starts_with("stopped by") {
+                "stopped"
+            } else {
+                "exited"
+            };
+            tracing::info!(session_id, cursor, kind, outcome = class, letter, "session.event")
+        }
+        "needs-input" => {
+            let asked = request.and_then(|request| request.get("kind")).and_then(Value::as_str).unwrap_or("input");
+            let asked = if matches!(asked, "question" | "approval") { asked } else { "input" };
+            tracing::info!(session_id, cursor, kind, outcome = asked, letter, "session.event")
+        }
+        _ => {
+            let class = if matches!(outcome, "completed" | "stopped") { outcome } else { "other" };
+            tracing::info!(session_id, cursor, kind, outcome = class, letter, "session.event")
+        }
+    }
 }
 
 fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<Event> {
@@ -296,6 +327,54 @@ mod tests {
         assert_eq!(after(&store, &child.id, 2).expect("events"), vec![], "the event outlived its report");
         let cursor = crate::session::get(&store, child.id.clone()).expect("get").expect("child").cursor;
         assert_eq!(cursor, 2);
+    }
+
+    /// One line per event, holding the kind and a class of outcome and never the
+    /// report, the request or who stopped it.
+    #[test]
+    fn each_event_is_traced_by_kind_and_outcome_class_without_its_report() {
+        use crate::trace::capture;
+        capture::install();
+        let dir = std::env::temp_dir().join(format!("crew-events-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let child = crate::session::create_child(
+            &store,
+            ws.id,
+            "codex: fix".into(),
+            "codex".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            None,
+        )
+        .expect("child");
+        let id = child.id.as_str();
+        let secret = "SECRET-REPORT-3f9a";
+        let request = serde_json::json!({ "kind": "approval", "command": secret });
+        record_reporting(&store, id, 1, "turn", "completed", secret, None, None).expect("turn");
+        record_reporting(&store, id, 2, "needs-input", "", secret, Some(&request), None).expect("asks");
+        let failure = format!("boom {}\nsecond line {secret}", "x".repeat(600));
+        record_reporting(&store, id, 3, "error", &failure, secret, None, None).expect("error");
+        record_reporting(&store, id, 4, "exited", "stopped by Planner-Bot", secret, None, None).expect("exit");
+
+        let ours: Vec<_> = capture::find("session.event", "session_id", id);
+        let seen: Vec<(String, String, String)> = ours
+            .iter()
+            .map(|e| (e.get("kind").unwrap().into(), e.get("cursor").unwrap().into(), e.get("outcome").unwrap().into()))
+            .collect();
+        let want = |kind: &str, cursor: &str, outcome: &str| (kind.to_string(), cursor.to_string(), outcome.to_string());
+        assert_eq!(
+            seen,
+            [want("turn", "1", "completed"), want("needs-input", "2", "approval"), want("error", "3", "failed"), want("exited", "4", "stopped")]
+        );
+        assert_eq!(ours[2].level, tracing::Level::WARN);
+        let error = ours[2].get("error").unwrap();
+        assert!(error.starts_with("boom ") && !error.contains("second line") && error.chars().count() <= 301, "{error}");
+        for event in &ours {
+            assert!(event.fields.values().all(|v| !v.contains(secret) && !v.contains("Planner-Bot")), "{event:?}");
+        }
     }
 
     #[test]

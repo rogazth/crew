@@ -53,7 +53,11 @@ export class Tunnels {
    */
   private readonly attempts = new Map<string, number>();
 
-  constructor(private readonly spawnSsh: typeof spawn = spawn) {}
+  private readonly spawnSsh: typeof spawn;
+
+  constructor(spawnSsh: typeof spawn = spawn) {
+    this.spawnSsh = spawnSsh;
+  }
 
   /** The machine's tunnel, opened if it is not up. Rejects with what ssh said when it cannot be. */
   ensure(key: string, target: SshTarget, remotePort: number): Promise<Forward> {
