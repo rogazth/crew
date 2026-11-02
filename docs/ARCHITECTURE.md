@@ -13,7 +13,7 @@ Models have confused these before, so they are said the same way everywhere a mo
 
 A subagent works for the session that started it. A session works for the user.
 
-The window uses four more words, for what a session started and what it reads. They are the words of `2026-10-12-orchestration-ui.md`:
+The window uses four more words, for what a session started and what it reads:
 
 - **Agent** (window only) — anything with its own transcript that a session started: a native subagent (Claude's Task, Codex's agent threads, opencode's child sessions), a Crew subagent, or an independent session. The daemon has no such noun; it says subagent or session.
 - **Work** — everything a session started that runs beside its turn: agents, shells and monitors, and Crew processes. The status line under the composer is the one place it shows: attention first (an agent waiting on a question or an approval), then running work, then `N conversations`. Paused after 20 automatic turns is a warning segment there too. The sheet it opens is titled "Work".

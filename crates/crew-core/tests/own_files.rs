@@ -1,5 +1,5 @@
 //! Crew writes its own files only where its environment's layout says
-//! (`crew_core::paths`, docs/plans/2026-10-15-environments.md). Reading `HOME`
+//! (`crew_core::paths`). Reading `HOME`
 //! or the system temp dir anywhere else is how a build ends up writing into
 //! another build's folders, so outside tests it is allowed only in the files
 //! below, each for a reason that is not Crew's own state.

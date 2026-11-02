@@ -1,4 +1,4 @@
-// What an e2e run left outside its sandboxes (docs/plans/2026-10-15-environments.md).
+// What an e2e run left outside its sandboxes.
 // The harness writes every sandbox it makes to $CREW_E2E_RUN_LOG; once the
 // specs are done, anything that still names one of them is a leak:
 //

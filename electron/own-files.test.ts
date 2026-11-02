@@ -1,5 +1,5 @@
-// Crew writes its own files only where its environment's layout says
-// (docs/plans/2026-10-15-environments.md). Reading the home or the temp dir
+// Crew writes its own files only where its environment's layout says.
+// Reading the home or the temp dir
 // anywhere else in the main process is how a build ends up writing into
 // another build's folders, so it is allowed only in these files, each for a
 // reason that is not Crew's own state.

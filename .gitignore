@@ -6,6 +6,9 @@ target/
 .DS_Store
 *.local
 
+# Plans are temporary: they guide the work and are not kept.
+docs/plans/
+
 # Reference checkouts: read-only architecture material, not part of the build.
 reference/
 
