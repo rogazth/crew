@@ -20,6 +20,13 @@ pub fn ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Counts one more of something that can repeat without end and says whether this one is
+/// worth a line: the first few, then one in thirty (the window's `loud`). The count rides along.
+pub fn throttled(counter: &std::sync::atomic::AtomicU64) -> Option<u64> {
+    let count = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    (count <= 5 || count % 30 == 0).then_some(count)
+}
+
 /// A stream frame that was not JSON, where there is no line to look at. Counted like [`unparsed`].
 pub fn unparsed_frame(provider: &str) {
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -211,7 +212,12 @@ impl Bridge {
             run.bound.retain(|_, binding| binding.session_id != session_id);
         }
         let bearer = Bearer::Session(session_id.to_string());
-        self.tokens().retain(|_, grant| grant.bearer != bearer);
+        let mut tokens = self.tokens();
+        let before = tokens.len();
+        tokens.retain(|_, grant| grant.bearer != bearer);
+        if tokens.len() < before {
+            tracing::debug!(session_id, tokens = before - tokens.len(), "bridge.revoked");
+        }
     }
 
     fn runs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Run>> {
@@ -351,22 +357,48 @@ impl OpencodeHost {
     }
 }
 
+/// What a bearer is, for the trace: never the token.
+fn bearer_kind(bearer: &Bearer) -> &'static str {
+    match bearer {
+        Bearer::User => "user",
+        Bearer::Session(_) => "session",
+        Bearer::OpencodeHost(_) => "opencode_host",
+    }
+}
+
 fn serve(bridge: Bridge, stream: UnixStream) {
+    static REFUSED: AtomicU64 = AtomicU64::new(0);
+    static MALFORMED: AtomicU64 = AtomicU64::new(0);
     let mut line = String::new();
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => return,
     });
-    if reader.read_line(&mut line).is_err() {
-        return;
+    match reader.read_line(&mut line) {
+        Ok(0) | Err(_) => {
+            // The client closed without asking anything (or the socket broke).
+            tracing::debug!("bridge.client_gone");
+            return;
+        }
+        Ok(_) => {}
     }
     let request: Request = match serde_json::from_str(&line) {
         Ok(request) => request,
-        Err(e) => return reply(stream, json!({ "error": format!("Bad request: {e}") })),
+        Err(e) => {
+            if let Some(count) = crate::trace::throttled(&MALFORMED) {
+                tracing::warn!(count, category = ?e.classify(), "bridge.bad_request");
+            }
+            return reply(stream, json!({ "error": format!("Bad request: {e}") }));
+        }
     };
     let Some(bearer) = bridge.whose(&request.token) else {
+        // A process holding a token that was retired (its session ended, a newer turn replaced it).
+        if let Some(count) = crate::trace::throttled(&REFUSED) {
+            tracing::warn!(count, method = %crate::trace::error_text(&request.method), "bridge.auth_refused");
+        }
         return reply(stream, json!({ "error": "Bad token" }));
     };
+    tracing::debug!(bearer = bearer_kind(&bearer), method = %crate::trace::error_text(&request.method), "bridge.client");
     let handler = bridge.shared.handler.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(handler) = handler else {
         return reply(stream, json!({ "error": "Tool handler is not set" }));
@@ -431,6 +463,62 @@ mod tests {
 
     fn bridge() -> Bridge {
         Bridge::start(short_dir()).expect("bridge")
+    }
+
+    fn raw_call(bridge: &Bridge, text: &str) -> String {
+        let mut stream = UnixStream::connect(bridge.socket_path()).expect("connect");
+        stream.write_all(text.as_bytes()).expect("write");
+        let mut out = String::new();
+        let _ = BufReader::new(stream).read_line(&mut out);
+        out
+    }
+
+    /// Clients that cannot speak, or hold a token that is gone, leave a line (throttled, for
+    /// a client that retries forever), and never the token.
+    #[test]
+    fn a_client_that_is_refused_leaves_a_line_with_its_method_and_not_its_token() {
+        use crate::trace::capture;
+        capture::install();
+        let bridge = bridge();
+        let token = "RETIRED-TOKEN-5e2a";
+        let method = format!("probe/{}", uuid::Uuid::new_v4());
+        // A retired token, over and over: one in thirty is written once the first few are.
+        for _ in 0..40 {
+            let reply = raw_call(&bridge, &format!("{{\"token\":\"{token}\",\"method\":\"{method}\"}}\n"));
+            assert!(reply.contains("Bad token"), "{reply}");
+        }
+        let refused = capture::find("bridge.auth_refused", "method", &method);
+        assert!(!refused.is_empty() && refused.len() < 40, "{} lines", refused.len());
+        assert_eq!(refused[0].level, tracing::Level::WARN);
+        // Not JSON at all, many times: the category, not the text.
+        for _ in 0..40 {
+            assert!(raw_call(&bridge, "not json SECRET-BODY\n").contains("Bad request"));
+        }
+        let malformed = capture::all("bridge.bad_request");
+        assert!(!malformed.is_empty());
+        for event in refused.iter().chain(malformed.iter()) {
+            assert!(event.fields.values().all(|v| !v.contains("RETIRED") && !v.contains("SECRET")), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn what_repeats_without_end_is_traced_for_the_first_few_and_then_one_in_thirty() {
+        let counter = AtomicU64::new(0);
+        let spoken: Vec<u64> = (0..65).filter_map(|_| crate::trace::throttled(&counter)).collect();
+        assert_eq!(spoken, [1, 2, 3, 4, 5, 30, 60]);
+    }
+
+    #[test]
+    fn a_session_losing_its_tokens_is_a_line_and_one_with_none_is_not() {
+        use crate::trace::capture;
+        capture::install();
+        let bridge = bridge();
+        let id = format!("revoke-{}", uuid::Uuid::new_v4());
+        bridge.mint(&id);
+        bridge.revoke(&id);
+        assert_eq!(capture::expect("bridge.revoked", "session_id", &id).get("tokens"), Some("1"));
+        bridge.revoke(&id);
+        assert_eq!(capture::find("bridge.revoked", "session_id", &id).len(), 1);
     }
 
     /// It used to unlink the socket and bind its own, leaving the live
