@@ -140,6 +140,12 @@ describe("what a record may hold", () => {
     expect(errorText("Session not found\n  at stack")).toBe("Session not found");
   });
 
+  it("keeps the words around an address and never the address", () => {
+    expect(errorText("https://example.com/releases/latest.json answered 503")).toBe("<url> answered 503");
+    expect(errorText(new Error("fetch to (wss://host:1/p?token=SECRET) failed"))).toBe("fetch to (<url>) failed");
+    expect(sanitizeFields({ error: "no answer from http://127.0.0.1:9 at all" }).error).toBe("no answer from <url> at all");
+  });
+
   it("accepts a record from the window and refuses what is not one", () => {
     expect(readRecord({ level: "WARN", message: "m", fields: { a: 1 } })?.level).toBe("WARN");
     expect(readRecord({ level: "LOUD", message: "m" })?.level).toBe("INFO");

@@ -93,7 +93,8 @@ pub fn error_text(error: &str) -> String {
         "expected ",
         "trailing",
     ];
-    let first_line = error.lines().next().unwrap_or("");
+    let first_line = redact_urls(error.lines().next().unwrap_or(""));
+    let first_line = first_line.as_str();
     let text = if PARSE_ERRORS
         .iter()
         .any(|start| first_line.starts_with(start) || first_line.contains(": invalid ") || first_line.contains(", expected "))
@@ -106,6 +107,30 @@ pub fn error_text(error: &str) -> String {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text,
     }
+}
+
+/// An address is not recorded: `scheme://rest` up to a space or a closing bracket or quote
+/// becomes `<url>`, and what the error says around it stays ("<url> answered 503").
+fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let head = &rest[..at];
+        let scheme_start = head.rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).map_or(0, |i| i + 1);
+        let scheme = &head[scheme_start..];
+        let after = &rest[at + 3..];
+        if !scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) || after.is_empty() {
+            out.push_str(&rest[..at + 3]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&head[..scheme_start]);
+        out.push_str("<url>");
+        let end = after.find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>' | ']')).unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn redact_quoted(text: &str) -> String {
@@ -294,6 +319,18 @@ mod tests {
         connected("cursor", &session, true, std::time::Instant::now());
         let up = capture::expect("provider.connected", "session_id", &session);
         assert_eq!(up.get("resumed"), Some("true"));
+    }
+
+    #[test]
+    fn an_address_in_an_error_is_not_recorded_and_the_words_around_it_are() {
+        assert_eq!(error_text("https://example.com/releases/latest.json answered 503"), "<url> answered 503");
+        assert_eq!(
+            error_text("error sending request for url (https://cursor.com/api/x?token=SECRET): timed out"),
+            "error sending request for url (<url>): timed out"
+        );
+        assert_eq!(error_text("tried ws://127.0.0.1:1 and wss://host/p then gave up"), "tried <url> and <url> then gave up");
+        assert_eq!(error_text("a :// alone and 9p://x"), "a :// alone and 9p://x");
+        assert_eq!(error_text("trailing :// "), "trailing :// ");
     }
 
     #[test]

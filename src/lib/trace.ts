@@ -73,12 +73,13 @@ export function sanitizeFields(fields: TraceFields | undefined): Record<string, 
 
 /**
  * An error as a record holds it. A parse error quotes the value it choked on,
- * and that value is the user's, so what sits in quotes goes (as in crewd). One
- * line, cut.
+ * and that value is the user's, so what sits in quotes goes (as in crewd), and so
+ * does any URL. One line, cut.
  */
 export function errorText(error: unknown): string {
   const text = error instanceof Error ? error.message : typeof error === "string" ? error : safeString(error);
-  const line = text.split("\n", 1)[0] ?? "";
+  // An address is not recorded: an error that names the URL it asked ("<url> answered 503") keeps the rest.
+  const line = (text.split("\n", 1)[0] ?? "").replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s)"'<>\]]+/gi, "<url>");
   const parse = /^(invalid (type|value|length)|unknown (variant|field)|missing field|expected |trailing)|, expected /.test(line);
   return cut(parse ? line.replace(/"[^"]*"/g, '"…"').replace(/`[^`]*`/g, "`…`") : line);
 }
