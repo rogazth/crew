@@ -1685,7 +1685,9 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             })
             .await?;
             let scheduler = hosts.scheduler.clone();
-            tokio::task::spawn_blocking(move || scheduler.arm());
+            // Part of the request that saved the routine.
+            let span = tracing::Span::current();
+            tokio::task::spawn_blocking(move || span.in_scope(|| scheduler.arm()));
             json(row)
         }
         "routine_delete" => {
@@ -1693,7 +1695,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             block(move || routine::delete(&store, id)).await?;
             let scheduler = hosts.scheduler.clone();
-            tokio::task::spawn_blocking(move || scheduler.arm());
+            let span = tracing::Span::current();
+            tokio::task::spawn_blocking(move || span.in_scope(|| scheduler.arm()));
             Ok(Value::Null)
         }
         "routine_run_now" => {
