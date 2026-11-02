@@ -302,7 +302,8 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
             }
             Supervisor::Launchd => {}
         }
-        tracing::info!(target: "daemon", url = %info.url, supervisor = ?supervisor, "daemon.ready");
+        // Where it listens as host:port; a URL is never in a trace line.
+        tracing::info!(target: "daemon", addr = %info.url.trim_start_matches("ws://"), supervisor = ?supervisor, "daemon.ready");
     }
     let reason = match early {
         Some(reason) => reason,
