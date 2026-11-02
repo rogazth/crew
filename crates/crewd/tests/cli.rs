@@ -331,6 +331,13 @@ fn a_second_crewd_leaves_the_live_one_alone() {
 
     drop(first.stdin.take());
     wait_exit(&mut first, Duration::from_secs(10));
+
+    // The refusals are in the trace, as lines of their own: the first daemon's files were not opened.
+    let errors = std::fs::read_to_string(dir.join("trace/errors.ndjson")).expect("errors.ndjson");
+    assert_eq!(errors.matches("daemon.lock_failed").count(), 2, "{errors}");
+    for line in errors.lines() {
+        serde_json::from_str::<serde_json::Value>(line).expect("every line is whole");
+    }
 }
 
 /// A start that cannot succeed used to exit 1, which launchd answers by
@@ -369,13 +376,13 @@ fn a_sigterm_during_startup_is_a_clean_stop() {
     let mut stderr = BufReader::new(child.stderr.take().expect("stderr"));
     let mut line = String::new();
     stderr.read_line(&mut line).expect("starting line");
-    assert!(line.contains("starting"), "{line}");
+    assert!(line.contains("daemon.start"), "{line}");
     let status = Command::new("kill").args(["-TERM", &child.id().to_string()]).status().expect("kill");
     assert!(status.success());
     wait_exit(&mut child, Duration::from_secs(10));
     let mut rest = String::new();
     let _ = stderr.read_to_string(&mut rest);
-    assert!(rest.contains("stopping"), "{rest}");
+    assert!(rest.contains("daemon.shutdown"), "{rest}");
     assert!(!dir.join("daemon.json").exists(), "daemon.json outlived its daemon");
     assert!(!dir.join("crew.sock").exists(), "the socket outlived its daemon");
 }

@@ -227,7 +227,11 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
     std::fs::create_dir_all(dir).map_err(|e| Failure::Permanent(format!("{}: {e}", dir.display())))?;
     // Before the socket, the database or anything else in the folder. Held
     // until `run` returns, after everything below has stopped.
-    let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
+    let _lock = DataLock::acquire(dir).map_err(|error| {
+        // Not through the subscriber, which would open the files of the daemon that holds the lock.
+        crewd::trace::note_refusal(dir, "daemon.lock_failed", &crew_core::trace::error_text(&error));
+        Failure::Permanent(error)
+    })?;
     // After the lock: two daemons never append to, or rotate, the same files.
     let traced = crewd::trace::init(dir);
     tracing::info!(

@@ -317,6 +317,44 @@ fn install_panic_hook() {
     }));
 }
 
+/// For the one start that cannot trace: another daemon holds the data dir's lock,
+/// so this process must not open (and rotate) the files that daemon writes. One
+/// line is appended to `errors.ndjson` instead, which an append of a whole line
+/// does without disturbing the other. Never fails.
+pub fn note_refusal(data_dir: &Path, message: &str, error: &str) {
+    let record = serde_json::json!({
+        "timestamp": rfc3339(std::time::SystemTime::now()),
+        "level": "ERROR",
+        "fields": { "message": message, "error": error, "pid": std::process::id() },
+        "target": "daemon.exit",
+    });
+    let path = data_dir.join(DIR).join(ERRORS_FILE);
+    let _ = OpenOptions::new().append(true).create(true).mode(0o600).open(path).and_then(|mut file| writeln!(file, "{record}"));
+}
+
+/// `2026-11-02T13:06:07.356565Z`, the form `tracing`'s own lines have.
+fn rfc3339(at: std::time::SystemTime) -> String {
+    let since = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let (days, rest) = (since.as_secs() / 86_400, since.as_secs() % 86_400);
+    // Howard Hinnant's civil-from-days.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:06}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60,
+        since.subsec_micros()
+    )
+}
+
 /// Writes out what is buffered and stops the writers. Safe to call twice, from
 /// a panic hook, and while another thread holds the lock (it then does nothing).
 pub fn flush() {
@@ -395,6 +433,24 @@ mod tests {
         assert_eq!(mode(&path), 0o600);
         assert_eq!(mode(&dir.join("a.ndjson.1")), 0o600);
         assert_eq!(fs::read_to_string(&path).expect("read"), "new line\n");
+    }
+
+    #[test]
+    fn a_refused_start_appends_one_valid_line_without_touching_the_rest() {
+        let dir = tmp("refusal");
+        let file = dir.join(DIR).join(ERRORS_FILE);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{\"keep\":1}\n").unwrap();
+        note_refusal(&dir, "daemon.already_running", "another crewd is already using it");
+        let text = fs::read_to_string(&file).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some("{\"keep\":1}"));
+        let line: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(line["fields"]["message"], "daemon.already_running");
+        assert!(line["timestamp"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(rfc3339(std::time::UNIX_EPOCH + Duration::new(1_793_625_422, 221_410_000)), "2026-11-02T13:17:02.221410Z");
+        // No folder, no problem.
+        note_refusal(&dir.join("nowhere"), "x", "y");
     }
 
     #[test]
