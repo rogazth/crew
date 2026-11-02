@@ -19,6 +19,26 @@ type Status = {
   CurrentTailnet?: { Name?: string };
 };
 
+/**
+ * The environment to run Tailscale's Mac binary in. Without TERM or SHLVL, as in
+ * an app opened from Finder, it starts as the GUI instead of the CLI and fails.
+ */
+export function cliEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, TERM: env.TERM ?? "dumb" };
+}
+
+/** What the CLI printed into a Tailnet. Anything but JSON is Tailscale's own error, shown as it said it. */
+export function tailnetFromOutput(stdout: string, added: ReadonlySet<string>): Tailnet {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    const message = stdout.trim().split("\n")[0] || "Tailscale said nothing";
+    return { state: "error", account: null, message, devices: [] };
+  }
+  return tailnetFrom(raw, added);
+}
+
 /** `tailscale status --json` into what Settings shows: the account, and the rows the add flow offers. */
 export function tailnetFrom(raw: unknown, added: ReadonlySet<string>): Tailnet {
   if (!raw || typeof raw !== "object") return { state: "error", account: null, message: "Tailscale said nothing", devices: [] };

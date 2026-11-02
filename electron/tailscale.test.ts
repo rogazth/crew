@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { devicesFrom, tailnetFrom } from "./tailscale";
+import { cliEnv, devicesFrom, tailnetFrom, tailnetFromOutput } from "./tailscale";
 
 const status = {
   Self: {
@@ -88,5 +88,35 @@ describe("tailnetFrom", () => {
   it("says so when Tailscale is stopped or signed out", () => {
     expect(tailnetFrom({ BackendState: "Stopped" }, new Set())).toMatchObject({ state: "stopped", devices: [] });
     expect(tailnetFrom({ BackendState: "NeedsLogin" }, new Set()).message).toBe("Tailscale is signed out");
+  });
+});
+
+describe("tailnetFromOutput", () => {
+  it("reads the status the CLI printed", () => {
+    expect(tailnetFromOutput(JSON.stringify({ BackendState: "Stopped" }), new Set()).state).toBe("stopped");
+  });
+
+  it("shows what Tailscale said when it did not print JSON", () => {
+    const stdout = "The Tailscale GUI failed to start: The operation couldn't be completed.\n\n";
+    expect(tailnetFromOutput(stdout, new Set())).toEqual({
+      state: "error",
+      account: null,
+      message: "The Tailscale GUI failed to start: The operation couldn't be completed.",
+      devices: [],
+    });
+  });
+
+  it("says so when it printed nothing", () => {
+    expect(tailnetFromOutput("", new Set()).message).toBe("Tailscale said nothing");
+  });
+});
+
+describe("cliEnv", () => {
+  it("gives an app opened from Finder a TERM and keeps the rest", () => {
+    expect(cliEnv({ HOME: "/Users/me" })).toEqual({ HOME: "/Users/me", TERM: "dumb" });
+  });
+
+  it("keeps a TERM it already has", () => {
+    expect(cliEnv({ TERM: "xterm" }).TERM).toBe("xterm");
   });
 });

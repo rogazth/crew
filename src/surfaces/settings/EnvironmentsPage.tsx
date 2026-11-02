@@ -236,13 +236,13 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
       {host && adding && <AddMachineFlow onClose={() => { setAdding(false); readTailnet(); }} />}
 
       <Group title="Network">
-        <Row id="tailscale" label="Tailscale" description="Peer-to-peer over your tailnet. No Crew server.">
+        <Row id="tailscale" label="Tailscale" description="Peer-to-peer over your tailnet, with no Crew server.">
           <TailnetState tailnet={tailnet} available={host !== null} />
         </Row>
         <ToggleRow
           id="warn-relay"
           label="Relay warnings"
-          description="Flag machines reached only through a relay."
+          description="Flag machines reached only by relay."
           checked={warnRelay}
           onChange={(checked) => {
             keep(READS.warnRelay, checked ? "on" : "off");
@@ -252,7 +252,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
         <ToggleRow
           id="wake"
           label="Reconnect on wake"
-          description="Reconnect as soon as this Mac wakes."
+          description="Reconnect to machines when this Mac wakes."
           checked={wake}
           onChange={(checked) => {
             keep(READS.wake, checked ? "on" : "off");
@@ -265,7 +265,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
         <ToggleRow
           id="auto-update"
           label="Update machines automatically"
-          description="Bring each machine's crewd up to this Mac's once no session there has worked for two minutes."
+          description="Match this Mac's crewd after two idle minutes."
           checked={autoUpdate}
           onChange={(checked) => {
             keep(READS.autoUpdate, checked ? "on" : "off");

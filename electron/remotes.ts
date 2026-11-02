@@ -20,7 +20,7 @@ import { remoteUpdater } from "./remote-updates";
 import { sshHosts } from "./ssh-config";
 import { setControlDir } from "./ssh-options";
 import { isLoopback, Tunnels } from "./ssh-tunnel";
-import { tailnetFrom } from "./tailscale";
+import { cliEnv, tailnetFromOutput } from "./tailscale";
 import type { Tailnet } from "../src/lib/remotes";
 
 const exec = promisify(execFile);
@@ -108,18 +108,12 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       rows.flatMap((row) => [row.host, row.name, row.ssh, row.ssh?.replace(/^ssh:\/\//, "").replace(/^.*@/, "").replace(/:\d+$/, "")].filter(Boolean)),
     );
     try {
-      const { stdout } = await exec(bin, ["status", "--json"], { timeout: 8_000, maxBuffer: 8_000_000 });
-      return tailnetFrom(JSON.parse(stdout), added);
+      const { stdout } = await exec(bin, ["status", "--json"], { timeout: 8_000, maxBuffer: 8_000_000, env: cliEnv(process.env) });
+      return tailnetFromOutput(stdout, added);
     } catch (error) {
       // A stopped Tailscale exits non-zero and still prints its state.
       const stdout = (error as { stdout?: unknown }).stdout;
-      if (typeof stdout === "string" && stdout.trim().startsWith("{")) {
-        try {
-          return tailnetFrom(JSON.parse(stdout), added);
-        } catch {
-          // Fall through to the error.
-        }
-      }
+      if (typeof stdout === "string" && stdout.trim().startsWith("{")) return tailnetFromOutput(stdout, added);
       return { state: "error", account: null, message: error instanceof Error ? error.message : String(error), devices: [] };
     }
   });
