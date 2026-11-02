@@ -1219,7 +1219,7 @@ impl TurnHost {
     fn stop_and_hand_over(&self, session_id: &str, letter_id: &str) -> TurnStarted {
         if self.is_running(session_id) {
             self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
-            self.cancel(session_id, true);
+            self.cancel(session_id, true, "interrupt_with_message");
         }
         // The stop's own end hands the queue over; with no turn left to wait
         // for (none was running, or it ended meanwhile) it goes now.
@@ -1415,7 +1415,7 @@ impl TurnHost {
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
         let no_turn = !self.is_running(session_id) && !self.is_settling(session_id);
-        self.cancel(session_id, true);
+        self.cancel(session_id, true, "stop");
         if no_turn {
             self.settle_turnless_child(session_id);
         }
@@ -2078,6 +2078,20 @@ impl TurnHost {
             Live::Grok(_) => "Grok",
             Live::Opencode(_) => "opencode",
         };
+        // Whether a turn was in it, and whether Crew asked it to go (a stop, a kill): an exit
+        // nobody asked for is the line to look for.
+        let (mid_turn, asked) = match &*live {
+            Live::Claude(row) => (row.active, row.cancelled),
+            Live::Codex(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Cursor(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Grok(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Opencode(_) => (false, true),
+        };
+        if asked {
+            tracing::info!(session_id, provider, code, mid_turn, "provider.exit");
+        } else {
+            tracing::warn!(session_id, provider, code, mid_turn, "provider.lost");
+        }
         match live {
             Live::Claude(row) => {
                 let mid = row.active;
@@ -2205,8 +2219,8 @@ impl TurnHost {
     /// Code does): what it left running in the background goes on, and is
     /// stopped from the panel one by one. With `kill`, a CLI that does not
     /// answer the stop is let go after [`INTERRUPT_GRACE`].
-    fn cancel(&self, session_id: &str, kill: bool) {
-        tracing::info!(session_id, kill, "turn.stop_requested");
+    fn cancel(&self, session_id: &str, kill: bool, reason: &'static str) {
+        tracing::info!(session_id, kill, reason, "turn.stop_requested");
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
         // this one. Without a turn to interrupt, it settles here.
@@ -2993,7 +3007,7 @@ impl TurnHost {
             return false;
         }
         self.exiting.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string(), by.to_string());
-        self.cancel(session_id, true);
+        self.cancel(session_id, true, "exit");
         true
     }
 
@@ -3732,6 +3746,7 @@ impl TurnHost {
             return Err("cancelled".into());
         }
 
+        let began = Instant::now();
         let (init_tx, init_rx) = oneshot::channel();
         {
             let mut map = self.lock();
@@ -3775,10 +3790,12 @@ impl TurnHost {
         match init {
             // Up: how large its window is, for a meter before the first answer.
             Ok(Ok(true)) => {
+                crate::trace::connected("claude", &session_id, spawn.resume.is_some(), began);
                 self.ask_claude_context(&session_id, false, None);
                 self.ask_claude_mcp(&session_id, true);
             }
             Ok(Ok(false)) | Ok(Err(_)) => {
+                crate::trace::connect_failed("claude", &session_id, "init", "the CLI exited before it said it was up");
                 let stderr = self
                     .lock()
                     .get(&session_id)
@@ -3794,6 +3811,7 @@ impl TurnHost {
                 });
             }
             Err(_) => {
+                crate::trace::connect_failed("claude", &session_id, "init", NO_ANSWER);
                 return Err(NO_ANSWER.into());
             }
         }
@@ -3819,6 +3837,7 @@ impl TurnHost {
                 }
             };
             if silent {
+                tracing::warn!(session_id = %id, waited_s = FIRST_OUTPUT_TIMEOUT.as_secs(), reason = "silent", "turn.aborted");
                 host.signal(
                     &id,
                     TurnOutcome::Failed(format!(
@@ -3863,6 +3882,10 @@ impl TurnHost {
 
     pub(crate) fn handle_claude_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
+            // A blank line is not a message; anything else that is not JSON is worth a count.
+            if !line.trim().is_empty() {
+                crate::trace::unparsed("claude", session_id, line);
+            }
             return;
         };
         if string_field(Some(&rec), "type").as_deref() == Some("keep_alive") {

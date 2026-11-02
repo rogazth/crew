@@ -461,6 +461,8 @@ impl ProviderJobs {
             }
             job
         };
+        // What it is, not what it runs: a step's command line is never traced.
+        tracing::info!(job_id = %job.id, provider, action = ?job.action, method = ?job.method, steps = plan.steps.len(), "provider_job.start");
         self.emit(&job);
         let host = self.clone();
         let id = job.id.clone();
@@ -518,6 +520,7 @@ impl ProviderJobs {
                 entry.job.step = Some(step.label.to_string());
                 entry.job.command = Some(step.command.clone());
             });
+            tracing::info!(job_id = id, step = step.label, "provider_job.step");
             let outcome = self.run_step(id, step, &mut lines);
             if self.cancelled(id) {
                 break;
@@ -535,6 +538,18 @@ impl ProviderJobs {
         // What is installed or who is signed in may have changed, whichever way it ended.
         provider_status::invalidate();
         self.update(id, |entry| {
+            let duration_ms = now_millis().saturating_sub(entry.job.started_at);
+            match &error {
+                Some(why) => tracing::warn!(
+                    job_id = id,
+                    provider = %entry.job.provider,
+                    phase = ?phase,
+                    duration_ms,
+                    error = %crate::trace::error_text(why),
+                    "provider_job.finish"
+                ),
+                None => tracing::info!(job_id = id, provider = %entry.job.provider, phase = ?phase, duration_ms, "provider_job.finish"),
+            }
             entry.pid = None;
             entry.job.phase = phase;
             entry.job.error = error;

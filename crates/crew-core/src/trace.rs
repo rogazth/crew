@@ -20,6 +20,47 @@ pub fn ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// A stream frame that was not JSON, where there is no line to look at. Counted like [`unparsed`].
+pub fn unparsed_frame(provider: &str) {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count <= 3 || count % 100 == 0 {
+        tracing::warn!(provider, unparsed = count, "provider.unparsed");
+    }
+}
+
+/// A provider's app server or CLI that did not come up: which step failed, and why in a line.
+pub fn connect_failed(provider: &str, session_id: &str, stage: &str, error: &str) {
+    tracing::warn!(provider, session_id, stage, error = %error_text(error), "provider.connect_failed");
+}
+
+/// A provider's connection is up: how long the handshake took and whether it picked up an earlier conversation.
+pub fn connected(provider: &str, session_id: &str, resumed: bool, started: std::time::Instant) {
+    tracing::info!(provider, session_id, resumed, took_ms = ms(started.elapsed()), "provider.connected");
+}
+
+/// A line a provider's process wrote that is not JSON. A CLI may print such a line
+/// each time it likes, so the first few are traced and then one in a hundred, with the
+/// running count; the line itself is never recorded, only how it failed and its size.
+pub fn unparsed(provider: &str, session_id: &str, line: &str) {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let category = match serde_json::from_str::<serde_json::Value>(line) {
+        // JSON that is not what the caller wanted is not this.
+        Ok(_) => return,
+        Err(error) => match error.classify() {
+            serde_json::error::Category::Io => "io",
+            serde_json::error::Category::Syntax => "syntax",
+            serde_json::error::Category::Data => "data",
+            serde_json::error::Category::Eof => "eof",
+        },
+    };
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count > 3 && count % 100 != 0 {
+        return;
+    }
+    tracing::warn!(provider, session_id, category, bytes = line.len(), unparsed = count, "provider.unparsed");
+}
+
 /// An error as a trace line may hold it. `serde` quotes the value it choked on
 /// ("invalid type: string \"...\", expected u32"), and that value is the
 /// caller's data, so what sits in quotes or backticks of such a message goes.

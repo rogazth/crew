@@ -186,6 +186,7 @@ impl TurnHost {
     }
 
     fn opencode_launch(&self, notes: Option<&str>) -> Result<Conn, String> {
+        let began = Instant::now();
         let path = self.resolve_bin("opencode")?;
         self.opencode_end_run();
         let password = password();
@@ -227,6 +228,7 @@ impl TurnHost {
         let args = ["serve", "--hostname", "127.0.0.1", "--port", "0"].map(str::to_string).to_vec();
         self.agents.spawn(SERVER_KEY.to_string(), path, args, cwd, Some(env))?;
         let fail = |host: &TurnHost, why: String| -> String {
+            crate::trace::connect_failed("opencode", SERVER_KEY, "serve", &why);
             host.agents.kill(SERVER_KEY);
             let output = host.opencode.output();
             if output.trim().is_empty() {
@@ -266,6 +268,8 @@ impl TurnHost {
         if ready_rx.recv_timeout(LISTEN_TIMEOUT).is_err() {
             return Err(fail(self, "opencode's event stream did not open.".into()));
         }
+        // The server is shared by every opencode session, so this is the one connection there is.
+        tracing::info!(provider = "opencode", version = %conn.version, took_ms = crate::trace::ms(began.elapsed()), "provider.connected");
         Ok(conn)
     }
 
@@ -340,6 +344,9 @@ impl TurnHost {
                         continue;
                     }
                 };
+                if dropped {
+                    tracing::info!(provider = "opencode", "provider.stream_reopened");
+                }
                 for item in stream {
                     match item {
                         Ok(event) => {
@@ -357,9 +364,12 @@ impl TurnHost {
                             host.opencode_event(&event);
                         }
                         // A frame that was not JSON; the next one starts clean.
-                        Err(HttpError::Protocol(_)) => {}
+                        Err(HttpError::Protocol(_)) => crate::trace::unparsed_frame("opencode"),
                         Err(_) => break,
                     }
+                }
+                if !dropped && host.opencode.current(conn.epoch) {
+                    tracing::warn!(provider = "opencode", "provider.stream_lost");
                 }
                 dropped = true;
                 thread::sleep(Duration::from_millis(100));
@@ -449,6 +459,12 @@ impl TurnHost {
             self.close_tray(&id);
         }
         let message = super::exit_message("opencode", code, &[output]);
+        // The server is the one process every opencode session shares: its going takes their turns with it.
+        if running.is_empty() {
+            tracing::info!(provider = "opencode", code, "provider.exit");
+        } else {
+            tracing::warn!(provider = "opencode", code, turns_lost = running.len(), "provider.lost");
+        }
         for id in running {
             self.transcripts.apply(&id, HarnessEvent::SessionEnded { code });
             self.signal(&id, TurnOutcome::Failed(message.clone()));

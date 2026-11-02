@@ -3148,6 +3148,8 @@ while True:
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
         assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+        let seen = crate::trace::capture::find("provider.connected", "session_id", &id);
+        assert_eq!(seen.iter().map(|e| e.get("resumed").unwrap_or("")).collect::<Vec<_>>(), ["false", "true"], "{seen:?}");
     }
 
     /// `/compact` is not a `turn/start`, so it cannot carry the settings that
@@ -4426,6 +4428,32 @@ time.sleep(600)
         assert_eq!(resumed[0]["threadId"], json!(bound));
         assert_eq!(resumed[0]["model"], "gpt-5.6-luna");
         assert!(resumed[0]["config"]["mcp_servers"]["crew"].is_object(), "{}", resumed[0]);
+        // Up, gone with nobody asking, and up again on the same thread: each a line.
+        let seen = crate::trace::capture::find("provider.connected", "session_id", &id);
+        assert_eq!(seen.iter().map(|e| e.get("resumed").unwrap_or("")).collect::<Vec<_>>(), ["false", "true"], "{seen:?}");
+    }
+
+    /// An exit nobody asked for is a warning with the code; one Crew asked for is not.
+    #[test]
+    fn a_process_that_dies_unasked_is_a_warning_and_one_that_was_stopped_is_not() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "remember 4817", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        w.turns.on_agent_exit(&id, Some(137));
+        let lost = crate::trace::capture::expect("provider.lost", "session_id", &id);
+        assert_eq!(lost.get("provider"), Some("Codex"));
+        assert_eq!((lost.get("code"), lost.get("mid_turn"), lost.level), (Some("137"), Some("false"), tracing::Level::WARN));
+
+        // A turn stopped from Crew: the process going with it was asked to.
+        let (id, _) = w.codex(&parent, "SLEEP 30", None);
+        until("the turn is up", || w.turns.is_running(&id));
+        w.turns.stop(&id).expect("stop");
+        let asked = crate::trace::capture::expect("turn.stop_requested", "session_id", &id);
+        assert_eq!(asked.get("reason"), Some("stop"));
+        w.settle(&id);
+        assert!(crate::trace::capture::find("provider.lost", "session_id", &id).is_empty());
     }
 
     /// A session whose settings changed is still on the app server it has:
