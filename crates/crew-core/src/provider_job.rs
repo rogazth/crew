@@ -526,6 +526,7 @@ impl ProviderJobs {
                 break;
             }
             if let Err(why) = outcome {
+                tracing::warn!(job_id = id, step = step.label, "provider_job.step_failed");
                 self.finish(id, ProviderJobPhase::Failed, Some(why), lines);
                 return;
             }
@@ -539,16 +540,12 @@ impl ProviderJobs {
         provider_status::invalidate();
         self.update(id, |entry| {
             let duration_ms = now_millis().saturating_sub(entry.job.started_at);
-            match &error {
-                Some(why) => tracing::warn!(
-                    job_id = id,
-                    provider = %entry.job.provider,
-                    phase = ?phase,
-                    duration_ms,
-                    error = %crate::trace::error_text(why),
-                    "provider_job.finish"
-                ),
-                None => tracing::info!(job_id = id, provider = %entry.job.provider, phase = ?phase, duration_ms, "provider_job.finish"),
+            // The error names the command that failed, and a command line is never traced:
+            // the step that failed is, by its label, in `provider_job.step_failed`.
+            if error.is_some() {
+                tracing::warn!(job_id = id, provider = %entry.job.provider, phase = ?phase, duration_ms, "provider_job.finish");
+            } else {
+                tracing::info!(job_id = id, provider = %entry.job.provider, phase = ?phase, duration_ms, "provider_job.finish");
             }
             entry.pid = None;
             entry.job.phase = phase;
@@ -632,6 +629,43 @@ mod tests {
     }
     fn commands(plan: &Plan) -> Vec<&str> {
         plan.steps.iter().map(|step| step.command.as_str()).collect()
+    }
+
+    /// An install or update leaves its provider, action, steps by name and how it ended,
+    /// and never the command that ran.
+    #[test]
+    fn a_job_is_traced_by_step_name_and_outcome_and_never_by_its_command() {
+        use crate::trace::capture;
+        capture::install();
+        let jobs = ProviderJobs::new();
+        let run = |provider: &str, command: &str| {
+            let plan = Plan { method: None, steps: vec![Step { label: "Installing", command: command.into() }] };
+            let job = jobs.start_plan(provider, ProviderJobAction::Install, plan).expect("start");
+            for _ in 0..200 {
+                if jobs.list().iter().any(|j| j.id == job.id && j.phase != ProviderJobPhase::Running) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            job.id
+        };
+        let good = run("job-test-ok", "true JOB-SECRET-1");
+        let bad = run("job-test-bad", "echo JOB-SECRET-2; exit 3");
+        let started = capture::expect("provider_job.start", "job_id", &good);
+        assert_eq!((started.get("provider"), started.get("action")), (Some("job-test-ok"), Some("Install")));
+        let done = capture::expect("provider_job.finish", "job_id", &good);
+        assert_eq!((done.get("phase"), done.level), (Some("Done"), tracing::Level::INFO));
+        capture::expect("provider_job.step", "job_id", &good);
+        let failed = capture::expect("provider_job.finish", "job_id", &bad);
+        assert_eq!((failed.get("phase"), failed.level), (Some("Failed"), tracing::Level::WARN));
+        assert_eq!(capture::expect("provider_job.step_failed", "job_id", &bad).get("step"), Some("Installing"));
+        for message in ["provider_job.start", "provider_job.step", "provider_job.step_failed", "provider_job.finish"] {
+            for id in [&good, &bad] {
+                for event in capture::find(message, "job_id", id) {
+                    assert!(event.fields.values().all(|v| !v.contains("JOB-SECRET")), "{event:?}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -451,12 +451,10 @@ impl TurnHost {
         })?;
         self.codex_notify(session_id, "initialized", json!({}))?;
         let (method, params) = thread_request(thread);
-        let opened = self
-            .codex_call(session_id, method, params, OPEN_TIMEOUT)
-            .map_err(|error| {
-                crate::trace::connect_failed("codex", session_id, "thread", &error);
-                self.codex_failure(session_id, "Codex could not open its thread", &error)
-            })?;
+        let opened = self.codex_call(session_id, method, params, OPEN_TIMEOUT).map_err(|error| {
+            crate::trace::connect_failed("codex", session_id, "thread", &error);
+            self.codex_failure(session_id, "Codex could not open its thread", &error)
+        })?;
         let thread_id = thread_id(&opened).ok_or_else(|| "Codex opened no thread.".to_string())?;
         crate::trace::connected("codex", session_id, thread.resume.is_some(), began);
         if let Some(Live::Codex(live)) = self.lock().get_mut(session_id) {

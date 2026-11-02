@@ -41,9 +41,9 @@ pub fn connected(provider: &str, session_id: &str, resumed: bool, started: std::
 
 /// A line a provider's process wrote that is not JSON. A CLI may print such a line
 /// each time it likes, so the first few are traced and then one in a hundred, with the
-/// running count; the line itself is never recorded, only how it failed and its size.
+/// running count for the session; the line itself is never recorded, only how it failed and its size.
 pub fn unparsed(provider: &str, session_id: &str, line: &str) {
-    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static COUNTS: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> = std::sync::Mutex::new(None);
     let category = match serde_json::from_str::<serde_json::Value>(line) {
         // JSON that is not what the caller wanted is not this.
         Ok(_) => return,
@@ -54,7 +54,17 @@ pub fn unparsed(provider: &str, session_id: &str, line: &str) {
             serde_json::error::Category::Eof => "eof",
         },
     };
-    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let count = {
+        let mut counts = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+        let counts = counts.get_or_insert_with(Default::default);
+        // Sessions come and go: what is counted for the ones gone is not worth keeping.
+        if counts.len() > 512 {
+            counts.clear();
+        }
+        let count = counts.entry(session_id.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    };
     if count > 3 && count % 100 != 0 {
         return;
     }
@@ -236,6 +246,7 @@ pub mod capture {
 
 #[cfg(test)]
 mod tests {
+    use super::capture;
     use super::*;
 
     #[test]
@@ -246,6 +257,36 @@ mod tests {
             "unknown variant `…`, expected one of `…`, `…`"
         );
         assert_eq!(error_text("missing field `id`"), "missing field `…`");
+    }
+
+    #[test]
+    fn an_unparseable_line_leaves_its_kind_and_size_and_never_the_line() {
+        capture::install();
+        let session = format!("unparsed-{}", uuid::Uuid::new_v4());
+        // Not JSON, cut off, and valid JSON (which is not this).
+        unparsed("codex", &session, "warning: SECRET-LINE is not json");
+        unparsed("codex", &session, "{\"a\": \"SECRET-LINE");
+        unparsed("codex", &session, "{\"a\": 1}");
+        let seen = capture::find("provider.unparsed", "session_id", &session);
+        let kinds: Vec<_> = seen.iter().map(|e| e.get("category").unwrap().to_string()).collect();
+        assert_eq!(kinds, ["syntax", "eof"], "{seen:?}");
+        assert_eq!(seen[0].get("bytes"), Some("32"));
+        assert!(seen.iter().all(|e| e.level == tracing::Level::WARN && e.fields.values().all(|v| !v.contains("SECRET"))));
+    }
+
+    #[test]
+    fn a_failed_connection_names_its_step_and_one_line_of_why() {
+        capture::install();
+        let session = format!("connect-{}", uuid::Uuid::new_v4());
+        connect_failed("cursor", &session, "authenticate", "login needed\nsecond line SECRET");
+        let line = capture::expect("provider.connect_failed", "session_id", &session);
+        assert_eq!(
+            (line.get("stage"), line.get("error"), line.level),
+            (Some("authenticate"), Some("login needed"), tracing::Level::WARN)
+        );
+        connected("cursor", &session, true, std::time::Instant::now());
+        let up = capture::expect("provider.connected", "session_id", &session);
+        assert_eq!(up.get("resumed"), Some("true"));
     }
 
     #[test]
