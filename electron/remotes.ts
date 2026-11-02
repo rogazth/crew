@@ -380,6 +380,9 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       ssh: input.ssh ?? "",
     });
     await putToken(row.id, input.token);
+    // An edit may have changed where the machine is (its port, its ssh destination): the tunnel it had
+    // goes to the old place, and the next dial opens one to the new.
+    if (input.id) tunnels.close(row.id);
     machinesChanged();
     // Whether it was an edit of a machine already kept or a new one.
     trace.info("machine.added", { machine: row.id, via: "manual", edit: Boolean(input.id) });
