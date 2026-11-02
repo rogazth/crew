@@ -10,7 +10,7 @@ function rig(overrides: { host?: () => TraceHost | null | undefined; maxQueue?: 
     now: () => new Date("2026-11-02T13:00:00.000Z"),
     setTimer: (run) => timers.push(run),
     clearTimer: () => {},
-    maxQueue: overrides.maxQueue,
+    ...(overrides.maxQueue === undefined ? {} : { maxQueue: overrides.maxQueue }),
   });
   return { trace, sent, timers };
 }
@@ -25,8 +25,18 @@ describe("the window's trace", () => {
     timers[0]!();
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual([
-      { timestamp: "2026-11-02T13:00:00.000Z", level: "INFO", message: "socket.closed", fields: { machine: "local", code: 1006, retry: true } },
-      { timestamp: "2026-11-02T13:00:00.000Z", level: "WARN", message: "socket.retry", fields: { machine: "local", in_ms: 500 } },
+      {
+        timestamp: "2026-11-02T13:00:00.000Z",
+        level: "INFO",
+        message: "socket.closed",
+        fields: { machine: "local", code: 1006, retry: true },
+      },
+      {
+        timestamp: "2026-11-02T13:00:00.000Z",
+        level: "WARN",
+        message: "socket.retry",
+        fields: { machine: "local", in_ms: 500 },
+      },
     ]);
   });
 
@@ -55,16 +65,30 @@ describe("the window's trace", () => {
   });
 
   it("never throws, whatever the bridge or the fields do", () => {
-    const hostile = { write: () => { throw new Error("ipc is gone"); } };
+    const hostile = {
+      write: () => {
+        throw new Error("ipc is gone");
+      },
+    };
     const { trace } = rig({ host: () => hostile });
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(() => {
       trace.error("x", { value: cyclic as never });
-      trace.info("y", { value: { toString: () => { throw new Error("no"); } } as never });
+      trace.info("y", {
+        value: {
+          toString: () => {
+            throw new Error("no");
+          },
+        } as never,
+      });
       trace.flush();
     }).not.toThrow();
-    const lookup = rig({ host: () => { throw new Error("no window"); } });
+    const lookup = rig({
+      host: () => {
+        throw new Error("no window");
+      },
+    });
     expect(() => lookup.trace.info("z")).not.toThrow();
   });
 
@@ -92,7 +116,15 @@ describe("the window's trace", () => {
 
 describe("what a record may hold", () => {
   it("keeps primitives, cuts long text, and turns anything else into text", () => {
-    const fields = sanitizeFields({ a: 1, b: "x".repeat(1000), c: false, d: null, e: undefined, f: NaN, g: [1, 2] as never });
+    const fields = sanitizeFields({
+      a: 1,
+      b: "x".repeat(1000),
+      c: false,
+      d: null,
+      e: undefined,
+      f: NaN,
+      g: [1, 2] as never,
+    });
     expect(fields.a).toBe(1);
     expect((fields.b as string).length).toBeLessThan(400);
     expect(fields).toMatchObject({ c: false, d: null, f: null, g: "1,2" });

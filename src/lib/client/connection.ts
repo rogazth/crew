@@ -1,4 +1,5 @@
 import type { Event, Hello, Response } from "../protocol";
+import { errorText, trace } from "../trace";
 
 type Listener = (event: string, payload: unknown) => void;
 type Endpoint = { url: string; token: string };
@@ -52,7 +53,14 @@ export class Connection {
   private nextId = 1;
   private ping: ReturnType<typeof setInterval> | null = null;
   private pingTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<
+    number,
+    { method: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
+  /** Requests turned away while offline since the last one traced: one line per episode, not per call. */
+  private refused = 0;
+  private attempts = 0;
+  private openedAt = 0;
   private readonly streams = new Map<number, (bytes: Uint8Array) => void>();
   private readonly buffered = new Map<number, Uint8Array[]>();
   private readonly bufferedBytes = new Map<number, number>();
@@ -113,6 +121,8 @@ export class Connection {
   request<T>(method: string, params: object = {}): Promise<T> {
     if (this.mismatch) return Promise.reject(new Error("This machine runs a crewd the app cannot talk to. Update it in Settings › Environments."));
     if (this.failFast && this.status === "offline" && !this.opened) {
+      // The method and the machine, never the params.
+      if (this.refused++ === 0) trace.warn("request.machine_down", { machine: this.envId, method });
       this.kick();
       return Promise.reject(new EnvDown(this.envId));
     }
@@ -121,7 +131,7 @@ export class Connection {
       if (!ws || ws.readyState !== WebSocket.OPEN) throw new EnvDown(this.envId);
       const id = this.nextId++;
       return new Promise<T>((resolve, reject) => {
-        this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
+        this.pending.set(id, { method, resolve: (value) => resolve(value as T), reject });
         ws.send(JSON.stringify({ id, method, params }));
       });
     });
@@ -167,8 +177,17 @@ export class Connection {
    * daemon refuses closes the socket before it, and that is a failure.
    */
   private async open(): Promise<void> {
-    const endpoint = await this.endpoint();
+    const attempt = ++this.attempts;
+    let endpoint: Endpoint;
+    try {
+      endpoint = await this.endpoint();
+    } catch (error) {
+      if (loud(attempt)) trace.warn("socket.no_endpoint", { machine: this.envId, attempt, error: errorText(error) });
+      throw error;
+    }
     if (this.stopped) throw new EnvDown(this.envId);
+    const started = performance.now();
+    if (loud(attempt)) trace.info("socket.connect", { machine: this.envId, attempt, host: hostOf(endpoint.url) });
     await new Promise<void>((resolve, reject) => {
       let ws: WebSocket;
       try {
@@ -188,6 +207,7 @@ export class Connection {
         else resolve();
       };
       const timer = globalThis.setTimeout(() => {
+        if (loud(attempt)) trace.warn("socket.timeout", { machine: this.envId, attempt, waited_ms: OPEN_TIMEOUT_MS });
         settle(new Error(`No answer from ${hostOf(endpoint.url)}`));
         ws.close();
       }, OPEN_TIMEOUT_MS);
@@ -195,21 +215,32 @@ export class Connection {
       ws.onopen = () => {
         ws.send(JSON.stringify({ auth: endpoint.token }));
       };
-      ws.onerror = () => settle(new Error(`Could not reach ${hostOf(endpoint.url)}`));
+      ws.onerror = () => {
+        if (loud(attempt)) trace.warn("socket.error", { machine: this.envId, attempt, host: hostOf(endpoint.url) });
+        settle(new Error(`Could not reach ${hostOf(endpoint.url)}`));
+      };
       ws.onmessage = (event) => {
         if (!authed && typeof event.data === "string" && isHello(event.data)) {
           authed = true;
-          this.adopt(ws);
+          this.adopt(ws, Math.round(performance.now() - started), attempt);
           settle();
         }
         if (this.socket === ws) this.onMessage(event);
       };
-      ws.onclose = () => {
+      ws.onclose = (event?: CloseEvent) => {
         if (!authed) {
+          if (loud(attempt)) trace.warn("socket.refused", { machine: this.envId, attempt, code: event?.code, settled });
           settle(new Error(settled ? "Connection closed" : "The machine refused the token"));
           return;
         }
         if (this.socket !== ws) return;
+        trace.warn("socket.closed", {
+          machine: this.envId,
+          code: event?.code,
+          clean: event?.wasClean,
+          up_ms: Math.round(performance.now() - this.openedAt),
+          retry: !this.stopped,
+        });
         this.socket = null;
         this.opened = null;
         this.clearPing();
@@ -223,8 +254,17 @@ export class Connection {
     });
   }
 
-  private adopt(ws: WebSocket) {
+  private adopt(ws: WebSocket, took: number, attempt: number) {
     const again = this.ever;
+    this.openedAt = performance.now();
+    this.refused = 0;
+    this.attempts = 0;
+    trace.info(again ? "socket.reconnected" : "socket.open", {
+      machine: this.envId,
+      attempt,
+      took_ms: took,
+      version: this.version ?? undefined,
+    });
     this.socket = ws;
     this.ever = true;
     this.delay = BACKOFF_MIN_MS;
@@ -246,6 +286,12 @@ export class Connection {
     if (this.stopped || this.retry !== null) return;
     const wait = this.delay;
     this.delay = Math.min(Math.max(this.delay, BACKOFF_MIN_MS) * 2, BACKOFF_MAX_MS);
+    if (loud(this.attempts))
+      trace.info("socket.retry", {
+        machine: this.envId,
+        in_ms: wait,
+        error: this.error ? errorText(this.error) : undefined,
+      });
     this.retry = globalThis.setTimeout(() => {
       this.retry = null;
       if (this.stopped || this.socket || this.opened) return;
@@ -322,7 +368,15 @@ export class Connection {
     if (!waiter) return;
     this.pending.delete(message.id);
     if (message.ok) waiter.resolve(message.result);
-    else waiter.reject(new Error(message.error ?? "Request failed"));
+    else {
+      // The method and why; the params stay out (a pty_write carries keystrokes).
+      trace.warn("request.failed", {
+        machine: this.envId,
+        method: waiter.method,
+        error: errorText(message.error ?? "Request failed"),
+      });
+      waiter.reject(new Error(message.error ?? "Request failed"));
+    }
   }
 
   private markClosed(id: number) {
@@ -368,7 +422,10 @@ export class Connection {
     const started = performance.now();
     const timer = globalThis.setTimeout(() => {
       this.pingTimer = null;
-      if (this.socket === ws) ws.close();
+      if (this.socket === ws) {
+        trace.warn("socket.ping_timeout", { machine: this.envId, waited_ms: PING_TIMEOUT_MS });
+        ws.close();
+      }
     }, PING_TIMEOUT_MS);
     this.pingTimer = timer;
     void this.request("ping", {})
@@ -394,6 +451,14 @@ export class Connection {
     if (this.pingTimer !== null) globalThis.clearTimeout(this.pingTimer);
     this.pingTimer = null;
   }
+}
+
+/**
+ * A machine that stays off is retried every few seconds for as long as it is: the
+ * first tries are traced, then one in thirty, so a week away does not fill the file.
+ */
+function loud(attempt: number): boolean {
+  return attempt <= 5 || attempt % 30 === 0;
 }
 
 /** A remote that is down, distinct from a request the daemon refused. */

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Connection, EnvDown } from "./connection";
+import { trace } from "../trace";
+
+vi.mock("../trace", async (original) => ({
+  ...(await original<typeof import("../trace")>()),
+  trace: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), flush: vi.fn() },
+}));
 
 class FakeSocket {
   static OPEN = 1;
@@ -9,7 +15,7 @@ class FakeSocket {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number; wasClean: boolean }) => void) | null = null;
   sent: string[] = [];
 
   constructor(public url: string) {
@@ -20,9 +26,9 @@ class FakeSocket {
     if (typeof data === "string") this.sent.push(data);
   }
 
-  close() {
+  close(code?: number) {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.(code === undefined ? undefined : { code, wasClean: false });
   }
 
   open() {
@@ -129,5 +135,57 @@ describe("Connection", () => {
     await vi.waitFor(() => expect(conn.status).toBe("online"));
     expect(back).toHaveBeenCalledTimes(1);
     conn.stop();
+  });
+  describe("trace", () => {
+    const calls = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.calls as Array<[string, Record<string, unknown>]>;
+
+    beforeEach(() => {
+      for (const level of ["info", "warn", "error"] as const) vi.mocked(trace[level]).mockClear();
+    });
+
+    it("records the socket opening, closing with its code, and the retry that follows, per machine", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().open();
+      latest().hello();
+      await opened;
+      expect(calls(trace.info).map(([message]) => message)).toEqual(["socket.connect", "socket.open"]);
+      expect(calls(trace.info)[1]?.[1]).toMatchObject({ machine: "vps", attempt: 1 });
+      latest().close(1006);
+      expect(calls(trace.warn)[0]).toEqual([
+        "socket.closed",
+        expect.objectContaining({ machine: "vps", code: 1006, clean: false, retry: true }),
+      ]);
+      expect(calls(trace.info).map(([message]) => message)).toContain("socket.retry");
+      conn.stop();
+    });
+
+    it("records a refused token, and a request the daemon refused by method and error, never its params", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().open();
+      latest().close(1008);
+      await expect(opened).rejects.toThrow();
+      expect(calls(trace.warn).map(([message]) => message)).toContain("socket.refused");
+      conn.stop();
+
+      const live = new Connection("vps", endpoint, true);
+      const up = live.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
+      latest().open();
+      latest().hello();
+      await up;
+      const failing = live.request("pty_write", { id: "t1", data: "secret keystrokes" });
+      await vi.waitFor(() => expect(latest().sent.length).toBeGreaterThan(1));
+      const sent = JSON.parse(latest().sent.at(-1) as string) as { id: number };
+      latest().onmessage?.({ data: JSON.stringify({ id: sent.id, ok: false, error: "Terminal is not running" }) });
+      await expect(failing).rejects.toThrow("Terminal is not running");
+      const failed = calls(trace.warn).find(([message]) => message === "request.failed");
+      expect(failed?.[1]).toEqual({ machine: "vps", method: "pty_write", error: "Terminal is not running" });
+      expect(JSON.stringify(calls(trace.warn))).not.toContain("secret keystrokes");
+      live.stop();
+    });
   });
 });
