@@ -2742,6 +2742,7 @@ while True:
     }
 
     fn world() -> World {
+        crate::trace::capture::install();
         let turns = TurnHost::test_new();
         turns.test_agents().set_events(Arc::new(Fanout(turns.clone())));
         let dir = std::env::temp_dir().join(format!("crew-st-{}", uuid::Uuid::new_v4()));
@@ -4696,6 +4697,14 @@ time.sleep(600)
         w.turns.respond(&id, request["request_id"].as_u64().unwrap(), ApprovalDecision::Always).expect("respond");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: acceptForSession", "{done}");
+        // The request is raised and settled in the trace by ids and kind, never what it asked for.
+        let raised = crate::trace::capture::expect("request.raised", "session_id", &id);
+        assert_eq!(raised.get("kind"), Some("approval"));
+        let decided = crate::trace::capture::expect("approval.decided", "session_id", &id);
+        assert_eq!(decided.get("decision"), Some("Always"));
+        for event in [raised, decided] {
+            assert!(event.fields.values().all(|v| !v.contains("touch asked.txt")), "{event:?}");
+        }
         let started = &sent(&log, "thread/start")[0];
         assert_eq!(
             (started["approvalPolicy"].clone(), started["sandbox"].clone()),
@@ -4716,6 +4725,11 @@ time.sleep(600)
         assert_eq!(answered["delivery"], "answered", "{answered}");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], r#"report: QUESTION + answers: {"color": {"answers": ["Blue"]}}"#, "{done}");
+        let settled = crate::trace::capture::expect("question.answered", "session_id", &id);
+        assert_eq!(settled.get("dismissed"), Some("false"));
+        let raised = crate::trace::capture::expect("request.raised", "session_id", &id);
+        assert_eq!((raised.get("kind"), raised.get("questions")), (Some("question"), Some("1")));
+        assert!(raised.fields.values().all(|v| !v.contains("Which color")), "{raised:?}");
     }
 
     /// Stopped: the turn is interrupted, and ends when Codex says so; one
@@ -9392,7 +9406,6 @@ time.sleep(600)
     #[test]
     fn a_sessions_life_is_traced_by_ids_without_what_it_was_told() {
         use crate::trace::capture;
-        capture::install();
         let w = world();
         let shell = w.session("terminal", "shell", "full");
         let other = w.session("terminal", "other", "full");
