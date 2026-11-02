@@ -34,11 +34,13 @@ import { watchOwner } from "./owner";
 import { appName, channelOf } from "./channel";
 import { registerCliIpc } from "./install-cli";
 import { registerLoginItemIpc } from "./login-item";
+import { beginLaunch, SETTLED_MS } from "./launch-guard";
 import { buildMenu } from "./menu";
 import { startMenuBar } from "./menu-bar";
 import { registerNotifyIpc, reveal } from "./notifications";
 import { onMachinesChanged, registerRemoteIpc, remoteMachines } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
+import { CHANNELS } from "../src/lib/browser/bridge";
 import { NOTIFY_CHANNELS } from "../src/lib/notify";
 import { registerAppInfoIpc } from "./app-info";
 import { installStagedOnQuit, watchForUpdates } from "./update";
@@ -587,6 +589,9 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   if (!primary) return;
+  const launch = beginLaunch(app.getPath("userData"));
+  app.once("will-quit", launch.settle);
+  ipcMain.handle(CHANNELS.safeStart, () => launch.safeStart);
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     // The window's documents only. Main's own fetches go through this session
     // too, and a remote file's preview passes on what they got.
@@ -616,6 +621,10 @@ app.whenReady().then(async () => {
   }
   if (!app.isPackaged && !e2e && process.env.CREW_RUST_WATCH !== "0") restartOnRebuild();
   createWindow();
+  setTimeout(launch.settle, SETTLED_MS).unref();
+  if (launch.safeStart && Notification.isSupported()) {
+    new Notification({ title: "Crew", body: "Crew closed unexpectedly while starting. Your pages wait until you open them." }).show();
+  }
   // The menu bar extra opens a session the way a banner's click does.
   if (!e2e)
     startMenuBar((target) => {

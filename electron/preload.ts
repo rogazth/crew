@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld("crewHost", {
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index, machine),
     favicon: (url: string, incognito = false) => ipcRenderer.invoke(CHANNELS.favicon, url, incognito),
     memoryPressure: () => ipcRenderer.invoke(CHANNELS.memoryPressure),
+    safeStart: () => ipcRenderer.invoke(CHANNELS.safeStart),
     importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
     setMachines: (machines: unknown) => ipcRenderer.invoke(CHANNELS.machines, machines),
     reportGuest: (tab: string, webContentsId: number) => ipcRenderer.send(CHANNELS.pageGuest, tab, webContentsId),

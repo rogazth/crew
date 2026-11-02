@@ -200,6 +200,7 @@ export type BrowserHost = {
   favicon(url: string, incognito?: boolean): Promise<string | null>;
   /** How tight the machine's memory is, read from the OS. */
   memoryPressure(): Promise<MemoryPressure>;
+  safeStart(): Promise<boolean>;
   /** Into every page's session; incognito pages never see them. */
   importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
   /** Every other machine a workspace lives on, so `<alias>.localhost` reaches its loopback. */
