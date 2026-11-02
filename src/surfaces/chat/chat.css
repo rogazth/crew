@@ -686,8 +686,8 @@
 
 /* ── The right panel ───────────────────────────────────────────────────────
    A second sheet on the chrome's ground. Its column's width is what moves; the
-   pane hangs from the column's left edge, painted under the main sheet, so it
-   comes in from beyond the window and the main sheet's edge passes over it. */
+   pane hangs from the column's left edge, so it comes in from beyond the window
+   and pushes the main sheet aside. */
 .ds-side-col {
   position: relative;
   height: 100%;
@@ -695,10 +695,6 @@
   pointer-events: none;
 }
 .ds-side-col[hidden] { display: none; }
-body:has(.ds-side-col) main {
-  position: relative;
-  z-index: 1;
-}
 :root[data-side-resize] * {
   cursor: col-resize !important;
   user-select: none;
@@ -708,7 +704,6 @@ body:has(.ds-side-col) main {
   top: 0;
   bottom: 0;
   left: 0;
-  z-index: 0;
   width: var(--side-w);
   background: var(--color-sidebar);
   pointer-events: auto;

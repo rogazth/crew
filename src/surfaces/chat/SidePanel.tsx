@@ -12,7 +12,7 @@ import { useSidebarWidth } from "../../hooks/useSidebarWidth";
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 900;
-const DEFAULT_WIDTH = 480;
+const DEFAULT_WIDTH = 420;
 /** Long enough for the spring to land; a frame that never comes must not leave the pane shut. */
 const LAND_MS = 500;
 

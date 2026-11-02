@@ -490,7 +490,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   useEffect(() => {
     if (!active || !listOnly) return;
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) closePanel();
+      // A menu open over the list takes its own Esc.
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="menu"]')) closePanel();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);

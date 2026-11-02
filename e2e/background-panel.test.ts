@@ -342,7 +342,10 @@ test("the list holds a native subagent, a Crew subagent and a session alike, and
     await crew.window.waitForTimeout(250);
     await crew.window.getByRole("menuitem", { name: menu }).hover();
     await crew.window.getByRole("menuitemradio", { name: item }).click();
+    // The submenu closes with the pick or with this Esc; a menu still up after it has settled takes one more.
     await crew.window.keyboard.press("Escape");
+    await crew.window.waitForTimeout(300);
+    if (await crew.window.getByRole("menuitem", { name: menu }).isVisible()) await crew.window.keyboard.press("Escape");
     await crew.window.waitForTimeout(250);
   };
   await pick(/Group by/, "None");
@@ -363,7 +366,7 @@ test("the list holds a native subagent, a Crew subagent and a session alike, and
   await crew.window.mouse.move(grip.x - 60, grip.y + 100, { steps: 4 });
   await crew.window.mouse.up();
   await waitFor(async () => ((await crew.window.locator("[data-side-panel]").boundingBox())?.width ?? 0) > box.width + 40, { message: "the panel grows" });
-  await waitFor(async () => Number(await crew.request<string | null>("state_get", { key: "side-panel:width" })) > 480, { message: "the width is kept" });
+  await waitFor(async () => Number(await crew.request<string | null>("state_get", { key: "side-panel:width" })) > 420, { message: "the width is kept" });
 
   await crew.window.keyboard.press("Escape");
   await list().waitFor({ state: "hidden" });

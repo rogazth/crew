@@ -1,8 +1,7 @@
 /*
- * Orchestration, sessions and commands: agent cards in the chat, letters
- * between sessions, the Work sheet, and the Commands page with its runs. Unlayered on purpose, so it beats Tailwind's utilities without
+ * Orchestration, sessions and commands: the Work sheet, and the Commands page with its runs. Unlayered on purpose, so it beats Tailwind's utilities without
  * !important, and loaded after index.css so it wins ties with its rules.
- * Hooks are data attributes on the real components (data-hang, data-run-state,
+ * Hooks are data attributes on the real components (data-run-state,
  * data-process-dot…), never Tailwind class names.
  */
 
@@ -89,94 +88,7 @@
   background: linear-gradient(to right, var(--chip) 0 2px, transparent 2px 4px, var(--chip) 4px 6px);
 }
 
-/* ── Agent cards in the chat ──────────────────────────────────────────────
-   The card hanging under "Started a subagent" is a soft filled surface, its
-   rows running edge to edge with a hairline between them, and an elbow runs
-   from the row's node into it: who was delegated what reads as a hierarchy,
-   not a list of boxes. A row's hover fills the card to its edge, so there is
-   never a second box inside the first. */
-
-[data-hang] {
-  --tw-ring-shadow: 0 0 #0000;
-  box-shadow: none;
-  border-radius: 14px;
-  background: var(--color-card);
-}
-[data-hang]:has([data-agent-card]) {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  overflow: visible;
-}
-[data-hang]:has([data-agent-card])::before {
-  content: "";
-  position: absolute;
-  top: -7px;
-  bottom: calc(100% - 26px);
-  left: -17px;
-  width: 13px;
-  border-left: 1.5px solid var(--color-border-strong);
-  border-bottom: 1.5px solid var(--color-border-strong);
-  border-bottom-left-radius: 9px;
-  pointer-events: none;
-}
-
-.ds-agent {
-  display: flex;
-  width: 100%;
-  min-height: 46px;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px 8px 10px;
-  border-radius: 0;
-  text-align: left;
-  outline: none;
-  transition: background-color 120ms var(--ease-out);
-}
-.ds-agent:first-child {
-  border-top-left-radius: 14px;
-  border-top-right-radius: 14px;
-}
-.ds-agent:last-child {
-  border-bottom-left-radius: 14px;
-  border-bottom-right-radius: 14px;
-}
-.ds-agent + .ds-agent {
-  box-shadow: inset 0 1px 0 var(--color-hairline);
-}
-button.ds-agent:hover {
-  background: var(--color-hover);
-}
-button.ds-agent:focus-visible {
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
-}
-.ds-agent-mark {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px var(--color-hairline), 0 1px 2px oklch(0% 0 0 / 0.05);
-}
-.ds-agent-go {
-  flex-shrink: 0;
-  color: var(--color-placeholder);
-  transition: color 120ms var(--ease-out);
-}
-button.ds-agent:hover .ds-agent-go {
-  color: var(--color-text);
-}
-/* What wants you is the one row that says so with its ground too. */
-.ds-agent[data-tone="warning"] {
-  background: color-mix(in oklab, var(--color-warning) 8%, transparent);
-}
-button.ds-agent[data-tone="warning"]:hover {
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-}
-
-/* A name in a sentence ("Started a subagent [mark] scout"): a soft pill that
+/* A name in a sentence ("Interrupted [mark] scout"): a soft pill that
    opens its thread. Hover fills it; nothing underlines, nothing moves. */
 .crew-peer {
   height: 20px;
@@ -191,51 +103,12 @@ button.crew-peer:hover {
   background: var(--color-selected);
 }
 
-/* ── Letters between sessions ─────────────────────────────────────────────
-   The sender's mark sits on a round raised tile; "waits on an answer" is a
-   soft amber chip; a child's quick question offers fills, not outlines. */
-
-[data-letter-in] > :first-child {
-  border-radius: 999px;
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px var(--color-hairline), 0 1px 2px oklch(0% 0 0 / 0.05);
-}
-[data-letter-tag] {
-  display: inline-flex;
-  height: 18px;
-  align-items: center;
-  align-self: center;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-  color: var(--color-warning);
-  font-size: 11px;
-  font-weight: 500;
-}
-[data-ask] > button {
-  --tw-ring-shadow: 0 0 #0000;
-  box-shadow: none;
-  height: 28px;
-  border-radius: 999px;
-  padding: 0 12px;
-  background: var(--color-card);
-  transition: background-color 120ms var(--ease-out);
-}
-[data-ask] > button:enabled:hover {
-  background: var(--color-hover);
-}
-[data-ask] > button[data-picked] {
-  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
-  color: var(--color-accent);
-  opacity: 1;
-}
-
 /* ── The Work sheet ────────────────────────────────────────────────────────
    Under the agent clip it is the clip's own panel (chat.css); elsewhere it
    floats over the composer, so it is a shadow and no line; rows concentric in it; a child
    that waits on you trades its turning arc for the amber dot. */
 
-[data-work-sheet]:not(.ds-strip-panel) {
+[data-work-sheet] {
   --tw-ring-shadow: 0 0 #0000;
   border-radius: 18px;
   padding: 6px;

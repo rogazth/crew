@@ -3,7 +3,7 @@
 // Codex's are. The chat's CLI is the fake opencode 2.x, which on SUBAGENT runs
 // the real shape (the call, the child's `session.created` with its `parentID`,
 // the call naming the child, the child's own execution): the card opens the
-// thread with the child's steps, the child is in the work sheet, and Stop ends
+// thread with the child's steps, the child is in the list of sub-agents, and Stop ends
 // the child only.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -34,7 +34,6 @@ after(async () => {
 });
 
 const composer = () => composerOf(crew, chat);
-const sheet = () => crew.window.locator("[data-work-sheet]");
 const page = () => crew.window.locator("[data-agent-view]");
 const card = () => crew.window.locator("[data-agent-start]").last();
 
@@ -65,7 +64,7 @@ const interrupts = async () =>
     .filter((line) => line.includes("/interrupt"))
     .map((line) => JSON.parse(line) as { path: string });
 
-test("a subagent that ran opens as a thread with the child's steps, and is in the work sheet", async () => {
+test("a subagent that ran opens as a thread with the child's steps, and is in the list of sub-agents", async () => {
   await send("look into it SUBAGENT");
   await idle();
   await card().waitFor({ timeout: 20_000 });
@@ -156,7 +155,6 @@ test("a second call that continues the same subagent is its own card and opens t
   assert.ok(text.indexOf("Again, reply") < text.indexOf("pong again"), text);
   // No wrapper card around the answers: they are chat messages.
   assert.equal(await thread.locator("[data-prose]").count(), 0);
-  assert.equal(await thread.locator("[data-hang]").count(), 0);
   await shoot("thread");
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });

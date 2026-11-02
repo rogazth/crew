@@ -60,10 +60,9 @@ export function EntryIcon({ entry, className }: { entry: PanelEntry; className: 
 }
 
 /**
- * The status line's work segment: what waits on the user ("scout asks"),
- * the running work ("2 agents · 1 shell", or what ran once nothing runs)
- * and the bot conversations ("2 conversations"), and the "Work" sheet they
- * open over the composer: the entries, then the conversations. A click
+ * The status line's work segment: what a chat left running ("1 shell", or what
+ * ran once nothing runs), and in an agent's thread its own agents and
+ * conversations, and the "Work" sheet they open over the composer. A click
  * outside the sheet closes it. While it is open the arrow keys move through
  * the entries, Enter opens one, x stops it and Esc closes the sheet; the
  * composer leaves Esc to it, so it does not also stop the turn.

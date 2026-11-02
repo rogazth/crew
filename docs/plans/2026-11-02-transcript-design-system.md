@@ -45,10 +45,12 @@ came out of three prototypes run on a real Manager transcript (branch
 - An agent and a conversation open in the right panel with the chat in view. A
   shell's output still takes the whole pane.
 
+A Crew sub-agent works at depth one: it cannot delegate or start sessions, so the
+list has one level. What its own CLI runs on its own (a native sub-agent, a shell)
+is in that thread's work sheet, and opens over it in the panel.
+
 ## Left for later
 
 - Native sub-agents are as complete as the daemon's board for the chat keeps them:
   what the board has lost shows as a beat with a dialog, not in the list.
 - Writing in, or adding someone to, a conversation between bots.
-- A nested agent (an agent's own agent) opens over its parent in the panel, and is
-  reached from that thread's own work sheet.

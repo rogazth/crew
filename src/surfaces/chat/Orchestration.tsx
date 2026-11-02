@@ -65,11 +65,6 @@ export function ToolLine({
   );
 }
 
-/** A card hanging under a row: indented to the row's text, hairline, the app's radius. */
-export function Hang({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div data-hang className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
-}
-
 /** A session or a bot as the chat's sessions know it: by id, else by name when the call named it by name only. */
 function peerOf(sessions: readonly Session[], id: string | undefined, name: string, provider?: string): Peer {
   const session = id ? sessions.find((row) => row.id === id) : sessions.find((row) => row.name === name);
@@ -287,7 +282,7 @@ const CONTROL_ICON = {
   delete: Trash2Icon,
 } as const;
 
-/** `interrupt_session`, `read_session`, `list_peers`, `stop_session`, `update_session`: one line, and a card only for text. */
+/** `interrupt_session`, `read_session`, `list_peers`, `stop_session`, `update_session`: one line. What a redirect said is in that agent's thread. */
 export const ControlRow = memo(function ControlRow({ block, marked }: { block: Block; marked: string | null }) {
   const control = controlOf(block);
   const target = control?.target;
@@ -295,23 +290,16 @@ export const ControlRow = memo(function ControlRow({ block, marked }: { block: B
   if (!control) return null;
   const icon = CONTROL_ICON[control.icon];
   return (
-    <div className="flex flex-col gap-1.5">
-      <ToolLine icon={icon} id={block.id} marked={marked}>
-        {control.before}
-        {target ? (
-          <>
-            {" "}
-            <PeerName peer={peer} />
-          </>
-        ) : null}
-        {control.after}
-      </ToolLine>
-      {control.text ? (
-        <Hang className="px-3.5 py-2.5 text-[13.5px] leading-[20px] text-text-muted">
-          <span className="whitespace-pre-wrap">{control.text}</span>
-        </Hang>
+    <ToolLine icon={icon} id={block.id} marked={marked}>
+      {control.before}
+      {target ? (
+        <>
+          {" "}
+          <PeerName peer={peer} />
+        </>
       ) : null}
-    </div>
+      {control.after}
+    </ToolLine>
   );
 });
 
@@ -396,7 +384,7 @@ const LATE_MS = 60_000;
  */
 function Speech({ id, marked, letter, peer, at, tag, note, text }: { id: string; marked: string | null; letter?: string | undefined; peer: Peer; at?: number | undefined; tag?: string | undefined; note?: string | undefined; text: string }) {
   return (
-    <div data-block={id} data-letter={letter} data-letter-in className={`flex gap-2.5 rounded-xl${id === marked ? " crew-found" : ""}`}>
+    <div data-block={id} data-letter={letter} className={`flex gap-2.5 rounded-xl${id === marked ? " crew-found" : ""}`}>
       <span className="mt-0.5 grid size-7 shrink-0 place-items-center">
         <PeerMark peer={peer} className="size-6" />
       </span>

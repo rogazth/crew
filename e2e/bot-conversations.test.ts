@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Session } from "../src/lib/types.ts";
-import { composerOf, launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, newSession, sendInChat, waitFor, type Crew } from "./harness.ts";
 
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 

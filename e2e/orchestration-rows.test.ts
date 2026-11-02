@@ -96,7 +96,7 @@ test("Crew calls draw as beats that say who and to whom, never the words: subage
   await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").waitFor();
   await crew.window.keyboard.press("Escape");
 
-  // The control rows: one line each, a card only for the redirect.
+  // The control rows: one line each.
   const text = flat(await crew.window.locator("[data-block]").allInnerTexts().then((all) => all.join(" | ")));
   for (const sentence of [
     "Interrupted billing-ui and redirected it",
@@ -107,7 +107,7 @@ test("Crew calls draw as beats that say who and to whom, never the words: subage
   ]) {
     assert.ok(text.includes(sentence), `${sentence}\n${text}`);
   }
-  assert.ok((await crew.window.getByText("Stop the illustration work: copy only.").count()) > 0, "the redirect is in a card");
+  assert.equal(await crew.window.getByText("Stop the illustration work: copy only.").count(), 0, "no preview of the redirect");
   // The checkpoint row is gone: no "wrote to" arrows.
   assert.equal(await crew.window.getByLabel("to", { exact: true }).count(), 0);
 
