@@ -4340,4 +4340,119 @@ for line in sys.stdin:
         assert_eq!(read.result, Some(serde_json::json!({ "readings": [], "history": [] })));
         handle.shutdown();
     }
+    /// A fake `claude` that answers by repeating what it was sent, so the
+    /// marker is in the prompt, the provider's output and the transcript.
+    fn write_fake_claude_echo(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-echo");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    print(json.dumps({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"echo " + line}}}), flush=True)
+    sys.stderr.write("stderr " + line)
+    print(json.dumps({"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// The privacy rule of the trace, held to a run: a prompt, a provider reply,
+    /// a keystroke and a tool call each carry a marker through the daemon, at
+    /// the most verbose level there is, and no file under `trace/` has it.
+    #[tokio::test]
+    async fn nothing_a_user_typed_or_a_model_said_reaches_the_trace_files() {
+        const MARKER: &str = "CANARY-5d1e9f3a7c2b";
+        let dir = test_dir("trace-canary");
+        std::env::set_var("CREW_TRACE", "trace");
+        trace::init(&dir).expect("trace");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        handle.override_agent_binary("claude", write_fake_claude_echo(&dir).to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+
+        // A prompt, and a reply that repeats it.
+        let started = rpc(
+            &mut ws,
+            10,
+            "turn_start",
+            serde_json::json!({ "sessionId": session_id, "cwd": dir.to_string_lossy(), "text": format!("please {MARKER}") }),
+        )
+        .await;
+        assert!(started.ok, "{:?}", started.error);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut req = 100u32;
+        let page = loop {
+            let page = transcript_of(&mut ws, req, &session_id).await;
+            req += 1;
+            if !page.working && page.blocks.iter().any(|b| b.role == proto::BlockRole::Assistant) {
+                break page;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "the turn did not end");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert!(page.blocks.iter().any(|b| b.text.contains(MARKER)), "the fake did not repeat the prompt");
+
+        // A keystroke, echoed back by the shell.
+        let spawn = spawn_req(20, "canary-pty");
+        let spawned = rpc(&mut ws, 20, &spawn.method, spawn.params).await;
+        assert!(spawned.ok, "{:?}", spawned.error);
+        let wrote =
+            rpc(&mut ws, 21, "pty_write", serde_json::json!({ "id": "canary-pty", "data": format!("echo {MARKER}\n") })).await;
+        assert!(wrote.ok, "{:?}", wrote.error);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let killed = rpc(&mut ws, 22, "pty_kill", serde_json::json!({ "id": "canary-pty" })).await;
+        assert!(killed.ok);
+
+        // Tool calls whose arguments carry it: one that works, one that is refused.
+        let socket = bridge.info().expect("info").socket_path;
+        let token = bridge.mint(&session_id);
+        for (name, arguments) in [
+            ("save_process", serde_json::json!({ "name": MARKER, "command": format!("echo {MARKER}") })),
+            ("update_description", serde_json::json!({ "description": MARKER, "extra": MARKER })),
+            ("no_such_tool", serde_json::json!({ "x": MARKER })),
+            ("read_logs", serde_json::json!({ "process": MARKER, "grep": MARKER })),
+        ] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({ "token": token, "method": "tools/call", "params": { "name": name, "arguments": arguments } }),
+            );
+            assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
+        }
+        drop(ws);
+        handle.shutdown();
+        trace::flush();
+
+        let mut seen = String::new();
+        let mut files = 0;
+        for entry in std::fs::read_dir(dir.join(trace::DIR)).expect("trace dir").flatten() {
+            let text = std::fs::read_to_string(entry.path()).expect("read");
+            assert!(
+                !text.contains(MARKER),
+                "{} holds the marker:\n{}",
+                entry.path().display(),
+                text.lines().filter(|l| l.contains(MARKER)).collect::<Vec<_>>().join("\n")
+            );
+            files += 1;
+            seen.push_str(&text);
+        }
+        assert!(files >= 2, "the files are there");
+        // Not an empty pass: the boundaries it is about did write.
+        for line in ["turn.start", "turn.end", "tool.call", "rpc.done", "pty.spawn", "conn.accepted", "session.status"] {
+            assert!(seen.contains(line), "no {line} in the trace:\n{seen}");
+        }
+    }
 }
