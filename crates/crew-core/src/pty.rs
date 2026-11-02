@@ -250,7 +250,7 @@ impl PtyHost {
         let pid = live.pid;
         let replaced = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), live);
         if let Some(prev) = replaced {
-            eprintln!("[pty] {id}: pid {pid} replaced live pid {}; terminating it", prev.pid);
+            tracing::warn!(%id, pid, replaced_pid = prev.pid, "pty.replaced_live");
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
@@ -297,6 +297,7 @@ impl PtyHost {
             map.drain().map(|(_, live)| live).collect()
         };
         self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        tracing::info!(count = kids.len(), "pty.kill_all");
         let waits: Vec<_> = kids
             .into_iter()
             .filter_map(|live| {
@@ -358,7 +359,7 @@ impl PtyHost {
     ) -> Result<u32, String> {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(prev) = self.remove(&id) {
-            eprintln!("[pty] {id}: respawn terminates pid {}", prev.pid);
+            tracing::info!(%id, pid = prev.pid, "pty.respawn_terminates");
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
@@ -524,10 +525,11 @@ impl PtyHost {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         match self.remove(id) {
             Some(live) => {
+                tracing::info!(%id, pid = live.pid, "pty.kill");
                 let _ = terminate(&live);
                 close_fd(live.master_fd);
             }
-            None => eprintln!("[pty] {id}: kill found nothing registered"),
+            None => tracing::debug!(%id, "pty.kill_found_nothing"),
         }
     }
 }
@@ -584,11 +586,15 @@ fn spawn_unix(
         Err(e) => {
             close_fd(master);
             close_fd(slave);
+            tracing::warn!(%id, program = %program_name(&program), error = %crate::trace::error_text(&e.to_string()), "pty.spawn_failed");
             return Err(format!("Failed to start {program}: {e}"));
         }
     };
     close_fd(slave);
     let pid = child.id();
+    let spawned = Instant::now();
+    // The program, never its arguments or what it prints.
+    tracing::info!(%id, pid, program = %program_name(&program), supervised = sink.is_some(), "pty.spawn");
     // setsid() made the child its own group. Recorded before anything can fail,
     // and dropped only once nobody is left in it.
     let registry = host.inner.registry.clone();
@@ -666,7 +672,13 @@ fn spawn_unix(
 
     let wait_host = host.clone();
     thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
+        let status = child.wait().ok();
+        let code = status.as_ref().and_then(|status| status.code());
+        #[cfg(unix)]
+        let signal = status.as_ref().and_then(std::os::unix::process::ExitStatusExt::signal);
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+        tracing::info!(%id, pid, code, signal, duration_ms = crate::trace::ms(spawned.elapsed()), "pty.exit");
         forget_group_when_empty(registry, pid);
         if sink.is_some() {
             // The child's last words are still in the master: the exit must
@@ -697,6 +709,10 @@ fn spawn_unix(
 /// else crewd holds, other terminals' masters and what Electron handed it,
 /// stays behind: a CLI holding a master never sees its terminal hang up when
 /// crewd dies.
+fn program_name(program: &str) -> String {
+    std::path::Path::new(program).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 fn pty_command(
     program: &str,
     args: &[String],

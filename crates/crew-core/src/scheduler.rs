@@ -184,6 +184,7 @@ impl Scheduler {
         // minute at a time, without a line in the history for each try.
         if once && busy {
             let _ = routine::reschedule(&self.store, &row.routine.id, started + ONCE_RETRY_MS);
+            tracing::info!(routine_id = %row.routine.id, session_id = %row.session.id, "routine.deferred");
             self.changed();
             return;
         }
@@ -205,6 +206,14 @@ impl Scheduler {
             other => other,
         };
         self.changed();
+        // The routine and where it went; its name and prompt are the user's.
+        tracing::info!(
+            routine_id = %row.routine.id,
+            session_id = %row.session.id,
+            trigger = ?trigger,
+            result = if busy { "skipped_busy" } else if moved.is_err() { "history_unwritten" } else { "started" },
+            "routine.fired"
+        );
         // Without a written next_run_at nothing bounds a re-fire, so a history
         // we could not write is a turn we do not start.
         if moved.is_err() || busy {
@@ -280,6 +289,7 @@ impl Scheduler {
     /// one the user saved in between is the one that stands.
     fn finish(&self, routine_id: &str, run: &RoutineRun, status: RunStatus) {
         let done = RoutineRun { finished_at: Some(now_millis()), status, ..run.clone() };
+        tracing::info!(routine_id, status = ?status, duration_ms = done.finished_at.map(|at| at - run.started_at), "routine.finished");
         let _ = routine::finish_run(&self.store, routine_id, &done);
         self.changed();
     }

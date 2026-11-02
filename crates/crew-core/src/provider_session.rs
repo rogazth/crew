@@ -68,7 +68,7 @@ fn cached_cursor_models() -> Option<(Instant, Vec<ListedModel>)> {
 
 fn refresh_cursor_models() -> Vec<ListedModel> {
     let models = list_cursor_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %err, "models.read_failed");
         Vec::new()
     });
     if !models.is_empty() {
@@ -523,7 +523,7 @@ fn cached_codex_models() -> Option<(Instant, Vec<ListedModel>)> {
 
 fn refresh_codex_models() -> Vec<ListedModel> {
     let models = list_codex_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %err, "models.read_failed");
         Vec::new()
     });
     if !models.is_empty() {
@@ -690,7 +690,7 @@ fn cached_grok_listing() -> Option<(Instant, GrokListing)> {
 
 fn refresh_grok_models() -> GrokListing {
     let listing = list_grok_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %err, "models.read_failed");
         GrokListing { models: Vec::new(), default_model: String::new() }
     });
     if !listing.models.is_empty() {
@@ -731,7 +731,7 @@ fn list_grok_models() -> Result<GrokListing, String> {
         }
     }
     Ok(grok_models_from_cli(&binary).unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %err, "models.read_failed");
         GrokListing { models: Vec::new(), default_model: String::new() }
     }))
 }
@@ -1134,7 +1134,7 @@ fn refresh_claude_fast_mode() {
     for _ in 0..FAST_MODE_PROBES {
         match probe_claude_fast_mode(&binary) {
             Ok(answer) => answers.push(answer),
-            Err(err) => eprintln!("[fast mode] {err}"),
+            Err(err) => tracing::warn!(error = %err, "fast_mode.read_failed"),
         }
     }
     if let Some((state, reason)) = believed_fast_mode(answers) {
@@ -1371,7 +1371,7 @@ fn cached_opencode_listing() -> Option<(Instant, OpencodeListing)> {
 
 fn refresh_opencode_models() -> OpencodeListing {
     let listing = list_opencode_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %err, "models.read_failed");
         OpencodeListing { models: Vec::new(), default_model: String::new() }
     });
     if !listing.models.is_empty() {

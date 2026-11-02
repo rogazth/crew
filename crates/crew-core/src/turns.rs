@@ -425,6 +425,22 @@ enum TurnOutcome {
     Stopped,
 }
 
+/// The span of one turn, with an id made now (see [`crate::trace::turn_id`]).
+fn turn_span(row: &crate::session::Session) -> tracing::Span {
+    tracing::info_span!("turn", session_id = %row.id, turn_id = %crate::trace::turn_id(), provider = %row.provider)
+}
+
+fn trace_turn_end(outcome: &TurnOutcome, started: Instant) {
+    let duration_ms = crate::trace::ms(started.elapsed());
+    match outcome {
+        TurnOutcome::Completed => tracing::info!(outcome = "completed", duration_ms, "turn.end"),
+        TurnOutcome::Stopped => tracing::info!(outcome = "stopped", duration_ms, "turn.end"),
+        TurnOutcome::Failed(message) => {
+            tracing::warn!(outcome = "failed", duration_ms, error = %crate::trace::error_text(message), "turn.end")
+        }
+    }
+}
+
 enum QuestionReply {
     Answers(Answers),
     Dismiss,
@@ -1453,7 +1469,7 @@ impl TurnHost {
             let held = if live { self.commands.holds("claude", &cwd) } else { self.commands.is_fresh("claude", &cwd, now) };
             if !held {
                 if let Err(error) = self.probe_claude_commands(session_id, &cwd, false) {
-                    eprintln!("[commands] {error}");
+                    tracing::warn!(%error, "commands.probe_failed");
                 }
             }
         }
@@ -1461,7 +1477,7 @@ impl TurnHost {
         // fresh is held, and again whenever it says the folder's changed.
         if session.provider == "opencode" && !self.commands.is_fresh("opencode", &cwd, crate::store::now_millis()) {
             if let Err(error) = self.opencode_menu(Some(session_id), &cwd) {
-                eprintln!("[commands] {error}");
+                tracing::warn!(%error, "commands.probe_failed");
             }
         }
         Ok(self.menu_of(&session, &cwd))
@@ -2186,6 +2202,7 @@ impl TurnHost {
     /// stopped from the panel one by one. With `kill`, a CLI that does not
     /// answer the stop is let go after [`INTERRUPT_GRACE`].
     fn cancel(&self, session_id: &str, kill: bool) {
+        tracing::info!(session_id, kill, "turn.stop_requested");
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
         // this one. Without a turn to interrupt, it settles here.
@@ -2442,6 +2459,12 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
         let row = session.clone();
+        // A span is per thread: this thread is the turn's, so everything it
+        // logs below, down to the provider's spawn, carries the turn's ids.
+        let span = turn_span(&row);
+        let _in_turn = span.enter();
+        let started = Instant::now();
+        tracing::info!(kind = %row.kind, letters = carried.len(), "turn.start");
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params, history),
             "codex" => self.run_codex(session, params, history),
@@ -2450,6 +2473,7 @@ impl TurnHost {
             "opencode" => self.run_opencode(session, params, history),
             other => TurnOutcome::Failed(format!("{other} agents are not wired up yet. Pick Claude for now.")),
         };
+        trace_turn_end(&outcome, started);
         self.finish_turn(row, outcome, carried);
     }
 
@@ -2875,7 +2899,7 @@ impl TurnHost {
         let written =
             crate::session_events::record_reporting(&self.store, id, cursor, kind, outcome, &report, request, letter.as_ref());
         if let Err(error) = &written {
-            eprintln!("[crewd] session {id}: the event was not written: {error}");
+            tracing::warn!(session_id = %id, %error, "transcript.event_unwritten");
         }
         self.signal.notify();
         if let (Ok(()), Some(letter)) = (written, letter) {
@@ -3172,7 +3196,13 @@ impl TurnHost {
         let host = self.clone();
         let row = row.clone();
         thread::spawn(move || {
+            // A turn the CLI began by itself: no Crew turn started it, but it is one all the same.
+            let span = turn_span(&row);
+            let _in_turn = span.enter();
+            let started = Instant::now();
+            tracing::info!(kind = %row.kind, adopted = true, "turn.start");
             let outcome = host.block_on(rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+            trace_turn_end(&outcome, started);
             if row.provider == "opencode" {
                 host.opencode_turn_ended(&row, &outcome);
             } else {
@@ -3313,7 +3343,12 @@ impl TurnHost {
         thread::spawn(move || {
             let _one = host.naming_gate.lock().unwrap_or_else(|e| e.into_inner());
             if let Err(error) = host.name_now(&session) {
-                eprintln!("[titles] {}: {error}", session.id);
+                // The CLI answered without a name, which it does often: not a fault.
+                if error.ends_with("no name") {
+                    tracing::debug!(session_id = %session.id, %error, "title.unnamed");
+                } else {
+                    tracing::warn!(session_id = %session.id, %error, "title.failed");
+                }
             }
         });
     }
@@ -3592,7 +3627,7 @@ impl TurnHost {
                     taken = self.claude_control_on(session_id, Some(epoch), request);
                 }
                 if let Err(error) = taken {
-                    eprintln!("[crewd] session {session_id}: Claude Code did not take a setting ({error}); it is launched again");
+                    tracing::warn!(%session_id, %error, "claude.setting_refused");
                     return false;
                 }
             }

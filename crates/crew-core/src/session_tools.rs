@@ -1539,13 +1539,14 @@ impl SessionTools {
             },
             &crate::messages::Find { tokens: SNIPPET_TOKENS, roles: &roles, whole: WHOLE_CHARS },
         )?;
-        // Every search, so whether words are enough (or vectors are needed)
-        // can be judged from what bots actually looked for and found.
-        eprintln!(
-            "[search] {} in {}: {query:?} → {} hit(s)",
-            caller.label(),
-            row.map(|row| row.id.as_str()).unwrap_or("the workspace"),
-            found.len()
+        // Every search, so whether words are enough (or vectors are needed) can
+        // be judged from how many hits bots get. Never the words they looked for.
+        tracing::info!(
+            session_id = caller.session_id().unwrap_or(""),
+            in_session = row.map(|row| row.id.as_str()),
+            query_chars = query.chars().count(),
+            hits = found.len(),
+            "messages.search"
         );
         let mut spent = 0;
         let mut hits = Vec::new();
@@ -2341,6 +2342,7 @@ impl ToolFamily for SessionTools {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::disallowed_macros)] // tests print what they measured
     use super::*;
     use crate::caller::CallerKind;
     use std::path::{Path, PathBuf};

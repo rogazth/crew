@@ -105,7 +105,7 @@ impl LogStore {
         }
         let mut state = self.lock();
         if let Err(error) = self.write(&mut state, bytes) {
-            eprintln!("[process] {}: {error}", self.dir.display());
+            tracing::warn!(dir = %self.dir.display(), %error, "process.log_failed");
         }
         state.seq += 1;
         state.at_line_start = bytes.ends_with(b"\n");

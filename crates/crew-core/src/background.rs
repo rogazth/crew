@@ -69,14 +69,14 @@ impl BackgroundHost {
         let saved = match store.with(load) {
             Ok(saved) => saved,
             Err(error) => {
-                eprintln!("[crewd] the background entries were not read: {error}");
+                tracing::warn!(%error, "background.read_failed");
                 return host;
             }
         };
         let mut hidden = match store.with(load_hidden) {
             Ok(hidden) => hidden,
             Err(error) => {
-                eprintln!("[crewd] the cleared panel entries were not read: {error}");
+                tracing::warn!(%error, "background.cleared_read_failed");
                 HashMap::new()
             }
         };
@@ -151,7 +151,7 @@ impl BackgroundHost {
                 board.saved = board.commands.clone();
                 board.saved_hidden = board.hidden.clone();
             }
-            Err(error) => eprintln!("[crewd] session {session_id}: the background entries were not written: {error}"),
+            Err(error) => tracing::warn!(%session_id, %error, "background.write_failed"),
         }
     }
 

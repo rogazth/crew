@@ -10,6 +10,12 @@ use std::time::Duration;
 /// Longest error text a trace line carries.
 const ERROR_CAP: usize = 300;
 
+/// A turn's id: made when it starts, to follow it through the trace. It is
+/// not stored and not on the wire.
+pub fn turn_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..12].to_string()
+}
+
 pub fn ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

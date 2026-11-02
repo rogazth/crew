@@ -104,7 +104,7 @@ impl UsageHost {
                 }
             }
             Ok(false) => {}
-            Err(error) => eprintln!("[usage] could not keep a {} reading: {error}", reading.provider),
+            Err(error) => tracing::warn!(provider = %reading.provider, %error, "usage.reading_unkept"),
         }
     }
 

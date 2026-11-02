@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_macros)] // tests print what they measured
 use super::*;
 
 struct Fixture {

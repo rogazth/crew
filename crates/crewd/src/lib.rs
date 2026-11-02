@@ -429,8 +429,10 @@ impl ToolHost for ToolDispatch {
         // the daemon could stop every other session with it.
         if method == "daemon/shutdown" {
             if caller.kind() != crew_core::caller::CallerKind::User {
+                tracing::warn!(target: "daemon", caller = ?caller.kind(), "daemon.shutdown_refused");
                 return Err("Only the user can stop Crew's daemon.".into());
             }
+            tracing::info!(target: "daemon", via = "cli", "daemon.shutdown_requested");
             let _ = self.exit.send(());
             return Ok(Value::Null);
         }
@@ -1075,6 +1077,8 @@ async fn drain_pty_input(host: PtyHost, hub: Arc<Hub>, stream_id: u32, mut rx: m
 
 fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<String>) {
     let id = host.session_of_stream(stream_id).unwrap_or_else(|| stream_id.to_string());
+    let error = error.into();
+    tracing::warn!(%id, stream_id, error = %crew_core::trace::error_text(&error), "pty.input_failed");
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
 }
 
@@ -2153,6 +2157,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         // "Quit Crew and Stop Everything". Answered before the daemon goes, so
         // the window hears it was heard.
         "daemon_shutdown" => {
+            tracing::info!(target: "daemon", via = "window", "daemon.shutdown_requested");
             let _ = hosts.exit.send(());
             Ok(Value::Null)
         }

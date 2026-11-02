@@ -149,6 +149,7 @@ fn call_timeout(method: &str, params: &Value) -> Duration {
 
 /// Model Context Protocol over stdio. Only `tools/*` is forwarded; the rest is
 /// the handshake every client sends first.
+#[allow(clippy::disallowed_macros)] // `crew mcp` speaks MCP on stdout, so its error goes to stderr
 pub fn serve_stdio() -> ExitCode {
     match Link::from_env() {
         Ok(link) => serve_stdio_with(&link),

@@ -16,6 +16,7 @@ const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `open -a Crew`. A folder is handed along, but the app does not act on one
 /// yet, so a refusal to take it still brings the app up without it.
+#[allow(clippy::disallowed_macros)] // the CLI's own message to its user; no subscriber runs here
 pub fn open(path: Option<&Path>) -> Result<ExitCode, CliError> {
     if !cfg!(target_os = "macos") {
         return Err(CliError::Failed("crew open needs macOS; start Crew yourself.".into()));

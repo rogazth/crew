@@ -122,6 +122,7 @@ where
 /// Why it failed, where the one who ran it reads it. A session is a model
 /// reading the command's output, and Cursor runs its commands with stderr
 /// thrown away, so there a refusal goes to stdout; a person gets stderr.
+#[allow(clippy::disallowed_macros)] // the CLI's own message to its user; no subscriber runs here
 fn report(ctx: &Ctx, error: CliError) -> ExitCode {
     if !error.message().is_empty() {
         let line = format!("crew: {}", error.message());

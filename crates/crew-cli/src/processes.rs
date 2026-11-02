@@ -168,6 +168,7 @@ fn tail(ctx: &Ctx, client: &Client, args: &LogsArgs) -> Result<ExitCode, CliErro
 /// `tail -f` over the bridge. Reads from the cursor until there is nothing
 /// new, then lets `wait_for_log` hold the call until a line arrives, so a
 /// quiet process costs one request every half minute rather than a poll loop.
+#[allow(clippy::disallowed_macros)] // the CLI's own message to its user; no subscriber runs here
 fn follow(ctx: &Ctx, client: &Client, target: &Value, mut cursor: u64) -> Result<(), CliError> {
     let mut can_wait = true;
     loop {
@@ -205,6 +206,7 @@ fn follow(ctx: &Ctx, client: &Client, target: &Value, mut cursor: u64) -> Result
     }
 }
 
+#[allow(clippy::disallowed_macros)] // the CLI's own message to its user; no subscriber runs here
 fn grep(ctx: &Ctx, client: &Client, args: &LogsArgs, pattern: &str) -> Result<ExitCode, CliError> {
     let mut request = with(&target(args), json!({ "pattern": pattern }));
     if let Some(lines) = args.lines {

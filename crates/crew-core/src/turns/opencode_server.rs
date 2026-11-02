@@ -275,7 +275,7 @@ impl TurnHost {
             Some(id) => {
                 self.transcripts.apply(id, HarnessEvent::SessionNote { message: message.to_string() });
             }
-            None => eprintln!("[opencode] {message}"),
+            None => tracing::info!(%message, "opencode.note"),
         }
     }
 

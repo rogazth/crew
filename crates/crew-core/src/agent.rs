@@ -171,6 +171,7 @@ impl AgentHost {
             self.shared.kill_all_gen.fetch_add(1, Ordering::SeqCst);
             inner.children.drain().map(|(_, child)| child).collect()
         };
+        tracing::info!(count = kids.len(), "agent.kill_all");
         let waits: Vec<_> = kids.iter().filter_map(terminate).collect();
         for wait in waits {
             let _ = wait.join();
@@ -251,8 +252,18 @@ impl AgentHost {
             .stderr(Stdio::piped());
         prepare_child(&mut cmd);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to start {command}: {e}"))?;
+        // The program's name, never its arguments: those carry the prompt.
+        let program = PathBuf::from(&command).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut child = cmd.spawn().map_err(|e| {
+            tracing::error!(session_id, %program, error = %crate::trace::error_text(&e.to_string()), "agent.spawn_failed");
+            format!("Failed to start {command}: {e}")
+        })?;
         let pid = child.id();
+        let spawned = Instant::now();
+        // The child outlives the turn that started it: its threads speak for the
+        // session and the process, not for that one turn.
+        let span = tracing::info_span!("agent", session_id = %session_id, pid);
+        span.in_scope(|| tracing::info!(%program, "agent.spawn"));
 
         let (stdin, stdout, stderr) = match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
             (Some(stdin), Some(stdout), Some(stderr)) => (stdin, stdout, stderr),
@@ -281,14 +292,16 @@ impl AgentHost {
 
         let gate = Arc::new(Gate { session_id: session_id.clone(), epoch });
         let (pumps_done, pumps) = mpsc::channel();
-        pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout, pumps_done.clone());
-        pump(self.clone(), STDERR_EVENT, gate, stderr, pumps_done);
+        pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout, pumps_done.clone(), span.clone());
+        pump(self.clone(), STDERR_EVENT, gate, stderr, pumps_done, span.clone());
 
         let wait_host = self.clone();
         let wait_id = session_id;
         thread::spawn(move || {
+            let _in_span = span.enter();
             let code = child.wait().ok().and_then(|status| status.code());
             live.exited.store(true, Ordering::Release);
+            tracing::info!(code, duration_ms = crate::trace::ms(spawned.elapsed()), "agent.exit");
             // Before the pumps: a helper the leader left behind holds the pipes
             // open, so waiting for their EOF first would wait for the very
             // process this is meant to end. Whoever owns the slot, however it
@@ -327,6 +340,7 @@ impl AgentHost {
 
     pub fn kill(&self, session_id: &str) {
         if let Some(live) = self.kill_session(session_id) {
+            tracing::info!(session_id, pid = live.pid, "agent.kill");
             let _ = terminate(&live);
         }
     }
@@ -350,7 +364,14 @@ struct Gate {
 /// One reader thread feeds a channel; the emitter waits a beat for the rest of
 /// the burst and sends it as one event. With partial messages on, claude writes
 /// a line per token, and each event is a JSON round-trip into the webview.
-fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read + Send + 'static, done: mpsc::Sender<()>) {
+fn pump(
+    host: AgentHost,
+    event: &'static str,
+    gate: Arc<Gate>,
+    reader: impl Read + Send + 'static,
+    done: mpsc::Sender<()>,
+    span: tracing::Span,
+) {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
@@ -361,6 +382,7 @@ fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read
         }
     });
     thread::spawn(move || {
+        let _in_span = span.enter();
         while let Ok(first) = rx.recv() {
             let mut lines = vec![first];
             let mut bytes = lines[0].len();
