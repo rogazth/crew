@@ -272,6 +272,25 @@ fn pause_and_resume_stop_and_continue_the_group() {
 }
 
 #[test]
+fn stopping_a_live_process_is_traced_once_and_says_whether_it_was_paused() {
+    let f = fixture("stop-trace", fast());
+    let running = f.add("running", "sleep 30");
+    f.host.start(&f.workspace, &running.id, RunRequest::default()).unwrap();
+    f.host.stop(&f.workspace, &running.id, None).unwrap();
+    let line = crate::trace::capture::expect("process.stop", "process_id", &running.id);
+    assert_eq!((line.level, line.get("paused")), (tracing::Level::INFO, Some("false")));
+    // Stopping what is already stopped is not another stop.
+    f.host.stop(&f.workspace, &running.id, None).unwrap();
+    assert_eq!(crate::trace::capture::find("process.stop", "process_id", &running.id).len(), 1);
+
+    let paused = f.add("paused", "sleep 30");
+    f.host.start(&f.workspace, &paused.id, RunRequest::default()).unwrap();
+    f.host.pause(&f.workspace, &paused.id, None).unwrap();
+    f.host.stop(&f.workspace, &paused.id, None).unwrap();
+    assert_eq!(crate::trace::capture::expect("process.stop", "process_id", &paused.id).get("paused"), Some("true"));
+}
+
+#[test]
 fn a_process_drains_to_its_log_with_nobody_watching() {
     let f = fixture("drain", fast());
     let process = f.add("flood", "yes 0123456789abcdef | head -c 3000000; echo; echo DONE");

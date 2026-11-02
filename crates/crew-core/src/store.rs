@@ -1717,6 +1717,49 @@ mod trace_tests {
     use super::*;
     use crate::trace::capture;
 
+    /// A turn a stopped daemon left open is settled when the store is opened again: one line for each
+    /// session, by id and kind, and none for a session that was at rest.
+    #[test]
+    fn opening_a_database_traces_each_turn_it_had_to_settle() {
+        capture::install();
+        let dir = std::env::temp_dir().join(format!("crew-store-settle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let (working, child, resting) = {
+            let store = Store::open(path.clone()).expect("open");
+            let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
+            let bot = |name: &str| {
+                crate::session::create(&store, workspace.id.clone(), "bot".into(), name.into(), "claude".into(), "m".into(), "".into(), "ask".into())
+                    .expect("session")
+                    .id
+            };
+            let (working, resting) = (bot("Working"), bot("Resting"));
+            crate::session::set_status(&store, working.clone(), "working".into()).expect("status");
+            let child = crate::session::create_child(
+                &store,
+                workspace.id.clone(),
+                "codex: fix".into(),
+                "codex".into(),
+                "m".into(),
+                "full".into(),
+                None,
+                Some(working.clone()),
+            )
+            .expect("child")
+            .id;
+            crate::session::set_status(&store, child.clone(), "working".into()).expect("status");
+            (working, child, resting)
+        };
+        let store = Store::open(path).expect("reopen");
+        let bot = capture::expect("store.settled_open_turn", "session_id", &working);
+        assert_eq!((bot.level, bot.get("kind")), (tracing::Level::INFO, Some("bot")));
+        assert_eq!(capture::expect("store.settled_open_turn", "session_id", &child).get("kind"), Some("child"));
+        assert!(capture::find("store.settled_open_turn", "session_id", &resting).is_empty());
+        // The turn is over: a bot is idle again and a child is waiting to be resumed.
+        let status = |id: &str| crate::session::get(&store, id.to_string()).unwrap().expect("session").status;
+        assert_eq!((status(&working).as_str(), status(&child).as_str()), ("idle", "starting"));
+    }
+
     /// A database made now was migrated from nothing; one opened again, from where it was left;
     /// one that is not a database is a line with the step that failed.
     #[test]

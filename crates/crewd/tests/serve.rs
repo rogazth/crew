@@ -27,7 +27,16 @@ struct Served {
 
 impl Served {
     fn start(dir: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        Self::start_in(dir, None)
+    }
+
+    /// With `home` as the daemon's HOME, where the CLIs it imports history from keep their files.
+    fn start_in(dir: &Path, home: Option<&Path>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_crewd"));
+        if let Some(home) = home {
+            command.env("HOME", home);
+        }
+        let mut child = command
             .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
             .arg(dir)
             .stdin(Stdio::piped())
@@ -130,6 +139,69 @@ async fn the_token_survives_a_restart() {
     assert_eq!(token(&dir), before);
     let (_, hello) = authenticate(&second.url, &before).await;
     assert!(hello.is_some());
+}
+
+/// A terminal session from before the chat view has its history only in its CLI's file. The
+/// daemon brings it in on the way up and says how many sessions it did that for, and no more.
+#[test]
+fn a_daemon_that_imports_a_terminal_history_traces_how_many_sessions_it_brought_in() {
+    use crew_core::store::Store;
+    let dir = temp("history-trace");
+    let home = dir.join("home");
+    let session = {
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let workspace = crew_core::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
+        let session = crew_core::session::create(
+            &store,
+            workspace.id,
+            "terminal".into(),
+            "Old".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("session");
+        let folder = home.join(".claude/projects").join(crew_core::claude_title::project_slug(&workspace.path));
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(
+            folder.join(format!("{}.jsonl", session.id)),
+            include_str!("../../crew-core/tests/fixtures/claude/claude-approvals.jsonl"),
+        )
+        .expect("history");
+        session.id
+    };
+
+    let mut daemon = Served::start_in(&dir, Some(&home));
+    let imported = wait_for_trace(&dir, "history.imported");
+    assert_eq!((imported["level"].as_str(), imported["fields"]["sessions"].as_u64()), (Some("INFO"), Some(1)), "{imported}");
+    daemon.terminate();
+    // The chat has what the CLI recorded.
+    let store = Store::open(dir.join("crew.sqlite3")).expect("reopen");
+    assert!(!store.with(|conn| crew_core::messages::all(conn, &session)).expect("messages").is_empty());
+    // Nothing is left to bring in: the next start imports none and says nothing.
+    let before = std::fs::read_to_string(dir.join("trace/crewd.ndjson")).expect("trace").matches("history.imported").count();
+    let mut again = Served::start_in(&dir, Some(&home));
+    again.terminate();
+    let after = std::fs::read_to_string(dir.join("trace/crewd.ndjson")).expect("trace").matches("history.imported").count();
+    assert_eq!(after, before);
+}
+
+/// The first line of the daemon's trace whose message is `message`, waiting for the writer thread.
+fn wait_for_trace(dir: &Path, message: &str) -> Value {
+    let start = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(dir.join("trace/crewd.ndjson")).unwrap_or_default();
+        for line in text.lines() {
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                if value["fields"]["message"] == message {
+                    return value;
+                }
+            }
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "no {message} in the trace: {text}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[tokio::test]

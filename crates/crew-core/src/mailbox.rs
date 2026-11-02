@@ -1316,6 +1316,40 @@ mod tests {
         }
     }
 
+    /// A letter set aside is a line by its id and its box, one letter or a box's worth with the
+    /// count; a letter already read, or a box with nothing waiting, is not.
+    #[test]
+    fn setting_letters_aside_is_traced_by_ids_and_counts_and_never_their_text() {
+        use crate::trace::capture;
+        capture::install();
+        let store = store();
+        let to = session(&store, "to");
+        let from = session(&store, "from");
+        let body = "ASIDE-BODY-3e8a";
+        let one = enqueue(&store, &to, &sender(&from), body).expect("queued");
+        dispose(&store, &one.id).expect("dispose");
+        let line = capture::expect("mailbox.disposed", "letter_id", &one.id);
+        assert_eq!((line.level, line.get("to_session")), (tracing::Level::INFO, Some(to.as_str())));
+        // Already set aside: nothing more to say.
+        dispose(&store, &one.id).expect("dispose again");
+        assert_eq!(capture::find("mailbox.disposed", "letter_id", &one.id).len(), 1);
+
+        let reader = session(&store, "reader");
+        for _ in 0..2 {
+            enqueue(&store, &reader, &sender(&from), body).expect("queued");
+        }
+        assert_eq!(drop_waiting(&store, &reader).expect("drop"), 2);
+        let aside = capture::expect("mailbox.set_aside", "to_session", &reader);
+        assert_eq!((aside.level, aside.get("count")), (tracing::Level::INFO, Some("2")));
+        // An empty box is not a line.
+        assert_eq!(drop_waiting(&store, &reader).expect("drop"), 0);
+        assert_eq!(capture::find("mailbox.set_aside", "to_session", &reader).len(), 1);
+
+        for event in capture::find("mailbox.disposed", "letter_id", &one.id).into_iter().chain(capture::find("mailbox.set_aside", "to_session", &reader)) {
+            assert!(event.fields.values().all(|v| !v.contains(body)), "{event:?}");
+        }
+    }
+
     #[test]
     fn the_envelope_carries_the_id_the_sender_is_reached_at() {
         let letter = envelope(&sender("s1"), "the branch is green", None, None);
@@ -1580,6 +1614,31 @@ mod tests {
         assert_eq!(state(&store, &done), (true, true, false));
         let back = waiting(&store, &to).expect("waiting");
         assert_eq!(back.iter().map(|letter| letter.text.as_str()).collect::<Vec<_>>(), ["lost"]);
+    }
+
+    /// The count of letters put back is one line at startup. The store has no id of its own, so
+    /// the test carries seven claimed letters (no other test reopens with that many) and finds the line by them.
+    #[test]
+    fn letters_put_back_at_startup_are_counted_in_the_trace() {
+        let dir = std::env::temp_dir().join(format!("crew-mailbox-trace-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        {
+            let store = Store::open(path.clone()).expect("store");
+            let to = session(&store, "to");
+            let from = session(&store, "from");
+            for _ in 0..7 {
+                enqueue(&store, &to, &sender(&from), "UNFINISHED-TEXT").expect("enqueue");
+                claim(&store, &to).expect("claim").expect("letter");
+            }
+        }
+        Store::open(path).expect("reopen");
+        let line = crate::trace::capture::all("store.recovered_letters")
+            .into_iter()
+            .find(|line| line.get("letters") == Some("7"))
+            .expect("the put-back was traced");
+        assert_eq!(line.level, tracing::Level::INFO);
+        assert!(line.fields.values().all(|v| !v.contains("UNFINISHED")));
     }
 
     /// A parent that read its child up to some point takes back the reports

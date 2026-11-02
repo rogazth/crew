@@ -591,6 +591,10 @@ mod tests {
         let after = world.reload(&routine.id);
         assert!(after.enabled);
         assert!(after.next_run_at.is_some_and(|at| at >= before + ONCE_RETRY_MS), "{:?}", after.next_run_at);
+        // The wait is the one line it leaves, by the routine and the bot it is waiting for; it is not a `routine.fired`.
+        let deferred = crate::trace::capture::expect("routine.deferred", "routine_id", &routine.id);
+        assert_eq!((deferred.level, deferred.get("session_id")), (tracing::Level::INFO, Some(coder.id.as_str())));
+        assert!(crate::trace::capture::find("routine.fired", "routine_id", &routine.id).is_empty());
     }
 
     /// Run now ahead of its time is a run, and the time still stands.

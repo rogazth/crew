@@ -501,6 +501,24 @@ mod tests {
         }
     }
 
+    /// A client that connects and hangs up without a word is a DEBUG line (below the default
+    /// filter: a probe does this all day). The line has no id to find it by, so the test waits for
+    /// the count to grow after its own connection closes.
+    #[test]
+    fn a_client_that_hangs_up_without_asking_leaves_a_debug_line() {
+        use crate::trace::capture;
+        capture::install();
+        let bridge = bridge();
+        let before = capture::all("bridge.client_gone").len();
+        drop(UnixStream::connect(bridge.socket_path()).expect("connect"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while capture::all("bridge.client_gone").len() == before {
+            assert!(std::time::Instant::now() < deadline, "no bridge.client_gone was traced");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(capture::all("bridge.client_gone").iter().all(|line| line.level == tracing::Level::DEBUG));
+    }
+
     #[test]
     fn what_repeats_without_end_is_traced_for_the_first_few_and_then_one_in_thirty() {
         let counter = AtomicU64::new(0);
