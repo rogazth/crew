@@ -39,7 +39,7 @@ pub fn run(ctx: &Ctx, args: &TraceArgs) -> Result<ExitCode, CliError> {
         output::say(&dir.to_string_lossy());
         return Ok(ExitCode::SUCCESS);
     }
-    let query = Query::from_args(args, SystemTime::now())?;
+    let query = Query::from_args(args, SystemTime::now())?.resolved(&dir);
     let raw = ctx.global.json;
     if !dir.is_dir() {
         if !raw {
@@ -82,6 +82,19 @@ pub struct Query {
     pub grep: Option<String>,
     /// 0 is no limit.
     pub limit: usize,
+    /// What `turn` stands for once the files were read: see [`Query::resolved`].
+    pub window: Option<TurnWindow>,
+}
+
+/// A turn as the files show it: the session it ran in and the span of time
+/// between its `turn.start` and its `turn.end`.
+#[derive(Debug, Clone)]
+pub struct TurnWindow {
+    pub id: String,
+    pub session: String,
+    pub from: i128,
+    /// None: the turn has no end in the trace, so the window runs to its end.
+    pub to: Option<i128>,
 }
 
 impl Query {
@@ -109,7 +122,40 @@ impl Query {
             target: args.target.clone(),
             grep: args.grep.as_ref().map(|text| text.to_lowercase()),
             limit: args.limit.unwrap_or(200),
+            window: None,
         })
+    }
+
+    /// With `--turn`, reads the turn's `turn.start` and `turn.end` to learn its
+    /// session and its window. A span's fields are only the innermost one's, and
+    /// a tool call runs on a thread that never saw the turn's span, so most of a
+    /// turn's lines carry no `turn_id`. What they do carry is their session and
+    /// a time, which is how the turn is told from its neighbours.
+    pub fn resolved(mut self, dir: &Path) -> Self {
+        let Some(id) = self.turn.clone() else { return self };
+        let mut starts: Vec<(i128, String, String)> = Vec::new();
+        let mut end: Option<i128> = None;
+        for family in FAMILIES {
+            for path in family_files(dir, family) {
+                scan(&path, family, |record| match record.message.as_str() {
+                    "turn.start" => {
+                        if let Some(session) = record.text(&["session_id", "session"]) {
+                            let turn = record.text(&["turn_id", "turn"]).unwrap_or_default();
+                            starts.push((record.at, session, turn));
+                        }
+                    }
+                    "turn.end" if record.has(&["turn_id", "turn"], &id) => {
+                        end = Some(end.map_or(record.at, |at| at.max(record.at)))
+                    }
+                    _ => {}
+                });
+            }
+        }
+        let Some((from, session, _)) = starts.iter().find(|(_, _, turn)| *turn == id).cloned() else { return self };
+        // No end: until the session's next turn began, or the trace ends.
+        let to = end.or_else(|| starts.iter().filter(|(at, who, _)| *who == session && *at > from).map(|(at, _, _)| *at).min());
+        self.window = Some(TurnWindow { id, session, from, to });
+        self
     }
 
     fn accepts(&self, record: &Record) -> bool {
@@ -125,8 +171,14 @@ impl Query {
         if self.session.as_ref().is_some_and(|id| !record.has(&["session_id", "session"], id)) {
             return false;
         }
-        if self.turn.as_ref().is_some_and(|id| !record.has(&["turn_id", "turn"], id)) {
-            return false;
+        if let Some(id) = &self.turn {
+            let named = record.has(&["turn_id", "turn"], id);
+            let inside = self.window.as_ref().is_some_and(|w| {
+                record.has(&["session_id", "session"], &w.session) && record.at >= w.from && w.to.is_none_or(|to| record.at <= to)
+            });
+            if !named && !inside {
+                return false;
+            }
         }
         if self.grep.as_ref().is_some_and(|text| !record.raw.to_lowercase().contains(&text.to_lowercase())) {
             return false;
@@ -210,6 +262,16 @@ impl Record {
                 Some(Value::String(text)) => text == id,
                 Some(other) => other.to_string() == id,
                 None => false,
+            })
+        })
+    }
+
+    /// The first of `keys` that holds a string, in the fields, then the span.
+    fn text(&self, keys: &[&str]) -> Option<String> {
+        keys.iter().find_map(|key| {
+            [&self.fields, &self.span].iter().find_map(|map| match map.get(*key) {
+                Some(Value::String(text)) => Some(text.clone()),
+                _ => None,
             })
         })
     }
@@ -339,6 +401,23 @@ fn source_of(family: &str) -> Source {
     }
 }
 
+/// Every record of one file, in file order.
+fn scan(path: &Path, family: &str, mut each: impl FnMut(Record)) {
+    let Ok(file) = File::open(path) else { return };
+    let mut reader = BufReader::new(file);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        if let Some(record) = Record::parse(&String::from_utf8_lossy(&buf), source_of(family)) {
+            each(record);
+        }
+    }
+}
+
 /// The newest `limit` records that pass `query`, merged and deduplicated,
 /// oldest first. A file is read line by line and only a bounded tail of what
 /// passes is kept for each family, so a trace of any size reads in the same memory.
@@ -356,25 +435,15 @@ pub fn read(dir: &Path, query: &Query) -> Vec<Record> {
                     continue;
                 }
             }
-            let Ok(file) = File::open(&path) else { continue };
-            let mut reader = BufReader::new(file);
-            let mut buf = Vec::new();
-            loop {
-                buf.clear();
-                match reader.read_until(b'\n', &mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let line = String::from_utf8_lossy(&buf);
-                let Some(record) = Record::parse(&line, source_of(family)) else { continue };
+            scan(&path, family, |record| {
                 if !query.accepts(&record) {
-                    continue;
+                    return;
                 }
                 if tail.len() == keep {
                     tail.pop_front();
                 }
                 tail.push_back(record);
-            }
+            });
         }
         merged.extend(tail);
     }
@@ -528,7 +597,7 @@ mod tests {
     }
 
     fn query() -> Query {
-        Query { session: None, turn: None, since: None, level: None, target: None, grep: None, limit: 200 }
+        Query { session: None, turn: None, since: None, level: None, target: None, grep: None, limit: 200, window: None }
     }
 
     fn messages(records: &[Record]) -> Vec<&str> {
@@ -656,6 +725,77 @@ mod tests {
         let mut q = query();
         q.limit = 3;
         assert_eq!(messages(&read(&d, &q)), ["m4997", "m4998", "m4999"]);
+    }
+
+    /// The lines as the daemon writes them: only the innermost span's fields
+    /// are on a line, so `agent.*` has the agent's span and `tool.call` has
+    /// no span at all, only its own `session_id`.
+    fn turn_lines(d: &Path) {
+        let span = |ts: &str, msg: &str, level: &str, fields: &str, span: &str| {
+            format!(
+                r#"{{"timestamp":"{ts}","level":"{level}","fields":{{"message":"{msg}"{fields}}},"target":"crew_core::x","span":{span}}}"#
+            )
+        };
+        let turn = |id: &str| format!(r#"{{"session_id":"s1","turn_id":"{id}","provider":"claude","name":"turn"}}"#);
+        let agent = r#"{"session_id":"s1","pid":7,"name":"agent"}"#;
+        write(
+            d,
+            "crewd.ndjson",
+            &[
+                span("2026-11-02T10:00:00.000000Z", "tool.call", "INFO", r#","tool":"before","session_id":"s1""#, "null")
+                    .replace(r#","span":null"#, ""),
+                span("2026-11-02T10:00:01.000000Z", "turn.start", "INFO", r#","kind":"user""#, &turn("t1")),
+                span("2026-11-02T10:00:01.100000Z", "agent.spawn", "INFO", r#","program":"claude""#, agent),
+                span("2026-11-02T10:00:02.000000Z", "tool.call", "INFO", r#","tool":"read","session_id":"s1""#, "null")
+                    .replace(r#","span":null"#, ""),
+                span("2026-11-02T10:00:02.500000Z", "tool.call", "INFO", r#","tool":"other","session_id":"s2""#, "null")
+                    .replace(r#","span":null"#, ""),
+                span("2026-11-02T10:00:03.000000Z", "turn.end", "INFO", r#","outcome":"completed""#, &turn("t1")),
+                span("2026-11-02T10:00:03.200000Z", "tool.call", "INFO", r#","tool":"between","session_id":"s1""#, "null")
+                    .replace(r#","span":null"#, ""),
+                span("2026-11-02T10:00:04.000000Z", "turn.start", "INFO", r#","kind":"user""#, &turn("t2")),
+                span("2026-11-02T10:00:05.000000Z", "agent.exit", "INFO", r#","code":0"#, agent),
+                span("2026-11-02T10:00:06.000000Z", "tool.call", "INFO", r#","tool":"later","session_id":"s1""#, "null")
+                    .replace(r#","span":null"#, ""),
+            ],
+        );
+    }
+
+    fn for_turn(d: &Path, id: &str) -> Vec<String> {
+        let mut q = query();
+        q.turn = Some(id.into());
+        read(d, &q.resolved(d))
+            .iter()
+            .map(|r| format!("{} {}", r.message, r.text(&["tool", "program"]).unwrap_or_default()).trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_turn_is_its_sessions_lines_between_its_start_and_its_end() {
+        let d = dir("turn-window");
+        turn_lines(&d);
+        // The tool call before, the one of another session and the one after are out.
+        assert_eq!(for_turn(&d, "t1"), ["turn.start", "agent.spawn claude", "tool.call read", "turn.end"]);
+    }
+
+    #[test]
+    fn a_turn_without_an_end_runs_to_the_sessions_next_turn_or_the_end_of_the_trace() {
+        let d = dir("turn-open");
+        turn_lines(&d);
+        // t2 never ended: it runs to the end of the trace.
+        assert_eq!(for_turn(&d, "t2"), ["turn.start", "agent.exit", "tool.call later"]);
+        // Drop t1's end: it stops where t2 began, and the tool call between stays in.
+        let text = fs::read_to_string(d.join("crewd.ndjson")).unwrap();
+        let cut: Vec<String> = text.lines().filter(|l| !l.contains("turn.end")).map(String::from).collect();
+        write(&d, "crewd.ndjson", &cut);
+        assert_eq!(for_turn(&d, "t1"), ["turn.start", "agent.spawn claude", "tool.call read", "tool.call between", "turn.start"]);
+    }
+
+    #[test]
+    fn an_unknown_turn_matches_only_lines_that_name_it() {
+        let d = dir("turn-unknown");
+        turn_lines(&d);
+        assert!(for_turn(&d, "nope").is_empty());
     }
 
     #[test]

@@ -2459,8 +2459,10 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
         let row = session.clone();
-        // A span is per thread: this thread is the turn's, so everything it
-        // logs below, down to the provider's spawn, carries the turn's ids.
+        // A span is per thread, and a line holds only its innermost span's
+        // fields: what this thread logs directly carries the turn's ids, but
+        // the agent's lines carry the agent's span and a tool call has only its
+        // session. `crew trace --turn` finds those by session and time.
         let span = turn_span(&row);
         let _in_turn = span.enter();
         let started = Instant::now();

@@ -96,7 +96,7 @@ Examples:
   crew trace                           the last 200 records, newest last
   crew trace --since 30m --level warn  what went wrong in the last half hour
   crew trace --session <id>            one session across the daemon, the app and the window
-  crew trace --turn <id> --json        one turn, as the raw lines
+  crew trace --turn <id> --json        one turn: its session's lines from start to end, raw
   crew trace --target app.window -f    follow the window's events
   crew trace path                      where the files are
 
@@ -122,7 +122,7 @@ pub struct TraceArgs {
     /// Only records of this session id (its own events, and those written inside its spans).
     #[arg(long, value_name = "ID")]
     pub session: Option<String>,
-    /// Only records of this turn id (`turn.start` and what happened inside the turn).
+    /// One turn: every record of its session between its `turn.start` and its `turn.end`, and those naming the turn id.
     #[arg(long, value_name = "ID")]
     pub turn: Option<String>,
     /// Only records newer than this long ago: 30s, 30m, 2h, 1d, 1w.
