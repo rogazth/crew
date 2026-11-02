@@ -48,6 +48,7 @@ mod http;
 pub mod lock;
 pub mod machine;
 mod socks;
+pub mod trace;
 
 pub struct Config {
     pub pty: PtyHost,
