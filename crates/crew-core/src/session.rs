@@ -476,6 +476,14 @@ fn insert(
         tx.commit()
     })?;
 
+    tracing::info!(
+        session_id = %session.id,
+        kind = %session.kind,
+        provider = %session.provider,
+        parent_id = session.parent_id.as_deref(),
+        worktree = session.worktree.is_some(),
+        "session.created"
+    );
     // Read back for what the row derives from others: its parent's name.
     Ok(get(store, session.id.clone())?.unwrap_or(session))
 }
@@ -698,6 +706,7 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     if let Some(folder) = folder {
         crate::bot_folder::remove(&folder);
     }
+    tracing::info!(session_id = %id, "session.deleted");
     Ok(())
 }
 

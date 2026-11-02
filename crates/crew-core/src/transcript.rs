@@ -222,6 +222,23 @@ impl TranscriptHub {
     }
 
     pub fn apply(&self, session_id: &str, event: HarnessEvent) -> u64 {
+        // Whatever the provider, this is where a request for the user's word is raised and settled.
+        // Ids and the way it was settled; never what it asks or the tool and its input.
+        match &event {
+            HarnessEvent::ApprovalRequested { request_id, .. } => {
+                tracing::info!(session_id, request_id, kind = "approval", "request.raised")
+            }
+            HarnessEvent::QuestionRequested { request_id, questions } => {
+                tracing::info!(session_id, request_id, kind = "question", questions = questions.len(), "request.raised")
+            }
+            HarnessEvent::ApprovalResolved { request_id, decision } => {
+                tracing::info!(session_id, request_id, kind = "approval", decision = ?decision, "request.settled")
+            }
+            HarnessEvent::QuestionResolved { request_id, answers } => {
+                tracing::info!(session_id, request_id, kind = "question", answered = answers.is_some(), "request.settled")
+            }
+            _ => {}
+        }
         if let HarnessEvent::SessionProviderBound { provider_session_id } = &event {
             let _ = session::set_provider_session(&self.store, session_id.to_string(), provider_session_id.clone());
         }

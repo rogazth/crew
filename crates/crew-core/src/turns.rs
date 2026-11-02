@@ -1916,6 +1916,7 @@ impl TurnHost {
     /// was already answered.
     pub fn respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Result<(), String> {
         let key = (session_id.to_string(), request_id);
+        let decided = format!("{decision:?}");
         let taken = self.codex_respond(session_id, request_id, decision.clone()).is_some()
             || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
             || self.grok_respond(session_id, request_id, decision.clone()).is_some()
@@ -1944,6 +1945,7 @@ impl TurnHost {
             return Err("No approval is waiting".into());
         }
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        tracing::info!(session_id, request_id, decision = %decided, "approval.decided");
         // Decided: an approval letter still waiting to wake the parent has
         // nothing left to ask.
         if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {
@@ -1991,6 +1993,7 @@ impl TurnHost {
     /// first answer wins, and the other is told it was already answered.
     pub fn answer(&self, session_id: &str, request_id: u64, answers: Option<Answers>) -> Result<(), String> {
         let key = (session_id.to_string(), request_id);
+        let dismissed = answers.is_none();
         let taken = self.codex_answer(session_id, request_id, answers.clone()).is_some()
             || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
             || self.grok_answer(session_id, request_id, answers.clone()).is_some()
@@ -2018,6 +2021,7 @@ impl TurnHost {
             return Err("No question is waiting".into());
         }
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        tracing::info!(session_id, request_id, dismissed, "question.answered");
         // Answered: a question letter still waiting to wake the parent has
         // nothing left to ask.
         if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {

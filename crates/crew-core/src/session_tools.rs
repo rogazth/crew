@@ -549,6 +549,9 @@ impl SessionTools {
         // What goes over is the oldest letter, which may not be this one: a
         // queue that delivers out of order is worse than one that waits.
         let started = if resuming { self.turns.drain_mailbox(&target.id) } else { self.turns.deliver_to(&target) };
+        if resuming {
+            tracing::info!(session_id = %target.id, provider = %target.provider, started, "session.resumed");
+        }
         let waiting = mailbox::waiting_count(&self.store, &target.id)?;
         let mut note = if resuming && started {
             format!("{} had exited. It is resumed on its conversation and reads this now.", target.name)
@@ -961,8 +964,18 @@ impl SessionTools {
         }) {
             let _ = mailbox::dispose(&self.store, &letter.id);
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
+            tracing::warn!(session_id = %row.id, error = %crate::trace::error_text(&error), "subagent.start_failed");
             return Err(format!("The session was made ({}) but its first turn did not start: {error}", row.id));
         }
+        tracing::info!(
+            session_id = %row.id,
+            parent_id = row.parent_id.as_deref(),
+            launched_by = caller.session_id(),
+            provider = %row.provider,
+            kind = if how == Start::Delegate { "subagent" } else { "session" },
+            worktree = made_tree,
+            "subagent.started"
+        );
         let out = json!({
             "id": row.id,
             "letter_id": letter.id,
@@ -1657,6 +1670,8 @@ impl SessionTools {
 
     /// End one subagent for good and say what it is now.
     fn stop_one(&self, by: &str, row: &Session) -> Result<Session, String> {
+        // Who stopped it is a name; the trace holds the ids.
+        tracing::info!(session_id = %row.id, parent_id = row.parent_id.as_deref(), running = self.turns.is_running(&row.id), "subagent.stopped");
         if self.turns.exit_child(&row.id, by) {
             // Its turn settles on its own thread; give it a moment so the
             // answer says what is true.
@@ -1822,6 +1837,7 @@ impl SessionTools {
         self.may_write(caller, &target)?;
         let running = self.turns.is_running(&target.id);
         let body = text(args.get("text"));
+        tracing::info!(session_id = %target.id, running, redirect = body.is_some(), "session.interrupt_requested");
         let mut out = json!({ "session": target.id, "name": target.name, "interrupted": running });
         match body {
             None => {
@@ -1850,6 +1866,7 @@ impl SessionTools {
                 });
             }
         }
+        tracing::info!(session_id = %target.id, interrupted = running, still_running = self.turns.is_running(&target.id), "session.interrupt_done");
         Ok(out)
     }
 }
@@ -9368,6 +9385,60 @@ time.sleep(600)
         assert_eq!((idle["interrupted"].clone(), idle["delivery"].clone()), (json!(false), json!("started")), "{idle}");
         w.settle(&id);
         assert!(w.blocks(&id).iter().any(|block| block.text == "report: and then this"));
+    }
+
+    /// A session's life leaves lines — made, started, interrupted, stopped, resumed, deleted —
+    /// with ids, provider and kind, and never the prompt or what it was sent.
+    #[test]
+    fn a_sessions_life_is_traced_by_ids_without_what_it_was_told() {
+        use crate::trace::capture;
+        capture::install();
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let other = w.session("terminal", "other", "full");
+        let prompt = "SLEEP 30 PROMPT-MARKER-91ab";
+        let id = w.start(&shell, prompt);
+        until("the turn is up", || w.launches().len() == 1);
+        let started = capture::expect("subagent.started", "session_id", &id);
+        assert_eq!(started.get("provider"), Some("opencode"));
+        assert_eq!(started.get("kind"), Some("subagent"));
+        assert_eq!(started.get("parent_id"), shell.session_id());
+        assert_eq!(capture::expect("session.created", "session_id", &id).get("kind"), Some("child"));
+
+        w.call(&other, "interrupt_session", json!({ "session": id, "text": "TEXT-MARKER-77cd" })).expect("interrupt");
+        let asked = capture::expect("session.interrupt_requested", "session_id", &id);
+        assert_eq!((asked.get("running"), asked.get("redirect")), (Some("true"), Some("true")));
+        capture::expect("session.interrupt_done", "session_id", &id);
+        w.settle(&id);
+
+        w.call(&shell, "stop_session", json!({ "session": id })).expect("stop");
+        capture::expect("subagent.stopped", "session_id", &id);
+        // An independent session that exited takes the next letter as a turn on its conversation.
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.say(&mine, "first");
+        w.turns.transcripts().set_status(&mine.id, "exited", None);
+        w.turns.transcripts().flush(&mine.id);
+        let sent = w.call(&shell, "send_message", json!({ "to": mine.id, "text": "come back TEXT-MARKER-77cd" })).expect("send");
+        assert_eq!(sent["delivery"], "resumed", "{sent}");
+        let resumed = capture::expect("session.resumed", "session_id", &mine.id);
+        assert_eq!(resumed.get("started"), Some("true"));
+        assert!(resumed.fields.values().all(|v| !v.contains("MARKER")), "{resumed:?}");
+        w.settle(&mine.id);
+        session::delete(w.turns.store(), id.clone()).expect("delete");
+        capture::expect("session.deleted", "session_id", &id);
+
+        for message in [
+            "subagent.started",
+            "session.created",
+            "session.interrupt_requested",
+            "session.interrupt_done",
+            "subagent.stopped",
+            "session.resumed",
+        ] {
+            for event in capture::find(message, "session_id", &id) {
+                assert!(event.fields.values().all(|v| !v.contains("MARKER")), "{message}: {event:?}");
+            }
+        }
     }
 
     #[test]
