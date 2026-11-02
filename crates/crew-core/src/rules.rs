@@ -145,13 +145,11 @@ pub fn set_cap(store: &Store, bot_id: &str, cap: usize) -> Result<usize, String>
 }
 
 fn read(conn: &Connection, bot_id: &str) -> rusqlite::Result<Vec<Rule>> {
-    conn.prepare_cached(
-        "SELECT number, body, created_at, updated_at FROM bot_rules WHERE bot_id = ?1 ORDER BY number",
-    )?
-    .query_map(params![bot_id], |row| {
-        Ok(Rule { id: row.get(0)?, body: row.get(1)?, created_at: row.get(2)?, updated_at: row.get(3)? })
-    })?
-    .collect()
+    conn.prepare_cached("SELECT number, body, created_at, updated_at FROM bot_rules WHERE bot_id = ?1 ORDER BY number")?
+        .query_map(params![bot_id], |row| {
+            Ok(Rule { id: row.get(0)?, body: row.get(1)?, created_at: row.get(2)?, updated_at: row.get(3)? })
+        })?
+        .collect()
 }
 
 /// A rule as it is stored: one line, its whitespace collapsed. A rule is a
@@ -163,13 +161,8 @@ pub fn tidy(body: &str) -> String {
 /// What a write to the rules does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
-    Add {
-        body: String,
-    },
-    Edit {
-        id: i64,
-        body: String,
-    },
+    Add { body: String },
+    Edit { id: i64, body: String },
     Remove(i64),
 }
 
@@ -319,11 +312,7 @@ pub fn lines(rules: &[Rule]) -> String {
     if rules.is_empty() {
         return "None yet.".into();
     }
-    rules
-        .iter()
-        .map(|rule| format!("[{}] {}", label(rule.id), tidy(&rule.body)))
-        .collect::<Vec<_>>()
-        .join("\n")
+    rules.iter().map(|rule| format!("[{}] {}", label(rule.id), tidy(&rule.body))).collect::<Vec<_>>().join("\n")
 }
 
 pub fn thousands(n: usize) -> String {
