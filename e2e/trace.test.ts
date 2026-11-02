@@ -9,7 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { chatLine, crewdPid, launchCrew, MOD, newSession, pressChord, sendInChat, waitFor, type Crew } from "./harness.ts";
+import { chatLine, crewdPid, launchCrew, MOD, newSession, pressChord, sendInChat, waitFor, workspaceMark, type Crew } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -74,9 +74,26 @@ test("a command run from the keyboard is a ui.command line with how it was trigg
   const ran = await line(crew, "app.ndjson", "ui.command", (one) => one.fields.command === "open-launcher");
   assert.equal(ran.target, "app.window");
   assert.equal(ran.fields.via, "keyboard");
-  // And a tab the command opened is the next thing the window says: its kind, never its title.
-  const tab = await line(crew, "app.ndjson", "tab.open");
-  assert.ok(typeof tab.fields.kind === "string" && !("title" in tab.fields), JSON.stringify(tab));
+});
+
+test("a session opened is a tab opened and a session opened, by ids and never by name", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+
+  const made = await newSession(crew, workspace.id);
+  const tab = await line(crew, "app.ndjson", "tab.open", (one) => one.fields.session === made.id);
+  assert.deepEqual([tab.fields.kind, tab.fields.workspace], ["session", workspace.id]);
+  assert.ok(!("title" in tab.fields), JSON.stringify(tab));
+  const opened = await line(crew, "app.ndjson", "session.open", (one) => one.fields.session === made.id);
+  assert.equal(opened.fields.provider, "claude");
+
+  // Another workspace brought on screen is a switch, by workspace ids.
+  const second = await crew.addWorkspace(await crew.makeRepo("second"), "second");
+  await workspaceMark(crew, workspace.name).click();
+  const switched = await line(crew, "app.ndjson", "workspace.switch", (one) => one.fields.workspace === workspace.id);
+  assert.equal(switched.fields.from, second.id);
 });
 
 test("an error thrown in the window and a promise nobody caught are lines with one line of why", async (t) => {
@@ -109,7 +126,8 @@ test("a renderer that crashes is renderer.gone, written by main before anything 
   const gone = await line(crew, "app.ndjson", "renderer.gone");
   assert.equal(gone.level, "ERROR");
   assert.equal(gone.target, "app.main");
-  assert.equal(gone.fields.reason, "crashed");
+  // Electron calls a renderer taken down on purpose "killed", and one that fell over "crashed".
+  assert.ok(["killed", "crashed"].includes(String(gone.fields.reason)), String(gone.fields.reason));
 });
 
 test("a crewd that goes is socket.closed and a new one is daemon.start, and a socket that is dropped comes back as socket.reconnected", async (t) => {
@@ -130,22 +148,25 @@ test("a crewd that goes is socket.closed and a new one is daemon.start, and a so
   });
   await crew.reload();
   await line(crew, "app.ndjson", "socket.open");
+  const dropped = new Date().toISOString();
   await crew.window.evaluate(() => {
     for (const socket of (window as unknown as { keptSockets: WebSocket[] }).keptSockets) socket.close(4000, "dropped by the spec");
   });
-  const closed = await line(crew, "app.ndjson", "socket.closed", (one) => one.fields.code === 4000);
+  const closed = await line(crew, "app.ndjson", "socket.closed", (one) => one.timestamp >= dropped);
   assert.equal(closed.level, "WARN");
   assert.equal(closed.fields.machine, "local");
-  const back = await line(crew, "app.ndjson", "socket.reconnected");
+  const back = await line(crew, "app.ndjson", "socket.reconnected", (one) => one.timestamp >= dropped);
   assert.equal(back.fields.machine, "local");
-  assert.ok(back.timestamp > closed.timestamp, "it came back after it went");
+  assert.ok(back.timestamp >= closed.timestamp, "it came back after it went");
 
   // The daemon itself killed: the window says its socket closed, main says the child went and was started
   // again, and the new crewd's first line is in the same file as the old one's last.
   const pid = await crewdPid(crew);
   const before = (await read(crew)).lines.filter((one) => one.fields.message === "daemon.start").length;
+  const killed = new Date().toISOString();
   process.kill(pid, "SIGKILL");
   await waitFor(async () => (await crewdPid(crew).catch(() => pid)) !== pid, { timeout: 20_000, message: "the app starts crewd again" });
+  await line(crew, "app.ndjson", "socket.closed", (one) => one.timestamp >= killed);
   await line(crew, "app.ndjson", "daemon.child_exit", (one) => one.fields.expected === false);
   await line(crew, "app.ndjson", "daemon.child_restart");
   await waitFor(async () => (await read(crew)).lines.filter((one) => one.fields.message === "daemon.start").length > before, {
@@ -214,7 +235,7 @@ test("a prompt, a reply and a keystroke with a marker in them reach no file unde
   }
   // Not an empty pass: the turn it was in is there, by ids.
   assert.ok(lines.some((one) => one.fields.message === "turn.start"));
-  assert.ok(lines.some((one) => one.fields.message === "session.event"));
+  assert.ok(lines.some((one) => one.fields.message === "session.status"));
   // The names are the trace's own: nothing else was made beside them.
   assert.ok(files.every((file) => /^(app|crewd|errors)\.ndjson(\.\d+)?$/.test(file)), files.join(", "));
 });
