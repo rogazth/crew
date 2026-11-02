@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTrace, errorText, readRecord, sanitizeFields, type TraceHost, type TraceRecord } from "./trace";
+import { createTrace, errorText, loud, readRecord, sanitizeFields, type TraceHost, type TraceRecord } from "./trace";
 
 function rig(overrides: { host?: () => TraceHost | null | undefined; maxQueue?: number } = {}) {
   const sent: TraceRecord[][] = [];
@@ -155,5 +155,28 @@ describe("the default instance", () => {
     vi.resetModules();
     const { trace } = await import("./trace");
     expect(() => trace.info("nothing listens")).not.toThrow();
+  });
+});
+
+describe("what a record keeps of an error", () => {
+  it("cuts every error-like field to one line without the values a parse error quotes", () => {
+    const out = sanitizeFields({
+      error: 'invalid type: string "hunter2", expected u32\nsecond line',
+      said: "ssh: refused\nmore",
+      reason: "x".repeat(1000),
+    });
+    expect(out.error).toBe('invalid type: string "…", expected u32');
+    expect(out.said).toBe("ssh: refused");
+    expect(String(out.reason).length).toBeLessThanOrEqual(301);
+  });
+
+  it("keeps the frames of a stack and not the message that heads it", () => {
+    const out = sanitizeFields({ stack: 'SyntaxError: Unexpected token "hunter2" in JSON\n    at parse (a.js:1:1)\n    at run (b.js:2:2)' });
+    expect(out.stack).toBe("    at parse (a.js:1:1)\n    at run (b.js:2:2)");
+  });
+
+  it("speaks for the first few tries of a stretch and then one in thirty", () => {
+    const spoken = Array.from({ length: 61 }, (_, i) => i + 1).filter(loud);
+    expect(spoken).toEqual([1, 2, 3, 4, 5, 30, 60]);
   });
 });

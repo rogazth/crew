@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { isLoopback } from "../src/lib/remotes";
 import { BASE_OPTIONS, controlOption, controlPath, options, who, type SshTarget } from "./ssh-options";
+import { loud } from "../src/lib/trace";
 import { errorText, trace } from "./trace";
 
 export { isLoopback };
@@ -46,6 +47,13 @@ export class Tunnels {
   private readonly ports = new Map<string, Forward>();
   /** Children asked to go, to tell their exit from a tunnel that dropped. */
   private readonly closing = new WeakSet<ChildProcess>();
+  /**
+   * Tries since each machine's tunnel was last up. An offline machine is dialled over and over
+   * (every window retry opens a tunnel), so past the first few only one in thirty is traced.
+   */
+  private readonly attempts = new Map<string, number>();
+
+  constructor(private readonly spawnSsh: typeof spawn = spawn) {}
 
   /** The machine's tunnel, opened if it is not up. Rejects with what ssh said when it cannot be. */
   ensure(key: string, target: SshTarget, remotePort: number): Promise<Forward> {
@@ -74,25 +82,32 @@ export class Tunnels {
     entry.ready = (async () => {
       const forward = this.ports.get(key) ?? { port: await freePort(), socksPort: await freePort() };
       this.ports.set(key, forward);
-      const child = spawn("ssh", tunnelArgs(target, forward, remotePort), { stdio: ["ignore", "ignore", "pipe"] });
+      const child = this.spawnSsh("ssh", tunnelArgs(target, forward, remotePort), { stdio: ["ignore", "ignore", "pipe"] });
       entry.child = child;
       const opened = Date.now();
-      trace.info("tunnel.open", { machine: key, pid: child.pid });
+      const attempt = (this.attempts.get(key) ?? 0) + 1;
+      this.attempts.set(key, attempt);
+      const say = loud(attempt);
+      let up = false;
+      if (say) trace.info("tunnel.open", { machine: key, pid: child.pid, attempt });
       let said = "";
       child.stderr?.setEncoding("utf8");
       child.stderr?.on("data", (chunk: string) => {
         said = (said + chunk).slice(-2_000);
       });
       child.on("exit", (code, signal) => {
-        trace.info("tunnel.down", {
-          machine: key,
-          code,
-          signal,
-          up_ms: Date.now() - opened,
-          dropped: !this.closing.has(child),
-          // ssh's last words, which say why (a refused key, a port taken).
-          said: said.trim().split("\n").at(-1),
-        });
+        // A tunnel that never came up is told by `tunnel.failed`; one that was up and dropped always is.
+        if (up || say) {
+          trace.info("tunnel.down", {
+            machine: key,
+            code,
+            signal,
+            up_ms: Date.now() - opened,
+            dropped: !this.closing.has(child),
+            // ssh's last words, which say why (a refused key, a port taken).
+            said: errorText(said.trim().split("\n").at(-1) ?? ""),
+          });
+        }
         if (this.open.get(key) === entry) this.open.delete(key);
         // Ports another program took are not asked for again.
         if (/Address already in use|cannot listen to port/i.test(said)) this.ports.delete(key);
@@ -100,10 +115,12 @@ export class Tunnels {
       try {
         await listening(forward.port, child, () => said);
       } catch (error) {
-        trace.warn("tunnel.failed", { machine: key, error: errorText(error), waited_ms: Date.now() - opened });
+        if (say) trace.warn("tunnel.failed", { machine: key, error: errorText(error), waited_ms: Date.now() - opened, attempt });
         throw error;
       }
-      trace.info("tunnel.up", { machine: key, took_ms: Date.now() - opened });
+      up = true;
+      this.attempts.delete(key);
+      trace.info("tunnel.up", { machine: key, took_ms: Date.now() - opened, after_attempts: attempt });
       return forward;
     })();
     this.open.set(key, entry);

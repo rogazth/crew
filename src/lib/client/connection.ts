@@ -1,5 +1,5 @@
 import type { Event, Hello, Response } from "../protocol";
-import { errorText, trace } from "../trace";
+import { errorText, loud, trace } from "../trace";
 
 type Listener = (event: string, payload: unknown) => void;
 type Endpoint = { url: string; token: string };
@@ -453,13 +453,6 @@ export class Connection {
   }
 }
 
-/**
- * A machine that stays off is retried every few seconds for as long as it is: the
- * first tries are traced, then one in thirty, so a week away does not fill the file.
- */
-function loud(attempt: number): boolean {
-  return attempt <= 5 || attempt % 30 === 0;
-}
 
 /** A remote that is down, distinct from a request the daemon refused. */
 export class EnvDown extends Error {

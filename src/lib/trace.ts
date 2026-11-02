@@ -31,6 +31,26 @@ const MAX_STACK = 2000;
 export const MAX_BATCH = 100;
 const LEVELS: readonly string[] = ["DEBUG", "INFO", "WARN", "ERROR"];
 
+/**
+ * A machine that stays off is retried every few seconds for as long as it is: the
+ * first tries are traced, then one in thirty, so a week away does not fill the file.
+ * `attempt` counts from 1 and starts again when the machine comes up.
+ */
+export function loud(attempt: number): boolean {
+  return attempt <= 5 || attempt % 30 === 0;
+}
+
+/** Fields that hold what something said when it failed: one line, cut, and without the values a parse error quotes. */
+const SAID_KEYS = new Set(["error", "said", "reason"]);
+
+/** The frames of a stack and not its first line, which is the error's message and may quote data. */
+function frames(stack: string): string {
+  return stack
+    .split("\n")
+    .filter((line) => /^\s+at /.test(line))
+    .join("\n");
+}
+
 /** Values a record can hold: anything else is turned into text and cut. */
 export function sanitizeFields(fields: TraceFields | undefined): Record<string, TraceValue> {
   const out: Record<string, TraceValue> = {};
@@ -42,7 +62,11 @@ export function sanitizeFields(fields: TraceFields | undefined): Record<string, 
     const name = key.slice(0, MAX_KEY);
     if (typeof value === "number") out[name] = Number.isFinite(value) ? value : null;
     else if (typeof value === "boolean" || value === null) out[name] = value;
-    else out[name] = cut(typeof value === "string" ? value : safeString(value), name === "stack" ? MAX_STACK : MAX_TEXT);
+    else {
+      const text = typeof value === "string" ? value : safeString(value);
+      if (name === "stack") out[name] = cut(frames(text), MAX_STACK);
+      else out[name] = SAID_KEYS.has(name) ? errorText(text) : cut(text);
+    }
   }
   return out;
 }
