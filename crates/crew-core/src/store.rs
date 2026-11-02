@@ -1790,7 +1790,7 @@ mod trace_tests {
         // One step behind: only that step is a migration.
         {
             let store = Store::open(path.clone()).expect("open");
-            store.with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version = 43;")).expect("downgrade");
+            store.with(|conn| conn.execute("DELETE FROM schema_migrations WHERE version = ?1", [latest])).expect("downgrade");
         }
         Store::open(path.clone()).expect("reopen");
         let behind = capture::all("store.migrated").into_iter().any(|e| {
