@@ -12,7 +12,8 @@ import { createInterface } from "node:readline";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { launchCrew, sessions, startChat, waitFor, workspaceMark, type Crew } from "./harness.ts";
-import type { Connector, Session } from "../src/lib/protocol.ts";
+import type { Connector } from "../src/lib/protocol.ts";
+import type { Session } from "../src/lib/types.ts";
 
 const FAKE = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/examples/fake_connector");
 

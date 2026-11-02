@@ -109,7 +109,7 @@ pub struct BuiltinConnector {
     pub tools: Vec<ConnectorTool>,
 }
 
-/// A machine leasing from this vault, by the token the vault minted for it.
+/// A machine using this vault, by the token the vault minted for it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -118,36 +118,36 @@ pub struct VaultMachine {
     pub name: String,
     #[ts(type = "number")]
     pub created_at: i64,
-    /// When it last leased a token.
+    /// When it last ran a tool on the vault.
     #[ts(type = "number | null")]
-    pub last_lease: Option<i64>,
+    pub last_call: Option<i64>,
 }
 
 /// Where this daemon's connectors' grants are: here, or on another machine
-/// it leases from.
+/// it uses.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct VaultStatus {
-    /// This daemon holds the grants (it is the vault); otherwise it leases.
+    /// This daemon holds the grants (it is the vault); otherwise its calls run on the vault.
     pub holds: bool,
-    /// The vault's machine, as the window named it, when this one leases.
+    /// The vault's machine, as the window named it, when this one uses it.
     pub vault_name: Option<String>,
-    /// The vault's address, when this one leases.
+    /// The vault's address, when this one uses it.
     pub vault_address: Option<String>,
-    /// Whether the vault answers, when this one leases.
+    /// Whether the vault answers, when this one uses it.
     pub online: bool,
     #[ts(type = "number | null")]
     pub offline_since: Option<i64>,
-    /// Where this vault takes leases besides its own socket (this Mac's tailnet address).
+    /// Where this vault takes machines besides its own socket (this Mac's tailnet address).
     pub listening: Option<String>,
-    /// The machines leasing from this one, when it is the vault.
+    /// The machines using this one, when it is the vault.
     pub machines: Vec<VaultMachine>,
     /// How many grants this daemon keeps.
     pub grants: u32,
 }
 
-/// A machine's lease token, minted by the vault, shown once.
+/// A machine's token, minted by the vault, shown once.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -156,7 +156,7 @@ pub struct VaultMinted {
     pub token: String,
 }
 
-/// Lease from the vault at `address` with `token` from now on.
+/// Use the vault at `address` with `token` from now on.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

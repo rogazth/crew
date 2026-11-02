@@ -927,7 +927,7 @@ function mcpStatus(sessionId: string) {
 const commands: Record<string, (args: Row) => unknown> = {
   connectors_list: () => structuredClone(connectors),
   builtin_list: () => structuredClone(BUILTINS),
-  // One machine, the vault: nothing leases from it in the mock.
+  // One machine, the vault: nothing else uses it in the mock.
   vault_status: () => ({
     holds: true,
     vaultName: null,

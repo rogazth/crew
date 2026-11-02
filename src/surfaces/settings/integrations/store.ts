@@ -71,7 +71,7 @@ function start() {
   if (started) return;
   started = true;
   onConnectors((connectors) => set((s) => ({ ...s, loaded: true, error: null, connectors })));
-  // Read from the vault, wherever it is; the machines online lease from it.
+  // Read from the vault, wherever it is; the machines online use it.
   void loadVault().then(() => {
     void reload();
     void ensureMembers();

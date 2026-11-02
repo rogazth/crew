@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use crate::store::{now_millis, Store};
 
 pub const MIGRATION_V45: &str = r#"
--- The machines leasing from this vault: each one's token, hashed.
+-- The machines using this vault: each one's token, hashed.
 CREATE TABLE IF NOT EXISTS vault_machines (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL,
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS vault_machines (
 );
 "#;
 
+/// A machine's calls run on the vault now: it no longer leases anything.
+pub const MIGRATION_V46: &str = "ALTER TABLE vault_machines RENAME COLUMN last_lease TO last_call;";
+
 fn hash(token: &str) -> String {
     Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -41,7 +44,7 @@ fn hash(token: &str) -> String {
 /// A new machine's token, shown once: the vault keeps only its hash.
 pub fn mint(store: &Store, name: &str) -> Result<(VaultMachine, String), String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let token = format!("lease-{}", super::oauth::random_token());
+    let token = format!("machine-{}", super::oauth::random_token());
     let now = now_millis();
     store.with(|conn| {
         conn.execute(
@@ -50,13 +53,13 @@ pub fn mint(store: &Store, name: &str) -> Result<(VaultMachine, String), String>
         )
         .map(drop)
     })?;
-    Ok((VaultMachine { id, name: name.to_string(), created_at: now, last_lease: None }, token))
+    Ok((VaultMachine { id, name: name.to_string(), created_at: now, last_call: None }, token))
 }
 
 pub fn machines(store: &Store) -> Result<Vec<VaultMachine>, String> {
     store.with(|conn| {
-        conn.prepare("SELECT id, name, created_at, last_lease FROM vault_machines ORDER BY created_at")?
-            .query_map([], |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_lease: row.get(3)? }))?
+        conn.prepare("SELECT id, name, created_at, last_call FROM vault_machines ORDER BY created_at")?
+            .query_map([], |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? }))?
             .collect()
     })
 }
@@ -65,21 +68,18 @@ pub fn revoke(store: &Store, id: &str) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM vault_machines WHERE id = ?1", [id]).map(drop))
 }
 
-/// Forgets every machine: a vault that moved leases to none.
+/// Forgets every machine: a vault that moved serves none.
 pub fn revoke_all(store: &Store) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM vault_machines", []).map(drop))
 }
 
-/// The machine a lease token is, if any.
+/// The machine a token is, if any.
 pub fn machine_of(store: &Store, token: &str) -> Result<Option<VaultMachine>, String> {
-    if !token.starts_with("lease-") {
-        return Ok(None);
-    }
     store.with(|conn| {
         conn.query_row(
-            "SELECT id, name, created_at, last_lease FROM vault_machines WHERE token_hash = ?1",
+            "SELECT id, name, created_at, last_call FROM vault_machines WHERE token_hash = ?1",
             [hash(token)],
-            |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_lease: row.get(3)? }),
+            |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? }),
         )
         .optional()
     })
@@ -90,8 +90,8 @@ pub fn is_known(store: &Store, id: &str) -> Result<bool, String> {
     store.with(|conn| conn.query_row("SELECT 1 FROM vault_machines WHERE id = ?1", [id], |_| Ok(())).optional().map(|row| row.is_some()))
 }
 
-pub fn leased(store: &Store, id: &str) -> Result<(), String> {
-    store.with(|conn| conn.execute("UPDATE vault_machines SET last_lease = ?2 WHERE id = ?1", params![id, now_millis()]).map(drop))
+pub fn called(store: &Store, id: &str) -> Result<(), String> {
+    store.with(|conn| conn.execute("UPDATE vault_machines SET last_call = ?2 WHERE id = ?1", params![id, now_millis()]).map(drop))
 }
 
 /// How often one machine may call: enough for sessions at work, not a loop
@@ -269,7 +269,7 @@ mod tests {
     use crew_protocol::AccountState;
 
     fn store() -> Store {
-        Store::open(std::env::temp_dir().join(format!("lease-{}", uuid::Uuid::new_v4())).join("crew.db")).unwrap()
+        Store::open(std::env::temp_dir().join(format!("machines-{}", uuid::Uuid::new_v4())).join("crew.db")).unwrap()
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
         let s = store();
         let (devbox, token) = mint(&s, "devbox").unwrap();
         assert_eq!(machine_of(&s, &token).unwrap().unwrap().id, devbox.id);
-        assert!(machine_of(&s, "lease-guess").unwrap().is_none());
+        assert!(machine_of(&s, "machine-guess").unwrap().is_none());
         assert!(machine_of(&s, "the daemon's own token").unwrap().is_none());
         let stored: String = s.with(|c| c.query_row("SELECT token_hash FROM vault_machines", [], |r| r.get(0))).unwrap();
         assert_ne!(stored, token, "only the hash is kept");

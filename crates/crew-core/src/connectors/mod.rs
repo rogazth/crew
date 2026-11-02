@@ -18,7 +18,7 @@ pub mod fake_server;
 pub mod flow;
 pub mod google;
 pub mod gws;
-pub mod lease;
+pub mod machines;
 pub mod net;
 pub mod oauth;
 pub mod remote;

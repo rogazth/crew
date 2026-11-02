@@ -1,7 +1,7 @@
 // The vault between machines, as the window runs it (plan
 // docs/plans/2026-10-23-integrations.md, phase 3). One machine holds the
 // sign-ins; the window, which reaches every machine, joins the others to it:
-// it asks the vault for a lease token for each and hands it over. Moving the
+// it asks the vault for a token for each and hands it over. Moving the
 // vault is three calls, new ← old: the new vault's key, the old vault's handoff
 // token for that key, the new vault pulling with it; the window carries the
 // key and the token, never a grant. Then every other machine joins the new one.
@@ -65,7 +65,7 @@ export const machineName = (envId: string) => {
   return link ? nameOf(link) : envId;
 };
 
-/** This Mac's tailnet address, where the machines lease from it when it is the vault. */
+/** This Mac's tailnet address, where the machines reach it when it is the vault. */
 async function macAddress(): Promise<string | null> {
   const net = await remotesHost()
     ?.tailnet()
@@ -116,7 +116,7 @@ export async function loadVault(): Promise<string> {
   return env;
 }
 
-/** Joins `member` to the vault: a lease token minted for it, handed over. Its old tokens are revoked. */
+/** Joins `member` to the vault: a token minted for it, handed over. Its old tokens are revoked. */
 async function join(member: EnvLink, vault: EnvLink, vaultAddress: string) {
   const old = await vaultStatus(vault.id).catch(() => null);
   for (const machine of old?.machines.filter((m) => m.name === nameOf(member)) ?? []) await vaultRevoke(vault.id, machine.id);
@@ -127,8 +127,8 @@ async function join(member: EnvLink, vault: EnvLink, vaultAddress: string) {
 let ensuring: Promise<void> | null = null;
 
 /**
- * Every machine online leases from the vault: one that holds no sign-ins of
- * its own, or leases from another address, joins it. One that holds
+ * Every machine online uses the vault: one that holds no sign-ins of
+ * its own, or uses another address, joins it. One that holds
  * sign-ins of its own is left as it is: moving them is the person's call.
  */
 export function ensureMembers(): Promise<void> {
@@ -148,10 +148,10 @@ export function ensureMembers(): Promise<void> {
         const stray = status.holds ? status.grants === 0 : status.vaultAddress !== address;
         if (stray) await join(member, vault, address).catch((e) => console.warn(`vault: ${nameOf(member)} didn't join: ${message(e)}`));
       }
-      // A machine removed from Crew leases no more.
+      // A machine removed from Crew reaches the vault no more.
       const names = new Set(links.map(nameOf));
-      const leasing = (await vaultStatus(vault.id).catch(() => null))?.machines ?? [];
-      for (const gone of leasing.filter((m) => !names.has(m.name))) await vaultRevoke(vault.id, gone.id).catch(() => {});
+      const known = (await vaultStatus(vault.id).catch(() => null))?.machines ?? [];
+      for (const gone of known.filter((m) => !names.has(m.name))) await vaultRevoke(vault.id, gone.id).catch(() => {});
     } finally {
       ensuring = null;
       void refreshVault();

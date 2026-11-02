@@ -3119,7 +3119,7 @@ mod tests {
         let called = call("hi");
         assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "hi", "{called}");
         let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 8, "vault_status", Value::Null).await.result.unwrap()).unwrap();
-        assert!(status.holds && status.machines[0].last_lease.is_some(), "{status:?}");
+        assert!(status.holds && status.machines[0].last_call.is_some(), "{status:?}");
 
         // A machine's token runs tools; it reads nothing else of the daemon,
         // and no method answers a token.

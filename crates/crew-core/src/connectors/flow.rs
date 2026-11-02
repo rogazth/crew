@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use super::builtin::Builtin;
 use super::google;
 use super::gws::{self, Gws, GwsError};
-use super::lease::{RelayError, VaultLink, MAX_RELAYED_BYTES};
+use super::machines::{RelayError, VaultLink, MAX_RELAYED_BYTES};
 use super::oauth::{self, Client, ClientAuth, Discovery, OAuthError, Pkce, Tokens};
 use super::remote::{RemoteClient, RemoteError};
 use super::vault::{Grant, VaultStore};
@@ -394,7 +394,7 @@ impl Connectors {
     /// Everything a vault move carries: every grant, and the config whole.
     /// Only ever sealed (`seal.rs`) before it leaves the daemon.
     pub fn move_bundle(&self) -> Result<Vec<u8>, String> {
-        let bundle = MoveBundle { grants: self.vault.all()?, config: super::lease::snapshot(&self.store)? };
+        let bundle = MoveBundle { grants: self.vault.all()?, config: super::machines::snapshot(&self.store)? };
         serde_json::to_vec(&bundle).map_err(|e| e.to_string())
     }
 
@@ -406,7 +406,7 @@ impl Connectors {
         let count = bundle.grants.len();
         self.set_link(None);
         self.moving_until.store(0, Ordering::SeqCst);
-        super::lease::import(&self.store, &bundle.config)?;
+        super::machines::import(&self.store, &bundle.config)?;
         self.vault.replace(bundle.grants.clone())?;
         self.remotes.lock().unwrap_or_else(|e| e.into_inner()).clear();
         for (key, grant) in bundle.grants {
@@ -731,7 +731,7 @@ impl Connectors {
         match link.call(account_id, name, arguments).await {
             Ok(answer) => answer,
             Err(RelayError::Offline) => {
-                let since = link.offline_since().map(|t| format!(" since {}", super::lease::clock(t))).unwrap_or_default();
+                let since = link.offline_since().map(|t| format!(" since {}", super::machines::clock(t))).unwrap_or_default();
                 tool_error(&format!("{label}: the vault on {vault} is offline{since}"))
             }
             Err(RelayError::Lost) => tool_error(&format!(
@@ -785,7 +785,7 @@ impl Connectors {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct MoveBundle {
     grants: HashMap<String, Grant>,
-    config: super::lease::Snapshot,
+    config: super::machines::Snapshot,
 }
 
 fn tool_error(line: &str) -> Value {
@@ -988,7 +988,7 @@ mod tests {
     fn member_of(vault: &Arc<Connectors>) -> (Arc<Connectors>, Arc<TestLink>, Arc<MemoryVault>) {
         let dir = std::env::temp_dir().join(format!("cf-{}", uuid::Uuid::new_v4()));
         let store = Store::open(dir.join("crew.db")).unwrap();
-        super::super::lease::import(&store, &super::super::lease::snapshot(&vault.store).unwrap()).unwrap();
+        super::super::machines::import(&store, &super::super::machines::snapshot(&vault.store).unwrap()).unwrap();
         let grants = Arc::new(MemoryVault::default());
         let machine = Connectors::new(store, grants.clone(), Arc::new(|| {})).unwrap();
         machine.set_gws(Gws::at(dir.join("no-gws-here")));

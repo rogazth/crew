@@ -2016,7 +2016,7 @@ export type VaultCallback = { state: string,
 url: string, };
 
 /**
- * Lease from the vault at `address` with `token` from now on.
+ * Use the vault at `address` with `token` from now on.
  */
 export type VaultJoin = { address: string, token: string, vaultName: string, };
 
@@ -2026,16 +2026,16 @@ export type VaultJoin = { address: string, token: string, vaultName: string, };
 export type VaultKey = { publicKey: string, };
 
 /**
- * A machine leasing from this vault, by the token the vault minted for it.
+ * A machine using this vault, by the token the vault minted for it.
  */
 export type VaultMachine = { id: string, name: string, createdAt: number, 
 /**
- * When it last leased a token.
+ * When it last ran a tool on the vault.
  */
-lastLease: number | null, };
+lastCall: number | null, };
 
 /**
- * A machine's lease token, minted by the vault, shown once.
+ * A machine's token, minted by the vault, shown once.
  */
 export type VaultMinted = { machine: VaultMachine, token: string, };
 
@@ -2047,31 +2047,31 @@ export type VaultPull = { address: string, token: string, };
 
 /**
  * Where this daemon's connectors' grants are: here, or on another machine
- * it leases from.
+ * it uses.
  */
 export type VaultStatus = { 
 /**
- * This daemon holds the grants (it is the vault); otherwise it leases.
+ * This daemon holds the grants (it is the vault); otherwise its calls run on the vault.
  */
 holds: boolean, 
 /**
- * The vault's machine, as the window named it, when this one leases.
+ * The vault's machine, as the window named it, when this one uses it.
  */
 vaultName: string | null, 
 /**
- * The vault's address, when this one leases.
+ * The vault's address, when this one uses it.
  */
 vaultAddress: string | null, 
 /**
- * Whether the vault answers, when this one leases.
+ * Whether the vault answers, when this one uses it.
  */
 online: boolean, offlineSince: number | null, 
 /**
- * Where this vault takes leases besides its own socket (this Mac's tailnet address).
+ * Where this vault takes machines besides its own socket (this Mac's tailnet address).
  */
 listening: string | null, 
 /**
- * The machines leasing from this one, when it is the vault.
+ * The machines using this one, when it is the vault.
  */
 machines: Array<VaultMachine>, 
 /**

@@ -26,14 +26,14 @@ function standing(machine: Machine, vaultEnv: string): string {
   if (needsTailscale(machine.envId)) return "Reached over SSH";
   const status = machine.status;
   if (machine.envId === vaultEnv) {
-    const leasing = status?.machines.length ?? 0;
-    return [`Keeps ${plural(status?.grants ?? 0, "sign-in")}`, leasing > 0 ? `${plural(leasing, "machine")} lease from it` : null]
+    const using = status?.machines.length ?? 0;
+    return [`Keeps ${plural(status?.grants ?? 0, "sign-in")}`, using > 0 ? `${plural(using, "machine")} ${using === 1 ? "uses" : "use"} it` : null]
       .filter(Boolean)
       .join(" · ");
   }
   if (!status) return "Can’t be reached";
   if (status.holds) return status.grants > 0 ? `Keeps ${plural(status.grants, "sign-in")} of its own` : "Not joined yet";
-  return status.online ? `Leases from ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
+  return status.online ? `Uses ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
 }
 
 /** What making `to` the vault costs, said before it happens. */

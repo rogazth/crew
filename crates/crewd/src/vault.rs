@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crew_core::connectors::flow::Connectors;
-use crew_core::connectors::lease::{self, InFlight, RateLimit, RelayError, VaultLink};
+use crew_core::connectors::machines::{self, InFlight, RateLimit, RelayError, VaultLink};
 use crew_core::connectors::seal::{self, Opener};
 use crew_core::store::{self as app_state, Store};
 use crew_protocol::{self as proto, Request, VaultMachine, VaultMinted, VaultStatus};
@@ -191,7 +191,7 @@ impl VaultHost {
                 online: true,
                 offline_since: None,
                 listening,
-                machines: lease::machines(&self.store)?,
+                machines: machines::machines(&self.store)?,
                 grants,
             },
         })
@@ -201,13 +201,13 @@ impl VaultHost {
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return Err("This machine uses another vault".into());
         }
-        let (machine, token) = lease::mint(&self.store, name)?;
+        let (machine, token) = machines::mint(&self.store, name)?;
         eprintln!("[crewd] vault: minted a token for {name} ({})", machine.id);
         Ok(VaultMinted { machine, token })
     }
 
     pub fn revoke(&self, id: &str) -> Result<(), String> {
-        lease::revoke(&self.store, id)?;
+        machines::revoke(&self.store, id)?;
         eprintln!("[crewd] vault: revoked machine {id}");
         Ok(())
     }
@@ -241,7 +241,7 @@ impl VaultHost {
         let config = LinkConfig { address: join.address, token: join.token, vault_name: join.vault_name };
         self.write_link(Some(&config))?;
         self.unlisten()?;
-        lease::revoke_all(&self.store)?;
+        machines::revoke_all(&self.store)?;
         self.start_link(config);
         Ok(())
     }
@@ -315,7 +315,7 @@ impl VaultHost {
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return None;
         }
-        lease::machine_of(&self.store, token).ok().flatten().map(PeerKind::Machine)
+        machines::machine_of(&self.store, token).ok().flatten().map(PeerKind::Machine)
     }
 
     /// The tailnet listener: a WebSocket with a machine or handoff token, nothing else.
@@ -395,7 +395,7 @@ impl VaultHost {
     fn still_known(&self, peer: &PeerKind) -> bool {
         match peer {
             PeerKind::Machine(machine) => {
-                self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && lease::is_known(&self.store, &machine.id).unwrap_or(false)
+                self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && machines::is_known(&self.store, &machine.id).unwrap_or(false)
             }
             PeerKind::Handoff(_) => true,
         }
@@ -405,7 +405,7 @@ impl VaultHost {
         match (peer, method) {
             (PeerKind::Machine(machine), "vault_config") => {
                 let store = self.store.clone();
-                let snap = tokio::task::spawn_blocking(move || lease::snapshot(&store)).await.map_err(|e| e.to_string())??;
+                let snap = tokio::task::spawn_blocking(move || machines::snapshot(&store)).await.map_err(|e| e.to_string())??;
                 let _ = &machine.id;
                 serde_json::to_value(snap).map_err(|e| e.to_string())
             }
@@ -439,7 +439,7 @@ impl VaultHost {
                 // Never the arguments or the answer: only who called what.
                 let outcome = if answer["isError"] == true { "failed" } else { "ok" };
                 eprintln!("[crewd] vault: {} called {tool} on account {account}: {outcome}", machine.name);
-                let _ = lease::leased(&self.store, &machine.id);
+                let _ = machines::called(&self.store, &machine.id);
                 Ok(answer)
             }
             (PeerKind::Machine(machine), "vault_tools_refresh") => {
@@ -473,7 +473,7 @@ impl VaultHost {
             (PeerKind::Handoff(token), "vault_handoff_done") => {
                 self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).remove(token);
                 self.connectors.forget_grants()?;
-                lease::revoke_all(&self.store)?;
+                machines::revoke_all(&self.store)?;
                 self.unlisten()?;
                 eprintln!("[crewd] vault: the grants moved away and were deleted here");
                 Ok(Value::Null)
@@ -609,9 +609,9 @@ impl Link {
         });
         let sync = |link: Arc<Link>, store: Store, connectors: Arc<Connectors>| async move {
             match link.request("vault_config", Value::Null, CALL_TIMEOUT).await {
-                Ok(Ok(value)) => match serde_json::from_value::<lease::Snapshot>(value) {
+                Ok(Ok(value)) => match serde_json::from_value::<machines::Snapshot>(value) {
                     Ok(snap) => {
-                        let done = tokio::task::spawn_blocking(move || lease::import(&store, &snap)).await;
+                        let done = tokio::task::spawn_blocking(move || machines::import(&store, &snap)).await;
                         if matches!(done, Ok(Ok(()))) {
                             connectors.notify();
                         }
