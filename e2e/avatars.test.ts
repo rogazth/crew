@@ -43,7 +43,7 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   // A bot, made in the sheet.
   await pressChord(crew, `${MOD}+Shift+a`);
   const sheet = page.getByRole("complementary", { name: "New bot" });
-  await sheet.getByPlaceholder("e.g. Research").fill("Scout");
+  await sheet.getByLabel("Name", { exact: true }).fill("Scout");
   await sheet.getByRole("button", { name: "Create bot" }).click();
   await sheet.waitFor({ state: "detached" });
   const bot = await waitFor(

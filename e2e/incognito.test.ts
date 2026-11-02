@@ -253,7 +253,7 @@ test("⇧⌘A still opens the new bot pane", async () => {
   await chord(`${MOD}+Shift+a`);
   const sheet = crew.window.getByRole("complementary", { name: "New bot" });
   await sheet.waitFor();
-  await sheet.getByPlaceholder("e.g. Research").click();
+  await sheet.getByLabel("Name", { exact: true }).click();
   await crew.window.keyboard.press("Escape");
   await sheet.waitFor({ state: "detached" });
 });

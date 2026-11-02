@@ -128,8 +128,8 @@ test("C2: every command starts from the Commands tab and stops from the palette"
   await page.getByRole("button", { name: "Start all", exact: true }).waitFor({ state: "detached" });
 
   await pressChord(crew, `${MOD}+Shift+p`);
-  await palette.getByRole("textbox", { name: "Search" }).fill("Stop All");
-  await palette.getByRole("button", { name: /^Stop All Commands/ }).click();
+  await palette.getByRole("textbox", { name: "Search" }).fill("Stop all");
+  await palette.getByRole("button", { name: /^Stop all commands/ }).click();
   await waitFor(async () => (await states()).every((state) => state === "stopped"), { message: "crewd stops both" });
   await page.getByRole("button", { name: "Stop all", exact: true }).waitFor({ state: "detached" });
 });

@@ -1,5 +1,6 @@
 // The address bar's suggestions: the one under the pointer shows its address
 // in the bar, and leaving the list puts back what was typed.
+import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
@@ -57,9 +58,14 @@ test("hovering a suggestion shows its address in the bar", async () => {
 
   await address().click();
   await address().fill("127.0.0.1");
-  const option = crew.window.getByRole("option", { name: /Page \/first/ });
+  // By its address: the page's title may not be in the history yet.
+  const option = crew.window.getByRole("option", { name: /\/first/ });
   await waitFor(() => option.isVisible(), { message: "history offers the first page" });
+  // The first move over a row only says where the pointer is: rows appear under a still one.
   await option.hover();
+  const box = await option.boundingBox();
+  assert.ok(box);
+  await crew.window.mouse.move(box.x + box.width / 2 + 4, box.y + box.height / 2);
   await waitForAddress(`${origin}/first`, "the hovered suggestion shows in the bar");
   await crew.window.mouse.move(0, 0);
   await waitForAddress("127.0.0.1", "leaving the list puts back what was typed");

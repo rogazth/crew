@@ -56,17 +56,18 @@ test("`@` offers a folder git ignores, and the message sends it", async () => {
   const session = await newSession(crew, workspace.id);
   const field = composerOf(crew, session);
   await field.fill("look at @refer");
-  const menu = crew.window.getByRole("listbox", { name: "Files" });
+  const menu = crew.window.getByRole("listbox", { name: "Mentions" });
   const folder = menu.getByRole("option").filter({ hasText: "reference/" }).first();
   await folder.waitFor();
   // Tab goes into the folder: the mention stays `@reference/`, with no space after it.
   await field.press("Tab");
   assert.equal(await field.textContent(), "look at @reference/");
   // Into the folder: what it holds, read from disk.
-  await menu.getByRole("option").filter({ hasText: "acme/" }).first().waitFor();
+  const inside = crew.window.getByRole("listbox", { name: "Files" });
+  await inside.getByRole("option").filter({ hasText: "acme/" }).first().waitFor();
   await field.press("End");
   await field.pressSequentially(" please");
-  await waitFor(async () => (await menu.count()) === 0, { message: "the menu closes past the mention" });
+  await waitFor(async () => (await inside.count()) === 0, { message: "the menu closes past the mention" });
   await sendInChat(crew, "look at @reference/ please");
 
   const cwd = workspace.path;
@@ -80,7 +81,7 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
   const session = await newSession(crew, workspace.id);
   const field = composerOf(crew, session);
   await field.fill("look at @refer");
-  await crew.window.getByRole("listbox", { name: "Files" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
+  await crew.window.getByRole("listbox", { name: "Mentions" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
   await field.pressSequentially(" now");
   await sendInChat(crew, "look at @reference/ now");
 
