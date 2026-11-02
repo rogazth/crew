@@ -94,7 +94,11 @@ pub fn error_text(error: &str) -> String {
         "trailing",
     ];
     let first_line = redact_destinations(&redact_urls(
-        error.lines().find(|l| !l.trim().is_empty() && !l.trim_start().starts_with("Warning:")).or_else(|| error.lines().next()).unwrap_or(""),
+        error
+            .lines()
+            .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with("Warning:"))
+            .or_else(|| error.lines().next())
+            .unwrap_or(""),
     ));
     let first_line = first_line.as_str();
     let text = if PARSE_ERRORS
@@ -368,11 +372,17 @@ mod tests {
 
     #[test]
     fn a_destination_in_an_error_is_not_recorded_and_the_cause_is() {
-        assert_eq!(error_text("crew-e2e-nobody@127.0.0.1: Permission denied (publickey)."), "<destination>: Permission denied (publickey).");
+        assert_eq!(
+            error_text("crew-e2e-nobody@127.0.0.1: Permission denied (publickey)."),
+            "<destination>: Permission denied (publickey)."
+        );
         assert_eq!(error_text("git@github.com:org/repo.git: not found"), "<destination>:org/repo.git: not found");
         assert_eq!(error_text("git@[::1]:x failed"), "<destination>:x failed");
         assert_eq!(error_text("no @ here, nor @mention"), "no @ here, nor @mention");
-        assert_eq!(error_text("Warning: Permanently added 'h' to the list.\nme@host: Permission denied"), "<destination>: Permission denied");
+        assert_eq!(
+            error_text("Warning: Permanently added 'h' to the list.\nme@host: Permission denied"),
+            "<destination>: Permission denied"
+        );
         assert_eq!(error_text("Warning: only this\n"), "Warning: only this");
     }
 
