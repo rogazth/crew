@@ -43,6 +43,7 @@ use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 
 mod http;
 pub mod lock;
@@ -224,6 +225,10 @@ impl Hub {
         (id, rx)
     }
 
+    fn contains(&self, id: u64) -> bool {
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id)
+    }
+
     fn watch_pty(&self, id: u64, stream_id: u32) {
         self.pty_attached.lock().unwrap_or_else(|e| e.into_inner()).entry(id).or_default().insert(stream_id);
     }
@@ -269,6 +274,10 @@ impl Hub {
             return;
         };
         if !send_wait(&tx, msg) {
+            // Too far behind (or already gone): the window reconnects and replays.
+            if !tx.is_closed() {
+                tracing::warn!(client_id = id, queued = tx.max_capacity() - tx.capacity(), "conn.dropped");
+            }
             self.unsubscribe(id);
         }
     }
@@ -699,7 +708,7 @@ async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
                 if listen.wait_for_addr
                     && matches!(error.kind(), std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse) =>
             {
-                eprintln!("[crewd] {}: {error}; trying again in {wait:?}", listen.addr);
+                tracing::warn!(addr = %listen.addr, %error, retry_in_ms = wait.as_millis() as u64, "daemon.bind_retry");
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(10));
             }
@@ -744,7 +753,7 @@ async fn run(
                     let token = token.clone();
                     tokio::spawn(socks::run(listener, token));
                 }
-                Err(error) => eprintln!("[crewd] socks {socks_at}: {error}"),
+                Err(error) => tracing::warn!(addr = %socks_at, %error, "socks.bind_failed"),
             }
         }
     }
@@ -775,7 +784,7 @@ async fn run(
             every.tick().await;
             let children = children.clone();
             if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
-                eprintln!("[crewd] reaping idle sessions: {error}");
+                tracing::warn!(%error, "sessions.reap_failed");
             }
             let turns = turns.clone();
             let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
@@ -792,7 +801,7 @@ async fn run(
             let store = expiring.store.clone();
             if let Ok(Some(days)) = block(move || session::retention_to_act_on(&store)).await {
                 if let Err(error) = expire_sessions(&expiring, days).await {
-                    eprintln!("[crewd] expiring sessions: {error}");
+                    tracing::warn!(%error, "sessions.expire_failed");
                 }
             }
         }
@@ -858,20 +867,25 @@ fn notice_dead_peer(stream: &TcpStream) {
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
+    let peer = stream.peer_addr().map(|addr| addr.ip().to_string()).unwrap_or_default();
     let Some(ws) = http::accept(stream, &token).await else {
+        tracing::debug!(%peer, "conn.not_a_window");
         return;
     };
     let (mut sink, mut source) = ws.split();
     let first = source.next().await;
     let Some(Ok(Message::Text(text))) = first else {
+        tracing::warn!(%peer, reason = "no_auth_frame", "conn.auth_failed");
         let _ = sink.close().await;
         return;
     };
     let Ok(Auth { auth }) = serde_json::from_str::<Auth>(text.as_ref()) else {
+        tracing::warn!(%peer, reason = "unreadable_auth_frame", "conn.auth_failed");
         let _ = sink.close().await;
         return;
     };
     if auth != token {
+        tracing::warn!(%peer, reason = "wrong_token", "conn.auth_failed");
         let _ = sink.close().await;
         return;
     }
@@ -884,6 +898,10 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     let (client_id, mut outgoing) = hub.subscribe();
+    // Every line from this connection's tasks carries `client_id`.
+    let span = tracing::info_span!("conn", client_id);
+    let opened = Instant::now();
+    tracing::info!(parent: &span, %peer, "conn.accepted");
     replay_busy_sessions(&hosts, &hub, client_id);
     let writer = tokio::spawn(async move {
         while let Some(msg) = outgoing.recv().await {
@@ -903,8 +921,15 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     // The last call on each terminal: the next one on it waits for it to finish.
     let mut pty_last: HashMap<String, oneshot::Receiver<()>> = HashMap::new();
 
+    let mut closed = "stream_ended".to_string();
     while let Some(msg) = source.next().await {
-        let Ok(msg) = msg else { break };
+        let msg = match msg {
+            Ok(msg) => msg,
+            Err(error) => {
+                closed = format!("socket_error: {error}");
+                break;
+            }
+        };
         match msg {
             Message::Text(text) => {
                 let hosts = hosts.clone();
@@ -919,20 +944,24 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                     let (done, rx) = oneshot::channel::<()>();
                     (pty_last.insert(id, rx), done)
                 });
-                tokio::spawn(async move {
-                    let _done = match turn {
-                        Some((before, done)) => {
-                            if let Some(before) = before {
-                                let _ = before.await;
+                let span = span.clone();
+                tokio::spawn(
+                    async move {
+                        let _done = match turn {
+                            Some((before, done)) => {
+                                if let Some(before) = before {
+                                    let _ = before.await;
+                                }
+                                Some(done)
                             }
-                            Some(done)
+                            None => None,
+                        };
+                        if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
+                            hub.send(client_id, Outgoing::Text(reply));
                         }
-                        None => None,
-                    };
-                    if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
-                        hub.send(client_id, Outgoing::Text(reply));
                     }
-                });
+                    .instrument(span),
+                );
             }
             Message::Binary(bytes) => {
                 if bytes.len() < 4 {
@@ -941,7 +970,10 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
                 enqueue_pty_input(&pty_in, &hosts, &hub, stream_id, bytes[4..].to_vec());
             }
-            Message::Close(_) => break,
+            Message::Close(_) => {
+                closed = "client_closed".to_string();
+                break;
+            }
             Message::Ping(payload) => {
                 hub.send(client_id, Outgoing::Pong(payload.to_vec()));
             }
@@ -949,6 +981,11 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         }
     }
 
+    // Taken off the hub already: it fell behind (`conn.dropped`) and the writer ended.
+    if !hub.contains(client_id) {
+        closed = "dropped_behind".to_string();
+    }
+    tracing::info!(parent: &span, reason = %closed, duration_ms = opened.elapsed().as_millis() as u64, "conn.closed");
     hub.unsubscribe(client_id);
     hosts.browser.relay().client_gone(client_id);
     writer.abort();
@@ -1065,7 +1102,8 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         Err(error) => return Some(encode(&proto::err(0, format!("Bad request: {error}")))),
     };
     if request.method == "pty_attach" {
-        attach_pty(hosts, hub, client_id, request.id, request.params).await;
+        let span = rpc_span(client_id, request.id, "pty_attach");
+        attach_pty(hosts, hub, client_id, request.id, request.params).instrument(span).await;
         return None;
     }
     // These speak for the connection itself, so they need to know which one it is.
@@ -1124,11 +1162,78 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
             Err(error) => proto::err(request.id, error),
         }));
     }
-    let result = dispatch(hosts, request.method.as_str(), request.params).await;
+    let span = rpc_span(client_id, request.id, &request.method);
+    let started = Instant::now();
+    let result = dispatch(hosts, request.method.as_str(), request.params).instrument(span.clone()).await;
+    span.in_scope(|| rpc_done(&request.method, started, result.as_ref().err()));
     Some(encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
     }))
+}
+
+/// Calls the window makes all the time: keystrokes, resizes, flow-control acks, pings, polls
+/// and the reads behind a screen opening. One INFO line each would bury the rest of
+/// the trace (a typing user makes dozens a second), so they are DEBUG unless they fail
+/// or take long. `pty_write` carries the user's keystrokes: no call's params are ever recorded.
+const HOT_METHODS: &[&str] = &[
+    "pty_write",
+    "pty_resize",
+    "pty_ack",
+    "ping",
+    "machine_metrics",
+    "daemon_info",
+    "state_get",
+    "state_set",
+    "state_keys",
+    "session_mark_seen",
+    "session_mark_read",
+    "transcript_tail",
+    "background_list",
+    "process_log_tail",
+    "upload_chunk",
+    "read_file_range",
+    "path_exists",
+    "path_is_file",
+    "list_folder",
+    "dir_list",
+    "list_project_files",
+    "search_files",
+    "browser_pages_list",
+    "browser_leases_list",
+    "browser_ack",
+    "browser_result",
+    "browser_host_focus",
+    "browser_host_pages",
+    "usage_read",
+    "mailbox_pending",
+];
+
+/// A hot call slower than this is worth a line anyway.
+const SLOW_CALL: Duration = Duration::from_secs(1);
+
+fn is_hot(method: &str) -> bool {
+    HOT_METHODS.contains(&method)
+}
+
+/// One span per call: `client_id` and `method`, so whatever the call does is
+/// found by either. Hot calls get a DEBUG one, which costs nothing unless asked for.
+fn rpc_span(client_id: u64, req_id: u32, method: &str) -> tracing::Span {
+    if is_hot(method) {
+        tracing::debug_span!("rpc", client_id, req_id, method)
+    } else {
+        tracing::info_span!("rpc", client_id, req_id, method)
+    }
+}
+
+/// `rpc.done` or `rpc.failed`, with the method, how long it took and, for a failure, why.
+fn rpc_done(method: &str, started: Instant, error: Option<&String>) {
+    let duration_ms = crew_core::trace::ms(started.elapsed());
+    match error {
+        Some(error) => tracing::warn!(method, duration_ms, error = %crew_core::trace::error_text(error), "rpc.failed"),
+        None if !is_hot(method) || started.elapsed() >= SLOW_CALL => tracing::info!(method, duration_ms, "rpc.done"),
+        None => tracing::debug!(method, duration_ms, "rpc.done"),
+    }
 }
 
 async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, params: Value) {
@@ -1166,8 +1271,11 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
+/// Runs `work` on the blocking pool. A `tracing` span is per thread, so the
+/// caller's (connection, request) is carried over by hand.
 async fn block<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tokio::task::spawn_blocking(work).await.map_err(|e| e.to_string())?
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(work)).await.map_err(|e| e.to_string())?
 }
 
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {

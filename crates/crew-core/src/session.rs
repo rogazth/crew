@@ -728,13 +728,21 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }
-    store.with(|conn| {
+    let previous = store.with(|conn| {
+        let previous: Option<String> = conn
+            .prepare_cached("SELECT status FROM sessions WHERE id = ?1")?
+            .query_row(params![id], |row| row.get(0))
+            .optional()?;
         conn.prepare_cached("UPDATE sessions SET status = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![
             id,
             status,
             now_millis()
-        ])
+        ])?;
+        Ok(previous)
     })?;
+    if previous.as_deref() != Some(status.as_str()) {
+        tracing::info!(session_id = %id, from = previous.as_deref().unwrap_or("none"), to = %status, "session.status");
+    }
     Ok(())
 }
 

@@ -778,7 +778,19 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let args = if args.is_object() { args } else { json!({}) };
-            match run(host, caller, name, &args) {
+            let started = std::time::Instant::now();
+            let outcome = run(host, caller, name, &args);
+            // The tool, who called, how long and whether it worked. Never `args` or what came back.
+            let tool: String = name.chars().take(64).collect();
+            let (caller_kind, session_id) = (format!("{:?}", caller.kind()), caller.session_id().unwrap_or(""));
+            let duration_ms = crate::trace::ms(started.elapsed());
+            match &outcome {
+                Ok(_) => tracing::info!(%tool, %caller_kind, session_id, duration_ms, "tool.call"),
+                Err(error) => {
+                    tracing::warn!(%tool, %caller_kind, session_id, duration_ms, error = %crate::trace::error_text(error), "tool.failed")
+                }
+            }
+            match outcome {
                 Ok(ToolOutput::Value(out)) => {
                     let body = match out {
                         Value::String(text) => text,
