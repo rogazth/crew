@@ -259,6 +259,23 @@ describe("panelEntries kinds", () => {
     expect(shell).not.toHaveProperty("provider");
   });
 
+  it("ends a launched session once it goes idle, though it records no events", () => {
+    const entryOf = (status: Session["status"]) =>
+      panelEntries(null, [standalone("billing", { launchedBy: "s1", status, createdAt: 10, updatedAt: 90 })], [], S1)[0];
+
+    expect(entryOf("idle")).toMatchObject({ state: "done", endedAt: 90, stoppable: false });
+    expect(entryOf("done")).toMatchObject({ state: "done", endedAt: 90, stoppable: false });
+    for (const status of ["starting", "working", "background", "needs-input"] as const) {
+      expect(entryOf(status)).toMatchObject({ state: "running", stoppable: true });
+    }
+    expect(entryOf("error")).toMatchObject({ state: "failed" });
+    expect(entryOf("exited")).toMatchObject({ state: "stopped" });
+  });
+
+  it("keeps a subagent that has yet to record an event running", () => {
+    expect(panelEntries(null, [session("scout", { status: "idle" })], [], S1)[0]).toMatchObject({ kind: "subagent", state: "running" });
+  });
+
   it("lists a session this one launched and not one launched by someone else", () => {
     const theirs = standalone("theirs", { name: "theirs", launchedBy: "s2" });
     const user = standalone("mine", { name: "mine" });

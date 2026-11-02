@@ -438,6 +438,9 @@ test("x on a session the chat launched interrupts its turn and leaves the sessio
   assert.ok(launch, "the session's CLI started");
   assert.doesNotThrow(() => process.kill(launch.pid, 0), "the session's CLI is still alive");
   assert.notEqual((await crew.request<Session>("session_get", { id: launched.id })).status, "exited");
+  // A session of the user's records no events: idle, it reads as done, not as still starting.
+  await row.getByText(/done after/).waitFor();
+  assert.equal(await row.getByRole("button", { name: "Stop" }).count(), 0);
   await crew.window.keyboard.press("Escape");
   await sheet().waitFor({ state: "hidden" });
 });

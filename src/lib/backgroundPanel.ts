@@ -10,7 +10,7 @@ import { isRunning } from "./background";
 import { tokenCount } from "./contextMeter";
 import { summarize } from "./activity";
 import { EFFORT_LABELS, modelLabel, type Effort } from "./providers";
-import { childState, isOwnedChild, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
+import { childState, isOwnedChild, launchedState, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
 import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, BotRef, Process, ProcessRun, ThreadPair } from "./protocol";
 import { duration } from "./time";
 import type { Session } from "./types";
@@ -163,7 +163,7 @@ const ATTENTION: Partial<Record<ChildState, PanelAttention>> = { question: "ques
 
 /** A Crew subagent the session owns, or an independent session it launched. */
 function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
-  const reason = childState(session);
+  const reason = kind === "session" ? launchedState(session) : childState(session);
   const state = CHILD_STATE[reason];
   return {
     id: `session:${session.id}`,

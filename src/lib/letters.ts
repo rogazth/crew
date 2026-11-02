@@ -186,6 +186,16 @@ export function childState(session: Pick<Session, "status" | "lastEvent">): Chil
   }
 }
 
+/**
+ * Where a session another one launched stands. It is the user's, so it records
+ * no events: idle and with no event means its turn ended, not that it has yet
+ * to start, as it would for a subagent.
+ */
+export function launchedState(session: Pick<Session, "status" | "lastEvent">): ChildState {
+  const state = childState(session);
+  return state === "starting" && (session.status === "idle" || session.status === "done") ? "reported" : state;
+}
+
 /** A child is one its parent owns: started with `delegate`, not launched as a session of the user's. */
 export function isOwnedChild(session: Pick<Session, "kind" | "parentId" | "launchedBy">): boolean {
   return session.kind === "child" && Boolean(session.parentId) && !session.launchedBy;
