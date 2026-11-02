@@ -1,5 +1,5 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { ChevronRightIcon, CircleCheckIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayLabel } from "../../lib/time";
@@ -178,14 +178,9 @@ export function TurnFold({
   const label = row.durationMs !== undefined ? `Worked for ${duration(row.durationMs)}` : "Worked";
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
-        <span className="crew-node relative">
-          <CircleCheckIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
-          <ChevronRightIcon
-            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-          />
-        </span>
+      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-1.5 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="text-text-muted tabular-nums transition-colors group-hover:text-text">{label}</span>
+        <ChevronRightIcon className={`size-3 text-icon opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90 opacity-100" : ""}`} />
         {row.failed ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
         <span className="h-px flex-1 bg-hairline" />
       </Collapsible.Trigger>

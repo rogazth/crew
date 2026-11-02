@@ -36,7 +36,7 @@ after(async () => {
 const composer = () => composerOf(crew);
 const sheet = () => crew.window.locator("[data-work-sheet]");
 const page = () => crew.window.locator("[data-agent-view]");
-const card = () => crew.window.locator("[data-agent-card]").last();
+const card = () => crew.window.locator("[data-agent-start]").last();
 
 async function send(text: string): Promise<void> {
   const field = composer();
@@ -104,9 +104,9 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
 test("Stop on a running subagent ends the child and not the parent's turn", async () => {
   const before = (await interrupts()).length;
   // The card of the test before is there already: wait for this call's own.
-  const cards = await crew.window.locator("[data-agent-card]").count();
+  const cards = await crew.window.locator("[data-agent-start]").count();
   await send("hold on SUBAGENT SLOW");
-  await waitFor(async () => (await crew.window.locator("[data-agent-card]").count()) > cards, { timeout: 20_000, message: "the call's card shows" });
+  await waitFor(async () => (await crew.window.locator("[data-agent-start]").count()) > cards, { timeout: 20_000, message: "the call's card shows" });
   await card().click();
   await page().waitFor();
   await page().getByText("echo child").first().waitFor();
@@ -132,9 +132,9 @@ test("a second call that continues the same subagent is its own card and opens t
   await send("again SUBAGENT RESUME");
   await idle();
   await crew.window.getByText("Done: again SUBAGENT RESUME", { exact: true }).waitFor();
-  const cards = crew.window.locator("[data-agent-card]");
+  const cards = crew.window.locator("[data-agent-start]");
   await waitFor(async () => (await cards.count()) >= 2, { message: "one card per call" });
-  const resumed = crew.window.getByText("Resumed a subagent");
+  const resumed = crew.window.locator("[data-agent-start]").filter({ hasText: "resumed" });
   await resumed.last().waitFor();
   assert.equal(await resumed.count(), 1);
   // Each call brought its own report back, in order.

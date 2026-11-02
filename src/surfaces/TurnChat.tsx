@@ -163,7 +163,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     },
     [closeThread, session.id],
   );
-  const letterScope = useMemo<LetterScope>(() => ({ ...letters.scope, openThread }), [letters.scope, openThread]);
+  const letterScope = useMemo<LetterScope>(() => ({ ...letters.scope, openThread, inThread: embedded }), [embedded, letters.scope, openThread]);
   const backgroundScope = useMemo<BackgroundScope>(() => ({ calls: markedCalls(commands), open: openOutput }), [commands, openOutput]);
 
   // Opening the tab means "talk to this session"; the caret should already be there.

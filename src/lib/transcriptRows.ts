@@ -6,7 +6,7 @@
  * the turn. The component below this renders rows and nothing else, so the
  * decisions live here where they can be checked.
  */
-import { type Block, type TurnUsage } from "./blocks";
+import { allFailed, type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, isSteering, letterIdOf } from "./letters";
 import { controlOf, isReportLetter, nativeReportAt, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
@@ -383,7 +383,7 @@ function foldTurn(turn: Row[]): Row[] {
     id: `fold-${rowId(work[0]!)}`,
     rows: work,
     ...(durationMs !== undefined && durationMs > 0 ? { durationMs } : {}),
-    failed: blocks.some((block) => block.tool?.status === "failed"),
+    failed: allFailed(blocks),
   };
   const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
   return [...turn.slice(0, opening), fold, ...out, ...rest];

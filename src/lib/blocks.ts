@@ -48,6 +48,12 @@ function isBlock(value: unknown): value is Block {
   return typeof row.id === "string" && typeof row.role === "string" && typeof row.text === "string";
 }
 
+/** A run reads as failed only when all of it did: one tool failing on the way shows on that tool's row. */
+export function allFailed(blocks: readonly Block[]): boolean {
+  const tools = blocks.filter((block) => block.tool);
+  return tools.length > 0 && tools.every((block) => block.tool?.status === "failed");
+}
+
 export function isOpen(block: Block): boolean {
   if (block.role === "tool") return block.tool?.status === "pending";
   if (block.role === "approval") return block.approval != null && !block.approval.decided;

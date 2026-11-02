@@ -196,8 +196,14 @@ describe("foldTurns", () => {
     const fold = rows[2] as Extract<Row, { kind: "fold" }>;
     expect(kinds(fold.rows)).toEqual(["activity", "message", "activity"]);
     expect(fold.durationMs).toBe(60_000);
-    expect(fold.failed).toBe(true);
+    expect(fold.failed).toBe(false);
     expect((rows[4] as Extract<Row, { kind: "footer" }>).folded).toBe(true);
+  });
+
+  it("reads a run as failed only when every tool in it failed", () => {
+    const failing = (id: string) => block("tool", id, { tool: { callId: id, name: "Bash", title: id, status: "failed" } });
+    const rows = foldTurns(groupRows([block("user", "fix it", { at: 1_000 }), failing("c1"), block("assistant", "trying again", { at: 2_000 }), failing("c2"), block("assistant", "gave up", { at: 3_000, usage: { durationMs: 2_000 } })]), false);
+    expect((rows.find((row) => row.kind === "fold") as Extract<Row, { kind: "fold" }>).failed).toBe(true);
   });
 
   it("leaves the turn the agent is still working on alone", () => {

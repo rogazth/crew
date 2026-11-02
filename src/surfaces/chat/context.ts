@@ -83,6 +83,8 @@ export type LetterScope = {
   owner: Party | null;
   sessions: readonly Session[];
   openThread: (thread: ThreadRef) => void;
+  /** This chat is an agent's thread: the letters are its words, not beats. */
+  inThread?: boolean;
 };
 
 export const LetterContext = createContext<LetterScope>({ owner: null, sessions: [], openThread: () => undefined });

@@ -1,6 +1,5 @@
-import { Collapsible } from "@base-ui/react/collapsible";
 import { Tooltip } from "../../chrome/kit";
-import { ChevronRightIcon, GitBranchIcon, ImagesIcon, InfoIcon } from "lucide-react";
+import { GitBranchIcon, ImagesIcon, InfoIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState, type ReactNode } from "react";
@@ -13,6 +12,7 @@ import { AttachmentStrip, Lightbox } from "./Attachments";
 import { isAuthFailure, loginArgv } from "../../lib/auth";
 import { LOCAL, envOfSession } from "../../lib/client/registry";
 import { providerOf } from "../../lib/providers";
+import { Beat } from "./Beat";
 import { useChatActions, useChatSession, type ChatSession } from "./context";
 import { CopyButton } from "./CopyButton";
 import { clock, duration } from "../../lib/time";
@@ -56,60 +56,23 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
 });
 
 /**
- * A letter a bot (or a terminal) wrote, folded to one line: who sent it and how it
- * opens. Folded it still shows the first line — a message you cannot see at
- * all is one you have to click to know you can ignore.
+ * A letter with no thread behind it: an old one, or one sent from the command
+ * line. A beat like the rest, its words in a dialog.
  */
 function Letter({ block, from }: { block: Block; from: BotRef }) {
-  const { openSession } = useChatActions();
-  const [open, setOpen] = useState(false);
-  const first = block.text.split("\n").find((line) => line.trim() !== "") ?? "";
+  const you = from.kind === "user";
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen}>
-      <Collapsible.Trigger
-        className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] leading-[18px] ring-1 ring-hairline transition-colors hover:bg-hover"
-        data-block={block.id}
-        data-letter-row
-      >
-        <BotAvatar seed={from.id} bare className="size-5" />
-        {from.kind === "user" ? (
-          <span className="shrink-0 text-text-muted">You sent this from the command line</span>
-        ) : (
-          <span className="shrink-0">
-            <span className="font-medium">{from.name}</span>
-            <span className="text-text-muted"> wrote to you</span>
-          </span>
-        )}
-        {open ? <span className="flex-1" /> : <span className="min-w-0 flex-1 truncate text-text-muted">{first}</span>}
-        <ChevronRightIcon
-          className={`size-3.5 shrink-0 text-icon transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-        />
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="crew-phase-panel">
-        <div className="flex flex-col items-start gap-1.5 pt-2">
-          {block.text ? (
-            <div className="crew-md-row">
-              <div className="crew-bubble is-from-bot" data-bubble>
-                <p className="whitespace-pre-wrap">{block.text}</p>
-              </div>
-              <CopyButton text={block.text} className="crew-copy crew-copy-aside" />
-            </div>
-          ) : null}
-          {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
-          {/* The user, and a sender deleted since, have no session to open. */}
-          {from.id ? (
-            <button
-              type="button"
-              onClick={() => openSession(from.id)}
-              className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
-              title={`Open ${from.name}`}
-            >
-              Open {from.name}
-            </button>
-          ) : null}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
+    <Beat
+      id={block.id}
+      first={you ? "you" : { id: from.id, name: from.name, bot: from.kind === undefined }}
+      verb={you ? "sent this from the command line" : "wrote to you"}
+      at={block.at}
+      peek={{
+        title: you ? "From the command line" : `Message from ${from.name}`,
+        text: block.text,
+        ...(block.files?.length ? { extra: <AttachmentStrip files={block.files} /> } : {}),
+      }}
+    />
   );
 }
 

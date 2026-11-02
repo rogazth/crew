@@ -65,35 +65,36 @@ async function shoot(name: string): Promise<void> {
 
 const row = (text: string | RegExp) => crew.window.locator("[data-block]").filter({ hasText: text }).last();
 
-test("Crew calls draw as rows and cards: subagents, a report, sessions started, a message and the control rows", async () => {
+test("Crew calls draw as beats that say who and to whom, never the words: subagents, a report, sessions started, a message; control calls stay rows", async () => {
   await send("crew");
   await row("Listed 7 peers").waitFor({ timeout: 30_000 });
   await idle();
 
-  // A subagent that answered: its row, its card, and its report under it.
-  const calls = crew.window.getByText(/^Started a subagent/);
-  assert.equal(await calls.count(), 2, "the scout and the reviewer");
+  // A subagent that answered: that it started, that it reported, and not what it said.
+  const beats = () => crew.window.locator("[data-beat]");
+  assert.equal(await crew.window.locator("[data-agent-start]").filter({ hasText: /scout|reviewer/ }).count(), 2, "the scout and the reviewer");
   const report = crew.window.locator("[data-report]");
   assert.equal(await report.count(), 1);
-  assert.match(flat(await report.innerText()), /Report from scout.*4 callers/);
+  assert.match(flat(await report.innerText()), /scout reported to/);
+  assert.doesNotMatch(flat(await report.innerText()), /4 callers/, "no preview of the report");
 
-  // Sessions started: one card, a line each, the one that failed in danger ink.
-  const started = crew.window.getByText("Started 2 sessions, 1 failed");
-  await started.waitFor();
-  const lines = crew.window.locator("[data-agent-card]").filter({ hasText: /billing-ui|refunds-api/ });
-  assert.equal(await lines.count(), 2);
-  const failed = crew.window.getByText(/docs-sweep · no free worktree name/);
+  // Sessions started: a beat each, the one that failed saying why.
+  assert.equal(await crew.window.locator("[data-agent-start]").filter({ hasText: /billing-ui|refunds-api/ }).count(), 2);
+  const failed = beats().filter({ hasText: /could not start.*docs-sweep.*no free worktree name/ });
   assert.equal(await failed.count(), 1);
-  await started.scrollIntoViewIfNeeded();
+  await failed.scrollIntoViewIfNeeded();
   await shoot("transcript-start-sessions");
 
-  // A message out: the text in a card, how it was delivered on the row.
-  const message = row(/Message to refunds-api/);
-  assert.match(flat(await message.innerText()), /Message to refunds-api · read mid-turn/);
+  // A message out: who, to whom and how it went over, and not what it said.
+  const message = beats().filter({ hasText: /wrote to.*refunds-api/ }).last();
+  assert.match(flat(await message.innerText()), /wrote to refunds-api · read mid-turn/);
   // A session is never drawn with the bot's face, even when the chat does not know which CLI it runs.
   assert.equal(await message.locator('[data-face="unknown"]').count(), 0);
   assert.equal(await crew.window.locator("[data-block]").getByRole("button").locator('[data-face="unknown"]').count(), 0);
-  assert.match(flat(await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").innerText()), /90-day limit/);
+  assert.equal(await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").count(), 0, "no preview of the message");
+  await message.getByRole("button").click();
+  await crew.window.getByText("Decision: partial refunds keep the 90-day limit.").waitFor();
+  await crew.window.keyboard.press("Escape");
 
   // The control rows: one line each, a card only for the redirect.
   const text = flat(await crew.window.locator("[data-block]").allInnerTexts().then((all) => all.join(" | ")));
@@ -151,10 +152,11 @@ test("a message to a child opens its thread at the letter, lit", async () => {
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   await idle();
   await send(`crewsent ${child.id} ${letter} Lint pass`);
-  const message = crew.window.locator(`[data-letter="${letter}"]`).filter({ hasText: /Message to/ });
+  const message = crew.window.locator(`[data-beat][data-letter="${letter}"]`);
   await message.waitFor({ timeout: 30_000 });
   await idle();
-  await message.getByRole("button", { name: "Lint pass" }).click();
+  assert.match(flat(await message.innerText()), /wrote to Lint pass/);
+  await message.getByRole("button").click();
 
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
@@ -178,31 +180,31 @@ async function askingChild(name: string, prompt: string) {
   });
 }
 
-test("a child's question is answered from the parent's chat: options on the letter, the first answer counts", async () => {
+test("a child's question waits as a beat in the parent's chat and is answered in the child's thread", async () => {
   const child = await askingChild("refunds-api", "Check the refund limits ASKQUESTION");
-  const letter = crew.window.locator("[data-letter]").filter({ hasText: /Partial refunds over 90 days/ });
+  const letter = crew.window.locator("[data-beat]").filter({ hasText: /refunds-api.*asked/ }).last();
   await letter.waitFor({ timeout: 30_000 });
-  assert.match(flat(await letter.innerText()), /refunds-api asks waits on an answer/);
-  const keep = letter.getByRole("button", { name: "Keep the 90-day limit" });
-  await keep.waitFor();
-  assert.match(flat(await letter.innerText()), /You or .* can answer/);
-  assert.doesNotMatch(flat(await letter.innerText()), /Options:/, "the options are said once, as buttons");
+  await waitFor(async () => /waiting for an answer/.test(flat(await letter.innerText())), { message: "the beat says it waits" });
+  assert.doesNotMatch(flat(await letter.innerText()), /Partial refunds over 90 days/, "no preview of the question");
   assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
   await letter.scrollIntoViewIfNeeded();
   await shoot("answer-from-parent");
 
-  await keep.click();
-  await waitFor(async () => /Answered by you · the first answer counts/.test(flat(await letter.innerText())), { message: "the chips say who answered" });
-  assert.equal(await keep.isDisabled(), true);
-  assert.equal(await letter.getByRole("button", { name: "Allow them" }).isDisabled(), true);
-  assert.equal(await letter.getByText(/waits on an answer/).count(), 0, "the tag is gone once it is answered");
+  await letter.getByRole("button").click();
+  const thread = crew.window.locator("[data-agent-view]");
+  await thread.waitFor();
+  await thread.getByText("Keep the 90-day limit", { exact: true }).click();
+  await thread.getByRole("button", { name: /^Send/ }).click();
   await crew.window.getByText(/Done: Check the refund limits ASKQUESTION \[answers: .*keep/).first().waitFor({ timeout: 30_000 });
   await waitFor(async () => (await crew.request<Session>("session_get", { id: child.id })).status !== "needs-input", { message: "the child's turn goes on" });
   await shoot("answer-from-parent-answered");
+  await crew.window.keyboard.press("Escape");
+  await thread.waitFor({ state: "detached" });
+  await waitFor(async () => !/waiting for an answer/.test(flat(await letter.innerText())), { message: "the beat stops waiting" });
   await idle();
 });
 
-test("a child's approval is decided from the parent's chat when the parent could do it itself", async () => {
+test("a child's approval waits as a beat in the parent's chat and is decided in the child's thread", async () => {
   // Only a parent that runs with full autonomy gets the approval as a letter.
   const now = await crew.request<Session>("session_get", { id: chat.id });
   await crew.request("session_update", {
@@ -216,18 +218,22 @@ test("a child's approval is decided from the parent's chat when the parent could
   });
   await idle();
   const child = await askingChild("billing-ui", "Run the billing fixtures ASKAPPROVAL");
-  const letter = crew.window.locator("[data-letter]").filter({ hasText: /wants to use/i });
+  const letter = crew.window.locator("[data-beat]").filter({ hasText: /billing-ui.*asked/ }).last();
   await letter.waitFor({ timeout: 30_000 });
-  assert.match(flat(await letter.innerText()), /billing-ui asks waits on an answer/);
-  const allow = letter.getByRole("button", { name: /^Allow/ });
-  await allow.waitFor();
+  await waitFor(async () => /waiting for an answer/.test(flat(await letter.innerText())), { message: "the beat says it waits" });
   assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
   await letter.scrollIntoViewIfNeeded();
   await shoot("answer-from-parent-approval");
 
+  await letter.getByRole("button").click();
+  const thread = crew.window.locator("[data-agent-view]");
+  await thread.waitFor();
+  const allow = thread.getByRole("button", { name: /^Allow/ }).first();
+  await allow.waitFor();
   await allow.click();
-  await waitFor(async () => /Allowed by you · the first answer counts/.test(flat(await letter.innerText())), { message: "the card says who decided" });
   await crew.window.getByText(/Done: Run the billing fixtures ASKAPPROVAL \[decision: once\]/).first().waitFor({ timeout: 30_000 });
   await shoot("answer-from-parent-approval-decided");
+  await crew.window.keyboard.press("Escape");
+  await thread.waitFor({ state: "detached" });
   await idle();
 });

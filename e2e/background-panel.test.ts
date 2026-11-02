@@ -327,7 +327,7 @@ test("the sheet lists a native subagent, a Crew subagent, a session and a shell 
 
 /** The sheet is open already when the test before left it so. */
 async function openWorkSheet(): Promise<void> {
-  if (!(await sheet().isVisible())) await inChat().getByRole("button", { name: /finished$|agent|session|shell|process/ }).click();
+  if (!(await sheet().isVisible())) await inChat().locator("[data-agent-clip], [data-status-line] button").filter({ hasText: /finished$|agent|session|shell|process/ }).first().click();
   await sheet().waitFor();
 }
 
@@ -375,28 +375,17 @@ test("a shell opens in place under the same header, with its output and no compo
   await page.waitFor({ state: "detached" });
 });
 
-test("a native subagent's call is one row and one card with the sheet's state, and the card opens its thread in place", async () => {
+test("a native subagent's call is one beat, and it opens its thread in place", async () => {
   await send("agent");
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
-  const calls = crew.window.getByText(/^Started a subagent/);
-  const cards = crew.window.locator("[data-agent-card]");
-  await cards.last().waitFor();
-  assert.equal(await calls.count(), await cards.count(), "every call is one row and one card");
-  const card = cards.last();
+  const beat = crew.window.locator("[data-agent-start]").last();
+  await beat.waitFor();
   const flat = (text: string) => text.replace(/\s+/g, " ");
+  assert.match(flat(await beat.innerText()), /started/);
+  assert.doesNotMatch(flat(await beat.innerText()), /41k tokens/, "where it stands is the work list's, not the beat's");
   await shoot("transcript-subagents");
 
-  // The sheet says the same of the same agent.
-  await openWorkSheet();
-  // The sheet lists the newest subagent first: the one the card is.
-  const listed = flat((await rows().allInnerTexts()).find((text) => text.includes("Subagent ·")) ?? "");
-  const state = /Subagent · (?:[^·]+ · )?(stopped|done|failed)/.exec(listed)?.[1] ?? "running";
-  assert.match(flat(await card.innerText()), /Look around.*41k tokens/);
-  assert.ok(flat(await card.innerText()).includes(state === "running" ? "Reading README.md" : state), `${await card.innerText()} vs ${listed}`);
-  await crew.window.keyboard.press("Escape");
-  await sheet().waitFor({ state: "hidden" });
-
-  await card.click();
+  await beat.click();
   const page = crew.window.locator("[data-agent-view]");
   await page.waitFor();
   assert.equal(await visible("[data-thread-header]").count(), 1, "one header in the pane");

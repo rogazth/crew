@@ -1,28 +1,21 @@
 /**
- * How orchestration reads in a transcript (orchestration plan, decisions
- * 19–21 and 27): a one-line tool row, and when there is more to read a card
- * hanging under it. A native subagent and a Crew subagent are the same row
- * and the same card; the card reads from the chat's work list, so it says
- * what the sheet says.
+ * How orchestration reads in a transcript: a beat in the middle of the chat that
+ * says who did what to whom (Beat.tsx), and nothing of what was said. A native
+ * subagent and a Crew subagent are the same beat. The words are read where they
+ * were said: an agent's thread, or a pair's conversation. Inside an agent's own
+ * thread the letters are that thread's words, so they stay drawn in full.
  */
 import {
-  BotIcon,
   CircleStopIcon,
   EyeIcon,
   HandIcon,
-  MessageSquareIcon,
-  MessagesSquareIcon,
   PencilIcon,
-  SquareTerminalIcon,
   SendIcon,
   Trash2Icon,
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 import { lazy, memo, Suspense, useContext, useState, type ReactNode } from "react";
-import { BotAvatar } from "../../chrome/BotAvatar";
-import { ProviderIcon } from "../../chrome/ProviderIcon";
-import type { PanelEntry, PanelState } from "../../lib/backgroundPanel";
 import { useOpenAsk } from "../../hooks/useOpenAsk";
 import { isOpen, type Block } from "../../lib/blocks";
 import { answer, respond } from "../../lib/turnRuntime";
@@ -31,10 +24,8 @@ import { QuestionCard } from "./QuestionCard";
 import { botLabel } from "../../lib/botNames";
 import { checkpointOf, resolveParty, USER } from "../../lib/letters";
 import {
-  agentMeta,
   controlOf,
   envelopeOf,
-  firstLine,
   FOLD_LINES,
   foldsLongText,
   isQuickQuestion,
@@ -42,17 +33,16 @@ import {
   nativeName,
   optionless,
   nativeReport,
+  nativeReportAt,
   sentOf,
   startedOf,
-  startedSessionsSentence,
 } from "../../lib/orchestration";
 import type { CrewTarget } from "../../lib/protocol";
-import { agentDetail, entryOfCall, resumesEntry, subagentView } from "../../lib/subagent";
+import { agentDetail, entryOfCall, resumesEntry } from "../../lib/subagent";
 import { useChatActions, useLetterScope, WorkContext } from "./context";
 import { Note, UserMessage } from "./Message";
-import { StateDot } from "./Panel";
 import type { Session } from "../../lib/types";
-import { AgentRow } from "./AgentRow";
+import { Beat, PeerMark, type Peer } from "./Beat";
 
 /** streamdown is half a megabyte: a long text loads it when it is first drawn. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -87,16 +77,6 @@ export function ToolLine({
 /** A card hanging under a row: indented to the row's text, hairline, the app's radius. */
 export function Hang({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div data-hang className={`ml-[26px] overflow-hidden rounded-xl ring-1 ring-hairline ${className}`}>{children}</div>;
-}
-
-/** Who a name stands for: a bot is its face, an agent its CLI's mark. */
-export type Peer = { id?: string | undefined; name: string; provider?: string | undefined; bot?: boolean | undefined };
-
-export function PeerMark({ peer, className }: { peer: Peer; className: string }) {
-  if (peer.bot && peer.id) return <BotAvatar seed={peer.id} bare className={`${className} shrink-0`} />;
-  if (peer.provider) return <ProviderIcon provider={peer.provider} className={`${className} shrink-0`} />;
-  // A session whose CLI is not known (gone, or named only by a call): a neutral mark. Only a bot has a face.
-  return <SquareTerminalIcon aria-hidden className={`${className} shrink-0 text-icon`} />;
 }
 
 /** A session or a bot as the chat's sessions know it: by id, else by name when the call named it by name only. */
@@ -140,35 +120,6 @@ export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
   );
 }
 
-/**
- * One agent's line inside a card: where it is, what it was asked, and how far
- * it got. The whole line opens its thread when there is one to open.
- */
-export function AgentLine({
-  state,
-  title,
-  meta,
-  peer,
-  entry,
-  onOpen,
-}: {
-  state: PanelState;
-  title: string;
-  meta: string;
-  /** Set when the line names the agent: a card of several lines. */
-  peer?: Peer;
-  /** The work list's entry for it, when it has one. */
-  entry?: PanelEntry | undefined;
-  onOpen?: (() => void) | undefined;
-}) {
-  const { sessions, owner } = useLetterScope();
-  const sessionId = entry?.id.startsWith("session:") ? entry.id.slice("session:".length) : peer?.id;
-  const session = sessionId ? sessions.find((row) => row.id === sessionId) : undefined;
-  // A native subagent wears its parent's mark.
-  const parent = sessions.find((row) => row.id === owner?.id)?.provider;
-  return <AgentRow state={state} title={title} meta={meta} peer={peer} entry={entry} session={session} fallback={parent} onOpen={onOpen} />;
-}
-
 /** A long text, folded at seven lines with a way to read it all. */
 export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: string; lines?: number; fold?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -197,196 +148,138 @@ export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: stri
   );
 }
 
-/**
- * That an agent reported, where the report arrived: one row like the one that started it, and its name opens
- * its thread at that turn, where the report is read whole. An agent with no thread to open shows the words here, whole.
- */
-export function Report({ peer, text, target, focus }: { peer: Peer; text: string; target: string | undefined; focus?: string }) {
-  return (
-    <div className="flex flex-col gap-1" data-report>
-      <ToolLine icon={BotIcon}>
-        Report from <PeerName peer={{ ...peer, id: target }} {...(focus ? { focus } : {})} />
-      </ToolLine>
-      {target ? null : (
-        <Hang className="bg-card px-3.5 py-2.5">
-          <LongText text={text} fold={false} />
-        </Hang>
-      )}
-    </div>
-  );
-}
-
-/** What the work list knows about a Crew session an agent row names. */
-function entryOf(entries: readonly PanelEntry[], sessionId: string | undefined): PanelEntry | undefined {
-  return sessionId ? entries.find((entry) => entry.id === `session:${sessionId}`) : undefined;
-}
-
-/** The facts a card says about one entry. */
-function entryFacts(entry: PanelEntry) {
-  return {
-    state: entry.state,
-    tokens: entry.tokens,
-    activity: entry.activity,
-    startedAt: entry.startedAt,
-    endedAt: entry.endedAt,
-  };
+/** The chat's owner, as a beat names it. */
+function useOwnerPeer(): Peer | undefined {
+  const { owner, sessions } = useLetterScope();
+  return owner ? peerOf(sessions, owner.id, owner.name) : undefined;
 }
 
 /**
- * A native subagent's call, whichever CLI ran it: `Started a subagent [mark]
- * Explore` and a card with what it was asked and where it stands. When it has
- * answered, its report is drawn under the card, at the point its call ended.
+ * A native subagent's call, whichever CLI ran it: `Lead started [mark] Explore`.
+ * It opens the subagent's thread; one the work list has lost shows what it was asked.
  */
 export const SubagentCall = memo(function SubagentCall({ block, marked }: { block: Block; marked: string | null }) {
   const entries = useContext(WorkContext);
   const { sessions, owner } = useLetterScope();
   const { openAgent } = useChatActions();
+  const me = useOwnerPeer();
   const detail = agentDetail(block);
-  const view = subagentView(block);
-  if (!detail || !view) return null;
+  if (!detail) return null;
   const entry = entryOfCall(entries, block);
   // A call that goes on with a subagent an earlier call started has its own steps and state: the entry is the whole subagent's.
   const resumed = resumesEntry(entry, block);
   const provider = entry?.provider ?? sessions.find((row) => row.id === owner?.id)?.provider;
   const peer: Peer = { name: nativeName(detail), provider };
-  const state = detail.thread ? view.state : (entry?.state ?? view.state);
-  const meta = agentMeta(entry ? { ...entryFacts(entry), state } : { state, activity: view.current });
+  const asked = detail.prompt ?? detail.description ?? "";
   return (
-    <div className="flex flex-col gap-1.5">
-      <ToolLine icon={BotIcon} id={block.id} marked={marked}>
-        {resumed ? "Resumed a subagent" : "Started a subagent"}{" "}
-        {entry ? (
-          <button type="button" onClick={() => openAgent(entry.id)} className={`${PEER_CHIP} rounded-chrome hover:underline`}>
-            <PeerMark peer={peer} className="size-3.5" />
-            <span className="truncate">{peer.name}</span>
-          </button>
-        ) : (
-          <PeerName peer={peer} />
-        )}
-      </ToolLine>
-      <Hang>
-        <AgentLine
-          state={state}
-          title={firstLine(detail.prompt ?? "") || detail.description || "Subagent"}
-          meta={meta}
-          entry={entry}
-          onOpen={entry ? () => openAgent(entry.id) : undefined}
-        />
-      </Hang>
-    </div>
+    <Beat
+      id={block.id}
+      marked={marked}
+      first={me}
+      start
+      verb={resumed ? "resumed" : "started"}
+      second={peer}
+      at={block.at}
+      onOpen={entry ? () => openAgent(entry.id) : undefined}
+      peek={asked ? { title: `What ${peer.name} was asked`, text: asked } : undefined}
+    />
   );
 });
 
-/** A native subagent's report as a row of its own, drawn where it landed after the call. */
+/** A native subagent's report, drawn where it landed after the call. */
 export const SubagentReport = memo(function SubagentReport({ block }: { block: Block }) {
   const entries = useContext(WorkContext);
   const { sessions, owner } = useLetterScope();
+  const { openAgent } = useChatActions();
+  const me = useOwnerPeer();
   const detail = agentDetail(block);
   const report = nativeReport(block);
   if (!detail || !report) return null;
   const entry = entryOfCall(entries, block);
   const provider = entry?.provider ?? sessions.find((row) => row.id === owner?.id)?.provider;
-  return <Report peer={{ name: nativeName(detail), provider }} text={report} target={entry?.id} />;
+  const peer: Peer = { name: nativeName(detail), provider };
+  return (
+    <Beat
+      report
+      first={peer}
+      verb="reported to"
+      second={me}
+      at={nativeReportAt(block) ?? block.at}
+      onOpen={entry ? () => openAgent(entry.id) : undefined}
+      peek={{ title: `What ${peer.name} reported`, text: report }}
+    />
+  );
 });
-
-/** The line a Crew start makes for one session: the work list's entry, else what the call said. */
-function lineOf(entries: readonly PanelEntry[], target: CrewTarget, block: Block) {
-  const entry = entryOf(entries, target.id);
-  if (entry) return { state: entry.state, meta: agentMeta(entryFacts(entry)), entry };
-  const failed = block.tool?.status === "failed";
-  const state: PanelState = failed ? "failed" : block.tool?.status === "pending" ? "running" : "done";
-  return { state, meta: agentMeta({ state }), entry: undefined };
-}
 
 /**
  * A Crew call that started something: `delegate` is a subagent, `start_session`
- * a session, `start_sessions` several, one line each. The prompt is not
- * unfolded here: it is the session's first letter, at the top of its thread.
+ * a session, `start_sessions` several, a beat each. The prompt is the session's
+ * first letter, at the top of its thread.
  */
 export const StartedRow = memo(function StartedRow({ block, marked }: { block: Block; marked: string | null }) {
   const entries = useContext(WorkContext);
   const { openAgent } = useChatActions();
   const { sessions } = useLetterScope();
+  const me = useOwnerPeer();
   const started = startedOf(block);
   if (!started) return null;
   const peerOf = (target: CrewTarget): Peer => {
     const session = target.id ? sessions.find((row) => row.id === target.id) : undefined;
     return { id: target.id, name: session?.name ?? target.name, provider: session?.provider ?? target.provider, bot: false };
   };
-
-  if (started.kind === "sessions") {
-    const { targets } = started;
-    return (
-      <div className="flex flex-col gap-1.5">
-        <ToolLine icon={MessagesSquareIcon} id={block.id} marked={marked}>
-          {startedSessionsSentence(targets)}
-        </ToolLine>
-        <span className="-mt-0.5 ml-[26px] text-[11.5px] text-placeholder">In your sidebar, and in Work while running.</span>
-        <Hang className="divide-y divide-hairline">
-          {targets.map((target, index) => {
-            const peer = peerOf(target);
-            if (target.note) {
-              return (
-                <div key={`${target.name}-${index}`} className="flex items-center gap-2.5 px-3 py-2 text-[12.5px] leading-[18px] text-danger">
-                  <StateDot state="failed" />
-                  <span className="min-w-0 truncate">
-                    {target.name} · {target.note}
-                  </span>
-                </div>
-              );
-            }
-            const line = lineOf(entries, target, block);
-            return (
-              <AgentLine
-                key={target.id ?? `${target.name}-${index}`}
-                state={line.state}
-                title={peer.name}
-                meta={line.meta}
-                peer={peer}
-                entry={line.entry}
-                onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
-              />
-            );
-          })}
-        </Hang>
-      </div>
-    );
-  }
-
-  const peer = peerOf(started.target);
-  const subagent = started.kind === "subagent";
-  const line = lineOf(entries, started.target, block);
+  const open = (target: CrewTarget) => {
+    const entry = target.id ? entries.find((one) => one.id === `session:${target.id}`) : undefined;
+    return entry ? () => openAgent(entry.id) : target.id && sessions.some((row) => row.id === target.id) ? () => openAgent(target.id!) : undefined;
+  };
+  const targets = started.kind === "sessions" ? started.targets : [started.target];
+  const prompt = started.kind === "sessions" ? undefined : started.prompt;
   return (
-    <div className="flex flex-col gap-1.5">
-      <ToolLine
-        icon={subagent ? BotIcon : MessagesSquareIcon}
-        id={block.id}
-        marked={marked}
-      >
-        {subagent ? "Started a subagent" : "Started a session"} <PeerName peer={peer} />
-      </ToolLine>
-      <Hang>
-        <AgentLine
-          state={line.state}
-          title={firstLine(started.prompt) || peer.name}
-          meta={line.meta}
-          entry={line.entry}
-          onOpen={line.entry ? () => openAgent(line.entry!.id) : undefined}
-        />
-      </Hang>
+    <div className="flex flex-col gap-0.5">
+      {targets.map((target, index) => {
+        const peer = peerOf(target);
+        return (
+          <Beat
+            key={target.id ?? `${target.name}-${index}`}
+            {...(index === 0 ? { id: block.id } : {})}
+            marked={marked}
+            first={me}
+            start={!target.note}
+            verb={target.note ? "could not start" : "started"}
+            second={peer}
+            note={target.note}
+            failed={Boolean(target.note)}
+            at={block.at}
+            onOpen={target.note ? undefined : open(target)}
+            peek={!target.note && prompt ? { title: `What ${peer.name} was asked`, text: prompt } : undefined}
+          />
+        );
+      })}
     </div>
   );
 });
 
-/** A Crew subagent's report letter: the words it brought back, where they arrived. */
+/** A Crew subagent's report letter: that it came, where it arrived. Its name's thread opens at that turn. */
 export const ReportLetter = memo(function ReportLetter({ block, marked }: { block: Block; marked: string | null }) {
   const from = block.fromBot;
+  const { sessions } = useLetterScope();
+  const { openAgent } = useChatActions();
   const peer = usePeer(from?.id, from?.name ?? "agent");
+  const me = useOwnerPeer();
   if (!from || !block.letterId) return null;
+  const letter = block.letterId;
   return (
-    <div data-block={block.id} className={`rounded-xl${lit(block.id, marked)}`}>
-      <Report peer={peer} text={exitedless(block)} target={from.id} focus={block.letterId} />
-    </div>
+    <Beat
+      report
+      id={block.id}
+      marked={marked}
+      letter={letter}
+      first={peer}
+      verb="reported to"
+      second={me}
+      at={block.at}
+      onOpen={from.id && sessions.some((row) => row.id === from.id) ? () => openAgent(from.id, { focus: letter }) : undefined}
+      peek={{ title: `What ${peer.name} reported`, text: exitedless(block) }}
+    />
   );
 });
 
@@ -394,7 +287,28 @@ export const ReportLetter = memo(function ReportLetter({ block, marked }: { bloc
 const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked: string | null }) {
   const sent = sentOf(block);
   const peer = usePeer(sent?.to.id, sent?.to.name ?? "", sent?.to.provider);
+  const { inThread, sessions } = useLetterScope();
+  const { openAgent } = useChatActions();
+  const me = useOwnerPeer();
   if (!sent) return null;
+  if (!inThread) {
+    const letter = sent.letterId;
+    const words = sent.text.trim();
+    return (
+      <Beat
+        id={block.id}
+        marked={marked}
+        letter={letter}
+        first={me}
+        verb={sent.handoff ? "handed you" : "wrote to"}
+        second={peer}
+        note={sent.delivery ?? undefined}
+        at={block.at}
+        onOpen={peer.id && sessions.some((row) => row.id === peer.id) ? () => openAgent(peer.id!, letter ? { focus: letter } : undefined) : undefined}
+        peek={words ? { title: `Message to ${peer.name}`, text: sent.text } : undefined}
+      />
+    );
+  }
   return (
     <div data-letter={sent.letterId} className="flex flex-col gap-1.5">
       <ToolLine icon={SendIcon} id={block.id} marked={marked}>
@@ -535,6 +449,52 @@ function WatchedLetter({ child, block, marked, by, onBy }: { child: Session; blo
  * request under the words.
  */
 const LetterIn = memo(function LetterIn({ block, marked }: { block: Block; marked: string | null }) {
+  const { inThread } = useLetterScope();
+  return inThread ? <LetterInThread block={block} marked={marked} /> : <LetterBeat block={block} marked={marked} />;
+});
+
+/**
+ * A letter another party wrote to this chat. Its words open in that party's
+ * thread when it works for this chat, else in the conversation between the two.
+ */
+function LetterBeat({ block, marked }: { block: Block; marked: string | null }) {
+  const entries = useContext(WorkContext);
+  const { sessions, owner, openThread } = useLetterScope();
+  const { openAgent } = useChatActions();
+  const from = block.fromBot;
+  const peer = usePeer(from?.id, from?.name ?? "", undefined);
+  const me = useOwnerPeer();
+  if (!from) return null;
+  const words = exitedless(block);
+  if (block.letterKind === "started") {
+    return <Beat id={block.id} marked={marked} letter={block.letterId} first={peer} verb="started" second={me} at={block.at} peek={{ title: `What ${peer.name} asked`, text: words }} />;
+  }
+  const asks = block.letterKind === "question" || block.letterKind === "approval";
+  const child = from.id ? sessions.find((row) => row.id === from.id && row.kind !== "bot") : undefined;
+  const letter = block.letterId;
+  const focus = letter ? { focus: letter } : undefined;
+  const open = () => {
+    if (entries.some((one) => one.id === `session:${from.id}`)) return openAgent(from.id, focus);
+    if (owner) openThread({ a: owner, b: resolveParty({ id: from.id, name: from.name }, sessions, owner.id), ...(focus ?? {}) });
+  };
+  return (
+    <Beat
+      id={block.id}
+      marked={marked}
+      letter={letter}
+      first={peer}
+      verb={asks ? "asked" : "wrote to"}
+      second={me}
+      waiting={asks && child?.status === "needs-input"}
+      at={block.at}
+      onOpen={child || sessions.some((row) => row.id === from.id) ? open : undefined}
+      peek={{ title: `Message from ${peer.name}`, text: words }}
+    />
+  );
+}
+
+/** Inside an agent's thread: a letter's words are what the thread is made of. */
+const LetterInThread = memo(function LetterInThread({ block, marked }: { block: Block; marked: string | null }) {
   const { sessions } = useLetterScope();
   const [watching, setWatching] = useState(false);
   const [by, setBy] = useState(false);
@@ -584,20 +544,16 @@ function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; ma
   );
 }
 
-/** The line a note leaves when the user writes to a child: its name opens that child's thread at the letter. */
+/** The beat a note leaves when the user writes to a child: its name opens that child's thread at the letter. */
 const WroteLine = memo(function WroteLine({ block, marked }: { block: Block; marked: string | null }) {
   const { owner, sessions } = useLetterScope();
+  const { openAgent } = useChatActions();
   const mark = owner ? checkpointOf(block, owner, botLabel) : null;
   const to = mark && owner ? resolveParty(mark.to, sessions, owner.id) : null;
   const peer = peerOf(sessions, to?.id || undefined, to?.name ?? "");
   if (!mark || mark.from.id !== USER) return block.role === "user" ? <UserMessage block={block} /> : <Note block={block} />;
-  return (
-    <div data-letter={mark.letterId}>
-      <ToolLine icon={MessageSquareIcon} id={block.id} marked={marked}>
-        You wrote to <PeerName peer={peer} focus={mark.letterId} />
-      </ToolLine>
-    </div>
-  );
+  const target = peer.id && sessions.some((row) => row.id === peer.id) ? peer.id : undefined;
+  return <Beat id={block.id} marked={marked} letter={mark.letterId} first="you" verb="wrote to" second={peer} at={block.at} onOpen={target ? () => openAgent(target, { focus: mark.letterId }) : undefined} />;
 });
 
 /** A letter row: the message this chat sent, the letter it received, or the note a write to a child leaves. */
