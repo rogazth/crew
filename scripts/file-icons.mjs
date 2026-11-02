@@ -1,9 +1,11 @@
 // Builds the file-type icon sprite from the Symbols icon theme (Miguel Solorio, MIT).
 //
-//   node scripts/file-icons.mjs [source-dir]
+//   node scripts/file-icons.mjs <theme-dir>
+//   CREW_ICON_THEME_DIR=<theme-dir> node scripts/file-icons.mjs
 //
-// Reads the vendored theme (default: reference/zeron/crates/ui, gitignored) and writes
-// what the app ships, all committed:
+// <theme-dir> is a checkout of the theme: the folder holding src/file-icons.json and
+// assets/file-icons/. Nothing is fetched and no default is assumed. It writes what the
+// app ships, all committed:
 //   src/assets/file-icons/sprite.svg     one hidden <svg> of <symbol id="fi-…"> / "fid-…"
 //   src/assets/file-icons/palette.css    the palette's dark-mode lifts, as light-dark() vars
 //   src/assets/file-icons/LICENSE.symbols
@@ -20,12 +22,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// The checkout's reference/, or the main checkout's when run from a worktree.
-const candidates = process.argv[2]
-  ? [path.resolve(process.argv[2])]
-  : [path.join(repo, "reference/zeron/crates/ui"), path.resolve(repo, "../../../reference/zeron/crates/ui")];
-const src = candidates.find((dir) => fs.existsSync(path.join(dir, "src/file-icons.json")));
-if (!src) throw new Error(`Symbols theme not found in ${candidates.join(" or ")}`);
+const arg = process.argv[2] ?? process.env.CREW_ICON_THEME_DIR;
+if (!arg) {
+  console.error("Usage: node scripts/file-icons.mjs <theme-dir>   (or set CREW_ICON_THEME_DIR)\n<theme-dir> holds src/file-icons.json and assets/file-icons/.");
+  process.exit(1);
+}
+const src = path.resolve(arg);
+if (!fs.existsSync(path.join(src, "src/file-icons.json"))) {
+  console.error(`Symbols theme not found: ${path.join(src, "src/file-icons.json")} does not exist.`);
+  process.exit(1);
+}
 const assetsDir = path.join(src, "assets/file-icons");
 const manifestPath = path.join(src, "src/file-icons.json");
 const outDir = path.join(repo, "src/assets/file-icons");
@@ -36,7 +42,7 @@ const MAX_BYTES = 8 * 1024;
 /** Worth their weight even so: common in the repos Crew opens. */
 const KEEP_HEAVY = new Set(["files/rust.svg", "files/claude.svg", "files/bun.svg", "files/svelte.svg", "files/yarn.svg", "folders/folder-claude.svg"]);
 
-/** Referenced by the upstream manifest without a definition; zeron's aliases. */
+/** Referenced by the upstream manifest without a definition; the aliases it was meant to have. */
 const ALIASES = { less: "brackets-sky", yml: "yaml" };
 
 /** Off-by-one exports of Tailwind colours, snapped so they share a variable. */
@@ -44,7 +50,7 @@ const SNAP = { "#E95A0C": "#EA580C", "#895BF6": "#8B5CF6", "#21C55D": "#22C55E",
 
 /**
  * The Tailwind colours the set uses: name, light (authored) and dark value. The
- * first seven dark values are zeron's `dark_icon_svg`; the rest lift the other
+ * first seven dark values are the theme's own dark variants; the rest lift the other
  * 600/700 shades the same way, and the light ones stay as authored.
  */
 const PALETTE = [

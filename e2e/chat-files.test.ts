@@ -19,7 +19,7 @@ before(async () => {
   });
   const repo = await crew.makeRepo("files", { ".gitignore": "reference/\n", "README.md": "# files\n" });
   // More than the index takes of a folder git ignores.
-  for (const name of ["acme", "zeron"]) {
+  for (const name of ["acme", "mesa"]) {
     const dir = path.join(repo, "reference", name);
     await mkdir(dir, { recursive: true });
     await Promise.all(Array.from({ length: 700 }, (_, i) => writeFile(path.join(dir, `f${i}.ts`), "")));
@@ -87,7 +87,7 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
   await crew.window.locator('[data-file-ref="reference/"]').filter({ visible: true }).last().click();
   const explorer = crew.window.getByRole("complementary", { name: "Explorer" });
   await explorer.getByText("acme", { exact: true }).waitFor();
-  await explorer.getByText("zeron", { exact: true }).waitFor();
+  await explorer.getByText("mesa", { exact: true }).waitFor();
 });
 
 test("an HTML file the reply names opens rendered in a page", async () => {

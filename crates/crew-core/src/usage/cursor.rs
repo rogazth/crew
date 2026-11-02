@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(window.resets_at, parse_iso_ms("2026-11-04T03:38:09.637Z"));
         // A pool whose week has ended says nothing about now.
         assert!(parse_sand(text, parse_iso_ms("2026-11-05T00:00:00Z").unwrap()).is_none());
-        // Grok Bot on its own beside a Cursor plan is not the plan's limit.
+        // An account that is not unified has no weekly pool to report.
         assert!(parse_sand(&text.replace(r#""isUnified":true"#, r#""isUnified":false"#), now).is_none());
     }
 

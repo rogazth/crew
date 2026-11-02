@@ -82,7 +82,7 @@ describe("folders", () => {
 
   it("offers a folder's entries, prefix matches and folders first", () => {
     const entries = [
-      { name: "zeron", path: "/w/reference/zeron", dir: true, ignored: true },
+      { name: "mesa", path: "/w/reference/mesa", dir: true, ignored: true },
       { name: "acme", path: "/w/reference/acme", dir: true, ignored: true },
       { name: "ac.md", path: "/w/reference/ac.md", dir: false, ignored: true },
       { name: "cursor", path: "/w/reference/cursor", dir: true, ignored: true },

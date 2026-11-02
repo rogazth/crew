@@ -85,7 +85,7 @@ export type ManualRemote = {
   token: string;
 };
 
-/** 7777 is Orca's. crewd listens here, and SOCKS on the port after it. */
+/** crewd listens here, and SOCKS on the port after it. */
 export const DEFAULT_PORT = 17877;
 
 /**

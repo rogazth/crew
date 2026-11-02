@@ -151,11 +151,11 @@ const spendoTrees = {
 };
 
 const landingRepo = makeRepo("landing", { "index.html": "<!doctype html>\n<title>Landing</title>\n" });
-const orcaRepo = makeRepo("orca", { "README.md": "# Orca\n", "cli/main.go": lines(50, "// go") });
-const orcaTrees = {
-  a: makeTree(orcaRepo, "feat/terminal-handoff"),
-  b: makeTree(orcaRepo, "fix/socket-timeout", { "cli/main.go": lines(46, "// go") }),
-  c: makeTree(orcaRepo, "spike/worktree-comments"),
+const harborRepo = makeRepo("harbor", { "README.md": "# Harbor\n", "cli/main.go": lines(50, "// go") });
+const harborTrees = {
+  a: makeTree(harborRepo, "feat/terminal-handoff"),
+  b: makeTree(harborRepo, "fix/socket-timeout", { "cli/main.go": lines(46, "// go") }),
+  c: makeTree(harborRepo, "spike/worktree-comments"),
 };
 // Not a git repo: a workspace with only its folder.
 const notesDir = join(REPOS, "notes");
@@ -216,7 +216,7 @@ const workspaces = {};
 for (const [key, name, path] of [
   ["crew", "crew", crewRepo],
   ["spendo", "spendo", spendoRepo],
-  ["orca", "orca", orcaRepo],
+  ["harbor", "harbor", harborRepo],
   ["landing", "landing", landingRepo],
   ["notes", "notes", notesDir],
 ]) {
@@ -304,19 +304,19 @@ await session("spendo", "bot", "Budgeteer", { provider: "codex", ago: 26 * HOUR 
 await session("spendo", "terminal", "php artisan test", { provider: "claude", ago: 3 * HOUR });
 await session("spendo", "bot", "Biweekly", { worktree: spendoTrees.budgets, status: "working", ago: 0 });
 
-// orca — lots of bots, to see the grid wrap and the folded faces stack.
+// harbor — lots of bots, to see the grid wrap and the folded faces stack.
 for (const [i, name] of ["Atlas", "Beacon", "Comet", "Delta", "Echo", "Flint", "Gale"].entries()) {
-  await session("orca", "bot", name, {
+  await session("harbor", "bot", name, {
     provider: ["claude", "codex", "cursor", "opencode", "grok"][i % 5],
     status: ["idle", "working", "idle", "done", "idle", "idle", "error"][i],
     ago: i * 17 * MIN,
   });
 }
-await session("orca", "bot", "Handoff", { worktree: orcaTrees.a, status: "working" });
-await session("orca", "bot", "Timeout", { worktree: orcaTrees.b, status: "needs-input", ago: MIN });
-await session("orca", "terminal", "go test ./...", { worktree: orcaTrees.b, provider: "opencode", status: "done" });
-await session("orca", "bot", "Commenter", { worktree: orcaTrees.c, ago: 4 * HOUR });
-await session("orca", "bot", "A very long bot name that should truncate", { worktree: orcaTrees.c, provider: "codex", ago: 5 * HOUR });
+await session("harbor", "bot", "Handoff", { worktree: harborTrees.a, status: "working" });
+await session("harbor", "bot", "Timeout", { worktree: harborTrees.b, status: "needs-input", ago: MIN });
+await session("harbor", "terminal", "go test ./...", { worktree: harborTrees.b, provider: "opencode", status: "done" });
+await session("harbor", "bot", "Commenter", { worktree: harborTrees.c, ago: 4 * HOUR });
+await session("harbor", "bot", "A very long bot name that should truncate", { worktree: harborTrees.c, provider: "codex", ago: 5 * HOUR });
 
 // landing — one bot, nothing else. notes — empty.
 await session("landing", "bot", "Copywriter", { provider: "opencode", ago: 2 * 24 * HOUR });
@@ -741,7 +741,7 @@ $$
 \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
 $$
 
-Sources: the acme timeline[^1] and [Zeron's tool chips](https://example.com/zeron).
+Sources: the acme timeline[^1] and [the tool chips](https://example.com/tool-chips).
 
 [^1]: \`apps/web/src/components/chat/MessagesTimeline.tsx\``;
 
@@ -1644,9 +1644,9 @@ apiBlocks.push(at(tool("Edit", "Edit RecurringTest.php", { kind: "edit", path: "
 transcript(apiSide.id, apiBlocks);
 transcript(uiSide.id, uiBlocks);
 
-// ---------- bots writing to each other: orca's Atlas, Beacon and Comet ----------
+// ---------- bots writing to each other: harbor's Atlas, Beacon and Comet ----------
 
-const [atlas, beacon, comet] = ["Atlas", "Beacon", "Comet"].map((name) => sessions.find((s) => s.ws === "orca" && s.name === name));
+const [atlas, beacon, comet] = ["Atlas", "Beacon", "Comet"].map((name) => sessions.find((s) => s.ws === "harbor" && s.name === name));
 const atlasBlocks = [{ role: "user", text: "Get the socket timeout fix landed today. Beacon owns the code, Comet runs the soak test.", ago: 50 * MIN }];
 const beaconBlocks = [];
 const cometBlocks = [];
@@ -1664,8 +1664,8 @@ say(beacon, beaconBlocks, atlas, atlasBlocks, "Question: should the keepalive pi
 say(atlas, atlasBlocks, beacon, beaconBlocks, "Only CLI → daemon for now. Keep the daemon untouched in this PR.", 39 * MIN, "steered");
 beaconBlocks.push(
   tool("Edit", "Edit cli/main.go", { kind: "edit", path: "cli/main.go", added: 18, removed: 3 }),
-  tool("Bash", "Run go test ./...", { kind: "command", command: "go test ./...", exitCode: 0, output: "ok  \torca/cli\t0.412s\nok  \torca/daemon\t1.093s" }),
-  tool("Bash", "Run git push", { kind: "command", command: "git push origin fix/socket-timeout", exitCode: 0, output: "To github.com:crew/orca.git\n   9e1b2c4..a3f9c12  fix/socket-timeout -> fix/socket-timeout" }),
+  tool("Bash", "Run go test ./...", { kind: "command", command: "go test ./...", exitCode: 0, output: "ok  \tharbor/cli\t0.412s\nok  \tharbor/daemon\t1.093s" }),
+  tool("Bash", "Run git push", { kind: "command", command: "git push origin fix/socket-timeout", exitCode: 0, output: "To github.com:crew/harbor.git\n   9e1b2c4..a3f9c12  fix/socket-timeout -> fix/socket-timeout" }),
 );
 say(beacon, beaconBlocks, comet, cometBlocks, "Pushed a3f9c12 to fix/socket-timeout. Soak it for 30 min with --socket-timeout 5m.", 23 * MIN);
 say(beacon, beaconBlocks, atlas, atlasBlocks, "Pushed a3f9c12: `--socket-timeout`, default 5m, a ping every 20 s. Comet is soaking it.", 22 * MIN, "queued");
