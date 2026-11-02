@@ -9,6 +9,7 @@ import { BotAvatar } from "../../chrome/BotAvatar";
 import { Overlay } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { clock } from "../../lib/time";
+import { useLetterScope } from "./context";
 
 /** streamdown is half a megabyte: a dialog loads it when it first opens. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -62,6 +63,8 @@ export type BeatProps = {
 
 export function Beat({ id, marked = null, letter, first, verb, second, note, waiting = false, failed = false, at, onOpen, peek, report = false, start = false }: BeatProps) {
   const [peeking, setPeeking] = useState(false);
+  const { openLetter } = useLetterScope();
+  const selected = letter !== undefined && letter === openLetter;
   const body = (
     <>
       {waiting ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" /> : null}
@@ -84,7 +87,7 @@ export function Beat({ id, marked = null, letter, first, verb, second, note, wai
       className={`flex justify-center${id && id === marked ? " crew-found" : ""}`}
     >
       {open ? (
-        <button type="button" {...(start ? { "data-agent-start": "" } : {})} onClick={open} className={`${shape} transition-colors hover:bg-hover`}>
+        <button type="button" {...(start ? { "data-agent-start": "" } : {})} onClick={open} className={`${shape} transition-colors ${selected ? "bg-card" : "hover:bg-hover"}`}>
           {body}
         </button>
       ) : (

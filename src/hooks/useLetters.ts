@@ -104,18 +104,30 @@ export function useChatLetters(session: Session, sessions: readonly Session[], b
   };
 }
 
+/** What an agent and the one it works for wrote each other: the newest page. */
+export function useAgentLetters(agentId: string | null, parentId: string | undefined): ThreadLetter[] {
+  return useMailbox(
+    agentId && parentId ? agentId : null,
+    0,
+    () => api.threadMessages({ a: agentId!, b: parentId!, sessionId: agentId!, limit: 40 }).then((page) => page.letters),
+    () => true,
+    NO_LETTERS,
+  );
+}
+
 /**
  * Back in the transcript, at a letter's checkpoint. The thread closes first;
- * the row is there on the next frame, near the top, nothing else moved.
+ * the row is there on the next frame, near the top, nothing else moved. `lit`
+ * marks it as a search hit; a thread opening at a letter just opens there.
  */
-export function showLetter(root: HTMLElement | null, letterId: string) {
+export function showLetter(root: HTMLElement | null, letterId: string, lit = true) {
   requestAnimationFrame(() => {
     const row = root?.querySelector(`[data-letter="${CSS.escape(letterId)}"]`);
     const scroller = row?.closest<HTMLElement>("[data-selectable='blocks']");
     // Not scrollIntoView: that also scrolls every clipped ancestor, which is the jump.
     if (row && scroller) scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 24;
     // Lit as a search hit is: it fades, because the point is to find it.
-    if (row) {
+    if (row && lit) {
       row.classList.remove("crew-found");
       void (row as HTMLElement).offsetWidth;
       row.classList.add("crew-found");

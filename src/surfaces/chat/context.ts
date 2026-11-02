@@ -83,8 +83,14 @@ export type LetterScope = {
   owner: Party | null;
   sessions: readonly Session[];
   openThread: (thread: ThreadRef) => void;
-  /** This chat is an agent's thread: the letters are its words, not beats. */
+  /** This chat is an agent's thread: who said what is its spine, not beats. */
   inThread?: boolean;
+  /** The letter the right panel is open at: its beat says so. */
+  openLetter?: string | undefined;
+  /** A native subagent's thread has no session of its own to name it. */
+  speaker?: { name: string; provider?: string | undefined } | undefined;
+  /** Who asked a native subagent: its prompts are that party's words, not the user's. */
+  asker?: { id?: string | undefined; name: string; provider?: string | undefined; bot?: boolean | undefined } | undefined;
 };
 
 export const LetterContext = createContext<LetterScope>({ owner: null, sessions: [], openThread: () => undefined });

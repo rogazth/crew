@@ -438,10 +438,6 @@
   /* The panel waits inside the tab's own box: nothing of it shows below the tab, and every other side is open. */
   clip-path: inset(-100vh -100vw 0 -100vw);
 }
-/* Unfolded, the tab's own corners square off where the panel joins it. */
-.ds-strip[data-open] {
-  border-radius: 0;
-}
 .ds-strip b {
   font-weight: 600;
   color: var(--color-text);
@@ -469,16 +465,6 @@
 .ds-strip-head:focus-visible {
   box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
 }
-.ds-strip[data-open] .ds-strip-head {
-  border-radius: 0;
-}
-.ds-strip-chevron {
-  color: var(--color-placeholder);
-  transition: transform 160ms var(--ease-out);
-}
-.ds-strip[data-open] .ds-strip-chevron {
-  transform: rotate(180deg);
-}
 .ds-strip-glyph {
   display: grid;
   width: 16px;
@@ -502,43 +488,6 @@
 @keyframes ds-strip-in {
   from { transform: translateY(14px); opacity: 0; }
   to { transform: none; opacity: 1; }
-}
-
-/* The panel sits on the tab's top edge (a pixel under it, so no seam shows).
-   Resting, it is pushed down behind the tab, hidden and inert; open, it is
-   where it sits. */
-.ds-strip-panel {
-  position: absolute;
-  z-index: 0;
-  inset-inline: 0;
-  bottom: calc(100% - 1px);
-  max-height: min(50vh, 380px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 6px 6px 4px;
-  border-radius: 14px 14px 0 0;
-  background: var(--color-fill);
-  color: var(--color-text);
-  transform: translateY(calc(100% + 1px));
-  visibility: hidden;
-  will-change: transform;
-  transition:
-    transform 140ms cubic-bezier(0.4, 0, 1, 1),
-    visibility 0s linear 140ms;
-}
-.ds-strip-panel[data-open] {
-  transform: none;
-  visibility: visible;
-  transition: transform 200ms var(--ease-out);
-}
-/* The rows' tiles were drawn for the surface; on the tab's ground they lift off it the same way. */
-.ds-strip-panel [data-entry] > span:first-child,
-.ds-strip-panel [data-conversation] > span:first-child {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px var(--color-hairline);
-}
-.ds-strip-panel [data-entry] > span:first-child > span:last-child {
-  background: var(--color-fill);
 }
 
 /* ── Empty states: a new session, Home ──────────────────────────────────── */
@@ -647,9 +596,7 @@
   .ds-send[data-swapped] > svg {
     animation: none;
   }
-  .ds-strip,
-  .ds-strip-chevron,
-  .ds-strip-panel {
+  .ds-strip {
     transition: none;
   }
 }
@@ -735,4 +682,70 @@
   .crew-picker {
     animation: none;
   }
+}
+
+/* ── The right panel ───────────────────────────────────────────────────────
+   A second sheet on the chrome's ground. Its column's width is what moves; the
+   pane hangs from the column's left edge, painted under the main sheet, so it
+   comes in from beyond the window and the main sheet's edge passes over it. */
+.ds-side-col {
+  position: relative;
+  height: 100%;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.ds-side-col[hidden] { display: none; }
+body:has(.ds-side-col) main {
+  position: relative;
+  z-index: 1;
+}
+:root[data-side-resize] * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+.ds-side-host {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  width: var(--side-w);
+  background: var(--color-sidebar);
+  pointer-events: auto;
+}
+.ds-side-host[hidden] { display: none; }
+.ds-side-inner {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  padding: 0 8px 8px 1px;
+}
+.ds-side-space {
+  height: 40px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+/* The main sheet's own skin. */
+.ds-side-sheet {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--color-canvas);
+  box-shadow:
+    0 0 0 1px var(--color-hairline),
+    0 0 16px -6px oklch(0% 0 0 / 0.1);
+}
+/* The gutter between the two sheets. */
+button.ds-side-resize {
+  position: absolute;
+  top: 40px;
+  bottom: 8px;
+  left: -8px;
+  z-index: 2;
+  width: 9px;
+  cursor: col-resize;
 }

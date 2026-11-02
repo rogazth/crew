@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { SquareIcon, XIcon } from 'lucide-react';
+import { ChevronLeftIcon, SquareIcon, XIcon } from 'lucide-react';
 import { IconButton } from '../../chrome/kit';
 import { useNow } from '../../hooks/useNow';
 import { KIND_LABEL, modelLine, tokensLabel, tokensTitle, type PanelEntry } from '../../lib/backgroundPanel';
@@ -9,6 +9,7 @@ import { agentDetail, subagentView, threadBlocks } from '../../lib/subagent';
 import { duration } from '../../lib/time';
 import { ShellOutput } from './Background';
 import { EntryIcon, StateDot } from './Panel';
+import { LetterContext, useLetterScope } from './context';
 import { Transcript } from './Transcript';
 
 /** One level of the way down to the open thread: a session that holds the level below it. */
@@ -44,6 +45,8 @@ type Props = {
   active: boolean;
   onStop: () => void;
   onClose: () => void;
+  /** In the right panel: the header goes back here, to the list or the agent above this one. */
+  onBack?: () => void;
 };
 
 /**
@@ -83,9 +86,12 @@ function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; paren
 const noop = () => {};
 
 /** A native subagent's thread, drawn by the chat's own transcript: its prompts, its steps and its answers, in order. */
-function SubagentTranscript({ calls, working, active }: { calls: readonly Block[]; working: boolean; active: boolean }) {
+function SubagentTranscript({ calls, working, active, name, provider, asker }: { calls: readonly Block[]; working: boolean; active: boolean; name: string; provider: string | undefined; asker: Crumb | undefined }) {
   const blocks = useMemo(() => threadBlocks(calls), [calls]);
+  const scope = useLetterScope();
+  const thread = useMemo(() => ({ ...scope, inThread: true, speaker: { name, provider }, asker }), [asker, name, provider, scope]);
   return (
+    <LetterContext value={thread}>
     <Transcript
       blocks={blocks}
       working={working}
@@ -98,6 +104,7 @@ function SubagentTranscript({ calls, working, active }: { calls: readonly Block[
       onAnswer={noop}
       since={calls.at(-1)?.at}
     />
+    </LetterContext>
   );
 }
 
@@ -122,6 +129,7 @@ export function AgentView({
   active,
   onStop,
   onClose,
+  onBack,
 }: Props) {
   const running = entry.state === 'running';
   const now = useNow(1000, running);
@@ -189,7 +197,14 @@ export function AgentView({
   ) : command && entry.kind === 'shell' ? (
     <ShellOutput key={command.id} sessionId={sessionId} command={command} live={live} />
   ) : detail && view ? (
-    <SubagentTranscript calls={blocks} working={view.state === 'running'} active={active} />
+    <SubagentTranscript
+      calls={blocks}
+      working={view.state === 'running'}
+      active={active}
+      name={entry.kind === 'subagent' && entry.origin === 'native' ? detail.agentType || 'Subagent' : entry.title}
+      provider={entry.provider}
+      asker={parent}
+    />
   ) : (
     <div className="mx-auto w-full max-w-chat px-6 pt-8">
       <p className="py-0.5 text-[12.5px] text-text-muted">Steps are in the parent transcript.</p>
@@ -200,6 +215,33 @@ export function AgentView({
   // The pill names this thread only: a Crew session by its name, a native subagent by its type, never the prompt it was sent.
   const name = entry.kind === 'subagent' && entry.origin === 'native' ? detail?.agentType || 'Subagent' : entry.title;
   const elapsed = duration((entry.endedAt ?? now) - entry.startedAt);
+
+  // In the right panel: its name and a way back. The model is in the prompt, how it stands is in the thread.
+  if (onBack) {
+    return (
+      <div ref={root} className="absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id} {...(active && stoppable ? { "data-keys": "x" } : {})}>
+        <header data-thread-header title={[...meta, branch, tokens && tokensTitle(entry)].filter(Boolean).join(' · ')} className="flex shrink-0 items-center gap-2 pt-3 pr-4 pb-2 pl-2.5">
+          <button type="button" onClick={onBack} aria-label="All sub-agents" title="All sub-agents" className="grid size-6 shrink-0 place-items-center rounded-chrome text-icon hover:bg-hover hover:text-text">
+            <ChevronLeftIcon className="size-3.5" />
+          </button>
+          <EntryIcon entry={entry} className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{name}</span>
+          {stoppable && (
+            <button type="button" title="Stop (x)" onClick={onStop} className="inline-flex h-6 shrink-0 items-center gap-1 rounded-chrome px-1.5 text-[12px] text-text-muted transition-colors hover:text-danger">
+              <SquareIcon className="size-2.5 fill-current" />
+              Stop
+            </button>
+          )}
+          <button type="button" onClick={onClose} aria-label="Close" title="Close" className="grid size-6 shrink-0 place-items-center rounded-chrome text-icon hover:bg-hover hover:text-text">
+            <XIcon className="size-3.5" />
+          </button>
+        </header>
+        {error && <p className="shrink-0 px-4 pb-2 text-[12px] text-danger">{error}</p>}
+        <div className="relative flex min-h-0 flex-1 flex-col">{body}</div>
+        {footer}
+      </div>
+    );
+  }
 
   return (
     <div ref={root} className="crew-thread absolute inset-0 z-20 flex flex-col bg-canvas" data-agent-view={entry.id} {...(active && stoppable ? { "data-keys": "x" } : {})}>

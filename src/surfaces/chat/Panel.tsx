@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { BotIcon, MessagesSquareIcon, PauseIcon, LayersIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useNow } from "../../hooks/useNow";
-import { entryDetail, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
+import { entryDetail, isAgentEntry, panelSummary, stepCursor, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry, type PanelKind, type PanelState } from "../../lib/backgroundPanel";
 import type { ThreadRef } from "../../lib/letters";
 import { clock } from "../../lib/time";
 import type { Session } from "../../lib/types";
@@ -73,18 +73,15 @@ export const WorkSegment = memo(function WorkSegment({
   open,
   onOpenChange,
   onEscape,
-  segment = false,
 }: {
   work: PanelScope;
-  /** Without the agents clip to open it, the sheet has its own entry: a button in the status line that floats the sheet over the composer. */
-  segment?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The sheet was closed with Esc: the composer takes the focus back. */
   onEscape: () => void;
 }) {
   const { conversations } = work;
-  // The agent clip opens the sheet, so the agents lead: the clip is about them, the rest of the work follows.
+  // In a thread the sheet still holds the agent's own agents: they lead.
   const entries = useMemo(
     () => [...work.entries].sort((a, b) => Number(isAgentEntry(b)) - Number(isAgentEntry(a))),
     [work.entries],
@@ -138,7 +135,7 @@ export const WorkSegment = memo(function WorkSegment({
     const down = (event: MouseEvent) => {
       const target = event.target as Node;
       if (sheet.current?.contains(target)) return;
-      if (target instanceof Element && target.closest("[data-agent-strip], [data-work-trigger]")) return;
+      if (target instanceof Element && target.closest("[data-work-trigger]")) return;
       onOpenChange(false);
     };
     document.addEventListener("mousedown", down);
@@ -188,8 +185,7 @@ export const WorkSegment = memo(function WorkSegment({
   if (total === 0) return null;
   return (
     <>
-      {segment && (
-        <button
+      <button
           type="button"
           data-work-trigger
           aria-expanded={shown}
@@ -217,20 +213,14 @@ export const WorkSegment = memo(function WorkSegment({
             </span>
           )}
         </button>
-      )}
-      {/* Under the clip the sheet stays mounted, closed: it unfolds and folds back instead of appearing and vanishing. */}
-      {(shown || !segment) && (
+      {shown && (
       <div
         ref={sheet}
         tabIndex={-1}
         data-work-sheet
-        {...(shown ? { "data-open": "", "data-keys": "x" } : {})}
-        inert={!shown}
-        className={
-          segment
-            ? "absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
-            : "ds-strip-panel flex flex-col outline-none"
-        }
+        data-open=""
+        data-keys="x"
+        className="absolute inset-x-6 bottom-full z-10 mb-2 flex max-h-[min(60vh,460px)] flex-col overflow-y-auto overscroll-contain rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-border outline-none"
       >
         <div className="flex items-center px-2 pt-1 pb-1.5 text-[11px] text-text-muted">
           Work
@@ -278,8 +268,6 @@ export const WorkSegment = memo(function WorkSegment({
     </>
   );
 });
-
-const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
 /** A row of the sheet's keys: an entry of the work, or a conversation. */
 type Row = { id: string; entry?: PanelEntry; conversation?: ConversationEntry };
@@ -388,7 +376,7 @@ const EntryRow = memo(function EntryRow({
  * the word turns red under the pointer. Hidden until the row is hovered.
  * Work that cannot be stopped alone says why in place of it.
  */
-function QuietStop({ entry, onStop }: { entry: PanelEntry; onStop: () => void }) {
+export function QuietStop({ entry, onStop }: { entry: PanelEntry; onStop: () => void }) {
   if (entry.state !== "running") return <span className="w-12 shrink-0" />;
   if (!entry.stoppable)
     return (

@@ -1,6 +1,6 @@
 // Plans 2026-10-05 (UI decision 1) and 2026-10-12 (decisions 5, 10, 26): a
 // session started with start_session lives in whoever started it, not in the
-// sidebar. It shows in the parent's status line and its Work sheet (there is
+// sidebar. It shows in the parent's status line and its list of sub-agents (there is
 // no chip bar) and opens in place, in the same tab. The session's CLI starts
 // it from its own shell with `crew sessions delegate`, with the session's
 // token, so the parent is the session; the fake opencode 2.x
@@ -28,7 +28,7 @@ async function shots(crew: Crew, name: string) {
   await crew.window.emulateMedia({ colorScheme: null });
 }
 
-test("a session a session started is in the status line and the Work sheet, and opens in the same tab", async (t) => {
+test("a session a session started is in the status line and the list of sub-agents, and opens in the right panel", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
@@ -50,7 +50,7 @@ test("a session a session started is in the status line and the Work sheet, and 
   });
 
   // One line under the composer says so; there is no chip, no bar, no sidebar row.
-  const work = crew.window.getByRole("button", { name: /^1 agent/ });
+  const work = crew.window.locator("[data-agents-segment]").first();
   await work.waitFor({ timeout: 10_000 });
   assert.equal(await crew.window.locator('[data-sheet="workspace"]').getByText("Sessions", { exact: true }).count(), 0, "no Sessions strip");
   assert.equal(await crew.window.locator('[data-sheet="workspace"]').getByText("Conversations", { exact: true }).count(), 0, "no Conversations in a bar");
@@ -59,11 +59,11 @@ test("a session a session started is in the status line and the Work sheet, and 
   );
   assert.ok(!rows.some((text) => text.includes("Lint pass")), JSON.stringify(rows));
 
-  // The sheet lists it; opening it is the same tab, now showing its chat with its report.
+  // The list has it; opening it stays in the tab, its chat with its report beside the parent's.
   const tabs = crew.window.locator('[data-tab-strip] [role="tab"]');
   const before = await tabs.count();
   await work.click();
-  const row = crew.window.locator("[data-work-sheet]").getByRole("option", { name: /Lint pass/ });
+  const row = crew.window.locator("[data-agent-list] [data-entry]").filter({ hasText: "Lint pass" });
   await row.waitFor();
   await shots(crew, "status-line-sheet");
   await row.click();
@@ -77,7 +77,7 @@ test("a session a session started is in the status line and the Work sheet, and 
   await crew.window.keyboard.press("Escape");
   await agentView.waitFor({ state: "detached" });
   const childTab = `session:${child.id}`;
-  assert.ok(!(await stripTabIds(crew)).includes(childTab), "opening it from the sheet made no tab");
+  assert.ok(!(await stripTabIds(crew)).includes(childTab), "opening it from the list made no tab");
 
   // ...a click on a banner about the child opens the parent's tab with the thread in it...
   await crew.app.evaluate(({ BrowserWindow }, target) => {

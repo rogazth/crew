@@ -637,6 +637,8 @@ export function App() {
           </div>
         </div>
       </main>
+      {/* The right panel hangs here, from the main sheet's edge; each chat brings its own (SidePanel). */}
+      <div data-side-slot hidden={!isWorkspace} className="ds-side-col" style={{ width: 0 }} />
       </SlideShell>
 
       {envs.picker && (

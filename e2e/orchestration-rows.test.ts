@@ -38,7 +38,7 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => composerOf(crew);
+const composer = () => composerOf(crew, chat);
 // innerText puts a break after an inline-flex name; the window draws "billing-ui's" as one word.
 const flat = (text: string) => text.replace(/\s+/g, " ").replace(/ 's\b/g, "'s").trim();
 
@@ -130,7 +130,7 @@ async function sessionEnv(): Promise<NodeJS.ProcessEnv> {
   return { ...rest, HOME: crew.home, CREW_SOCKET: socket, CREW_TOKEN: token };
 }
 
-test("a message to a child opens its thread at the letter, lit", async () => {
+test("a message to a child opens its thread in the right panel at the letter, with no highlight", async () => {
   const env = await sessionEnv();
   await run(CREW, ["sessions", "delegate", "--provider", "opencode", "--effort", "none", "--name", "Lint pass", "--", "tidy the imports"], { env });
   const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((one) => one.parentId === chat.id), {
@@ -141,14 +141,14 @@ test("a message to a child opens its thread at the letter, lit", async () => {
     timeout: 20_000,
     message: "the child reports",
   });
-  await crew.window.getByText("Done: tidy the imports", { exact: true }).waitFor({ timeout: 30_000 });
+  await crew.window.locator("[data-report]").filter({ hasText: "Lint pass" }).first().waitFor({ timeout: 30_000 });
   await idle();
   const sent = await run(CREW, ["--json", "send", child.id, "Use the existing component"], { env });
   const letter = /"letter_id"\s*:\s*"([^"]+)"/.exec(sent.stdout)?.[1];
   assert.ok(letter, sent.stdout);
 
   // The child answers the letter and its report wakes the parent: let that turn end first.
-  await crew.window.getByText("Done: Use the existing component", { exact: true }).first().waitFor({ timeout: 30_000 });
+  await waitFor(async () => (await crew.window.locator("[data-report]").filter({ hasText: "Lint pass" }).count()) >= 2, { timeout: 30_000, message: "the child's second report" });
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   await idle();
   await send(`crewsent ${child.id} ${letter} Lint pass`);
@@ -163,7 +163,8 @@ test("a message to a child opens its thread at the letter, lit", async () => {
   const arrived = page.locator(`[data-letter="${letter}"]`);
   await arrived.waitFor();
   assert.match(flat(await arrived.innerText()), /Use the existing component/);
-  await waitFor(async () => ((await arrived.getAttribute("class")) ?? "").includes("crew-found"), { timeout: 3_000, message: "the letter is lit" });
+  assert.doesNotMatch((await arrived.getAttribute("class")) ?? "", /crew-found/, "the panel opens there without a flash");
+  assert.equal(await crew.window.locator(`[data-beat][data-letter="${letter}"] button`).evaluate((el) => el.className.includes("bg-card")), true, "the beat says it is open");
   await shoot("thread-at-letter");
   await crew.window.keyboard.press("Escape");
   await page.waitFor({ state: "detached" });
@@ -189,6 +190,14 @@ test("a child's question waits as a beat in the parent's chat and is answered in
   assert.equal((await crew.request<Session>("session_get", { id: child.id })).status, "needs-input");
   await letter.scrollIntoViewIfNeeded();
   await shoot("answer-from-parent");
+
+  // Over the prompt, only now that it wants something; waved away, it stays gone until the next time.
+  const notice = crew.window.locator("[data-notice]");
+  await notice.waitFor();
+  assert.match(flat(await notice.innerText()), /refunds-api asks you/);
+  await notice.getByRole("button", { name: "Dismiss" }).click();
+  await notice.waitFor({ state: "detached" });
+  assert.match(flat(await letter.innerText()), /waiting for an answer/, "the beat still says so");
 
   await letter.getByRole("button").click();
   const thread = crew.window.locator("[data-agent-view]");
@@ -225,9 +234,14 @@ test("a child's approval waits as a beat in the parent's chat and is decided in 
   await letter.scrollIntoViewIfNeeded();
   await shoot("answer-from-parent-approval");
 
-  await letter.getByRole("button").click();
+  // The notice opens the agent that wants something, and goes while it is open.
+  const notice = crew.window.locator("[data-notice]");
+  await notice.waitFor();
+  assert.match(flat(await notice.innerText()), /billing-ui needs approval/);
+  await notice.locator("[data-agent-notice]").click();
   const thread = crew.window.locator("[data-agent-view]");
   await thread.waitFor();
+  await notice.waitFor({ state: "detached" });
   const allow = thread.getByRole("button", { name: /^Allow/ }).first();
   await allow.waitFor();
   await allow.click();

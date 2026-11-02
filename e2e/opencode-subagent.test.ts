@@ -33,7 +33,7 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => composerOf(crew);
+const composer = () => composerOf(crew, chat);
 const sheet = () => crew.window.locator("[data-work-sheet]");
 const page = () => crew.window.locator("[data-agent-view]");
 const card = () => crew.window.locator("[data-agent-start]").last();
@@ -74,9 +74,11 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
 
   await card().click();
   await page().waitFor();
-  await page().getByText("echo child").first().waitFor();
+  // What it said is the thread's spine; what it did is one line that opens.
   await page().getByText("pong").first().waitFor();
-  assert.match(await page().locator("[data-thread-header]").innerText(), /Done/);
+  assert.equal(await page().getByText("echo child").count(), 0, "the work is folded");
+  await page().getByRole("button", { name: /^Worked/ }).first().click();
+  await page().getByText("echo child").first().waitFor();
   // It is the chat's own transcript: its words select as the chat's do, and ⌘A keeps to the thread.
   const thread = page().locator('[data-selectable="blocks"]');
   assert.equal(await thread.count(), 1, "the thread is one transcript");
@@ -90,15 +92,16 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });
 
-  const work = crew.window.getByRole("button", { name: /1 agent/ });
-  await work.click();
-  await sheet().waitFor();
-  const rows = await sheet().getByRole("option").allTextContents();
-  assert.equal(rows.length, 1, rows.join("\n"));
-  assert.match(rows[0]!, /Reply with pong.*Subagent · (?:[^·]+ · )?done/s, rows[0]);
+  await crew.window.locator("[data-agents-segment]").first().click();
+  const list = crew.window.locator("[data-agent-list]");
+  const rows = list.locator("[data-entry]");
+  await rows.first().waitFor();
+  assert.equal(await rows.count(), 1, (await rows.allTextContents()).join("\n"));
+  assert.match((await rows.first().innerText()).replace(/\s+/g, " "), /Reply with pong/);
+  await list.locator('[data-list-section="done"]').waitFor();
   await shoot("work");
   await crew.window.keyboard.press("Escape");
-  await sheet().waitFor({ state: "hidden" });
+  await list.waitFor({ state: "hidden" });
 });
 
 test("Stop on a running subagent ends the child and not the parent's turn", async () => {
@@ -110,7 +113,8 @@ test("Stop on a running subagent ends the child and not the parent's turn", asyn
   await card().click();
   await page().waitFor();
   await page().getByText("echo child").first().waitFor();
-  await page().locator("[data-thread-header]").getByText("Running").waitFor();
+  const stopButton = page().locator("[data-thread-header]").getByRole("button", { name: /Stop/ });
+  await stopButton.waitFor();
   // The working line counts from when the call started, as the chat's does.
   await page().getByText(/^Working for \d+s$/).waitFor();
   await shoot("running");
@@ -118,7 +122,7 @@ test("Stop on a running subagent ends the child and not the parent's turn", asyn
   assert.equal((await crew.request<Session>("session_get", { id: chat.id })).status, "working");
 
   await crew.window.keyboard.press("x");
-  await page().locator("[data-thread-header]").getByText("Stopped").waitFor({ timeout: 20_000 });
+  await stopButton.waitFor({ state: "detached", timeout: 20_000 });
   await idle();
   await shoot("stopped");
   await crew.window.keyboard.press("Escape");

@@ -230,15 +230,49 @@ export function mergeLetters(held: readonly ThreadLetter[], page: readonly Threa
   return [...byId.values()].sort((x, y) => x.at - y.at);
 }
 
-/**
- * Whose letters sit on the right of a thread, as the user's own messages do
- * in a chat: the chat owner's when it is one of the pair, else the user's.
- */
-export function rightSide(thread: Pick<ThreadRef, "a" | "b">, owner: Party): string {
-  return thread.a.id === owner.id || thread.b.id === owner.id ? owner.id : USER;
-}
-
 /** A letter's sender as a thread compares it: the person is `USER` whatever id it carries. */
 export function senderId(letter: Pick<ThreadLetter, "from">): string {
   return partyOf(letter.from).id;
+}
+
+/** A letter's block in an agent's thread, with when it was sent: it may reach the agent long after. */
+export type ThreadBlock = Block & { sentAt?: number };
+
+/**
+ * An agent's transcript holds nearly everything said to it and by it; this adds
+ * the rest from its letters. A letter sits where it reached the agent, which is
+ * the order the agent worked in, and says when it was sent. A report is the
+ * agent's last message and a question its open request, so those only learn
+ * their letter's id, for a beat to open at. What the transcript has no place for
+ * (the answer to a question, written to the agent) goes in by time.
+ */
+export function withLetters(blocks: readonly Block[], letters: readonly ThreadLetter[], agentId: string): ThreadBlock[] {
+  const told = new Set(blocks.flatMap((block) => {
+    const id = letterIdOf(block);
+    return id ? [id] : [];
+  }));
+  const out: ThreadBlock[] = blocks.map((block) => {
+    const letter = block.role === "user" && block.letterId ? letters.find((one) => one.id === block.letterId) : undefined;
+    return letter ? { ...block, sentAt: letter.at } : block;
+  });
+  for (const letter of letters) {
+    if (told.has(letter.id) || letter.state === "pending" || letter.state === "disposed") continue;
+    if (senderId(letter) === agentId) {
+      const found = letter.kind === "report"
+        ? out.findIndex((block) => block.role === "assistant" && block.text.trim() === letter.text.trim())
+        : letter.kind === "question" || letter.kind === "approval"
+          ? out.findIndex((block) => block.role === letter.kind && block.at === letter.at)
+          : -1;
+      if (found >= 0) out[found] = { ...out[found]!, letterId: letter.id };
+      continue;
+    }
+    // Before the window this chat holds: it belongs to a page it has not read.
+    const first = out[0]?.at;
+    if (first !== undefined && letter.at < first) continue;
+    const at = out.findIndex((block) => (block.at ?? 0) > letter.at);
+    const said: ThreadBlock = { id: `letter-${letter.id}`, role: "user", text: letter.text, at: letter.at, letterId: letter.id, letterKind: letter.kind, fromBot: letter.from };
+    if (at < 0) out.push(said);
+    else out.splice(at, 0, said);
+  }
+  return out;
 }

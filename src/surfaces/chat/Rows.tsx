@@ -7,8 +7,8 @@ import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
-import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
-import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter, UserMessage } from "./Message";
+import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
+import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter } from "./Message";
 import { SIGNED_IN_NOTE } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
 
@@ -35,7 +35,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
     switch (row.kind) {
       case "activity":
         return (
-          <div key={row.id} className={className}>
+          <div key={row.id} className={className} {...(row.blocks.length === 1 && row.blocks[0]!.letterId ? { "data-letter": row.blocks[0]!.letterId } : {})}>
             <ActivityGroup
               blocks={row.blocks}
               live={working && index === rows.length - 1}
@@ -139,8 +139,10 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
             data-message={block.role}
             className={`${className}${block.id === focusId ? " crew-found" : ""}`}
           >
-            {block.role === "user" ? (
-              <UserMessage block={block} />
+            {row.answer ? (
+              <AgentAnswer block={block} report={row.answer === "report"} />
+            ) : block.role === "user" ? (
+              <AskedOrSaid block={block} />
             ) : block.role === "system" ? (
               <SystemLine block={block} signedIn={signedAfter(rows, index)} />
             ) : (

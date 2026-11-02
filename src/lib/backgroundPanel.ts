@@ -374,6 +374,9 @@ export const clearedKey = (entry: PanelEntry): string => `${entry.id}@${entry.en
 /** The board's own entries are dropped by the daemon when cleared; the others are only hidden here. */
 const onBoard = (entry: PanelEntry) => entry.source.type === "command";
 
+/** An agent, as against what it left running (a shell, a process). */
+export const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
+
 /** The entries the panel shows: everything running, and what the user has not cleared. */
 export function visibleEntries(entries: readonly PanelEntry[], cleared: ReadonlySet<string>): PanelEntry[] {
   return entries.filter((entry) => entry.state === "running" || onBoard(entry) || !cleared.has(clearedKey(entry)));

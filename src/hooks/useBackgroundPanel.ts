@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import * as api from "../lib/api";
-import { finishedKeys, panelEntries, visibleEntries, type PanelEntry } from "../lib/backgroundPanel";
+import { finishedKeys, isAgentEntry, panelEntries, visibleEntries, type PanelEntry } from "../lib/backgroundPanel";
 import type { Process } from "../lib/processes";
 import type { Session } from "../lib/types";
 import { useBackground } from "./useBackground";
@@ -45,10 +45,11 @@ export function useBackgroundPanel(session: Session, sessions: readonly Session[
   );
 
   const clear = useCallback(() => {
-    const keys = finishedKeys(all).filter((key) => !cleared.has(key));
-    if (keys.length > 0 || all.some((entry) => entry.source.type === "command" && entry.state !== "running")) {
-      void api.backgroundClear(session.id, undefined, keys).catch(() => {});
-    }
+    // An agent stays: the list of sub-agents is its history, so only what it left running can be cleared.
+    const others = all.filter((entry) => !isAgentEntry(entry));
+    const keys = finishedKeys(others).filter((key) => !cleared.has(key));
+    const ids = others.flatMap((entry) => (entry.source.type === "command" && entry.state !== "running" ? [entry.source.id] : []));
+    if (keys.length > 0 || ids.length > 0) void api.backgroundClear(session.id, ids, keys).catch(() => {});
   }, [all, cleared, session.id]);
 
   return { board, all, entries, failed, stop, clear };

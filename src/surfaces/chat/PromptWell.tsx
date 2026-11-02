@@ -64,6 +64,8 @@ type Props = {
   onEscape?: () => boolean;
   /** Between the menus and the attachments: the queue's chips. */
   above?: ReactNode;
+  /** The chips as they are, shown and not offered: a sub-agent runs what it was started with. */
+  lockedChoice?: AgentChoice | undefined;
   /** The right end of the toolbar, after the access chip: the send button and what goes with it. */
   trailing: ReactNode;
   /** On the form, for what looks it up: `data-session`. */
@@ -98,6 +100,7 @@ export function PromptWell({
   onSend,
   onEscape,
   above,
+  lockedChoice,
   trailing,
   session,
 }: Props) {
@@ -433,6 +436,11 @@ export function PromptWell({
       <div className="flex h-8 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <AttachMenu onAttach={onAttach} onMention={() => typeAtCaret("@")} onCommand={() => typeAtCaret("/")} />
+          {lockedChoice && (
+            <div className="ds-model-group" inert title="Set when it was started">
+              <ModelControls lockProvider value={lockedChoice} onChange={() => undefined} />
+            </div>
+          )}
           {choice && onChoice && (
             <div className="ds-model-group">
               <ModelControls lockProvider={lockProvider} value={choice} onChange={onChoice} openers={{ model, effort }} />

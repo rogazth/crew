@@ -40,6 +40,8 @@ export function DefaultChatSurface({
   switchProvider = false,
   overlay,
   inThread = false,
+  agents,
+  panelOpen = false,
   readOnly = false,
   finding = null,
   onCloseFind,
@@ -112,6 +114,8 @@ export function DefaultChatSurface({
             {...(whileWorking ? { whileWorking } : {})}
             {...(queue ? { queue } : {})}
             {...(work ? { work } : {})}
+            {...(agents ? { agentsLine: agents } : {})}
+            panelOpen={panelOpen}
             {...(onOptions ? { onOptions } : {})}
             optionsPending={optionsPending}
             switchProvider={switchProvider}

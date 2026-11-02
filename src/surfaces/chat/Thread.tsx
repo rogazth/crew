@@ -4,7 +4,7 @@ import { Kbd } from "../../chrome/Kbd";
 import { Button } from "../../chrome/kit";
 import * as api from "../../lib/api";
 import { client } from "../../lib/client";
-import { mergeLetters, partyOf, rightSide, senderId, USER, type Party, type ThreadRef } from "../../lib/letters";
+import { mergeLetters, partyOf, senderId, USER, type ThreadRef } from "../../lib/letters";
 import type { ThreadLetter } from "../../lib/protocol";
 import { clock } from "../../lib/time";
 import type { Session } from "../../lib/types";
@@ -23,8 +23,6 @@ const SETTLE_MS = 250;
 
 type Props = {
   thread: ThreadRef;
-  /** The chat it opens over: its letters sit on the right. */
-  owner: Party;
   /** The chat asking, which routes the reads to its daemon. */
   sessionId: string;
   sessions: readonly Session[];
@@ -47,7 +45,7 @@ type Page = { letters: ThreadLetter[]; more: boolean; loading: boolean };
  * "Show in chat" goes back to that letter's checkpoint, Esc or the back
  * button to where the reader was.
  */
-export function Thread({ thread, owner, sessionId, sessions, active, inChat, onClose, onShowInChat }: Props) {
+export function Thread({ thread, sessionId, sessions, active, inChat, onClose, onShowInChat }: Props) {
   const { a, b, focus } = thread;
   const ends = { a: a.id || USER, b: b.id || USER };
   const [page, setPage] = useState<Page>({ letters: [], more: false, loading: true });
@@ -138,7 +136,6 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
   // Who opened the conversation reads first in the header.
   const opener = page.letters[0];
   const [first, second] = opener && senderId(opener) === (b.id || USER) ? [b, a] : [a, b];
-  const right = rightSide(thread, owner);
 
   const count = `${page.letters.length}${page.more ? "+" : ""} ${page.letters.length === 1 && !page.more ? "letter" : "letters"}`;
 
@@ -196,7 +193,7 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
                 key={letter.id}
                 letter={letter}
                 sessions={sessions}
-                right={senderId(letter) === right}
+                right={senderId(letter) === USER}
                 same={index > 0 && senderId(page.letters[index - 1]!) === senderId(letter)}
                 {...(inChat.has(letter.id) ? { onShowInChat: () => onShowInChat(letter.id) } : {})}
               />
@@ -210,7 +207,7 @@ export function Thread({ thread, owner, sessionId, sessions, active, inChat, onC
 
 /**
  * One letter: who sent it over the bubble, their face at its foot, the words
- * as the chat renders them. The chat owner's sit on the right; a run from the
+ * as the chat renders them. The user's sit on the right, everyone else's on the left; a run from the
  * same sender sits closer and names them once.
  */
 function Letter({

@@ -5,7 +5,6 @@ import { Menu } from "@base-ui/react/menu";
 import {
   ArrowUpIcon,
   AtSignIcon,
-  ChevronUpIcon,
   GitBranchIcon,
   ImageIcon,
   PaperclipIcon,
@@ -13,105 +12,63 @@ import {
   ServerIcon,
   SlashIcon,
   SquareIcon,
+  WorkflowIcon,
+  XIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { pickerKeyDown } from "../../chrome/promptKeys";
 import { PANEL, ROW } from "../../chrome/kit";
+import { StatusDot } from "../../chrome/StatusDot";
 import type { PanelEntry } from "../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../lib/contextMeter";
 import { IS_MAC } from "../../lib/hotkey";
 import { providerOf } from "../../lib/providers";
-import type { PanelScope } from "./Panel";
 import type { Session } from "../../lib/types";
 import { branchOf, useWhere, type Where } from "./where";
 
 /** An agent among the work: a native subagent or a session someone started. Shells, processes and bot conversations are not the clip's. */
-export const isAgent = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
-
-type ClipState = "working" | "attention" | "quiet";
-
-const agents = (n: number) => `${n} ${n === 1 ? "agent" : "agents"}`;
-
-/** What the clip says about the agents, if there are any: who runs, who waits on the user, or that they ended. */
-export function clipOf(work: PanelScope | undefined): { state: ClipState; label: ReactNode } | null {
-  const all = work?.entries.filter(isAgent) ?? [];
-  if (all.length === 0) return null;
-  const running = all.filter((entry) => entry.state === "running");
-  const waiting = running.filter((entry) => entry.attention);
-  if (waiting.length > 0) {
-    const [only] = waiting;
-    return {
-      state: "attention",
-      label:
-        waiting.length === 1 && only ? (
-          <>
-            <b>{only.title}</b> {only.attention === "approval" ? "needs approval" : "asks you"}
-          </>
-        ) : (
-          <>
-            <b>{agents(waiting.length)}</b> wait on you
-          </>
-        ),
-    };
-  }
-  if (running.length > 0)
-    return {
-      state: "working",
-      label: (
-        <>
-          <b>{agents(running.length)}</b> working
-        </>
-      ),
-    };
-  // One that failed did not finish: it is counted on its own, and one that was stopped likewise.
-  const failed = all.filter((entry) => entry.state === "failed").length;
-  const stopped = all.filter((entry) => entry.state === "stopped").length;
-  const finished = all.length - failed - stopped;
-  const parts = [
-    ...(finished > 0 ? [`${agents(finished)} finished`] : []),
-    ...(failed > 0 ? [`${failed} failed`] : []),
-    ...(stopped > 0 ? [`${stopped} stopped`] : []),
-  ];
-  return { state: "quiet", label: parts.join(" · ") };
-}
+/** Something an agent needs of the user: it waits on an answer, or it failed and nobody has looked. */
+export type AgentNoticeItem = { key: string; entry: PanelEntry; asks: "question" | "approval" | "failed" };
 
 /**
- * A slim tab tucked under the composer's top edge, there only while the chat
- * has agents: the ones running, the ones that wait on you, and quietly the
- * ones that ended. The turn itself is the transcript's ("Working for…"). A
- * click unfolds the tab upward, in place, into the list of those agents:
- * `children` is that list, drawn by the same element that holds the tab.
+ * On the prompt's top edge, only while an agent wants something: there is
+ * nothing here while agents simply work. Opens the agent, or the list when
+ * several want something; the x waves it away until the next time.
  */
-export function AgentClip({
-  work,
-  open,
-  onToggle,
-  children,
-}: {
-  work: PanelScope | undefined;
-  open: boolean;
-  onToggle: () => void;
-  children?: ReactNode;
-}) {
-  const clip = clipOf(work);
-  if (!clip) return null;
+export function AgentNotice({ notices, onOpen, onDismiss }: { notices: readonly AgentNoticeItem[]; onOpen: () => void; onDismiss: () => void }) {
+  const [only] = notices;
+  if (!only) return null;
+  const words = notices.length > 1 ? (
+    <>
+      <b>{notices.length} agents</b> want you
+    </>
+  ) : (
+    <>
+      <b>{only.entry.title}</b> {only.asks === "approval" ? "needs approval" : only.asks === "question" ? "asks you" : "failed"}
+    </>
+  );
   return (
-    <div data-agent-strip data-state={clip.state} className="ds-strip" {...(open ? { "data-open": "" } : {})}>
-      {children}
-      <button type="button" data-agent-clip className="ds-strip-head" aria-expanded={open} onClick={onToggle}>
+    <div data-agent-strip data-notice data-state="attention" className="ds-strip">
+      <button type="button" data-agent-notice className="ds-strip-head pr-8" onClick={onOpen}>
         <span className="ds-strip-glyph">
-          {clip.state === "working" ? (
-            <span className="crew-bg-dot" aria-hidden />
-          ) : clip.state === "attention" ? (
-            <span className="ds-strip-halo" aria-hidden />
-          ) : (
-            <span className="ds-strip-rest" aria-hidden />
-          )}
+          <span className="ds-strip-halo" aria-hidden />
         </span>
-        <span className="min-w-0 flex-1 truncate text-left">{clip.label}</span>
-        <ChevronUpIcon className="ds-strip-chevron size-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-left">{words}</span>
+      </button>
+      <button type="button" data-notice-dismiss onClick={onDismiss} aria-label="Dismiss" title="Dismiss" className="absolute top-0 right-2 z-10 grid size-6 place-items-center rounded-md text-icon transition-colors hover:text-text">
+        <XIcon className="size-3" />
       </button>
     </div>
+  );
+}
+
+/** In the line under the prompt, where it asks for nothing: the way to everyone this chat has worked with. */
+export function AgentsSegment({ working, onToggle }: { working: number; onToggle: () => void }) {
+  return (
+    <button type="button" data-agents-segment onClick={onToggle} className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text">
+      {working > 0 ? <StatusDot status="working" /> : <WorkflowIcon className="size-3.5" aria-hidden />}
+      {working > 0 ? `${working} ${working === 1 ? "sub-agent" : "sub-agents"} working` : "View sub-agents"}
+    </button>
   );
 }
 

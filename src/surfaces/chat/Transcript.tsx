@@ -5,11 +5,11 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
-import { foldTurns, groupRows, speaker, splitQueued, turnStart, underway } from "../../lib/transcriptRows";
+import { foldTurns, groupRows, speaker, splitQueued, threadRows, turnStart, underway } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
 import { Rows } from "./Rows";
-import { useBackgroundScope } from "./context";
+import { useBackgroundScope, useLetterScope } from "./context";
 
 const NEAR_BOTTOM_PX = 16;
 /** How long a clicked row holds its place: the panel's 200ms, and room for what renders late in it. */
@@ -95,6 +95,7 @@ export function Transcript({
   const anchor = useRef<{ el: Element; until: number } | null>(null);
   // The queue at the foot waits under the working line, outside any turn.
   const { calls } = useBackgroundScope();
+  const { inThread } = useLetterScope();
   const { rows, queued } = useMemo(() => {
     const split = splitQueued(groupRows(blocks, calls.size > 0 ? new Set(calls.keys()) : undefined));
     // The message the agent is already working on is that turn's prompt. It
@@ -104,8 +105,8 @@ export function Transcript({
     const rows = prompt
       ? [...split.rows, { kind: "message" as const, block: { ...prompt, streaming: false } }]
       : split.rows;
-    return { rows: foldTurns(rows, working), queued };
-  }, [blocks, calls, working]);
+    return { rows: inThread ? threadRows(rows, working) : foldTurns(rows, working), queued };
+  }, [blocks, calls, inThread, working]);
 
   const onScroll = useCallback(() => {
     const el = scroller.current;

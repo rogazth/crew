@@ -35,27 +35,25 @@ test("a bot the chat wrote to is a conversation in the status line, and opens as
   );
   await sendInChat(crew, `!'${CREW}' send Reviewer "please look at the diff on main"`);
 
-  const segment = crew.window.getByRole("button", { name: "1 conversation", exact: true });
+  const segment = crew.window.locator("[data-agents-segment]").first();
   await segment.waitFor({ timeout: 20_000 });
-
-  assert.equal(await crew.window.getByText("Conversations", { exact: true }).count(), 0, "not in a bar");
   await segment.click();
-  const sheet = crew.window.locator("[data-work-sheet]");
-  await sheet.waitFor();
-  const row = sheet.locator("[data-conversation]");
-  assert.match(await row.innerText(), /Reviewer[\s\S]*please look at the diff/);
-  assert.equal(await sheet.getByText("Conversations", { exact: true }).count(), 1, "the group is titled");
+  const list = crew.window.locator("[data-agent-list]");
+  await list.waitFor();
+  const row = list.locator("[data-conversation]");
+  assert.match(await row.innerText(), /Reviewer/);
+  assert.doesNotMatch(await row.innerText(), /please look at the diff/, "no preview");
+  assert.equal(await list.getByText("Conversations", { exact: true }).count(), 1, "the group is titled");
   await shots(crew, "status-line-conversation");
 
-  await crew.window.keyboard.press("Enter");
+  await row.click();
   const view = crew.window.locator("[data-conversation-view]");
   await view.waitFor();
   await view.getByText("please look at the diff on main").waitFor();
   assert.match(await view.locator("[data-thread-header]").innerText(), /Reviewer[\s\S]*Conversation · 1 letter/);
-  assert.equal(await composerOf(crew).count(), 0, "no composer");
+  assert.equal(await view.locator("[data-composer]").count(), 0, "no composer");
   await shots(crew, "bot-conversation");
 
   await crew.window.keyboard.press("Escape");
   await view.waitFor({ state: "detached" });
-  await composerOf(crew).waitFor();
 });

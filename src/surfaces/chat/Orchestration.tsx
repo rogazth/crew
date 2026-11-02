@@ -10,28 +10,19 @@ import {
   EyeIcon,
   HandIcon,
   PencilIcon,
-  SendIcon,
   Trash2Icon,
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
-import { lazy, memo, Suspense, useContext, useState, type ReactNode } from "react";
-import { useOpenAsk } from "../../hooks/useOpenAsk";
-import { isOpen, type Block } from "../../lib/blocks";
-import { answer, respond } from "../../lib/turnRuntime";
-import { ApprovalCard } from "./ApprovalCard";
-import { QuestionCard } from "./QuestionCard";
+import { lazy, memo, Suspense, useContext, type ReactNode } from "react";
+import type { Block } from "../../lib/blocks";
 import { botLabel } from "../../lib/botNames";
-import { checkpointOf, resolveParty, USER } from "../../lib/letters";
+import { checkpointOf, letterIdOf, resolveParty, USER, type ThreadBlock } from "../../lib/letters";
+import { clock } from "../../lib/time";
 import {
   controlOf,
-  envelopeOf,
-  FOLD_LINES,
-  foldsLongText,
-  isQuickQuestion,
   exitedless,
   nativeName,
-  optionless,
   nativeReport,
   nativeReportAt,
   sentOf,
@@ -120,34 +111,6 @@ export function PeerName({ peer, focus }: { peer: Peer; focus?: string }) {
   );
 }
 
-/** A long text, folded at seven lines with a way to read it all. */
-export function LongText({ text, lines = FOLD_LINES, fold = true }: { text: string; lines?: number; fold?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const folds = fold && foldsLongText(text, lines);
-  const total = text.split("\n").length;
-  return (
-    <div className="flex flex-col">
-      <div
-        className={`relative text-[length:var(--chat-text)] leading-[21px] ${folds && !open ? "overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]" : ""}`}
-        style={folds && !open ? { maxHeight: `${lines * 21}px` } : undefined}
-      >
-        <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
-          <Markdown text={text} />
-        </Suspense>
-      </div>
-      {folds ? (
-        <button
-          type="button"
-          onClick={() => setOpen((was) => !was)}
-          className="-ml-1.5 mt-1 self-start rounded-chrome px-1.5 py-0.5 text-[12px] text-text-muted transition-colors hover:bg-hover hover:text-text"
-        >
-          {open ? "Show less" : `Show all · ${total} lines`}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 /** The chat's owner, as a beat names it. */
 function useOwnerPeer(): Peer | undefined {
   const { owner, sessions } = useLetterScope();
@@ -227,9 +190,11 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
     const session = target.id ? sessions.find((row) => row.id === target.id) : undefined;
     return { id: target.id, name: session?.name ?? target.name, provider: session?.provider ?? target.provider, bot: false };
   };
+  const letter = started.kind === "sessions" ? undefined : letterIdOf(block);
+  const focus = letter ? { focus: letter } : undefined;
   const open = (target: CrewTarget) => {
     const entry = target.id ? entries.find((one) => one.id === `session:${target.id}`) : undefined;
-    return entry ? () => openAgent(entry.id) : target.id && sessions.some((row) => row.id === target.id) ? () => openAgent(target.id!) : undefined;
+    return entry ? () => openAgent(entry.id, focus) : target.id && sessions.some((row) => row.id === target.id) ? () => openAgent(target.id!, focus) : undefined;
   };
   const targets = started.kind === "sessions" ? started.targets : [started.target];
   const prompt = started.kind === "sessions" ? undefined : started.prompt;
@@ -242,6 +207,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
             key={target.id ?? `${target.name}-${index}`}
             {...(index === 0 ? { id: block.id } : {})}
             marked={marked}
+            letter={letter}
             first={me}
             start={!target.note}
             verb={target.note ? "could not start" : "started"}
@@ -309,20 +275,7 @@ const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked:
       />
     );
   }
-  return (
-    <div data-letter={sent.letterId} className="flex flex-col gap-1.5">
-      <ToolLine icon={SendIcon} id={block.id} marked={marked}>
-        {sent.handoff ? "Handed" : "Message to"} <PeerName peer={peer} {...(sent.letterId ? { focus: sent.letterId } : {})} />
-        {sent.handoff ? " to you" : ""}
-        {sent.delivery ? <span className="text-placeholder"> · {sent.delivery}</span> : null}
-      </ToolLine>
-      {sent.text.trim() ? (
-        <Hang className="px-3.5 py-2.5">
-          <LongText text={sent.text} />
-        </Hang>
-      ) : null}
-    </div>
-  );
+  return <Speech id={block.id} marked={marked} letter={sent.letterId} peer={me ?? peer} at={block.at} text={sent.text} />;
 });
 
 const CONTROL_ICON = {
@@ -361,86 +314,6 @@ export const ControlRow = memo(function ControlRow({ block, marked }: { block: B
     </div>
   );
 });
-
-/** What a child's open request says once it is settled: how it ended, in the card's own words. */
-function settledOf(block: Block): string {
-  if (block.role === "approval") return block.approval?.decided === "deny" ? "Denied" : "Allowed";
-  return block.question?.dismissed ? "Dismissed" : "Answered";
-}
-
-/**
- * The child's open question or approval, under the letter that carries it
- * (orchestration plan, decision 25): a single choice as chips, a longer form as
- * the question card, an approval as its card. Answered here or in the thread,
- * the first answer counts and the rest disable.
- */
-function ChildAsk({ child, ask, by, onBy }: { child: Session; ask: Block; by: boolean; onBy: () => void }) {
-  const { owner } = useLetterScope();
-  const open = isOpen(ask);
-  const who = owner?.name ?? "the parent";
-  if (open && ask.role === "approval") {
-    return (
-      <div className="mt-1 max-w-[560px]" data-ask="approval">
-        <ApprovalCard
-          block={ask}
-          onApprove={(requestId, decision) => {
-            onBy();
-            respond(child, requestId, decision);
-          }}
-        />
-        <span className="text-[11.5px] text-placeholder">You or {who} can decide · the first answer counts</span>
-      </div>
-    );
-  }
-  if (open && !isQuickQuestion(ask)) {
-    return (
-      <div className="mt-1 max-w-[560px]" data-ask="question">
-        <QuestionCard
-          block={ask}
-          onAnswer={(requestId, answers) => {
-            onBy();
-            answer(child, requestId, answers);
-          }}
-        />
-        <span className="text-[11.5px] text-placeholder">You or {who} can answer · the first answer counts</span>
-      </div>
-    );
-  }
-  const note = open ? `You or ${who} can answer` : `${settledOf(ask)}${by ? " by you" : ""} · the first answer counts`;
-  const question = ask.question?.questions[0];
-  const picked = ask.question?.answers?.[question?.question ?? ""];
-  return (
-    <div className="mt-1.5 flex flex-wrap gap-1.5" data-ask={ask.role} data-settled={open ? undefined : ""}>
-      {ask.role === "question"
-        ? question?.options.map((option) => (
-            <button
-              key={option.label}
-              type="button"
-              disabled={!open}
-              onClick={() => {
-                onBy();
-                answer(child, ask.question!.requestId, { [question.question]: option.label });
-              }}
-              data-picked={picked === option.label ? "" : undefined}
-              className={`h-7 rounded-md px-2.5 text-[12.5px] ring-1 transition-colors ${
-                picked === option.label ? "text-text ring-border-strong" : "ring-hairline enabled:hover:bg-hover disabled:opacity-50"
-              }`}
-            >
-              {option.label}
-            </button>
-          ))
-        : null}
-      <span className="self-center text-[11.5px] text-placeholder">{note}</span>
-    </div>
-  );
-}
-
-/** Reads the child's thread, so it is only mounted while the child asks (and after, to show how it ended). */
-function WatchedLetter({ child, block, marked, by, onBy }: { child: Session; block: Block; marked: string | null; by: boolean; onBy: () => void }) {
-  const kind = block.letterKind === "approval" ? "approval" : "question";
-  const ask = useOpenAsk(child.id, kind, block.text);
-  return <LetterFrame block={block} marked={marked} child={child} ask={ask} by={by} onBy={onBy} />;
-}
 
 /**
  * A letter from another party (a session, a bot, a parent): its mark in a tile,
@@ -494,54 +367,69 @@ function LetterBeat({ block, marked }: { block: Block; marked: string | null }) 
 }
 
 /** Inside an agent's thread: a letter's words are what the thread is made of. */
-const LetterInThread = memo(function LetterInThread({ block, marked }: { block: Block; marked: string | null }) {
-  const { sessions } = useLetterScope();
-  const [watching, setWatching] = useState(false);
-  const [by, setBy] = useState(false);
-  const asks = block.letterKind === "question" || block.letterKind === "approval";
-  const child = asks && block.fromBot?.id ? sessions.find((row) => row.id === block.fromBot?.id && row.kind !== "bot") : undefined;
-  // Once it has asked it stays mounted: the answer is read from the same thread.
-  if (child?.status === "needs-input" && !watching) setWatching(true);
-  if (child && watching) return <WatchedLetter child={child} block={block} marked={marked} by={by} onBy={() => setBy(true)} />;
-  return <LetterFrame block={block} marked={marked} child={child} ask={null} by={by} onBy={() => setBy(true)} />;
-});
-
-function LetterFrame({ block, marked, child, ask, by, onBy }: { block: Block; marked: string | null; child: Session | undefined; ask: Block | null; by: boolean; onBy: () => void }) {
+function LetterInThread({ block, marked }: { block: Block; marked: string | null }) {
   const from = block.fromBot;
   const peer = usePeer(from?.id, from?.name ?? "", undefined);
-  const { openAgent } = useChatActions();
   if (!from) return null;
-  const { word, tag } = envelopeOf(block.letterKind);
-  const id = peer.id;
-  // A session's question names its tag only while its request is open.
-  const tagged = tag && (!child || (ask && isOpen(ask)));
+  const sentAt = (block as ThreadBlock).sentAt;
+  const late = sentAt !== undefined && block.at !== undefined && block.at - sentAt > LATE_MS;
   return (
-    <div data-letter={block.letterId} data-letter-in className={`flex gap-2.5 rounded-xl py-1${lit(block.id, marked)}`}>
-      <span className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-card">
-        <PeerMark peer={peer} className="size-3.5" />
+    <Speech
+      id={block.id}
+      marked={marked}
+      letter={block.letterId}
+      peer={peer}
+      at={late ? sentAt : block.at}
+      tag={block.letterKind === "started" ? "Brief" : block.letterKind === "report" ? "Report" : undefined}
+      note={late ? `reached it ${clock(block.at!)}` : undefined}
+      text={exitedless(block)}
+    />
+  );
+}
+
+/** A letter this long after it was sent says so: the agent worked without it until then. */
+const LATE_MS = 60_000;
+
+/**
+ * Someone other than the user, in a thread: on the left, with their mark and
+ * name. The user is the bubble on the right, in any conversation.
+ */
+function Speech({ id, marked, letter, peer, at, tag, note, text }: { id: string; marked: string | null; letter?: string | undefined; peer: Peer; at?: number | undefined; tag?: string | undefined; note?: string | undefined; text: string }) {
+  return (
+    <div data-block={id} data-letter={letter} data-letter-in className={`flex gap-2.5 rounded-xl${id === marked ? " crew-found" : ""}`}>
+      <span className="mt-0.5 grid size-7 shrink-0 place-items-center">
+        <PeerMark peer={peer} className="size-6" />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-baseline gap-1.5 text-[12.5px]">
-          {id ? (
-            <button
-              type="button"
-              onClick={() => openAgent(id, block.letterId ? { focus: block.letterId } : undefined)}
-              className="rounded-chrome font-medium text-text hover:underline"
-            >
-              {peer.name}
-            </button>
-          ) : (
-            <span className="font-medium text-text">{peer.name}</span>
-          )}
-          <span className="text-text-muted">{word}</span>
-          {tagged ? <span data-letter-tag className="text-placeholder"><span data-sep>· </span>{tag}</span> : null}
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <div className="flex items-baseline gap-1.5 px-0.5 text-[12px] leading-4">
+          <span className="font-medium text-text">{peer.name}</span>
+          {at !== undefined ? <span className="text-placeholder tabular-nums">{clock(at)}</span> : null}
+          {note ? <span className="text-placeholder">· {note}</span> : null}
         </div>
-        {/* The options are buttons under it: the letter's own list of them would say them twice. */}
-        <LongText text={child && ask?.role === "question" ? optionless(exitedless(block)) : exitedless(block)} fold={block.letterKind !== "started"} />
-        {child && ask ? <ChildAsk child={child} ask={ask} by={by} onBy={onBy} /> : null}
+        <div className="max-w-full min-w-0 rounded-2xl rounded-tl-md bg-card px-3.5 py-2.5">
+          {tag ? <div className="mb-1 text-[11px] font-medium text-text-muted">{tag}</div> : null}
+          <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
+            <Markdown text={text} />
+          </Suspense>
+        </div>
       </div>
     </div>
   );
+}
+
+/** What an agent said at the end of a turn, in its own thread. */
+export function AgentAnswer({ block, report }: { block: Block; report: boolean }) {
+  const { speaker } = useLetterScope();
+  const me = useOwnerPeer();
+  const peer: Peer = speaker ?? me ?? { name: "Agent" };
+  return <Speech id={block.id} marked={null} letter={block.letterId} peer={peer} at={block.at} tag={report ? "Report" : undefined} text={block.text} />;
+}
+
+/** The user's words on the right; a native subagent's prompt is the words of whoever asked it. */
+export function AskedOrSaid({ block }: { block: Block }) {
+  const { asker } = useLetterScope();
+  if (!asker) return <UserMessage block={block} />;
+  return <Speech id={block.id} marked={null} peer={asker} at={block.at} tag="Brief" text={block.text} />;
 }
 
 /** The beat a note leaves when the user writes to a child: its name opens that child's thread at the letter. */

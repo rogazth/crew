@@ -18,8 +18,9 @@ import { useChatActions } from "./context";
 import type { PromptHandle } from "./PromptEditor";
 import { PromptWell } from "./PromptWell";
 import {
-  AgentClip,
-  clipOf,
+  AgentNotice,
+  AgentsSegment,
+  type AgentNoticeItem,
   ContextRing,
   SendButton,
   SessionRemoteSegment,
@@ -65,7 +66,13 @@ type Props = {
   switchProvider?: boolean;
   /** In a thread: Esc goes back one level and never stops the turn; the Stop button does. */
   escBack?: boolean;
+  /** The chat's agents: what wants the user over the prompt, and the way to all of them under it. */
+  agentsLine?: AgentsLine;
+  /** The right panel is open: Esc is its, and never stops this chat's turn. */
+  panelOpen?: boolean;
 };
+
+export type AgentsLine = { notices: readonly AgentNoticeItem[]; working: number; any: boolean; onOpenNotice: () => void; onDismiss: () => void; onToggleList: () => void };
 
 /** What the session's row says it runs, as the chips show it. */
 const choiceOf = (session: Session): AgentChoice => ({
@@ -106,6 +113,8 @@ export function Composer({
   optionsPending = false,
   switchProvider = false,
   escBack = false,
+  agentsLine,
+  panelOpen = false,
 }: Props) {
   const field = useRef<PromptHandle>(null);
   useImperativeHandle(ref, () => ({
@@ -138,7 +147,7 @@ export function Composer({
   const sendAs = (wait: boolean) => onSend(working ? (wait ? "queue" : whileWorking) : undefined);
   // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
   const escape = () => {
-    if (!working || sheet === "work" || escBack) return false;
+    if (!working || sheet === "work" || escBack || panelOpen) return false;
     onStop();
     return true;
   };
@@ -149,7 +158,6 @@ export function Composer({
   const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
   const current = fitChoice(choiceOf(session));
   const stepsEffort = !!onOptions && effortsOf(current.provider, current.model).length > 1;
-  const hasClip = clipOf(work) !== null;
   const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
 
   const queued = queue && queue.items.some((message) => !message.steering);
@@ -166,16 +174,7 @@ export function Composer({
         : `Message ${session.name}…`;
   return (
     <div className={`ds-composer-wrap relative mx-auto w-full max-w-chat shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
-      <AgentClip work={work} open={sheet === "work"} onToggle={() => openWork(sheet !== "work")}>
-        {work && hasClip && (
-          <WorkSegment
-            work={work}
-            open={sheet === "work"}
-            onOpenChange={openWork}
-            onEscape={focusField}
-          />
-        )}
-      </AgentClip>
+      {agentsLine && <AgentNotice notices={agentsLine.notices} onOpen={agentsLine.onOpenNotice} onDismiss={agentsLine.onDismiss} />}
       <UsageWarning provider={session.provider} />
       <PromptWell
         ref={field}
@@ -195,8 +194,9 @@ export function Composer({
         commands={entries}
         onSlash={readCommands}
         onAction={runAction}
-        choice={onOptions ? choiceOf(session) : undefined}
-        onChoice={onOptions}
+        choice={onOptions && !escBack ? choiceOf(session) : undefined}
+        onChoice={escBack ? undefined : onOptions}
+        lockedChoice={escBack ? choiceOf(session) : undefined}
         lockProvider={!switchProvider}
         movable={movable}
         placeholder={placeholder}
@@ -232,8 +232,9 @@ export function Composer({
         {!centered && <WorktreeSegment session={session} />}
         {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
         {session.paused && <PausedSegment />}
-        {/* Shells, processes and conversations with no agent to put a clip up still have their sheet: this opens it. */}
-        {work && !hasClip && <WorkSegment segment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
+        {agentsLine?.any && <AgentsSegment working={agentsLine.working} onToggle={agentsLine.onToggleList} />}
+        {/* Shells and processes the chat left running: this opens their sheet. */}
+        {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         <span className="flex-1" />
         {optionsPending ? (
