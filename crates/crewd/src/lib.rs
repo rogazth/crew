@@ -3064,11 +3064,11 @@ mod tests {
         handle.shutdown();
     }
 
-    /// Two daemons, the way two machines would be: the second leases from the
-    /// first, its sessions calling a connector the first signed in; then the
-    /// vault moves to the second, sealed, and the first keeps nothing.
+    /// Two daemons, the way two machines would be: the second sends its calls
+    /// to the first, its sessions calling a connector the first signed in; then
+    /// the vault moves to the second, sealed, and the first keeps nothing.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_machine_leases_from_the_vault_and_the_vault_moves_to_it() {
+    async fn a_machine_calls_through_the_vault_and_the_vault_moves_to_it() {
         use crew_core::connectors::{fake_server, net};
         net::allow_insecure_for_tests();
         let fake = fake_server::start(fake_server::Options::default()).await;
@@ -3106,7 +3106,7 @@ mod tests {
         let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 7, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(!status.holds && status.online && status.grants == 0, "{status:?}");
 
-        // A session on B calls the connector with a token leased from A.
+        // A session on B calls the connector: the call runs on A.
         let session_id = seed_bot(&mut wb, dir_b.to_str().unwrap()).await;
         let info = bridge_b.info().expect("info");
         let token = bridge_b.mint(&session_id);
@@ -3121,12 +3121,45 @@ mod tests {
         let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 8, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(status.holds && status.machines[0].last_lease.is_some(), "{status:?}");
 
-        // A lease token leases; it reads nothing else of the daemon.
+        // A machine's token runs tools; it reads nothing else of the daemon,
+        // and no method answers a token.
         let (mut peer, _) = connect_async(a.url()).await.expect("connect");
         peer.send(Message::Text(serde_json::json!({ "auth": minted.token }).to_string().into())).await.unwrap();
         let _hello = peer.next().await;
         let other = rpc(&mut peer, 9, "connectors_list", Value::Null).await;
         assert!(other.error.unwrap().contains("not for this connection"));
+        let lease = rpc(&mut peer, 80, "vault_lease", serde_json::json!({ "accountId": account.id })).await;
+        assert!(lease.error.unwrap().contains("not for this connection"));
+
+        // A slow call holds up nothing else on the connection.
+        let ask = |id: u32, method: &str, params: Value| serde_json::json!({ "id": id, "method": method, "params": params }).to_string();
+        let slow = serde_json::json!({ "accountId": account.id, "tool": "search", "arguments": { "delayMs": 1500 } });
+        peer.send(Message::Text(ask(81, "vault_call", slow).into())).await.unwrap();
+        peer.send(Message::Text(ask(82, "vault_config", Value::Null).into())).await.unwrap();
+        let mut order = Vec::new();
+        let mut frames = String::new();
+        while order.len() < 2 {
+            let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), peer.next()).await.expect("an answer") else { panic!("closed") };
+            frames.push_str(text.as_ref());
+            let answer: Value = serde_json::from_str(text.as_ref()).unwrap();
+            if let Some(id) = answer["id"].as_u64() {
+                order.push(id);
+            }
+        }
+        assert_eq!(order, [82, 81], "the config came first");
+
+        // The grant's tokens never crossed: not in a frame, not on B's disk.
+        let bearer = fake.requests().iter().rev().find_map(|r| r.header("authorization").map(str::to_string)).expect("the fake was called");
+        let access_token = bearer.trim_start_matches("Bearer ").to_string();
+        assert!(!frames.contains(&access_token), "a frame held the access token");
+        let mut files = vec![dir_b.clone()];
+        while let Some(path) = files.pop() {
+            if path.is_dir() {
+                files.extend(std::fs::read_dir(&path).unwrap().flatten().map(|e| e.path()));
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                assert!(!bytes.windows(access_token.len()).any(|w| w == access_token.as_bytes()), "{path:?} held the access token");
+            }
+        }
 
         // Revoking a machine stops what it already has open, at its next request.
         let spare = rpc(&mut wa, 90, "vault_mint", serde_json::json!({ "name": "spare" })).await;
@@ -3158,6 +3191,79 @@ mod tests {
         assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "after", "B calls with its own grant: {called}");
         let _ = account;
         a.shutdown();
+        b.shutdown();
+    }
+
+    /// A call sent to a vault that goes away before it answers says it may have
+    /// run, and isn't tried again; the next one says the vault is offline.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_call_the_vault_never_answered_says_it_may_have_run() {
+        use crew_core::connectors::{fake_server, net};
+        net::allow_insecure_for_tests();
+        let fake = fake_server::start(fake_server::Options::default()).await;
+        let (dir_a, dir_b) = (test_dir("lost-a"), test_dir("lost-b"));
+        let (a, _) = test_serve_bridged(&dir_a);
+        let (b, bridge_b) = test_serve_bridged(&dir_b);
+        let mut wa = connect_authed(&a).await;
+        let mut wb = connect_authed(&b).await;
+        let added = rpc(&mut wa, 1, "connector_add", serde_json::json!({ "url": fake.mcp_url, "name": "Fake" })).await;
+        let connector: proto::Connector = serde_json::from_value(added.result.expect("added")).unwrap();
+        let started = rpc(&mut wa, 2, "connector_connect", serde_json::json!({ "connectorId": connector.id })).await;
+        let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
+        let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
+        let caught = answer.headers()["location"].to_str().unwrap().to_string();
+        assert!(rpc(&mut wa, 3, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await.error.is_none());
+        let minted = rpc(&mut wa, 4, "vault_mint", serde_json::json!({ "name": "devbox" })).await;
+        let minted: proto::VaultMinted = serde_json::from_value(minted.result.expect("minted")).unwrap();
+        let address = a.url().trim_start_matches("ws://").trim_end_matches('/').to_string();
+        let join = serde_json::json!({ "address": address, "token": minted.token, "vaultName": "the Mac" });
+        assert!(rpc(&mut wb, 5, "vault_join", join).await.error.is_none());
+        for _ in 0..100 {
+            let list = rpc(&mut wb, 6, "connectors_list", Value::Null).await.result.unwrap_or_default();
+            if list.as_array().is_some_and(|l| !l.is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let session_id = seed_bot(&mut wb, dir_b.to_str().unwrap()).await;
+        let info = bridge_b.info().expect("info");
+        let token = bridge_b.mint(&session_id);
+        let call = move |arguments: Value| {
+            let payload = serde_json::json!({ "token": token, "method": "tools/call",
+                "params": { "_crewConnector": "fake", "name": "create_page", "arguments": arguments } });
+            let socket = info.socket_path.clone();
+            std::thread::spawn(move || unix_call(&socket, &payload))
+        };
+        let tool_calls = || fake.requests().iter().filter(|r| r.body.contains("tools/call")).count();
+
+        let running = call(serde_json::json!({ "delayMs": 30000 }));
+        for _ in 0..100 {
+            if tool_calls() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(tool_calls(), 1, "the call reached the service");
+        // The vault goes away with the call running.
+        a.shutdown();
+        let lost = tokio::task::spawn_blocking(move || running.join().unwrap()).await.unwrap();
+        let line = lost["result"]["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(line.contains("create_page may have run"), "{lost}");
+        assert_eq!(tool_calls(), 1, "not tried again");
+
+        let call_again = call.clone();
+        let mut offline = String::new();
+        for _ in 0..100 {
+            let call_again = call_again.clone();
+            let answered = tokio::task::spawn_blocking(move || call_again(serde_json::json!({})).join().unwrap()).await.unwrap();
+            offline = answered["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+            if offline.contains("is offline") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(offline.contains("the vault on the Mac is offline since"), "{offline}");
+        assert_eq!(tool_calls(), 1, "nothing was sent");
         b.shutdown();
     }
 

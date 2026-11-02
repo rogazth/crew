@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use super::builtin::Builtin;
 use super::google;
 use super::gws::{self, Gws, GwsError};
-use super::lease::{Held, Lease, LeaseError, Leaser};
+use super::lease::{RelayError, VaultLink, MAX_RELAYED_BYTES};
 use super::oauth::{self, Client, ClientAuth, Discovery, OAuthError, Pkce, Tokens};
 use super::remote::{RemoteClient, RemoteError};
 use super::vault::{Grant, VaultStore};
@@ -62,9 +62,8 @@ pub struct Connectors {
     google: Mutex<(google::Endpoints, Option<Client>)>,
     /// The `gws` the Google apps' tools run.
     gws: Mutex<Gws>,
-    /// Set on a machine that is not the vault: it leases its tokens.
-    leaser: Mutex<Option<Arc<dyn Leaser>>>,
-    leases: Mutex<HashMap<String, Held>>,
+    /// Set on a machine that is not the vault: its calls run there.
+    link: Mutex<Option<Arc<dyn VaultLink>>>,
     /// Until when no call starts here: a move is taking the grants away, and
     /// a refresh now could spend a token already sealed for the new vault.
     moving_until: AtomicI64,
@@ -103,8 +102,7 @@ impl Connectors {
             remotes: Mutex::new(HashMap::new()),
             google: Mutex::new((google::Endpoints::default(), None)),
             gws: Mutex::new(Gws::default()),
-            leaser: Mutex::new(None),
-            leases: Mutex::new(HashMap::new()),
+            link: Mutex::new(None),
             moving_until: AtomicI64::new(0),
             in_flight: tokio::sync::RwLock::new(()),
             on_change,
@@ -137,14 +135,13 @@ impl Connectors {
         *self.gws.lock().unwrap_or_else(|e| e.into_inner()) = gws;
     }
 
-    /// Leases from a vault on another machine; `None` makes this one the vault again.
-    pub fn set_leaser(&self, leaser: Option<Arc<dyn Leaser>>) {
-        *self.leaser.lock().unwrap_or_else(|e| e.into_inner()) = leaser;
-        self.leases.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    /// Sends its calls to a vault on another machine; `None` makes this one the vault again.
+    pub fn set_link(&self, link: Option<Arc<dyn VaultLink>>) {
+        *self.link.lock().unwrap_or_else(|e| e.into_inner()) = link;
     }
 
-    fn leaser(&self) -> Option<Arc<dyn Leaser>> {
-        self.leaser.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    fn link(&self) -> Option<Arc<dyn VaultLink>> {
+        self.link.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -407,7 +404,7 @@ impl Connectors {
     pub async fn land_move(&self, bundle: &[u8]) -> Result<usize, String> {
         let bundle: MoveBundle = serde_json::from_slice(bundle).map_err(|_| "The vault's grants didn't read".to_string())?;
         let count = bundle.grants.len();
-        self.set_leaser(None);
+        self.set_link(None);
         self.moving_until.store(0, Ordering::SeqCst);
         super::lease::import(&self.store, &bundle.config)?;
         self.vault.replace(bundle.grants.clone())?;
@@ -445,7 +442,7 @@ impl Connectors {
     /// The vault moved here without the old one: the config this machine had
     /// stays, and every account asks for a sign-in.
     pub fn start_empty(&self) -> Result<(), String> {
-        self.set_leaser(None);
+        self.set_link(None);
         self.moving_until.store(0, Ordering::SeqCst);
         self.vault.replace(HashMap::new())?;
         for account in super::list(&self.store)?.into_iter().flat_map(|c| c.accounts) {
@@ -538,54 +535,12 @@ impl Connectors {
         Ok(self.token_and_scope(account_id, stale).await?.0)
     }
 
-    /// The token, and the scopes its grant holds: the vault's own, or a lease from it.
+    /// The token, and the scopes its grant holds.
     async fn token_and_scope(&self, account_id: &str, stale: Option<&str>) -> Result<(String, Option<String>), Unavailable> {
-        if let Some(leaser) = self.leaser() {
-            let held = self.leased(&leaser, account_id, stale).await?;
-            return Ok((held.access_token, held.scope));
-        }
         let token = self.vault_token(account_id, stale).await?;
         let key = self.grant_key(account_id).map_err(Unavailable)?.ok_or_else(|| self.expired(account_id))?;
         let scope = self.vault.get(&key).map_err(Unavailable)?.and_then(|g| g.scope);
         Ok((token, scope))
-    }
-
-    /// A lease, the one held while it is fresh. With the vault offline, the
-    /// one held serves until it runs out; then the call says since when.
-    async fn leased(&self, leaser: &Arc<dyn Leaser>, account_id: &str, stale: Option<&str>) -> Result<Lease, Unavailable> {
-        let lock = self.refresh_lock(account_id);
-        let _held = lock.lock().await;
-        let now = now_millis();
-        let kept = self.leases.lock().unwrap_or_else(|e| e.into_inner()).get(account_id).cloned();
-        let refused = |h: &Held| stale == Some(h.lease.access_token.as_str());
-        if let Some(h) = kept.as_ref().filter(|h| h.fresh(now) && !refused(h)) {
-            return Ok(h.lease.clone());
-        }
-        match leaser.lease(account_id, stale).await {
-            Ok(lease) => {
-                self.leases.lock().unwrap_or_else(|e| e.into_inner()).insert(account_id.into(), Held { lease: lease.clone(), at: now });
-                Ok(lease)
-            }
-            Err(LeaseError::Offline) => match kept.filter(|h| h.alive(now) && !refused(h)) {
-                Some(h) => Ok(h.lease),
-                None => {
-                    let since = leaser.offline_since().map(|t| format!(" since {}", super::lease::clock(t))).unwrap_or_default();
-                    Err(Unavailable(format!("{}: the vault on {} is offline{since}", self.label(account_id), leaser.vault_name())))
-                }
-            },
-            Err(LeaseError::Refused(line)) => {
-                self.leases.lock().unwrap_or_else(|e| e.into_inner()).remove(account_id);
-                Err(Unavailable(line))
-            }
-        }
-    }
-
-    /// A lease for another machine: the vault's live token, its end and its scopes.
-    pub async fn lease(&self, account_id: &str, stale: Option<&str>) -> Result<Lease, String> {
-        let token = self.vault_token(account_id, stale).await.map_err(|Unavailable(line)| line)?;
-        let key = self.grant_key(account_id)?.ok_or("That account isn't signed in")?;
-        let grant = self.vault.get(&key)?.ok_or("That account isn't signed in")?;
-        Ok(Lease { access_token: token, expires_at: grant.expires_at, scope: grant.scope })
     }
 
     /// The vault's own token for an account, refreshed when it is near its end.
@@ -698,6 +653,10 @@ impl Connectors {
 
     /// Lists the server's tools now and keeps them. A built-in's are its own.
     pub async fn list_tools(&self, account_id: &str) -> Result<(), String> {
+        if let Some(link) = self.link() {
+            link.refresh_tools(account_id);
+            return Ok(());
+        }
         if let Some(builtin) = super::connector_of(&self.store, account_id)?.as_ref().and_then(Builtin::of) {
             super::set_raw_tools(&self.store, account_id, &builtin.tool_defs())?;
             self.changed();
@@ -714,9 +673,14 @@ impl Connectors {
     }
 
     /// The tools a session's shim lists: the cached ones, switched-off ones
-    /// left out. A cache older than an hour is listed again first; when that
-    /// fails, the old list still answers.
+    /// left out. On the vault, a cache older than an hour is listed again
+    /// first; when that fails, the old list still answers.
     pub async fn tools_for_shim(&self, account_id: &str) -> Result<Vec<Value>, String> {
+        // A machine answers from its copy, so a spawn doesn't wait on the vault.
+        if let Some(link) = self.link() {
+            link.refresh_tools(account_id);
+            return super::listed_tools(&self.store, account_id);
+        }
         let at: Option<i64> = self.store.with(|conn| {
             conn.query_row("SELECT tools_at FROM connector_accounts WHERE id = ?1", [account_id], |row| row.get(0))
                 .optional()
@@ -728,8 +692,13 @@ impl Connectors {
         super::listed_tools(&self.store, account_id)
     }
 
-    /// A tool call for a session. Failures are answers for the model.
+    /// A tool call for a session. Failures are answers for the model. On a
+    /// machine that is not the vault it runs on the vault, whose switches and
+    /// scopes decide.
     pub async fn call(&self, account_id: &str, name: &str, arguments: Value) -> Value {
+        if let Some(link) = self.link() {
+            return self.forward(link.as_ref(), account_id, name, arguments).await;
+        }
         let _open = match self.enter().await {
             Ok(open) => open,
             Err(Unavailable(line)) => return tool_error(&line),
@@ -749,6 +718,36 @@ impl Connectors {
             })
             .await;
         call.unwrap_or_else(|Unavailable(line)| tool_error(&line))
+    }
+
+    /// A call sent to the vault. It is never tried again: once sent, it may
+    /// have run.
+    async fn forward(&self, link: &dyn VaultLink, account_id: &str, name: &str, arguments: Value) -> Value {
+        let label = self.label(account_id);
+        let vault = link.vault_name();
+        if arguments.to_string().len() > MAX_RELAYED_BYTES {
+            return tool_error(&format!("{label}: the arguments of {name} are too large to send to the vault on {vault}."));
+        }
+        match link.call(account_id, name, arguments).await {
+            Ok(answer) => answer,
+            Err(RelayError::Offline) => {
+                let since = link.offline_since().map(|t| format!(" since {}", super::lease::clock(t))).unwrap_or_default();
+                tool_error(&format!("{label}: the vault on {vault} is offline{since}"))
+            }
+            Err(RelayError::Lost) => tool_error(&format!(
+                "{label}: the connection to the vault on {vault} dropped during this call. {name} may have run; check before trying it again."
+            )),
+            Err(RelayError::Refused(line)) => tool_error(&line),
+        }
+    }
+
+    /// A call another machine sent: its answer, unless it is too large to go back.
+    pub async fn call_for_machine(&self, account_id: &str, name: &str, arguments: Value) -> Value {
+        let answer = self.call(account_id, name, arguments).await;
+        if answer.to_string().len() > MAX_RELAYED_BYTES {
+            return tool_error(&format!("{}: the answer of {name} is too large to send to this machine.", self.label(account_id)));
+        }
+        answer
     }
 
     /// One of Google's apps' tools, run with `gws` and the account's token,
@@ -938,25 +937,43 @@ mod tests {
         assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope);
     }
 
-    /// Another machine's connectors, leasing from `vault` in this process.
-    struct TestLeaser {
-        vault: Arc<Connectors>,
-        online: std::sync::atomic::AtomicBool,
+    /// How the vault answers another machine, in this process.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Reach {
+        Online,
+        Offline,
+        /// The call runs there and its answer is lost on the way back.
+        LosesAnswers,
     }
 
-    impl Leaser for TestLeaser {
-        fn lease<'a>(
+    struct TestLink {
+        vault: Arc<Connectors>,
+        reach: Mutex<Reach>,
+        refreshes: Mutex<Vec<String>>,
+    }
+
+    impl VaultLink for TestLink {
+        fn call<'a>(
             &'a self,
             account_id: &'a str,
-            stale: Option<&'a str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Lease, LeaseError>> + Send + 'a>> {
+            tool: &'a str,
+            arguments: Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, RelayError>> + Send + 'a>> {
             Box::pin(async move {
-                if !self.online.load(std::sync::atomic::Ordering::SeqCst) {
-                    return Err(LeaseError::Offline);
+                let reach = *self.reach.lock().unwrap();
+                if reach == Reach::Offline {
+                    return Err(RelayError::Offline);
                 }
-                let (id, stale) = (account_id.to_string(), stale.map(str::to_string));
-                self.vault.run(move |c| async move { c.lease(&id, stale.as_deref()).await }).await.map_err(LeaseError::Refused)
+                let (id, tool) = (account_id.to_string(), tool.to_string());
+                let answer = self.vault.run(move |c| async move { Ok(c.call_for_machine(&id, &tool, arguments).await) }).await.map_err(RelayError::Refused)?;
+                if reach == Reach::LosesAnswers {
+                    return Err(RelayError::Lost);
+                }
+                Ok(answer)
             })
+        }
+        fn refresh_tools(&self, account_id: &str) {
+            self.refreshes.lock().unwrap().push(account_id.to_string());
         }
         fn vault_name(&self) -> String {
             "devbox".into()
@@ -966,27 +983,97 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_machine_that_is_not_the_vault_calls_with_leases_and_rides_out_an_offline_vault() {
-        let (vault, grants, _fake, id) = signed_in(Options::default());
+    /// A machine that is not the vault: a copy of the config, no grant, and a
+    /// `gws` that can't run, so nothing of a call can run here.
+    fn member_of(vault: &Arc<Connectors>) -> (Arc<Connectors>, Arc<TestLink>, Arc<MemoryVault>) {
         let dir = std::env::temp_dir().join(format!("cf-{}", uuid::Uuid::new_v4()));
         let store = Store::open(dir.join("crew.db")).unwrap();
         super::super::lease::import(&store, &super::super::lease::snapshot(&vault.store).unwrap()).unwrap();
-        let machine = Connectors::new(store, Arc::new(MemoryVault::default()), Arc::new(|| {})).unwrap();
-        let link = Arc::new(TestLeaser { vault: vault.clone(), online: true.into() });
-        machine.set_leaser(Some(link.clone()));
+        let grants = Arc::new(MemoryVault::default());
+        let machine = Connectors::new(store, grants.clone(), Arc::new(|| {})).unwrap();
+        machine.set_gws(Gws::at(dir.join("no-gws-here")));
+        let link = Arc::new(TestLink { vault: vault.clone(), reach: Mutex::new(Reach::Online), refreshes: Mutex::new(Vec::new()) });
+        machine.set_link(Some(link.clone()));
+        (machine, link, grants)
+    }
+
+    fn tool_calls(fake: &FakeServer) -> usize {
+        fake.requests().iter().filter(|r| r.body.contains("tools/call")).count()
+    }
+
+    fn line_of(answer: &Value) -> &str {
+        answer["content"][0]["text"].as_str().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_machine_that_is_not_the_vault_runs_its_calls_there_and_holds_no_token() {
+        let (vault, _grants, fake, id) = signed_in(Options::default());
+        let (machine, link, grants) = member_of(&vault);
 
         let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "a" })));
-        assert!(answer["isError"] != true, "{answer}");
-        let held = machine.leases.lock().unwrap().get(&id).unwrap().lease.access_token.clone();
-        assert_eq!(held, grants.get(&id).unwrap().unwrap().access_token, "the vault's token, lent");
+        assert_eq!(answer["structuredContent"]["arguments"]["text"], "a", "{answer}");
+        assert_eq!(tool_calls(&fake), 1);
+        assert_eq!(grants.all().unwrap().len(), 0, "the machine keeps no grant");
 
-        link.online.store(false, std::sync::atomic::Ordering::SeqCst);
+        // The vault away: the call says so at once, and nothing is sent.
+        *link.reach.lock().unwrap() = Reach::Offline;
         let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "b" })));
-        assert!(answer["isError"] != true, "the token held still serves: {answer}");
-        machine.leases.lock().unwrap().get_mut(&id).unwrap().lease.expires_at = Some(now_millis() - 1);
-        let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "c" })));
-        assert!(answer["content"][0]["text"].as_str().unwrap().contains("the vault on devbox is offline since"), "{answer}");
+        assert!(line_of(&answer).contains("the vault on devbox is offline since"), "{answer}");
+        assert_eq!(answer["isError"], true);
+        assert_eq!(tool_calls(&fake), 1);
+
+        // The answer lost on its way back: said so, and not tried again.
+        *link.reach.lock().unwrap() = Reach::LosesAnswers;
+        let answer = machine.block_on(machine.call(&id, "create_page", json!({ "text": "c" })));
+        assert!(line_of(&answer).contains("create_page may have run"), "{answer}");
+        assert_eq!(tool_calls(&fake), 2, "it ran once");
+    }
+
+    #[test]
+    fn the_vaults_switches_decide_even_when_a_machines_copy_is_behind() {
+        let (vault, _grants, fake, id) = signed_in(Options::default());
+        let (machine, _link, _) = member_of(&vault);
+        let tools: Vec<String> = vault.account(&id).unwrap().tools.iter().map(|t| t.name.clone()).collect();
+        assert!(tools.contains(&"search".to_string()));
+        super::super::set_tool(&vault.store, &id, "search", false).unwrap();
+        assert!(!super::super::tool_off(&machine.store, &id, "search").unwrap(), "the copy hasn't heard");
+        let answer = machine.block_on(machine.call(&id, "search", json!({})));
+        assert!(line_of(&answer).contains("switched off"), "{answer}");
+        assert_eq!(tool_calls(&fake), 0);
+    }
+
+    #[test]
+    fn a_machine_lists_tools_from_its_copy_and_asks_the_vault_to_refresh() {
+        let (vault, _grants, fake, id) = signed_in(Options::default());
+        let (machine, link, _) = member_of(&vault);
+        let before = fake.requests().len();
+        let tools = machine.block_on(machine.tools_for_shim(&id)).unwrap();
+        assert!(!tools.is_empty());
+        assert_eq!(fake.requests().len(), before, "a spawn doesn't wait on the network");
+        assert_eq!(*link.refreshes.lock().unwrap(), [id.clone()]);
+        machine.block_on(machine.list_tools(&id)).unwrap();
+        assert_eq!(link.refreshes.lock().unwrap().len(), 2);
+        assert_eq!(machine.account(&id).unwrap().state, AccountState::Connected, "a machine marks nothing itself");
+    }
+
+    #[test]
+    fn a_google_call_runs_gws_on_the_vault_only() {
+        let (vault, _grants, _fake, _store) = google();
+        let gmail = sign_in_google(&vault, "builtin:google.gmail", None).unwrap();
+        let (machine, _link, _) = member_of(&vault);
+        let answer = machine.block_on(machine.call(&gmail.id, "list_labels", json!({})));
+        assert!(answer["isError"] != true, "the machine has no gws, the vault does: {answer}");
+    }
+
+    #[test]
+    fn a_call_too_large_for_the_connection_is_an_answer_and_not_a_dropped_link() {
+        let (vault, _grants, fake, id) = signed_in(Options::default());
+        let (machine, _link, _) = member_of(&vault);
+        let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "x".repeat(MAX_RELAYED_BYTES + 1) })));
+        assert!(line_of(&answer).contains("arguments of search are too large"), "{answer}");
+        assert_eq!(tool_calls(&fake), 0);
+        let answer = machine.block_on(machine.call(&id, "search", json!({ "answerBytes": MAX_RELAYED_BYTES + 1 })));
+        assert!(line_of(&answer).contains("answer of search is too large"), "{}", line_of(&answer).len());
     }
 
     /// A move waits for the call running, refuses new ones while it lasts, and

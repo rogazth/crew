@@ -1,17 +1,17 @@
-//! A vault on one machine, and the others leasing from it (plan
-//! `2026-10-23-integrations.md`, phase 3).
+//! A vault on one machine, and the others sending it their calls (plans
+//! `2026-10-23-integrations.md`, phase 3, and `2026-11-02-vault-calls.md`).
 //!
-//! - **Machines** the vault knows each lease with a token of their own,
-//!   minted by the vault for that machine and revocable on its own. The vault
-//!   keeps only its hash. Such a token reads the connectors and leases access
-//!   tokens; it can do nothing else (`crewd`'s lease connections).
+//! - **Machines** the vault knows each come with a token of their own, minted
+//!   by the vault for that machine and revocable on its own. The vault keeps
+//!   only its hash. Such a token reads the connectors and runs tools on the
+//!   vault; it can do nothing else (`crewd`'s peer connections).
 //! - **The config** (connectors, accounts, bindings, tool switches and the
 //!   tools' definitions) is the vault's; every other machine keeps a copy,
 //!   replaced whole each time the vault's changes (`snapshot`, `import`), and
 //!   spawns from it. No grant is in it.
-//! - **A lease** is an access token, its end and its scopes. The machine keeps
-//!   it in memory only, asks again at 80% of its life or after a 401, and
-//!   keeps using it while the vault is offline until it runs out.
+//! - **A call** runs on the vault, with the vault's token. No connection
+//!   between machines carries an access or refresh token, except a move's
+//!   sealed grants (`seal.rs`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -94,8 +94,8 @@ pub fn leased(store: &Store, id: &str) -> Result<(), String> {
     store.with(|conn| conn.execute("UPDATE vault_machines SET last_lease = ?2 WHERE id = ?1", params![id, now_millis()]).map(drop))
 }
 
-/// How often one machine may lease: enough for every account's token at 80%
-/// of an hour and the retries after a 401, not a loop that drains the vault.
+/// How often one machine may call: enough for sessions at work, not a loop
+/// that drains the vault.
 pub struct RateLimit {
     per_minute: usize,
     seen: Mutex<HashMap<String, Vec<i64>>>,
@@ -119,61 +119,77 @@ impl RateLimit {
     }
 }
 
-/* ── Leases ───────────────────────────────────────────────────────────── */
-
-/// An access token the vault lent: kept in memory only.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Lease {
-    pub access_token: String,
-    /// Unix milliseconds; `None` when the service did not say.
-    pub expires_at: Option<i64>,
-    pub scope: Option<String>,
+/// Calls one machine may have running at once.
+#[derive(Clone)]
+pub struct InFlight {
+    most: usize,
+    counts: std::sync::Arc<Mutex<HashMap<String, usize>>>,
 }
 
-impl std::fmt::Debug for Lease {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Lease").field("expires_at", &self.expires_at).field("scope", &self.scope).finish_non_exhaustive()
+/// A call counted as running, until it is dropped.
+pub struct Running {
+    machine: String,
+    counts: std::sync::Arc<Mutex<HashMap<String, usize>>>,
+}
+
+impl InFlight {
+    pub fn new(most: usize) -> Self {
+        InFlight { most, counts: Default::default() }
+    }
+
+    pub fn enter(&self, machine: &str) -> Option<Running> {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(machine.to_string()).or_default();
+        if *count >= self.most {
+            return None;
+        }
+        *count += 1;
+        Some(Running { machine: machine.to_string(), counts: self.counts.clone() })
     }
 }
 
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.machine) {
+            *count = count.saturating_sub(1);
+        }
+    }
+}
+
+/* ── Calling the vault ────────────────────────────────────────────────── */
+
+/// The most a call's arguments or its answer may be between machines. A
+/// WebSocket frame stops at 16 MiB, and one past that closes the connection
+/// with every call on it.
+pub const MAX_RELAYED_BYTES: usize = 8 << 20;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LeaseError {
-    /// The vault can't be reached.
+pub enum RelayError {
+    /// The vault can't be reached: the call was not sent.
     Offline,
-    /// The vault answered no, in a line for the model (the account needs a sign-in).
+    /// The call was sent and its answer never came: it may have run.
+    Lost,
+    /// The vault answered no, in a line for the model.
     Refused(String),
 }
 
 /// How a machine that is not the vault reaches it (`crewd`'s link).
-pub trait Leaser: Send + Sync {
-    /// An access token for the account; `stale` is the one a service just refused.
-    fn lease<'a>(
+pub trait VaultLink: Send + Sync {
+    /// Runs a tool on the vault. Never retried: it may send an email.
+    fn call<'a>(
         &'a self,
         account_id: &'a str,
-        stale: Option<&'a str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Lease, LeaseError>> + Send + 'a>>;
+        tool: &'a str,
+        arguments: serde_json::Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, RelayError>> + Send + 'a>>;
+    /// Asks the vault to list the account's tools again if its list is old. A
+    /// change comes back with the config.
+    fn refresh_tools(&self, account_id: &str);
     /// The vault's machine, for the lines a model reads: "devbox".
     fn vault_name(&self) -> String;
     /// Since when the vault can't be reached, while it can't.
     fn offline_since(&self) -> Option<i64>;
-}
-
-/// A lease kept, and when it came: asked again at 80% of its life.
-#[derive(Clone)]
-pub(crate) struct Held {
-    pub lease: Lease,
-    pub at: i64,
-}
-
-impl Held {
-    pub fn fresh(&self, now: i64) -> bool {
-        self.lease.expires_at.is_none_or(|end| now < self.at + (end - self.at) * 4 / 5)
-    }
-
-    pub fn alive(&self, now: i64) -> bool {
-        self.lease.expires_at.is_none_or(|end| now < end)
-    }
 }
 
 /// "14:02", for "offline since".
@@ -257,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_leases_with_its_own_token_until_it_is_revoked() {
+    fn a_machine_comes_with_its_own_token_until_it_is_revoked() {
         let s = store();
         let (devbox, token) = mint(&s, "devbox").unwrap();
         assert_eq!(machine_of(&s, &token).unwrap().unwrap().id, devbox.id);
@@ -290,10 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_that_leases_too_often_is_held_back() {
+    fn a_machine_that_calls_too_often_is_held_back() {
         let limit = RateLimit::new(3);
         assert!((0..3).all(|_| limit.allow("m")));
         assert!(!limit.allow("m"));
         assert!(limit.allow("other"));
+    }
+
+    #[test]
+    fn a_machine_with_too_many_calls_running_waits_for_one_to_end() {
+        let running = InFlight::new(2);
+        let (one, _two) = (running.enter("m").unwrap(), running.enter("m").unwrap());
+        assert!(running.enter("m").is_none());
+        assert!(running.enter("other").is_some());
+        drop(one);
+        assert!(running.enter("m").is_some());
     }
 }

@@ -1,19 +1,20 @@
 //! The vault between machines (plan `2026-10-23-integrations.md`, phase 3).
 //!
-//! One daemon holds the grants: the vault. Every other one leases from it
-//! over a socket it opens to the vault, never the other way round:
+//! One daemon holds the grants: the vault. Every other one sends it its tool
+//! calls over a socket it opens to the vault, never the other way round. No
+//! token crosses that socket (plan `2026-11-02-vault-calls.md`):
 //!
-//! - **The vault** takes lease connections on its own socket (`crewd serve`
+//! - **The vault** takes machines' connections on its own socket (`crewd serve`
 //!   on a remote) or, when it is this Mac, on a listener of its own on the
-//!   tailnet address (`vault_listen`), which takes nothing but lease and
-//!   handoff tokens. A lease connection can ask for a lease and for the
+//!   tailnet address (`vault_listen`), which takes nothing but machine and
+//!   handoff tokens. A machine's connection can run a tool and read the
 //!   config, and hears when the config changes; nothing else of the daemon
 //!   reaches it.
 //! - **A member** keeps its link (`<data>/vault-link.json`, 0600: the vault's
-//!   address, its lease token and the vault's name), replaces its copy of the
-//!   config each time the vault's changes, and leases its tokens
-//!   (`Connectors::set_leaser`). It reconnects on its own, and while it can't,
-//!   it rides on the tokens it holds.
+//!   address, its machine token and the vault's name), replaces its copy of
+//!   the config each time the vault's changes, and sends its calls there
+//!   (`Connectors::set_link`). It reconnects on its own, and while it can't,
+//!   a call says the vault is offline.
 //! - **A move** goes new vault ← old vault, the window carrying only a public
 //!   key and a handoff token: the new vault makes a key pair for the move
 //!   (`vault_move_open`), the old one answers a handoff token for that key,
@@ -30,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crew_core::connectors::flow::Connectors;
-use crew_core::connectors::lease::{self, Lease, LeaseError, Leaser, RateLimit};
+use crew_core::connectors::lease::{self, InFlight, RateLimit, RelayError, VaultLink};
 use crew_core::connectors::seal::{self, Opener};
 use crew_core::store::{self as app_state, Store};
 use crew_protocol::{self as proto, Request, VaultMachine, VaultMinted, VaultStatus};
@@ -46,10 +47,15 @@ use tokio_tungstenite::tungstenite::Message;
 const MOVE_TTL_MS: i64 = 2 * 60 * 1000;
 /// How long a move waits for the calls running on the old vault.
 const MOVE_DRAIN: Duration = Duration::from_secs(30);
-/// Leases one machine may ask for in a minute.
-const LEASES_PER_MINUTE: usize = 120;
-/// A call to the vault that takes longer than this is the vault being away.
+/// Calls one machine may make in a minute: there for runaway loops.
+const CALLS_PER_MINUTE: usize = 600;
+/// Calls one machine may have running at once.
+const CALLS_IN_FLIGHT: usize = 32;
+/// A short request to the vault that takes longer than this is the vault being away.
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a machine waits for a tool's answer: past a remote call's 300 s,
+/// and short of the shim's 320 s, so the answer or this error reaches it first.
+const TOOL_ANSWER_TIMEOUT: Duration = Duration::from_secs(315);
 const STATE_LISTEN: &str = "vault:listen";
 
 /// How a member reaches its vault, kept in `<data>/vault-link.json`.
@@ -81,7 +87,8 @@ pub struct VaultHost {
     opener: Mutex<Option<(Opener, i64)>>,
     handoffs: Mutex<HashMap<String, Handoff>>,
     limit: RateLimit,
-    /// Bumped on every change of the config: lease connections tell their machine.
+    running: InFlight,
+    /// Bumped on every change of the config: machines' connections tell theirs.
     changes: watch::Receiver<u64>,
 }
 
@@ -95,7 +102,8 @@ impl VaultHost {
             listener: Mutex::new(None),
             opener: Mutex::new(None),
             handoffs: Mutex::new(HashMap::new()),
-            limit: RateLimit::new(LEASES_PER_MINUTE),
+            limit: RateLimit::new(CALLS_PER_MINUTE),
+            running: InFlight::new(CALLS_IN_FLIGHT),
             changes,
         })
     }
@@ -108,7 +116,7 @@ impl VaultHost {
             let host = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = host.listen(addr.clone()).await {
-                    eprintln!("[crewd] vault: couldn't take leases on {addr}: {e}");
+                    eprintln!("[crewd] vault: couldn't listen for machines on {addr}: {e}");
                 }
             });
         }
@@ -143,7 +151,7 @@ impl VaultHost {
 
     fn start_link(self: &Arc<Self>, config: LinkConfig) {
         let link = Link::start(config, self.store.clone(), self.connectors.clone());
-        self.connectors.set_leaser(Some(link.clone() as Arc<dyn Leaser>));
+        self.connectors.set_link(Some(link.clone() as Arc<dyn VaultLink>));
         if let Some(old) = self.link.lock().unwrap_or_else(|e| e.into_inner()).replace(link) {
             old.stop();
         }
@@ -153,7 +161,7 @@ impl VaultHost {
         if let Some(old) = self.link.lock().unwrap_or_else(|e| e.into_inner()).take() {
             old.stop();
         }
-        self.connectors.set_leaser(None);
+        self.connectors.set_link(None);
     }
 
     /* ── The window's calls (the user's token) ───────────────────────── */
@@ -191,10 +199,10 @@ impl VaultHost {
 
     pub fn mint(&self, name: &str) -> Result<VaultMinted, String> {
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
-            return Err("This machine leases from another vault".into());
+            return Err("This machine uses another vault".into());
         }
         let (machine, token) = lease::mint(&self.store, name)?;
-        eprintln!("[crewd] vault: minted a lease token for {name} ({})", machine.id);
+        eprintln!("[crewd] vault: minted a token for {name} ({})", machine.id);
         Ok(VaultMinted { machine, token })
     }
 
@@ -204,7 +212,7 @@ impl VaultHost {
         Ok(())
     }
 
-    /// Takes leases on `addr` too (this Mac's tailnet address), and again after a restart.
+    /// Takes machines on `addr` too (this Mac's tailnet address), and again after a restart.
     pub async fn listen(self: &Arc<Self>, addr: String) -> Result<(), String> {
         let listener = TcpListener::bind(&addr).await.map_err(|e| format!("Couldn't listen on {addr}: {e}"))?;
         let host = self.clone();
@@ -228,7 +236,7 @@ impl VaultHost {
         app_state::delete(&self.store, STATE_LISTEN.into())
     }
 
-    /// From now on this machine leases from the vault at `address`.
+    /// From now on this machine's calls run on the vault at `address`.
     pub fn join(self: &Arc<Self>, join: proto::VaultJoin) -> Result<(), String> {
         let config = LinkConfig { address: join.address, token: join.token, vault_name: join.vault_name };
         self.write_link(Some(&config))?;
@@ -238,7 +246,7 @@ impl VaultHost {
         Ok(())
     }
 
-    /// Leases from no one: this machine holds its own grants again (none, until a move lands).
+    /// Uses no other vault: this machine holds its own grants again (none, until a move lands).
     pub fn leave(&self) -> Result<(), String> {
         self.write_link(None)?;
         self.stop_link();
@@ -295,7 +303,7 @@ impl VaultHost {
         self.connectors.start_empty()
     }
 
-    /* ── Peers: machines leasing, and a new vault pulling ────────────── */
+    /* ── Peers: machines calling, and a new vault pulling ────────────── */
 
     /// Who a token is, other than the daemon's own.
     pub fn peer_of(&self, token: &str) -> Option<PeerKind> {
@@ -303,14 +311,14 @@ impl VaultHost {
             let handoffs = self.handoffs.lock().unwrap_or_else(|e| e.into_inner());
             return handoffs.get(token).filter(|h| h.expires_at > app_state::now_millis()).map(|_| PeerKind::Handoff(token.to_string()));
         }
-        // A member holds no one's grants: its old tokens lease nothing.
+        // A member holds no one's grants: its old tokens reach nothing.
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return None;
         }
         lease::machine_of(&self.store, token).ok().flatten().map(PeerKind::Machine)
     }
 
-    /// The tailnet listener: a WebSocket with a lease or handoff token, nothing else.
+    /// The tailnet listener: a WebSocket with a machine or handoff token, nothing else.
     async fn serve_listener(self: Arc<Self>, stream: TcpStream) {
         let Some(ws) = crate::http::accept_socket_only(stream).await else { return };
         let (mut sink, mut source) = ws.split();
@@ -401,23 +409,55 @@ impl VaultHost {
                 let _ = &machine.id;
                 serde_json::to_value(snap).map_err(|e| e.to_string())
             }
-            (PeerKind::Machine(machine), "vault_lease") => {
-                if !self.limit.allow(&machine.id) {
-                    eprintln!("[crewd] vault: {} asked for too many leases", machine.name);
-                    return Err("Too many leases at once".into());
-                }
+            (PeerKind::Machine(machine), "vault_call") => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Ask {
                     account_id: String,
-                    stale: Option<String>,
+                    tool: String,
+                    #[serde(default)]
+                    arguments: Value,
                 }
+                if !self.limit.allow(&machine.id) {
+                    eprintln!("[crewd] vault: {} made too many calls", machine.name);
+                    return Err("Too many calls from this machine in a minute; wait a moment and try again.".into());
+                }
+                let Some(counted) = self.running.enter(&machine.id) else {
+                    eprintln!("[crewd] vault: {} has too many calls running", machine.name);
+                    return Err("Too many calls running from this machine; wait for one to end and try again.".into());
+                };
                 let ask: Ask = serde_json::from_value(params).map_err(|e| e.to_string())?;
-                let account = ask.account_id.clone();
-                let lent = self.connectors.run(move |c| async move { c.lease(&ask.account_id, ask.stale.as_deref()).await }).await;
-                eprintln!("[crewd] vault: {} leased account {account}: {}", machine.name, if lent.is_ok() { "lent" } else { "refused" });
+                let (account, tool) = (ask.account_id.clone(), ask.tool.clone());
+                // On the connectors' runtime: it finishes even if this connection doesn't.
+                let answer = self
+                    .connectors
+                    .run(move |c| async move {
+                        let _counted = counted;
+                        Ok(c.call_for_machine(&ask.account_id, &ask.tool, ask.arguments).await)
+                    })
+                    .await?;
+                // Never the arguments or the answer: only who called what.
+                let outcome = if answer["isError"] == true { "failed" } else { "ok" };
+                eprintln!("[crewd] vault: {} called {tool} on account {account}: {outcome}", machine.name);
                 let _ = lease::leased(&self.store, &machine.id);
-                serde_json::to_value(lent?).map_err(|e| e.to_string())
+                Ok(answer)
+            }
+            (PeerKind::Machine(machine), "vault_tools_refresh") => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Ask {
+                    account_id: String,
+                }
+                if !self.limit.allow(&machine.id) {
+                    return Err("Too many calls from this machine in a minute".into());
+                }
+                let Ask { account_id } = serde_json::from_value(params).map_err(|e| e.to_string())?;
+                let connectors = self.connectors.clone();
+                // Not waited for: a change comes back as `vault-config`.
+                tokio::spawn(async move {
+                    let _ = connectors.run(move |c| async move { c.tools_for_shim(&account_id).await }).await;
+                });
+                Ok(Value::Null)
             }
             (PeerKind::Handoff(token), "vault_handoff_take") => {
                 let now = app_state::now_millis();
@@ -491,7 +531,7 @@ impl Peer {
 }
 
 /// A member's link to its vault: one connection kept open, the config copied
-/// over each time it changes, leases asked for on it.
+/// over each time it changes, tool calls sent on it.
 pub struct Link {
     config: LinkConfig,
     out: Mutex<Option<mpsc::UnboundedSender<String>>>,
@@ -522,6 +562,8 @@ impl Link {
             task.abort();
         }
         self.out.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Whoever waits on an answer that can't come now hears at once.
+        self.waiting.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     fn state(&self) -> (bool, Option<i64>) {
@@ -557,7 +599,7 @@ impl Link {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         *self.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
         self.went(true);
-        eprintln!("[crewd] vault link: leasing from {}", self.config.vault_name);
+        eprintln!("[crewd] vault link: using the vault on {}", self.config.vault_name);
         let writer = tokio::spawn(async move {
             while let Some(text) = rx.recv().await {
                 if sink.send(Message::Text(text.into())).await.is_err() {
@@ -566,7 +608,7 @@ impl Link {
             }
         });
         let sync = |link: Arc<Link>, store: Store, connectors: Arc<Connectors>| async move {
-            match link.request("vault_config", Value::Null).await {
+            match link.request("vault_config", Value::Null, CALL_TIMEOUT).await {
                 Ok(Ok(value)) => match serde_json::from_value::<lease::Snapshot>(value) {
                     Ok(snap) => {
                         let done = tokio::task::spawn_blocking(move || lease::import(&store, &snap)).await;
@@ -603,14 +645,25 @@ impl Link {
         Err(format!("{} closed the connection", self.config.vault_name))
     }
 
-    /// A call on the open connection: `Err` when the vault is away, `Ok(Err)` when it refused.
-    async fn request(&self, method: &str, params: Value) -> Result<Result<Value, String>, LeaseError> {
+    /// A call on the open connection: `Offline` when it could not be sent,
+    /// `Lost` when it was and no answer came, `Ok(Err)` when the vault refused.
+    async fn request(&self, method: &str, params: Value, wait: Duration) -> Result<Result<Value, String>, RelayError> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
-        let out = self.out.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or(LeaseError::Offline)?;
+        let out = self.out.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or(RelayError::Offline)?;
         self.waiting.lock().unwrap_or_else(|e| e.into_inner()).insert(id, tx);
-        out.send(json!({ "id": id, "method": method, "params": params }).to_string()).map_err(|_| LeaseError::Offline)?;
-        let answer = tokio::time::timeout(CALL_TIMEOUT, rx).await.map_err(|_| LeaseError::Offline)?.map_err(|_| LeaseError::Offline)?;
+        if out.send(json!({ "id": id, "method": method, "params": params }).to_string()).is_err() {
+            self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            return Err(RelayError::Offline);
+        }
+        let answer = match tokio::time::timeout(wait, rx).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => return Err(RelayError::Lost),
+            Err(_) => {
+                self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                return Err(RelayError::Lost);
+            }
+        };
         Ok(match answer["ok"].as_bool() {
             Some(true) => Ok(answer["result"].clone()),
             _ => Err(answer["error"].as_str().unwrap_or("The vault refused").to_string()),
@@ -618,18 +671,25 @@ impl Link {
     }
 }
 
-impl Leaser for Link {
-    fn lease<'a>(
+impl VaultLink for Link {
+    fn call<'a>(
         &'a self,
         account_id: &'a str,
-        stale: Option<&'a str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Lease, LeaseError>> + Send + 'a>> {
+        tool: &'a str,
+        arguments: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, RelayError>> + Send + 'a>> {
         Box::pin(async move {
-            match self.request("vault_lease", json!({ "accountId": account_id, "stale": stale })).await? {
-                Ok(value) => serde_json::from_value(value).map_err(|e| LeaseError::Refused(e.to_string())),
-                Err(line) => Err(LeaseError::Refused(line)),
-            }
+            let params = json!({ "accountId": account_id, "tool": tool, "arguments": arguments });
+            self.request("vault_call", params, TOOL_ANSWER_TIMEOUT).await?.map_err(RelayError::Refused)
         })
+    }
+
+    fn refresh_tools(&self, account_id: &str) {
+        // No one waits: the answer finds no waiter and is dropped.
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(out) = self.out.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = out.send(json!({ "id": id, "method": "vault_tools_refresh", "params": { "accountId": account_id } }).to_string());
+        }
     }
 
     fn vault_name(&self) -> String {
