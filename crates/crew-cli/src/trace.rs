@@ -259,8 +259,8 @@ impl Record {
         keys.iter().any(|key| {
             [&self.fields, &self.span].iter().any(|map| match map.get(*key) {
                 Some(Value::String(text)) => text == id,
-                Some(other) => other.to_string() == id,
-                None => false,
+                Some(Value::Number(number)) => number.to_string() == id,
+                _ => false,
             })
         })
     }
