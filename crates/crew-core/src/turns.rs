@@ -1469,7 +1469,7 @@ impl TurnHost {
             let held = if live { self.commands.holds("claude", &cwd) } else { self.commands.is_fresh("claude", &cwd, now) };
             if !held {
                 if let Err(error) = self.probe_claude_commands(session_id, &cwd, false) {
-                    tracing::warn!(%error, "commands.probe_failed");
+                    tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "commands.probe_failed");
                 }
             }
         }
@@ -1477,7 +1477,7 @@ impl TurnHost {
         // fresh is held, and again whenever it says the folder's changed.
         if session.provider == "opencode" && !self.commands.is_fresh("opencode", &cwd, crate::store::now_millis()) {
             if let Err(error) = self.opencode_menu(Some(session_id), &cwd) {
-                tracing::warn!(%error, "commands.probe_failed");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "commands.probe_failed");
             }
         }
         Ok(self.menu_of(&session, &cwd))
@@ -2901,7 +2901,7 @@ impl TurnHost {
         let written =
             crate::session_events::record_reporting(&self.store, id, cursor, kind, outcome, &report, request, letter.as_ref());
         if let Err(error) = &written {
-            tracing::warn!(session_id = %id, %error, "transcript.event_unwritten");
+            tracing::warn!(session_id = %id, error = %crate::trace::error_text(&error.to_string()), "transcript.event_unwritten");
         }
         self.signal.notify();
         if let (Ok(()), Some(letter)) = (written, letter) {
@@ -3347,9 +3347,9 @@ impl TurnHost {
             if let Err(error) = host.name_now(&session) {
                 // The CLI answered without a name, which it does often: not a fault.
                 if error.ends_with("no name") {
-                    tracing::debug!(session_id = %session.id, %error, "title.unnamed");
+                    tracing::debug!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.unnamed");
                 } else {
-                    tracing::warn!(session_id = %session.id, %error, "title.failed");
+                    tracing::warn!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.failed");
                 }
             }
         });
@@ -3629,7 +3629,7 @@ impl TurnHost {
                     taken = self.claude_control_on(session_id, Some(epoch), request);
                 }
                 if let Err(error) = taken {
-                    tracing::warn!(%session_id, %error, "claude.setting_refused");
+                    tracing::warn!(%session_id, error = %crate::trace::error_text(&error.to_string()), "claude.setting_refused");
                     return false;
                 }
             }

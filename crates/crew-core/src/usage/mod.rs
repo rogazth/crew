@@ -104,7 +104,9 @@ impl UsageHost {
                 }
             }
             Ok(false) => {}
-            Err(error) => tracing::warn!(provider = %reading.provider, %error, "usage.reading_unkept"),
+            Err(error) => {
+                tracing::warn!(provider = %reading.provider, error = %crate::trace::error_text(&error.to_string()), "usage.reading_unkept")
+            }
         }
     }
 

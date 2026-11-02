@@ -895,7 +895,7 @@ impl ProcessHost {
         };
         drop(runs);
         if let Err(error) = result {
-            tracing::warn!(process = %key.0, %error, "process.restart_failed");
+            tracing::warn!(process = %key.0, error = %crate::trace::error_text(&error.to_string()), "process.restart_failed");
         }
         self.inner.moved.notify_all();
         self.emit(&key.0);

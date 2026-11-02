@@ -244,7 +244,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
         "daemon.start"
     );
     if let Err(error) = traced {
-        tracing::warn!(target: "daemon", error, "trace.unavailable");
+        tracing::warn!(target: "daemon", error = %crew_core::trace::error_text(&error), "trace.unavailable");
     }
     // Before anything writes a file: where this environment keeps what is not
     // in the data dir itself.
@@ -285,7 +285,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
                 pid: Some(std::process::id()),
             },
         ) {
-            tracing::warn!(target: "daemon", %error, "daemon.json_unwritten");
+            tracing::warn!(target: "daemon", error = %crew_core::trace::error_text(&error.to_string()), "daemon.json_unwritten");
         }
         match supervisor {
             Supervisor::Parent => {
@@ -346,7 +346,7 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     match crew_core::history_import::import_all(&store, &crew_core::history_import::Sources::from_env()) {
         Ok(0) => {}
         Ok(n) => tracing::info!(sessions = n, "history.imported"),
-        Err(e) => tracing::warn!(error = %e, "history.import_failed"),
+        Err(e) => tracing::warn!(error = %crew_core::trace::error_text(&e.to_string()), "history.import_failed"),
     }
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
@@ -362,7 +362,7 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
 /// failure itself, in the plain form the app and `journalctl` show.
 fn failed(name: &'static str, failure: Failure) -> Failure {
     let permanent = matches!(failure, Failure::Permanent(_));
-    tracing::error!(target: "daemon.exit", permanent, error = failure.message(), "{}", name);
+    tracing::error!(target: "daemon.exit", permanent, error = %crew_core::trace::error_text(failure.message()), "{}", name);
     failure
 }
 

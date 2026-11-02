@@ -710,7 +710,7 @@ async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
                 if listen.wait_for_addr
                     && matches!(error.kind(), std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse) =>
             {
-                tracing::warn!(addr = %listen.addr, %error, retry_in_ms = wait.as_millis() as u64, "daemon.bind_retry");
+                tracing::warn!(addr = %listen.addr, error = %crew_core::trace::error_text(&error.to_string()), retry_in_ms = wait.as_millis() as u64, "daemon.bind_retry");
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(10));
             }
@@ -755,7 +755,9 @@ async fn run(
                     let token = token.clone();
                     tokio::spawn(socks::run(listener, token));
                 }
-                Err(error) => tracing::warn!(addr = %socks_at, %error, "socks.bind_failed"),
+                Err(error) => {
+                    tracing::warn!(addr = %socks_at, error = %crew_core::trace::error_text(&error.to_string()), "socks.bind_failed")
+                }
             }
         }
     }
@@ -786,7 +788,7 @@ async fn run(
             every.tick().await;
             let children = children.clone();
             if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
-                tracing::warn!(%error, "sessions.reap_failed");
+                tracing::warn!(error = %crew_core::trace::error_text(&error.to_string()), "sessions.reap_failed");
             }
             let turns = turns.clone();
             let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
@@ -803,7 +805,7 @@ async fn run(
             let store = expiring.store.clone();
             if let Ok(Some(days)) = block(move || session::retention_to_act_on(&store)).await {
                 if let Err(error) = expire_sessions(&expiring, days).await {
-                    tracing::warn!(%error, "sessions.expire_failed");
+                    tracing::warn!(error = %crew_core::trace::error_text(&error.to_string()), "sessions.expire_failed");
                 }
             }
         }
@@ -987,7 +989,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     if !hub.contains(client_id) {
         closed = "dropped_behind".to_string();
     }
-    tracing::info!(parent: &span, reason = %closed, duration_ms = opened.elapsed().as_millis() as u64, "conn.closed");
+    tracing::info!(parent: &span, reason = %crew_core::trace::error_text(&closed), duration_ms = opened.elapsed().as_millis() as u64, "conn.closed");
     hub.unsubscribe(client_id);
     hosts.browser.relay().client_gone(client_id);
     writer.abort();

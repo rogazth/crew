@@ -27,7 +27,7 @@ pub fn ensure(store: &Store, bot_id: &str) -> Option<PathBuf> {
     match std::fs::create_dir_all(&folder) {
         Ok(()) => Some(folder),
         Err(error) => {
-            tracing::warn!(folder = %folder.display(), %error, "bot_folder.failed");
+            tracing::warn!(folder = %folder.display(), error = %crate::trace::error_text(&error.to_string()), "bot_folder.failed");
             None
         }
     }
@@ -103,7 +103,7 @@ fn remove_under(folder: &Path, work: &Path) {
     }
     if let Err(error) = std::fs::remove_dir_all(folder) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(folder = %folder.display(), %error, "bot_folder.failed");
+            tracing::warn!(folder = %folder.display(), error = %crate::trace::error_text(&error.to_string()), "bot_folder.failed");
         }
     }
 }

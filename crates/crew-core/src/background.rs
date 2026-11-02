@@ -69,14 +69,14 @@ impl BackgroundHost {
         let saved = match store.with(load) {
             Ok(saved) => saved,
             Err(error) => {
-                tracing::warn!(%error, "background.read_failed");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "background.read_failed");
                 return host;
             }
         };
         let mut hidden = match store.with(load_hidden) {
             Ok(hidden) => hidden,
             Err(error) => {
-                tracing::warn!(%error, "background.cleared_read_failed");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "background.cleared_read_failed");
                 HashMap::new()
             }
         };
@@ -151,7 +151,9 @@ impl BackgroundHost {
                 board.saved = board.commands.clone();
                 board.saved_hidden = board.hidden.clone();
             }
-            Err(error) => tracing::warn!(%session_id, %error, "background.write_failed"),
+            Err(error) => {
+                tracing::warn!(%session_id, error = %crate::trace::error_text(&error.to_string()), "background.write_failed")
+            }
         }
     }
 

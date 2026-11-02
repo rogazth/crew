@@ -275,7 +275,8 @@ impl TurnHost {
             Some(id) => {
                 self.transcripts.apply(id, HarnessEvent::SessionNote { message: message.to_string() });
             }
-            None => tracing::info!(%message, "opencode.note"),
+            // What the server said (a migration's label, why it failed) is its to say: only that it did is traced.
+            None => tracing::info!(len = message.len(), "opencode.note"),
         }
     }
 

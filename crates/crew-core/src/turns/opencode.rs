@@ -1267,7 +1267,7 @@ impl TurnHost {
             thread::sleep(Duration::from_millis(200));
             host.opencode.end_menu_read(&cwd);
             if let Err(error) = host.opencode_menu(None, &cwd) {
-                tracing::warn!(%error, "commands.probe_failed");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "commands.probe_failed");
             }
         });
     }
@@ -1329,7 +1329,7 @@ impl TurnHost {
         let (id, cwd) = (session_id.to_string(), cwd.to_string());
         thread::spawn(move || loop {
             if let Err(error) = host.opencode_read_mcp(&cwd, &id) {
-                tracing::warn!(%error, "mcp.read_failed");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "mcp.read_failed");
             }
             if !host.mcp_status.release(&id) {
                 break;

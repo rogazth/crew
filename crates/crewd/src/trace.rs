@@ -313,7 +313,16 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let mut backtrace = std::backtrace::Backtrace::force_capture().to_string();
         backtrace.truncate(BACKTRACE_CAP);
-        tracing::error!(target: "daemon", panic = %info, backtrace = %backtrace, "daemon.panic");
+        // Where it happened, and its message cut to a line: a payload can quote data.
+        let payload = info.payload();
+        let said = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let panic = format!("{at}: {}", crew_core::trace::error_text(said));
+        tracing::error!(target: "daemon", panic = %panic, backtrace = %backtrace, "daemon.panic");
         flush();
         previous(info);
     }));
