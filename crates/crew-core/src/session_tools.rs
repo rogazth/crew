@@ -3317,6 +3317,41 @@ while True:
     /// A stop interrupts the turn and keeps the process: the CLI closes the
     /// stopped turn with a result of its own, and the next message is a turn
     /// on the same process, with nothing launched.
+    /// A subagent with no turn that still reads as starting has nothing to
+    /// interrupt, so a stop has to be what ends that; anything else keeps
+    /// what it has.
+    #[test]
+    fn stopping_a_subagent_with_no_turn_ends_it_as_stopped() {
+        let w = world();
+        let row = |id: &str| session::get(w.turns.store(), id.to_string()).expect("read").expect("session");
+        let stuck = session::create_child(
+            w.turns.store(),
+            w.workspace.clone(),
+            "stuck".into(),
+            "opencode".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            None,
+        )
+        .expect("child")
+        .id;
+        assert_eq!(row(&stuck).status, "starting");
+
+        w.turns.stop(&stuck).expect("stop");
+        let ended = row(&stuck);
+        assert_eq!(ended.status, "idle");
+        let stopped = ended.last_event.expect("an event");
+        assert_eq!(stopped.kind, "stopped");
+
+        w.turns.stop(&stuck).expect("stop again");
+        assert_eq!(row(&stuck).last_event.expect("an event").cursor, stopped.cursor, "a second stop writes nothing");
+
+        let mine = w.session("terminal", "mine", "full").session_id().expect("id").to_string();
+        w.turns.stop(&mine).expect("stop");
+        assert!(row(&mine).last_event.is_none(), "only a subagent reads its state off its events");
+    }
+
     #[test]
     fn a_stopped_claude_turn_keeps_the_process_and_the_next_turn_runs_on_it() {
         let w = world();

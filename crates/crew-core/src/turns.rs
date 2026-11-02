@@ -1398,8 +1398,33 @@ impl TurnHost {
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
+        let no_turn = !self.is_running(session_id) && !self.is_settling(session_id);
         self.cancel(session_id, true);
+        if no_turn {
+            self.settle_turnless_child(session_id);
+        }
         Ok(())
+    }
+
+    /// A subagent with no turn that still reads as starting or working has
+    /// nothing to interrupt, and no turn's end will ever say otherwise:
+    /// stopping it is what ends that. One whose last event says how it ended
+    /// keeps it.
+    fn settle_turnless_child(&self, session_id: &str) {
+        let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
+            return;
+        };
+        let stale = match session.status.as_str() {
+            "starting" | "working" => true,
+            "idle" => session.last_event.is_none(),
+            _ => false,
+        };
+        if session.kind == "child" && stale {
+            self.transcripts.append_system(session_id, "Stopped");
+            self.transcripts.set_status(session_id, "idle", None);
+            self.transcripts.flush(session_id);
+            self.child_event(&session, "turn", "stopped", None);
+        }
     }
 
     /// What a session's turn left running in the background.
