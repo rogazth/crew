@@ -156,3 +156,95 @@ describe("app.ndjson", () => {
     t.dispose();
   });
 });
+
+describe("trace.dropped", () => {
+  it("is written by the same trace once it can write again, with how many writes it lost", () => {
+    const base = temp();
+    const blocker = path.join(base, "blocked");
+    writeFileSync(blocker, "a file where the folder should be");
+    vi.useFakeTimers({ now: new Date("2026-11-02T10:00:00Z") });
+    const dir = path.join(blocker, "trace");
+    const t = new AppTrace({ dir });
+    t.info("lost one");
+    t.flushSync();
+    t.info("lost two");
+    t.flushSync();
+    // The folder is made; the trace tries again a second later.
+    rmSync(blocker);
+    vi.setSystemTime(new Date("2026-11-02T10:00:05Z"));
+    t.info("kept");
+    t.flushSync();
+    const lines = read(dir).map((line) => line.fields as { message: string; write_failures?: number });
+    expect(lines.map((line) => line.message)).toEqual(["kept", "trace.dropped"]);
+    expect(lines[1]?.write_failures).toBeGreaterThanOrEqual(1);
+    const dropped = read(dir).at(-1);
+    expect(dropped).toMatchObject({ level: "WARN", target: "app.main" });
+    // Said once: nothing is lost since, so nothing more is reported.
+    t.info("after");
+    t.flushSync();
+    expect(read(dir).map((line) => (line.fields as { message: string }).message)).toEqual(["kept", "trace.dropped", "after"]);
+    t.dispose();
+  });
+});
+
+describe("main's one trace", () => {
+  const load = async () => {
+    vi.resetModules();
+    return import("./trace");
+  };
+  const messages = (dir: string) => read(dir).map((line) => (line.fields as { message: string }).message);
+
+  it("keeps what is said before the data dir is known and writes it, in order, once it is", async () => {
+    const dir = temp();
+    const { trace, initTrace } = await load();
+    trace.info("app.start", { version: "1.0.0" });
+    trace.warn("daemon.decision");
+    trace.error("main.uncaught", { error: "boom" });
+    expect(existsSync(path.join(dir, "app.ndjson"))).toBe(false);
+    initTrace(dir);
+    trace.info("after");
+    trace.flush();
+    expect(messages(dir)).toEqual(["app.start", "daemon.decision", "main.uncaught", "after"]);
+    expect(read(dir).map((line) => line.level)).toEqual(["INFO", "WARN", "ERROR", "INFO"]);
+  });
+
+  it("holds the first two hundred of what is said early and drops the rest", async () => {
+    const dir = temp();
+    const { trace, initTrace } = await load();
+    for (let i = 0; i < 250; i += 1) trace.info("early", { i });
+    initTrace(dir);
+    trace.flush();
+    const lines = read(dir);
+    expect(lines).toHaveLength(200);
+    expect((lines.at(-1)?.fields as { i: number }).i).toBe(199);
+  });
+
+  it("writes the window's records as app.window and ignores them before it is open", async () => {
+    const dir = temp();
+    const { trace, initTrace } = await load();
+    trace.window([{ message: "too early" }]);
+    initTrace(dir);
+    trace.window([{ timestamp: "2026-11-02T10:00:00.000Z", level: "WARN", message: "socket.closed", fields: { machine: "local" } }]);
+    trace.flush();
+    expect(read(dir)).toEqual([
+      {
+        timestamp: "2026-11-02T10:00:00.000Z",
+        level: "WARN",
+        fields: { message: "socket.closed", machine: "local" },
+        target: "app.window",
+      },
+    ]);
+  });
+
+  it("lets go of the file it had when it is opened again somewhere else", async () => {
+    const [first, second] = [temp(), temp()];
+    const { trace, initTrace } = await load();
+    initTrace(first);
+    trace.info("in the first");
+    initTrace(second);
+    trace.info("in the second");
+    trace.flush();
+    expect(messages(first)).toEqual(["in the first"]);
+    expect(messages(second)).toEqual(["in the second"]);
+  });
+});
