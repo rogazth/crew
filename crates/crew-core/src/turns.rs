@@ -138,8 +138,7 @@ const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else 
 /// warm start.
 pub const RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// How long a process that background work pins stays up past
-/// [`RELEASE_AFTER`]. t3code keeps such a process up to four hours, then lets
-/// it go whatever still runs in it.
+/// [`RELEASE_AFTER`]: up to four hours, then it goes whatever still runs in it.
 pub const PIN_CAP: Duration = Duration::from_secs(4 * 60 * 60);
 const STDERR_TAIL: usize = 12;
 /// Whether a session running with `autonomy` would do what `request` asks

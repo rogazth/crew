@@ -741,7 +741,7 @@ $$
 \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
 $$
 
-Sources: the t3code timeline[^1] and [Zeron's tool chips](https://example.com/zeron).
+Sources: the acme timeline[^1] and [Zeron's tool chips](https://example.com/zeron).
 
 [^1]: \`apps/web/src/components/chat/MessagesTimeline.tsx\``;
 

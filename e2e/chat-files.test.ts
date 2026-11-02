@@ -19,7 +19,7 @@ before(async () => {
   });
   const repo = await crew.makeRepo("files", { ".gitignore": "reference/\n", "README.md": "# files\n" });
   // More than the index takes of a folder git ignores.
-  for (const name of ["t3code", "zeron"]) {
+  for (const name of ["acme", "zeron"]) {
     const dir = path.join(repo, "reference", name);
     await mkdir(dir, { recursive: true });
     await Promise.all(Array.from({ length: 700 }, (_, i) => writeFile(path.join(dir, `f${i}.ts`), "")));
@@ -63,7 +63,7 @@ test("`@` offers a folder git ignores, and the message sends it", async () => {
   await field.press("Tab");
   assert.equal(await field.textContent(), "look at @reference/");
   // Into the folder: what it holds, read from disk.
-  await menu.getByRole("option").filter({ hasText: "t3code/" }).first().waitFor();
+  await menu.getByRole("option").filter({ hasText: "acme/" }).first().waitFor();
   await field.press("End");
   await field.pressSequentially(" please");
   await waitFor(async () => (await menu.count()) === 0, { message: "the menu closes past the mention" });
@@ -86,7 +86,7 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
 
   await crew.window.locator('[data-file-ref="reference/"]').filter({ visible: true }).last().click();
   const explorer = crew.window.getByRole("complementary", { name: "Explorer" });
-  await explorer.getByText("t3code", { exact: true }).waitFor();
+  await explorer.getByText("acme", { exact: true }).waitFor();
   await explorer.getByText("zeron", { exact: true }).waitFor();
 });
 

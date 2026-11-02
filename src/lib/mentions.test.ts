@@ -83,14 +83,14 @@ describe("folders", () => {
   it("offers a folder's entries, prefix matches and folders first", () => {
     const entries = [
       { name: "zeron", path: "/w/reference/zeron", dir: true, ignored: true },
-      { name: "t3code", path: "/w/reference/t3code", dir: true, ignored: true },
-      { name: "t3.md", path: "/w/reference/t3.md", dir: false, ignored: true },
+      { name: "acme", path: "/w/reference/acme", dir: true, ignored: true },
+      { name: "ac.md", path: "/w/reference/ac.md", dir: false, ignored: true },
       { name: "cursor", path: "/w/reference/cursor", dir: true, ignored: true },
       { name: ".hidden", path: "/w/reference/.hidden", dir: true, ignored: true },
     ];
-    expect(folderChoices(entries, "reference/", "t3").map((c) => c.relative)).toEqual([
-      "reference/t3code/",
-      "reference/t3.md",
+    expect(folderChoices(entries, "reference/", "ac").map((c) => c.relative)).toEqual([
+      "reference/acme/",
+      "reference/ac.md",
     ]);
     expect(folderChoices(entries, "reference/", "").length).toBe(4);
   });
