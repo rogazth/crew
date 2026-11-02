@@ -28,6 +28,7 @@ fn fast() -> ProcessConfig {
 }
 
 fn fixture(name: &str, config: ProcessConfig) -> Fixture {
+    crate::trace::capture::install();
     let dir = std::env::temp_dir().join(format!("crew-proc-{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let store = Store::open(dir.join("crew.sqlite3")).unwrap();
@@ -148,6 +149,11 @@ fn a_crashing_process_restarts_until_the_limit_and_stays_crashed() {
     assert_eq!(done.main().exit_code, Some(3));
     let logs = f.host.read_logs(&f.workspace, "flaky", None, None, Some(0), None).unwrap();
     assert_eq!(logs.text.lines().filter(|line| *line == "boom").count(), 3, "{:?}", logs.text);
+    // Giving up is a warning that names the process and how many crashes it took; each start before it is a line.
+    let crashed = crate::trace::capture::expect("process.crashed", "process_id", &process.id);
+    assert_eq!((crashed.level, crashed.get("crashes")), (tracing::Level::WARN, Some("3")));
+    assert!(crashed.fields.values().all(|v| !v.contains("boom")), "{crashed:?}");
+    assert!(crate::trace::capture::find("process.start", "process_id", &process.id).len() >= 3);
     // A start by hand is a fresh count.
     let again = f.host.start(&f.workspace, "flaky", RunRequest::default()).unwrap();
     assert_eq!(again.main().restarts, 0);

@@ -367,6 +367,7 @@ mod tests {
     }
 
     fn world() -> World {
+        crate::trace::capture::install();
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Fanout(host.clone())));
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -977,6 +978,14 @@ mod tests {
         assert_eq!(run.trigger, RunTrigger::Manual);
         assert_eq!(run.status, RunStatus::Ok);
         assert!(wake_text(&world, &coder.id).contains("was run on demand"), "the manual cue is missing");
+        // The routine and where it went, at both ends; never its name or its prompt.
+        let fired = crate::trace::capture::expect("routine.fired", "routine_id", &routine.id);
+        assert_eq!((fired.get("trigger"), fired.get("result")), (Some("Manual"), Some("started")));
+        let finished = crate::trace::capture::expect("routine.finished", "routine_id", &routine.id);
+        assert_eq!(finished.get("status"), Some("Ok"));
+        for event in [fired, finished] {
+            assert!(event.fields.values().all(|v| !v.contains("Standup")), "{event:?}");
+        }
         world.scheduler.stop();
     }
 

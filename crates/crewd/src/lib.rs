@@ -2745,7 +2745,8 @@ mod tests {
         assert!(reply.ok, "{:?}", reply.error);
         requests.recv_timeout(Duration::from_secs(2)).expect("the window's request");
         // Each way of asking, and the one refused, is a line saying so.
-        let vias: Vec<_> = capture::all("daemon.shutdown_requested").iter().filter_map(|e| e.get("via").map(String::from)).collect();
+        let vias: Vec<_> =
+            capture::all("daemon.shutdown_requested").iter().filter_map(|e| e.get("via").map(String::from)).collect();
         assert!(vias.iter().any(|v| v == "cli") && vias.iter().any(|v| v == "window"), "{vias:?}");
         let refused = capture::all("daemon.shutdown_refused");
         assert!(refused.iter().any(|e| e.get("caller") == Some("Bot") && e.level == tracing::Level::WARN), "{refused:?}");
@@ -3438,6 +3439,42 @@ time.sleep(600)
 
     fn write_fake_claude(dir: &std::path::Path) -> std::path::PathBuf {
         write_fake_claude_script(dir, false, false)
+    }
+
+    /// A claude that asks to run a command made of the prompt it was given, so an approval
+    /// request holds what the user typed.
+    fn write_fake_claude_approval_echo(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-approval-echo");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    print(json.dumps({"type":"control_request","request_id":"c1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo " + line}}}), flush=True)
+    for answer in sys.stdin:
+        try:
+            if json.loads(answer).get("type") == "control_response":
+                break
+        except Exception:
+            continue
+    print(json.dumps({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"done " + line}}}), flush=True)
+    print(json.dumps({"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
     }
 
     fn write_fake_claude_approval(dir: &std::path::Path) -> std::path::PathBuf {
@@ -4467,6 +4504,59 @@ for line in sys.stdin:
             );
             assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
         }
+        // A letter between two sessions, a session's title, a subagent's name and prompt, and an
+        // approval request that holds the marker: each is something a family of lines is about.
+        let other_dir = dir.clone();
+        handle.override_agent_binary("claude", write_fake_claude_approval_echo(&dir).to_string_lossy().into_owned());
+        let workspaces = rpc(&mut ws, 39, "workspace_list", serde_json::json!({})).await;
+        let workspace = workspaces.result.expect("workspaces")[0]["id"].as_str().expect("id").to_string();
+        let made = rpc(
+            &mut ws,
+            38,
+            "session_create",
+            serde_json::json!({
+                "workspaceId": workspace, "kind": "bot", "name": "B", "provider": "claude",
+                "model": "m", "description": "", "autonomy": "ask"
+            }),
+        )
+        .await;
+        assert!(made.ok, "{:?}", made.error);
+        let second = made.result.expect("session")["id"].as_str().expect("id").to_string();
+        let renamed =
+            rpc(&mut ws, 40, "session_rename", serde_json::json!({ "id": second, "name": format!("title {MARKER}") })).await;
+        assert!(renamed.ok, "{:?}", renamed.error);
+        let asked = rpc(
+            &mut ws,
+            41,
+            "turn_start",
+            serde_json::json!({ "sessionId": second, "cwd": other_dir.to_string_lossy(), "text": format!("run {MARKER}") }),
+        )
+        .await;
+        assert!(asked.ok, "{:?}", asked.error);
+        let raised = crew_core::trace::capture::expect("request.raised", "session_id", &second);
+        let request_id: u64 = raised.get("request_id").expect("request id").parse().expect("number");
+        let decided = rpc(
+            &mut ws,
+            42,
+            "turn_respond",
+            serde_json::json!({ "sessionId": second, "requestId": request_id, "decision": "allow" }),
+        )
+        .await;
+        assert!(decided.ok, "{:?}", decided.error);
+        crew_core::trace::capture::expect("approval.decided", "session_id", &second);
+        for (name, arguments) in [
+            ("send_message", serde_json::json!({ "to": second, "text": format!("letter {MARKER}") })),
+            (
+                "delegate",
+                serde_json::json!({ "prompt": format!("subagent {MARKER}"), "name": format!("name {MARKER}"), "provider": "claude", "effort": "low" }),
+            ),
+        ] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({ "token": token, "method": "tools/call", "params": { "name": name, "arguments": arguments } }),
+            );
+            assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
+        }
         // A call whose params name a session with something that is not an id.
         let polluted =
             rpc(&mut ws, 30, "no_such_method_canary", serde_json::json!({ "sessionId": format!("not an id {MARKER}") })).await;
@@ -4551,7 +4641,9 @@ for line in sys.stdin:
         let (mut silent, _) = connect_async(handle.url()).await.expect("connect");
         silent.close(None).await.expect("close");
         let deadline = Instant::now() + Duration::from_secs(5);
-        while (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame")) < (before.0 + 1, before.1 + 1, before.2 + 1) {
+        while (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame"))
+            < (before.0 + 1, before.1 + 1, before.2 + 1)
+        {
             assert!(Instant::now() < deadline, "not all three were traced: {:?}", capture::all("conn.auth_failed"));
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
