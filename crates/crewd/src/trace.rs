@@ -253,38 +253,55 @@ fn main_filter() -> EnvFilter {
     std::env::var("CREW_TRACE").ok().and_then(|spec| EnvFilter::try_new(spec).ok()).unwrap_or_else(|| EnvFilter::new("info"))
 }
 
-/// Installs the daemon's subscriber, writing under `<data>/trace/`. Returns
-/// why not on failure, and the daemon then runs with stderr only.
+/// Installs the daemon's subscriber, writing under `<data>/trace/`. A file
+/// that cannot be opened is left out and named in the error (the daemon runs
+/// with what it has: stderr always); a second call is an error and does nothing.
 pub fn init(data_dir: &Path) -> Result<(), String> {
     let dir = data_dir.join(DIR);
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut problems = Vec::new();
+    if let Err(e) = fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir) {
+        problems.push(format!("{}: {e}", dir.display()));
+    }
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-    let (main, main_guard) = sink(&dir, MAIN_FILE, 10 << 20, 5).map_err(|e| format!("{MAIN_FILE}: {e}"))?;
-    let (errors, errors_guard) = sink(&dir, ERRORS_FILE, 5 << 20, 3).map_err(|e| format!("{ERRORS_FILE}: {e}"))?;
+    let mut guards = Vec::new();
+    let mut open = |file: &'static str, max: u64, keep: u32| match sink(&dir, file, max, keep) {
+        Ok((writer, guard)) => {
+            guards.push(guard);
+            Some(writer)
+        }
+        Err(e) => {
+            problems.push(format!("{file}: {e}"));
+            None
+        }
+    };
+    let main = open(MAIN_FILE, 10 << 20, 5);
+    let errors = open(ERRORS_FILE, 5 << 20, 3);
 
     // crewd.log is what the app shows: warnings, errors and the daemon's own
-    // lifecycle (target `daemon`). The RPC-by-RPC detail lives in the files.
-    let human = fmt::layer()
-        .with_ansi(false)
-        .with_target(false)
-        .log_internal_errors(false)
-        .with_writer(QuietStderr)
-        .with_filter(filter_fn(|meta| *meta.level() <= tracing::Level::WARN || meta.target() == "daemon"));
+    // lifecycle (target `daemon`). The RPC-by-RPC detail lives in the files. A
+    // failed start (target `daemon.exit`) is printed by `main`, in plain form.
+    let human = fmt::layer().with_ansi(false).with_target(false).log_internal_errors(false).with_writer(QuietStderr).with_filter(
+        filter_fn(|meta| meta.target() != "daemon.exit" && (*meta.level() <= tracing::Level::WARN || meta.target() == "daemon")),
+    );
 
     tracing_subscriber::registry()
-        .with(json_layer(main).with_filter(main_filter()))
-        .with(json_layer(errors).with_filter(LevelFilter::WARN))
+        .with(main.map(|writer| json_layer(writer).with_filter(main_filter())))
+        .with(errors.map(|writer| json_layer(writer).with_filter(LevelFilter::WARN)))
         .with(human)
         .try_init()
         .map_err(|e| e.to_string())?;
 
-    *lock(&SINKS) = Some(Sinks { _guards: vec![main_guard, errors_guard] });
+    *lock(&SINKS) = Some(Sinks { _guards: guards });
     install_panic_hook();
     let _ = thread::Builder::new().name("trace-report".into()).spawn(|| loop {
         thread::sleep(REPORT_EVERY);
         report_drops();
     });
-    Ok(())
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
 }
 
 /// A panic in a release build aborts without dropping anything, so the hook
