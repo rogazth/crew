@@ -29,6 +29,8 @@ import { collapseGroup, collapseOthers, expandGroup, revealActive, visibleIn, ty
 import type { BrowserTabPatch } from '../lib/tabs';
 import type { Tab } from '../lib/types';
 import { migrateLegacyTabs } from '../lib/tabsMigration';
+import { tabEvents } from '../lib/tabsTrace';
+import { trace } from '../lib/trace';
 import { discardEdits, fileName, unsavedTabs } from '../lib/unsavedEdits';
 
 const NO_COLLAPSED: string[] = [];
@@ -89,6 +91,13 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
       saved.current[id] = next;
       void api.stateSet(`tabs:${id}`, JSON.stringify(persistedTabs(next))).catch(() => {});
     }
+  }, [registry]);
+
+  // Tabs opened, closed and switched to, by kind and id, in every workspace that was already restored.
+  const traced = useRef<TabRegistry>({});
+  useEffect(() => {
+    for (const event of tabEvents(traced.current, registry)) trace.info(event.message, event.fields);
+    traced.current = registry;
   }, [registry]);
 
   // Every change keeps the strip's recent order, so the tab brought on screen

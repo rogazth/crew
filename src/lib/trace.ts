@@ -190,16 +190,38 @@ function bridge(): TraceHost | undefined {
 /** The window's trace, through the preload's bridge. */
 export const trace: Trace = createTrace({ host: bridge });
 
+/** A task that held the window's thread this long (ms) is written: the page was frozen for it. */
+export const LONG_TASK_MS = 1000;
+
+/**
+ * `window.long_task` with its duration, for each task of a second or more. The browser reports
+ * every task over 50 ms; only the ones the user would have felt as a freeze are kept.
+ */
+function watchLongTasks(Observer: typeof PerformanceObserver | undefined): void {
+  if (!Observer) return;
+  try {
+    new Observer((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration >= LONG_TASK_MS) trace.warn("window.long_task", { duration_ms: Math.round(entry.duration) });
+      }
+    }).observe({ type: "longtask", buffered: true });
+  } catch {
+    // A browser without the longtask type: nothing to watch.
+  }
+}
+
 /**
  * `window.onerror` and unhandled rejections, and the queue sent when the page
  * goes away. Once, at boot.
  */
-export function installWindowTrace(target: Window = window): void {
+export function installWindowTrace(target: Window = window, observer: typeof PerformanceObserver | undefined = globalThis.PerformanceObserver): void {
   try {
+    watchLongTasks(observer);
     target.addEventListener("error", (event) => {
       trace.error("window.error", {
         error: errorText(event.error ?? event.message),
-        file: event.filename ? event.filename.split("/").slice(-1)[0] : undefined,
+        // The script's name alone: its address may carry a query.
+        file: event.filename ? event.filename.split("/").slice(-1)[0]?.split(/[?#]/)[0] : undefined,
         line: event.lineno || undefined,
       });
     });

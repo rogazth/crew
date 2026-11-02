@@ -22,7 +22,7 @@ export function useBrowserBridge() {
     publishLayout();
     const unwatch = onKeyboardLayoutChange(publishLayout);
     const unlisten = host.onCommand((id) => {
-      if (isCommandId(id)) runCommand(id);
+      if (isCommandId(id)) runCommand(id, "menu");
     });
     return () => {
       unsubscribe();

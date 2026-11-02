@@ -124,7 +124,7 @@ export function CommandPalette(props: Props) {
         icon: <Glyph className="size-4" />,
         trail: command.keys ? <Kbd keys={command.keys} /> : undefined,
         // Closing first lets a command own the surface it opens — a sheet, a dialog, a picker.
-        run: close(() => runCommand(command.id)),
+        run: close(() => runCommand(command.id, "palette")),
       };
     });
 

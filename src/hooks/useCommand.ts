@@ -38,7 +38,7 @@ function listen() {
     if (!forward) return;
     event.preventDefault();
     event.stopPropagation();
-    if (forward.run) runCommand(forward.id as CommandId);
+    if (forward.run) runCommand(forward.id as CommandId, "keyboard");
   });
 }
 
