@@ -504,9 +504,37 @@ pub fn enqueue_with_files(
     put(store, letter)
 }
 
+/// One line for a letter written: who to and from, what kind and how big, never what it says.
+/// `how` is `queued` (waits its turn), `claimed` (went over at once) or `delivered` (read as written).
+fn trace_written(letter: &Letter, how: &str) {
+    tracing::info!(
+        letter_id = %letter.id,
+        to_session = %letter.to_session,
+        from = %letter.from.id,
+        from_kind = letter.from.kind.as_deref().unwrap_or(""),
+        kind = %letter.kind,
+        bytes = letter.text.len(),
+        files = letter.files.len(),
+        how,
+        "mailbox.letter"
+    );
+}
+
+/// A letter that could not be written.
+fn trace_unwritten(letter: &Letter, error: &str) {
+    tracing::warn!(
+        letter_id = %letter.id,
+        to_session = %letter.to_session,
+        kind = %letter.kind,
+        error = %crate::trace::error_text(error),
+        "mailbox.failed"
+    );
+}
+
 /// Drop a letter of any kind in its box.
 pub fn put(store: &Store, letter: Letter) -> Result<Letter, String> {
-    store.with(|conn| insert(conn, &letter))?;
+    store.with(|conn| insert(conn, &letter)).inspect_err(|error| trace_unwritten(&letter, error))?;
+    trace_written(&letter, "queued");
     store.mailbox_changed(&letter.to_session);
     Ok(letter)
 }
@@ -532,10 +560,13 @@ pub fn record_claimed_with_files(
     let mut letter = Letter::new(to_session, from, text, MESSAGE, None);
     letter.files = files;
     letter.dispatch = dispatch;
-    store.with(|conn| {
-        insert(conn, &letter)?;
-        conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, letter.at])
-    })?;
+    store
+        .with(|conn| {
+            insert(conn, &letter)?;
+            conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, letter.at])
+        })
+        .inspect_err(|error| trace_unwritten(&letter, error))?;
+    trace_written(&letter, "claimed");
     store.mailbox_changed(to_session);
     Ok(letter)
 }
@@ -544,11 +575,14 @@ pub fn record_claimed_with_files(
 /// question the reader stopped on.
 pub fn record_delivered(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
     let letter = Letter::new(to_session, from, text, MESSAGE, None);
-    store.with(|conn| {
-        insert(conn, &letter)?;
-        conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2, delivered_at = ?2 WHERE id = ?1")?
-            .execute(params![letter.id, letter.at])
-    })?;
+    store
+        .with(|conn| {
+            insert(conn, &letter)?;
+            conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2, delivered_at = ?2 WHERE id = ?1")?
+                .execute(params![letter.id, letter.at])
+        })
+        .inspect_err(|error| trace_unwritten(&letter, error))?;
+    trace_written(&letter, "delivered");
     store.mailbox_changed(to_session);
     Ok(letter)
 }
@@ -582,6 +616,7 @@ pub fn dispose(store: &Store, id: &str) -> Result<(), String> {
         .optional()
     })?;
     if let Some(to) = to {
+        tracing::info!(letter_id = id, to_session = %to, "mailbox.disposed");
         store.mailbox_changed(&to);
     }
     Ok(())
@@ -872,6 +907,8 @@ pub fn release(store: &Store, id: &str) -> Result<(), String> {
             .optional()
     })?;
     if let Some(to) = to {
+        // A delivery that could not go through: the letter waits at the head of the box again.
+        tracing::warn!(letter_id = id, to_session = %to, "mailbox.delivery_failed");
         store.mailbox_changed(&to);
     }
     Ok(())
@@ -895,6 +932,9 @@ pub fn delivered(store: &Store, ids: &[String]) -> Result<(), String> {
                 )?
                 .query_row(params![id, now], |row| row.get(0))
                 .optional()?;
+            if let Some(to) = &to {
+                tracing::info!(letter_id = id.as_str(), to_session = %to, "mailbox.delivered");
+            }
             boxes.extend(to);
         }
         Ok(boxes)
@@ -932,6 +972,7 @@ pub fn drop_waiting(store: &Store, to_session: &str) -> Result<usize, String> {
 
 fn changed(store: &Store, to_session: &str, count: usize) {
     if count > 0 {
+        tracing::info!(to_session, count, "mailbox.set_aside");
         store.mailbox_changed(to_session);
     }
 }
@@ -1228,6 +1269,51 @@ mod tests {
 
     fn sender(id: &str) -> BotRef {
         BotRef::bot(id, "Coder")
+    }
+
+    /// Letters leave a line when they are written, handed over, sent back or set
+    /// aside: ids, kind and size, never the body.
+    #[test]
+    fn a_letters_life_is_traced_by_ids_kind_and_size_and_never_its_text() {
+        use crate::trace::capture;
+        capture::install();
+        let store = store();
+        let to = session(&store, "to");
+        let from = session(&store, "from");
+        let body = "LETTER-BODY-7c1d";
+        let queued = enqueue(&store, &to, &sender(&from), body).expect("queued");
+        let line = capture::expect("mailbox.letter", "letter_id", &queued.id);
+        assert_eq!(line.get("how"), Some("queued"));
+        assert_eq!(line.get("to_session"), Some(to.as_str()));
+        assert_eq!(line.get("from"), Some(from.as_str()));
+        assert_eq!(line.get("kind"), Some("message"));
+        assert_eq!(line.get("bytes"), Some(body.len().to_string().as_str()));
+        let claimed = record_claimed(&store, &to, &sender(&from), body).expect("claimed");
+        assert_eq!(capture::expect("mailbox.letter", "letter_id", &claimed.id).get("how"), Some("claimed"));
+        let read = record_delivered(&store, &to, &sender(&from), body).expect("delivered");
+        assert_eq!(capture::expect("mailbox.letter", "letter_id", &read.id).get("how"), Some("delivered"));
+
+        // Handed over and back.
+        let taken = claim(&store, &to).expect("claim").expect("a letter");
+        release(&store, &taken.id).expect("release");
+        assert_eq!(capture::expect("mailbox.delivery_failed", "letter_id", &taken.id).level, tracing::Level::WARN);
+        claim(&store, &to).expect("claim");
+        delivered(&store, &[taken.id.clone()]).expect("delivered");
+        capture::expect("mailbox.delivered", "letter_id", &taken.id);
+
+        // Written to a box that is not there: the foreign key refuses it.
+        let lost = Letter::new("nobody-here", &sender(&from), body, MESSAGE, None);
+        assert!(put(&store, lost.clone()).is_err());
+        let failed = capture::expect("mailbox.failed", "letter_id", &lost.id);
+        assert_eq!(failed.level, tracing::Level::WARN);
+        assert!(failed.get("error").is_some_and(|e| !e.contains(body)));
+
+        // Nothing traced for these letters holds the body.
+        for message in ["mailbox.letter", "mailbox.failed", "mailbox.delivered", "mailbox.delivery_failed"] {
+            for event in capture::all(message) {
+                assert!(event.fields.values().all(|v| !v.contains(body)), "{event:?}");
+            }
+        }
     }
 
     #[test]

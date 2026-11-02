@@ -367,7 +367,12 @@ mod tests {
         let want = |kind: &str, cursor: &str, outcome: &str| (kind.to_string(), cursor.to_string(), outcome.to_string());
         assert_eq!(
             seen,
-            [want("turn", "1", "completed"), want("needs-input", "2", "approval"), want("error", "3", "failed"), want("exited", "4", "stopped")]
+            [
+                want("turn", "1", "completed"),
+                want("needs-input", "2", "approval"),
+                want("error", "3", "failed"),
+                want("exited", "4", "stopped")
+            ]
         );
         assert_eq!(ours[2].level, tracing::Level::WARN);
         let error = ours[2].get("error").unwrap();
