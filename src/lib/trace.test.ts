@@ -103,11 +103,11 @@ describe("the window's trace", () => {
   });
 
   it("reads the host at each event, so a bridge that appears later is used", () => {
-    let host: TraceHost | undefined;
+    const bridge: { host?: TraceHost } = {};
     const sent: TraceRecord[][] = [];
-    const trace = createTrace({ host: () => host, setTimer: () => 0, clearTimer: () => {} });
+    const trace = createTrace({ host: () => bridge.host, setTimer: () => 0, clearTimer: () => {} });
     trace.info("early");
-    host = { write: (records) => void sent.push(records) };
+    bridge.host = { write: (records) => void sent.push(records) };
     trace.info("late");
     trace.flush();
     expect(sent.flat().map((r) => r.message)).toEqual(["late"]);
