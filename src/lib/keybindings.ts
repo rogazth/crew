@@ -1,3 +1,5 @@
+import { IS_MAC } from "./hotkey";
+import { defineSetting } from "./settingsEngine/define";
 import { canonicalOf, formatChord, parseChord, sameKeyOf } from "./chords";
 import { COMMAND_IDS, COMMANDS, defaultKeysFor, isCommandId, type CommandId, type KeyOverrides } from "./commands";
 
@@ -131,3 +133,11 @@ export function exportOverrides(overrides: KeyOverrides): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export const keybindingsSetting = defineSetting<KeyOverrides>({
+  key: "keybindings:overrides",
+  scope: "device",
+  fallback: {},
+  parse: (raw) => readStored(raw, IS_MAC),
+  format: JSON.stringify,
+});

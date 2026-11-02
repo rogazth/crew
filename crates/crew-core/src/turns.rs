@@ -5033,11 +5033,12 @@ mod mailbox_tests {
         turn(&world, &asker, "one");
         assert!(!allowed_all(), "an asking bot asks by default");
 
-        crate::store::set(world.host.test_store(), crate::session::BYPASS_KEY.into(), "on".into()).expect("set");
+        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, Some("on"), crate::settings::GLOBAL)
+            .expect("set");
         turn(&world, &asker, "two");
         assert!(allowed_all(), "bypass runs it without asking");
 
-        crate::store::delete(world.host.test_store(), crate::session::BYPASS_KEY.into()).expect("delete");
+        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, None, crate::settings::GLOBAL).expect("off");
         turn(&world, &asker, "three");
         assert!(!allowed_all(), "off again, it asks again");
     }

@@ -24,8 +24,8 @@ before(async () => {
   crew = await launchCrew();
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   await crew.reload();

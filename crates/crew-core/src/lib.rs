@@ -47,6 +47,7 @@ pub mod session;
 pub mod session_events;
 pub mod session_history;
 pub mod session_tools;
+pub mod settings;
 pub mod shell_path;
 pub mod store;
 pub mod titles;

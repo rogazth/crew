@@ -23,6 +23,7 @@ use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
 use crew_core::session_tools::SessionTools;
+use crew_core::settings;
 use crew_core::store::{self as app_state, Store};
 use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
@@ -779,14 +780,16 @@ async fn run(
             let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
         }
     });
-    // The first tick is now: what aged out while the app was closed goes before anyone looks.
+    // The first tick waits: a choice made while this daemon was down reaches it
+    // through a client, and that client gets the time to connect before anything goes.
     let expiring = hosts.clone();
     tokio::spawn(async move {
-        let mut every = tokio::time::interval(EXPIRE_EVERY);
+        let first = tokio::time::Instant::now() + EXPIRE_GRACE;
+        let mut every = tokio::time::interval_at(first, EXPIRE_EVERY);
         loop {
             every.tick().await;
             let store = expiring.store.clone();
-            if let Ok(Some(days)) = block(move || session::retention_days(&store)).await {
+            if let Ok(Some(days)) = block(move || session::retention_to_act_on(&store)).await {
                 if let Err(error) = expire_sessions(&expiring, days).await {
                     eprintln!("[crewd] expiring sessions: {error}");
                 }
@@ -1198,6 +1201,7 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often the daemon lets go of sessions Settings no longer keeps.
 const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
+const EXPIRE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// How often idle child sessions are looked at.
 const REAP_EVERY: Duration = Duration::from_secs(20);
@@ -1618,6 +1622,31 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 hosts.hub.emit("browser-pages-changed", Value::Null);
             }
             Ok(Value::Null)
+        }
+        "settings_get" => {
+            let Key { key } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || settings::get(&store, &key)).await?)
+        }
+        "settings_list" => {
+            let store = hosts.store.clone();
+            json(block(move || settings::list(&store)).await?)
+        }
+        "settings_set" => {
+            let proto::SettingSet { key, value, scope } = parse(params)?;
+            let store = hosts.store.clone();
+            let row = block(move || settings::set(&store, &key, value.as_deref(), &scope)).await?;
+            hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: vec![row.clone()] });
+            json(row)
+        }
+        "settings_merge" => {
+            let proto::SettingsMerge { rows } = parse(params)?;
+            let store = hosts.store.clone();
+            let taken = block(move || settings::merge(&store, &rows)).await?;
+            if !taken.is_empty() {
+                hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: taken.clone() });
+            }
+            json(taken)
         }
         // Every browser tab in this Mac's strips, for main to tell each machine its own.
         "browser_pages_list" => {

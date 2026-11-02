@@ -1,10 +1,11 @@
+import { readSetting } from "../lib/settingsEngine/store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { LOCAL, envOf, linkOf, reconnect, refreshRemotes, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
 import { dispatchNotification } from "../lib/notifications";
 import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, remotesHost } from "../lib/host";
-import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, WAKE_ON } from "../lib/remoteUi";
+import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, wakeSetting } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
 import type { useWorkspaces } from "./useWorkspaces";
@@ -107,8 +108,8 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
     const host = remotesHost();
     if (!host) return;
     return host.onWake(() => {
-      void api.stateGet(WAKE_ON).then((value) => {
-        if (value !== "off") wakeAll();
+      void readSetting(wakeSetting).then((on) => {
+        if (on) wakeAll();
       });
     });
   }, []);

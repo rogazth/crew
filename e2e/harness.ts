@@ -787,7 +787,7 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
  */
 export async function newSession(crew: Crew, workspaceId: string, worktree: string | null = null): Promise<Session> {
   // What the start screen would pick: the default agent saved in Settings, else Claude with full access.
-  const raw = await crew.request<string | null>("state_get", { key: "providers:default" });
+  const raw = await crew.request<string | null>("settings_get", { key: "providers:default" });
   const saved = { provider: "claude", model: "", effort: "", access: "full", ...(JSON.parse(raw ?? "{}") as object) };
   const made = await crew.request<Session>("session_create", {
     workspaceId,

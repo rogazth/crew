@@ -1371,6 +1371,27 @@ export type SessionsDeleted = { ids: Array<string>, };
 export type SessionsRetention = { days: number, };
 
 /**
+ * One setting as a daemon keeps it: `settings` in crew-core says what the
+ * columns mean. A null value is the default, chosen at that revision.
+ */
+export type SettingRow = { key: string, value: string | null, scope: string, revision: number, origin: string, };
+
+/**
+ * `settings_set`: a choice made on this daemon.
+ */
+export type SettingSet = { key: string, value: string | null, scope: string, };
+
+/**
+ * `settings-changed`: rows that just changed on the daemon that sends it.
+ */
+export type SettingsChanged = { rows: Array<SettingRow>, };
+
+/**
+ * `settings_merge`: rows from the other copies. Empty still confirms this daemon.
+ */
+export type SettingsMerge = { rows: Array<SettingRow>, };
+
+/**
  * Where a subagent is. A background one outlives the call that started it,
  * so the call's status cannot say.
  */

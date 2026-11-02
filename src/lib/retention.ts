@@ -1,3 +1,5 @@
+import { defineSetting } from "./settingsEngine/define";
+
 /** The daemon reads the same key: whole days, absent keeps sessions forever. */
 export const RETENTION_KEY = "sessions:retention";
 
@@ -15,3 +17,11 @@ export function parseRetention(raw: string | null): Retention {
   return RETENTION_CHOICES.find((choice) => choice.value === value)?.value ?? "never";
 }
 
+
+export const retention = defineSetting<Retention>({
+  key: RETENTION_KEY,
+  scope: "global",
+  fallback: "never",
+  parse: parseRetention,
+  format: (value) => (value === "never" ? null : value),
+});

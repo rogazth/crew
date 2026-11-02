@@ -34,9 +34,6 @@ import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
-import { BotAvatarProvider } from "./hooks/useBotAvatar";
-import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
-import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
@@ -50,6 +47,9 @@ import { useProcesses } from "./hooks/useProcesses";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
+import { showToast } from "./lib/toasts";
+import { GLOBAL_KEYS } from "./lib/settingsEngine/defs";
+import { onSettingSaveFailed, startSettings } from "./lib/settingsEngine/store";
 import { boot } from "./lib/turnRuntime";
 import { unlockNotificationAudio } from "./lib/notificationSound";
 import { watchProcesses } from "./lib/processAlerts";
@@ -75,6 +75,19 @@ export function App() {
   // due, a bot writes to another — so the window listens from the moment it
   // opens rather than from the first thing the user sends.
   useEffect(() => void boot(), []);
+  useEffect(() => startSettings(GLOBAL_KEYS), []);
+  useEffect(
+    () =>
+      onSettingSaveFailed((_key, error) =>
+        showToast({
+          title: "Could not save a setting",
+          body: error instanceof Error ? error.message : String(error),
+          source: "error",
+          target: null,
+        }),
+      ),
+    [],
+  );
   useEffect(unlockNotificationAudio, []);
   useSelectAllScope();
   useBrowserBridge();
@@ -368,11 +381,9 @@ export function App() {
     paneMove && panePlace && paneSession ? { sessionId: paneSession.id, place: panePlace, places: panePlaces, onMove: paneMove } : null;
 
   return (
-    <TerminalPrefsProvider>
-    <BrowserPrefsProvider>
+    <>
     <LinkRouter open={nav.openBrowser} />
     <Toaster onOpen={openNotified} />
-    <BotAvatarProvider>
     {/* Under a bot's pane the whole window steps back (useRecede); the pane is portaled out of it. */}
     <div ref={appRoot} data-app className="flex h-full">
       <SlideShell
@@ -692,9 +703,7 @@ export function App() {
       />
 
     </div>
-    </BotAvatarProvider>
-    </BrowserPrefsProvider>
-    </TerminalPrefsProvider>
+    </>
   );
 }
 

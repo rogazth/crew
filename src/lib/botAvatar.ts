@@ -1,3 +1,4 @@
+import { defineSetting } from "./settingsEngine/define";
 import { Avatar, Style, type StyleDefinition } from "@dicebear/core";
 
 type Definition = { default: unknown };
@@ -104,3 +105,11 @@ export function avatarUri(id: BotAvatarId, style: Style<StyleDefinition>, seed: 
   }
   return uri;
 }
+
+export const botAvatarSetting = defineSetting<BotAvatarId>({
+  key: "bot:avatar",
+  scope: "global",
+  fallback: DEFAULT_BOT_AVATAR,
+  parse: parseBotAvatar,
+  format: (value) => value,
+});

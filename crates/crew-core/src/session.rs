@@ -851,8 +851,20 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
 pub const RETENTION_KEY: &str = "sessions:retention";
 
 pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
-    let raw = crate::store::get(store, RETENTION_KEY.into())?;
+    let raw = crate::settings::get(store, RETENTION_KEY)?;
     Ok(raw.and_then(|raw| raw.trim().parse::<u32>().ok()).filter(|days| *days > 0))
+}
+
+/// The retention the daemon may act on by itself: none on a copy no client has
+/// confirmed lately, which may be one the user has since changed. Waiting only
+/// keeps old sessions a little longer.
+pub fn retention_to_act_on(store: &Store) -> Result<Option<u32>, String> {
+    let confirmed = crate::settings::confirmed_within(store, crate::store::now_millis(), crate::settings::CONFIRM_FOR_MS)?;
+    if confirmed {
+        retention_days(store)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Where Settings keeps whether every session runs without asking, whatever
@@ -860,7 +872,7 @@ pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
 pub const BYPASS_KEY: &str = "sessions:bypass-permissions";
 
 pub fn bypass_permissions(store: &Store) -> bool {
-    crate::store::get(store, BYPASS_KEY.into()).ok().flatten().is_some_and(|raw| raw.trim() == "on")
+    crate::settings::get(store, BYPASS_KEY).ok().flatten().is_some_and(|raw| raw.trim() == "on")
 }
 
 /// The sessions last touched before `before`, less the ones deleting would
@@ -1256,9 +1268,18 @@ mod tests {
         let (store, _) = world();
         assert_eq!(retention_days(&store).unwrap(), None);
         for (raw, days) in [("30", Some(30)), ("0", None), ("never", None), (" 7 ", Some(7))] {
-            crate::store::set(&store, RETENTION_KEY.into(), raw.into()).expect("set");
+            crate::settings::set(&store, RETENTION_KEY, Some(raw), crate::settings::GLOBAL).expect("set");
             assert_eq!(retention_days(&store).unwrap(), days, "{raw}");
         }
+    }
+
+    #[test]
+    fn the_daemon_acts_on_retention_only_once_a_client_has_confirmed_it() {
+        let (store, _) = world();
+        crate::settings::set(&store, RETENTION_KEY, Some("30"), crate::settings::GLOBAL).expect("set");
+        assert_eq!(retention_to_act_on(&store).unwrap(), None);
+        crate::settings::merge(&store, &[]).expect("confirm");
+        assert_eq!(retention_to_act_on(&store).unwrap(), Some(30));
     }
 
     #[test]
@@ -1266,7 +1287,7 @@ mod tests {
         let (store, _) = world();
         assert!(!bypass_permissions(&store));
         for (raw, on) in [("on", true), (" on ", true), ("off", false), ("true", false), ("", false)] {
-            crate::store::set(&store, BYPASS_KEY.into(), raw.into()).expect("set");
+            crate::settings::set(&store, BYPASS_KEY, Some(raw), crate::settings::GLOBAL).expect("set");
             assert_eq!(bypass_permissions(&store), on, "{raw}");
         }
     }

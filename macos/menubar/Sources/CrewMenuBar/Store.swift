@@ -155,7 +155,7 @@ final class Store: ObservableObject {
 
     /// The rings are saved without an event, so the menu reads them each time it opens.
     func readRings() async {
-        guard let raw = try? await link.request("state_get", ["key": "usage:rings"], as: String?.self),
+        guard let raw = try? await link.request("settings_get", ["key": "usage:rings"], as: String?.self),
               let data = raw.data(using: .utf8),
               let config = try? JSONDecoder().decode(RingConfig.self, from: data) else { return }
         rings = Array(config.order.filter { plans.contains($0) && config.shown.contains($0) }.prefix(maxRings))

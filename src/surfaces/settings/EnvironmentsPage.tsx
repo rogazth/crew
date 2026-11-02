@@ -36,9 +36,10 @@ import { whereOf } from "../../lib/envText";
 import { remotesHost } from "../../lib/host";
 import { PROVIDERS } from "../../lib/providers";
 import type { MachineSample } from "../../lib/protocol";
-import { AUTO_UPDATE, INSTALL_STEPS, compareVersions, errorText as message, type RemoteUpdateState, type Tailnet } from "../../lib/remotes";
-import { openWorkspaceOn, subscribeAdd, takeAddRequest, WAKE_ON, WARN_RELAY } from "../../lib/remoteUi";
-import { READS, keep, useKept, useRead } from "../../lib/settingsReads";
+import { INSTALL_STEPS, compareVersions, errorText as message, type RemoteUpdateState, type Tailnet } from "../../lib/remotes";
+import { openWorkspaceOn, subscribeAdd, takeAddRequest, autoUpdateSetting, wakeSetting, warnRelaySetting } from "../../lib/remoteUi";
+import { saveSetting, useSetting } from "../../lib/settingsEngine/store";
+import { READS, keep, useKept } from "../../lib/settingsReads";
 import type { Workspace } from "../../lib/types";
 import { AddMachineFlow } from "./AddMachineFlow";
 import { manageProviders } from "./route";
@@ -62,9 +63,9 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   const kept = useKept(READS.tailnet) ?? null;
   const [failed, setFailed] = useState<Tailnet | null>(null);
   const tailnet = failed ?? kept;
-  const warnRelay = useRead(READS.warnRelay) !== "off";
-  const wake = useRead(READS.wake) !== "off";
-  const autoUpdate = useRead(READS.autoUpdate) !== "off";
+  const warnRelay = useSetting(warnRelaySetting);
+  const wake = useSetting(wakeSetting);
+  const autoUpdate = useSetting(autoUpdateSetting);
   const [busy, setBusy] = useState<Record<string, Busy>>({});
   /** Updates main's updater waits on or runs, and the step each running one is on. */
   const [pending, setPending] = useState<Record<string, RemoteUpdateState>>({});
@@ -244,20 +245,14 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           label="Relay warnings"
           description="Flag machines reached only by relay."
           checked={warnRelay}
-          onChange={(checked) => {
-            keep(READS.warnRelay, checked ? "on" : "off");
-            void api.stateSet(WARN_RELAY, checked ? "on" : "off");
-          }}
+          onChange={(checked) => saveSetting(warnRelaySetting, checked)}
         />
         <ToggleRow
           id="wake"
           label="Reconnect on wake"
           description="Reconnect to machines when this Mac wakes."
           checked={wake}
-          onChange={(checked) => {
-            keep(READS.wake, checked ? "on" : "off");
-            void api.stateSet(WAKE_ON, checked ? "on" : "off");
-          }}
+          onChange={(checked) => saveSetting(wakeSetting, checked)}
         />
       </Group>
 
@@ -267,10 +262,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           label="Update machines automatically"
           description="Match this Mac's crewd after two idle minutes."
           checked={autoUpdate}
-          onChange={(checked) => {
-            keep(READS.autoUpdate, checked ? "on" : "off");
-            void api.stateSet(AUTO_UPDATE, checked ? "on" : "off");
-          }}
+          onChange={(checked) => saveSetting(autoUpdateSetting, checked)}
         />
       </Group>
 

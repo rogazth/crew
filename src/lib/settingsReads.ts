@@ -2,16 +2,11 @@
 // and read ahead as Settings opens: a page paints with the values it keeps,
 // not with defaults that flip a frame later and push the rows under them.
 import { useEffect, useSyncExternalStore } from "react";
-import * as api from "./api";
 import type { CliStatus } from "./cli";
 import { appInfo, cliHost, homeDir, loginItemHost, notificationStatus, remotesHost, updateHost } from "./host";
 import type { LoginItemState } from "./loginItem";
 import type { BannerState } from "./notify";
-import { BYPASS_KEY } from "./permissions";
-import { RETENTION_KEY } from "./retention";
-import { AUTO_UPDATE, type Tailnet } from "./remotes";
-import { WAKE_ON, WARN_RELAY } from "./remoteUi";
-import { REOPEN_KEY } from "./startup";
+import type { Tailnet } from "./remotes";
 import type { ReleaseList, UpdateState } from "./update";
 
 export type Read<T> = { key: string; load: () => Promise<T> };
@@ -65,17 +60,9 @@ export function useRead<T>(read: Read<T>): T | undefined {
   return useKept(read);
 }
 
-const state = (key: string): Read<string | null> => ({ key: `state:${key}`, load: () => api.stateGet(key) });
-
 const none = () => Promise.resolve(null);
 
 export const READS = {
-  retention: state(RETENTION_KEY),
-  bypass: state(BYPASS_KEY),
-  reopen: state(REOPEN_KEY),
-  warnRelay: state(WARN_RELAY),
-  wake: state(WAKE_ON),
-  autoUpdate: state(AUTO_UPDATE),
   login: { key: "login", load: (): Promise<LoginItemState | null> => loginItemHost()?.get() ?? none() },
   cli: { key: "cli", load: (): Promise<CliStatus | null> => cliHost()?.status() ?? none() },
   home: { key: "home", load: homeDir },

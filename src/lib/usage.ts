@@ -6,6 +6,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "./api";
 import { getLinks, subscribeLinks } from "./client/registry";
 import { notify } from "./host";
+import { defineSetting } from "./settingsEngine/define";
+import { hasSetting, peekSetting, saveSetting, setSetting, useSetting } from "./settingsEngine/store";
 import type { UsageSnapshot } from "./protocol";
 import { crossings, hasWindows, mergeSnapshots, peak, type Crossing, type Look, type Reading, type Window } from "./usageData";
 
@@ -109,12 +111,10 @@ export type RingConfig = { order: string[]; shown: string[]; colors: Record<stri
 const RINGS_KEY = "usage:rings";
 /** Where the redesign's dev build kept the setup, in this browser, before it lived in the store. */
 const LEGACY_RINGS_KEY = "crew.proto.usageRings.v2";
-const ringWatchers = new Set<() => void>();
 /** The providers that report a plan, in the order a fresh setup shows them. */
 const PLANS = ["claude", "codex", "cursor", "grok"];
 const DEFAULT_COLORS: Record<string, RingColorId> = { claude: "clay", codex: "blue", cursor: "teal", grok: "violet" };
 const FALLBACK: RingConfig = { order: PLANS, shown: PLANS.slice(0, MAX_RINGS), colors: DEFAULT_COLORS };
-let rings: RingConfig = FALLBACK;
 let ringsLoaded = false;
 
 function parseRings(raw: string | null): RingConfig | null {
@@ -137,47 +137,42 @@ function legacyRings(): string | null {
   }
 }
 
-/** Reads the setup from the store once; the old localStorage copy moves in and is deleted. */
+export const ringsSetting = defineSetting<RingConfig>({
+  key: RINGS_KEY,
+  scope: "global",
+  fallback: FALLBACK,
+  parse: (raw) => parseRings(raw) ?? FALLBACK,
+  format: JSON.stringify,
+});
+
+/** The old localStorage copy moves in once and is deleted. */
 function loadRings() {
   if (ringsLoaded) return;
   ringsLoaded = true;
-  api
-    .stateGet(RINGS_KEY)
-    .then(async (raw) => {
-      const saved = parseRings(raw);
+  void hasSetting(ringsSetting)
+    .then(async (saved) => {
       const old = saved ? null : parseRings(legacyRings());
-      if (old) {
-        await api.stateSet(RINGS_KEY, JSON.stringify(old));
+      if (old) await setSetting(ringsSetting, old);
+      if (!saved) {
         try {
           localStorage.removeItem(LEGACY_RINGS_KEY);
         } catch {
           // Left behind, it reads the same again.
         }
       }
-      const next = saved ?? old;
-      if (next) setRings(next, false);
     })
     .catch(() => {
       ringsLoaded = false;
     });
 }
 
-function setRings(next: RingConfig, save = true) {
-  rings = next;
-  if (save) void api.stateSet(RINGS_KEY, JSON.stringify(next)).catch(() => {});
-  for (const watch of ringWatchers) watch();
-}
+const peekRings = () => peekSetting(ringsSetting);
+const setRings = (next: RingConfig) => saveSetting(ringsSetting, next);
 
 /** The rings' setup, in the rail and in Settings alike. */
 export function useRings(): RingConfig {
   useEffect(loadRings, []);
-  return useSyncExternalStore(
-    (watch) => {
-      ringWatchers.add(watch);
-      return () => ringWatchers.delete(watch);
-    },
-    () => rings,
-  );
+  return useSetting(ringsSetting);
 }
 
 /** The providers with a ring, outermost first. */
@@ -200,21 +195,24 @@ export function colorOf(config: RingConfig, provider: string): string {
 
 /** Whether a ring can go on or off: one has to stay, and the rail fits no more than MAX_RINGS. */
 export function canToggleRing(provider: string): boolean {
-  return rings.shown.includes(provider) ? rings.shown.length > 1 : rings.shown.length < MAX_RINGS;
+  const { shown } = peekRings();
+  return shown.includes(provider) ? shown.length > 1 : shown.length < MAX_RINGS;
 }
 
 export function toggleRing(provider: string) {
   if (!canToggleRing(provider)) return;
+  const rings = peekRings();
   const shown = rings.shown.includes(provider) ? rings.shown.filter((id) => id !== provider) : [...rings.shown, provider];
   setRings({ ...rings, shown });
 }
 
 export function reorderRings(order: string[]) {
-  setRings({ ...rings, order });
+  setRings({ ...peekRings(), order });
 }
 
 /** A colour another provider wears is not offered, so two rings never look alike. */
 export function setRingColor(provider: string, color: RingColorId | string) {
+  const rings = peekRings();
   setRings({ ...rings, colors: { ...rings.colors, [provider]: color } });
 }
 
@@ -322,10 +320,6 @@ export type Alerts = { notify: boolean; composer: boolean; /** Minutes between r
 
 const ALERTS_KEY = "usage:alerts";
 const ALERT_DEFAULTS: Alerts = { notify: true, composer: true, every: 5 };
-const alertWatchers = new Set<() => void>();
-let alerts: Alerts = ALERT_DEFAULTS;
-let alertsLoaded = false;
-
 export function parseAlerts(raw: string | null): Alerts | null {
   try {
     const saved = JSON.parse(raw ?? "null") as Partial<Alerts> | null;
@@ -340,39 +334,21 @@ export function parseAlerts(raw: string | null): Alerts | null {
   }
 }
 
-function loadAlerts() {
-  if (alertsLoaded) return;
-  alertsLoaded = true;
-  api
-    .stateGet(ALERTS_KEY)
-    .then((raw) => {
-      const saved = parseAlerts(raw);
-      if (saved) {
-        alerts = saved;
-        for (const watch of alertWatchers) watch();
-      }
-    })
-    .catch(() => {
-      alertsLoaded = false;
-    });
-}
+export const alertsSetting = defineSetting<Alerts>({
+  key: ALERTS_KEY,
+  scope: "global",
+  fallback: ALERT_DEFAULTS,
+  parse: (raw) => parseAlerts(raw) ?? ALERT_DEFAULTS,
+  format: JSON.stringify,
+});
 
 export function setAlerts(patch: Partial<Alerts>) {
-  alerts = { ...alerts, ...patch };
-  void api.stateSet(ALERTS_KEY, JSON.stringify(alerts)).catch(() => {});
-  for (const watch of alertWatchers) watch();
+  saveSetting(alertsSetting, { ...peekSetting(alertsSetting), ...patch });
 }
 
-/** The alert settings, persisted in the store, in Settings and wherever they apply. */
+/** The alert settings, in Settings and wherever they apply. */
 export function useAlerts(): Alerts {
-  useEffect(loadAlerts, []);
-  return useSyncExternalStore(
-    (watch) => {
-      alertWatchers.add(watch);
-      return () => alertWatchers.delete(watch);
-    },
-    () => alerts,
-  );
+  return useSetting(alertsSetting);
 }
 
 function describe({ reading, window }: Crossing): { title: string; body: string } {
@@ -389,7 +365,7 @@ function alertOn(list: Reading[]) {
   const result = crossings(list, looked, NOTIFY_AT);
   const first = looked === null;
   looked = result.look;
-  if (first || !alerts.notify) return;
+  if (first || !peekSetting(alertsSetting).notify) return;
   for (const crossing of result.fresh) void notify({ ...describe(crossing), target: null }).catch(() => {});
 }
 

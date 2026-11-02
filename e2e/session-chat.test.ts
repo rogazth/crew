@@ -14,8 +14,8 @@ let crew: Crew;
 before(async () => {
   crew = await launchCrew();
   // Only the fake claude is installed, but the default must not depend on it.
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   await crew.reload();

@@ -13,8 +13,8 @@ let workspace: Workspace;
 
 before(async () => {
   crew = await launchCrew();
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   const repo = await crew.makeRepo("files", { ".gitignore": "reference/\n", "README.md": "# files\n" });

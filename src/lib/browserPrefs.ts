@@ -1,3 +1,4 @@
+import { defineSetting } from "./settingsEngine/define";
 /** Where a page's DevTools open: docked to a side of the page, or in a window of their own. */
 export type DevToolsDock = "right" | "bottom" | "left" | "window";
 
@@ -61,3 +62,11 @@ export function parseBrowserPrefs(raw: string | null): BrowserPrefs {
     return DEFAULT_BROWSER_PREFS;
   }
 }
+
+export const browserPrefsSetting = defineSetting<BrowserPrefs>({
+  key: "browser:prefs",
+  scope: "global",
+  fallback: DEFAULT_BROWSER_PREFS,
+  parse: parseBrowserPrefs,
+  format: JSON.stringify,
+});

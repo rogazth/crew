@@ -1,3 +1,4 @@
+import { defineSetting } from "../settingsEngine/define";
 /**
  * What a page may use on this Mac, and what the person decided about it, as
  * pure decisions. Main answers Chromium with them; the window asks and keeps
@@ -180,3 +181,12 @@ export function externalScheme(url: string, own: readonly string[] = []): string
   if (own.some((name) => `${name.toLowerCase().replace(/:$/, "")}:` === scheme)) return null;
   return scheme.slice(0, -1);
 }
+
+/** What the person decided each site may use. An incognito page's decisions never reach here. */
+export const sitePermissionsSetting = defineSetting<SitePermissions>({
+  key: "browser:site-permissions",
+  scope: "device",
+  fallback: {},
+  parse: parseSitePermissions,
+  format: JSON.stringify,
+});

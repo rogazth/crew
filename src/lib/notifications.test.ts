@@ -8,6 +8,13 @@ vi.mock("./host", () => ({
 }));
 const playSound = vi.fn();
 vi.mock("./notificationSound", () => ({ playSound: (...args: unknown[]) => playSound(...args) }));
+vi.mock("./client", () => ({
+  client: {
+    request: async (method: string, params: Record<string, unknown>) =>
+      method === "settings_list" ? [] : method === "settings_set" ? { ...params, revision: 1, origin: "test" } : null,
+    on: () => () => {},
+  },
+}));
 vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }));
 const showToast = vi.fn();
 const closeToast = vi.fn();

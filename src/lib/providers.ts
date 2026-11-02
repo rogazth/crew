@@ -1,3 +1,4 @@
+import { defineSetting } from "./settingsEngine/define";
 import { fuzzyMatch } from "./fuzzy";
 import type { ListedModel } from "./protocol";
 
@@ -717,3 +718,34 @@ export function loadListedModels(providerId: string, fetch: (provider: string) =
     .then((rows) => setListedModels(providerId, rows))
     .catch(() => asked.delete(providerId));
 }
+
+/** What a new session starts with, set in Settings › Providers. */
+export const defaultAgentSetting = defineSetting<AgentChoice>({
+  key: "providers:default",
+  scope: "global",
+  fallback: fitChoice({ provider: DEFAULT_PROVIDER, model: "", effort: "", access: DEFAULT_ACCESS }),
+  parse: (raw) => parseAgentChoice(raw) ?? fitChoice({ provider: DEFAULT_PROVIDER, model: "", effort: "", access: DEFAULT_ACCESS }),
+  format: JSON.stringify,
+});
+
+/** The last pick made on each provider, so coming back to one finds its model, effort and access as left. */
+export const lastAgentsSetting = defineSetting<Record<string, AgentChoice>>({
+  key: "providers:last",
+  scope: "global",
+  fallback: {},
+  parse: (raw) => {
+    const picks: Record<string, AgentChoice> = {};
+    try {
+      const stored: unknown = JSON.parse(raw ?? "{}");
+      if (typeof stored !== "object" || stored === null) return picks;
+      for (const value of Object.values(stored)) {
+        const choice = parseAgentChoice(JSON.stringify(value));
+        if (choice) picks[choice.provider] = choice;
+      }
+    } catch {
+      // A value it cannot read is no picks at all.
+    }
+    return picks;
+  },
+  format: JSON.stringify,
+});

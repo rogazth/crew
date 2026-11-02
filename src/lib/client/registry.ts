@@ -2,7 +2,6 @@ import { daemonInfo, remotesHost } from "../host";
 import { dispatchNotification } from "../notifications";
 import type { MachineInfo, RemoteEnv, Workspace } from "../protocol";
 import { isLoopback } from "../remotes";
-import { RETENTION_KEY } from "../retention";
 import { Connection, EnvDown, type ConnStatus } from "./connection";
 import { LOCAL, envForPane, envForPath, routeEnv, type RouteMaps } from "./route";
 
@@ -50,6 +49,7 @@ const listeners = new Map<string, Set<Listener>>();
 export type Here = (sessionId: string) => boolean;
 
 const reconnectHooks = new Set<(here: Here) => void>();
+const connectedHooks = new Set<(envId: string) => void>();
 const workspaceWatchers = new Set<() => void>();
 const linkWatchers = new Set<() => void>();
 /** Machines that dropped after being up, so "back online" is said only after a drop. */
@@ -150,7 +150,6 @@ export async function request<T>(method: string, params: object = {}, envId?: st
   if (!conn) throw new EnvDown(env);
   const result = await conn.request<T>(method, params);
   remember(env, method, params as Record<string, unknown>, result);
-  if (method === "state_set" && isRetention(params)) mirrorRetention(params);
   return result;
 }
 
@@ -162,6 +161,15 @@ export function on(event: string, listener: Listener): () => void {
     set.delete(listener);
     if (set.size === 0) listeners.delete(event);
   };
+}
+
+/**
+ * Every time a daemon says hello: the first time since the window opened as well
+ * as after a drop, so a machine that was off when the app started counts too.
+ */
+export function onConnected(hook: (envId: string) => void): () => void {
+  connectedHooks.add(hook);
+  return () => connectedHooks.delete(hook);
 }
 
 /** `hook` gets which sessions live on the machine that came back, so a caller resyncs only those. */
@@ -300,6 +308,10 @@ function wire(conn: Connection) {
     }
     void pullInfo(conn);
     if (conn.envId !== LOCAL) void pullWorkspaces(conn);
+    // After this message is handled: a hook reads the link with its protocol checked.
+    queueMicrotask(() => {
+      for (const hook of connectedHooks) hook(conn.envId);
+    });
   };
   conn.onChange = () => {
     const now = conn.status;
@@ -546,17 +558,6 @@ function noteEvent(env: string, event: string, payload: unknown) {
   if (event !== "session-created" && event !== "session-updated") return;
   if (!isRecord(payload) || !isSession(payload.session)) return;
   registerSession(env, payload.session);
-}
-
-function isRetention(params: object): boolean {
-  return isRecord(params) && params.key === RETENTION_KEY;
-}
-
-function mirrorRetention(params: object) {
-  for (const [env, conn] of connections) {
-    if (env === LOCAL || !conn.ready || conn.mismatch) continue;
-    void conn.request("state_set", params).catch(() => {});
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

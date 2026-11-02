@@ -22,7 +22,7 @@ async function faceOf(crew: Crew, name: string): Promise<string> {
 
 /** A crewd state key, parsed as JSON when it is JSON. */
 async function stored(crew: Crew, key: string): Promise<unknown> {
-  const raw = await crew.request<string | null>("state_get", { key });
+  const raw = await crew.request<string | null>(key === "bot:avatar" ? "settings_get" : "state_get", { key });
   if (raw === null) return null;
   try {
     return JSON.parse(raw);

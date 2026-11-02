@@ -1,3 +1,4 @@
+import { defineSetting } from "./settingsEngine/define";
 export type Ligatures = "auto" | "on" | "off";
 
 export type TerminalPrefs = {
@@ -87,3 +88,11 @@ export function parseTerminalPrefs(raw: string | null): TerminalPrefs {
 function number(value: unknown, limits: { min: number; max: number }, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? clamp(value, limits) : fallback;
 }
+
+export const terminalPrefsSetting = defineSetting<TerminalPrefs>({
+  key: "terminal:prefs",
+  scope: "global",
+  fallback: DEFAULT_TERMINAL_PREFS,
+  parse: parseTerminalPrefs,
+  format: JSON.stringify,
+});

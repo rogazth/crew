@@ -235,7 +235,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       const url = new URL(info.url);
       return (await peek(url.hostname, Number(url.port), info.token).catch(() => null))?.version || null;
     },
-    auto: async () => (await localRpc<string | null>(getDaemon, "state_get", { key: AUTO_UPDATE }).catch(() => null)) !== "off",
+    auto: async () => (await localRpc<string | null>(getDaemon, "settings_get", { key: AUTO_UPDATE }).catch(() => null)) !== "off",
     busy: (id) => busy.has(id) || installing !== null,
     update: updateMachine,
     publish: (states: Record<string, RemoteUpdateState>) => broadcast("remotes:update-states", states),

@@ -494,6 +494,10 @@ const commands: Record<string, (args: Row) => unknown> = {
     letters.filter((letter) => (letter.to as Row).id === sessionId && (letter.state === "pending" || letter.state === "claimed")),
   session_mark_read: ({ id }) =>
     void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
+  settings_list: () => [],
+  settings_get: () => null,
+  settings_set: ({ key, value, scope }) => ({ key, value, scope, revision: Date.now(), origin: "mock" }),
+  settings_merge: () => [],
   state_get: ({ key }) => state.get(key as string) ?? null,
   usage_read: () => mockUsage(),
   state_set: ({ key, value }) => void state.set(key as string, value as string),

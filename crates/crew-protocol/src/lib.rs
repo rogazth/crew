@@ -250,6 +250,46 @@ pub struct RemoteEnv {
     pub ssh: String,
 }
 
+/// One setting as a daemon keeps it: `settings` in crew-core says what the
+/// columns mean. A null value is the default, chosen at that revision.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingRow {
+    pub key: String,
+    pub value: Option<String>,
+    pub scope: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub origin: String,
+}
+
+/// `settings_set`: a choice made on this daemon.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingSet {
+    pub key: String,
+    pub value: Option<String>,
+    pub scope: String,
+}
+
+/// `settings_merge`: rows from the other copies. Empty still confirms this daemon.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingsMerge {
+    pub rows: Vec<SettingRow>,
+}
+
+/// `settings-changed`: rows that just changed on the daemon that sends it.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingsChanged {
+    pub rows: Vec<SettingRow>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

@@ -113,7 +113,7 @@ const SETTINGS: IndexEntry[] = [
   { id: "login", label: "Open at login", page: "general", keywords: "startup launch sign in boot routines" },
   { id: "reopen", label: "Reopen where you left off", page: "general", keywords: "startup restore workspace tabs home launch" },
   { id: "crew-command", label: "crew command", page: "general", keywords: "cli path terminal install" },
-  { id: "bypass", label: "Bypass permissions", page: "general", keywords: "danger skip approvals yolo" },
+  { id: "bypass", label: "Bypass permissions", page: "providers", keywords: "danger skip approvals yolo" },
   { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },
   { id: "style", label: "Style and accent colour", page: "appearance", keywords: "brand ink crew cobalt teal blue" },
   { id: "text-size", label: "Chat text size", page: "appearance", keywords: "font size zoom bigger smaller reading" },

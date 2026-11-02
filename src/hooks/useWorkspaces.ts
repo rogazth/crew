@@ -4,7 +4,8 @@ import { publishWorkspaces } from "../lib/placeStore";
 import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
-import { parseReopen, REOPEN_KEY } from "../lib/startup";
+import { readSetting } from "../lib/settingsEngine/store";
+import { reopenSetting } from "../lib/startup";
 import { nameFromPath, resolveActive } from "../lib/workspaces";
 
 export function useWorkspaces() {
@@ -24,14 +25,14 @@ export function useWorkspaces() {
         Promise.all([
           api.listWorkspaces(),
           api.getActiveWorkspace(),
-          api.stateGet(REOPEN_KEY).catch(() => null),
+          readSetting(reopenSetting).catch(() => true),
         ]),
       )
       .then(([list, active, reopen]) => {
         if (cancelled) return;
         setWorkspaces(list);
         // "Reopen where you left off" off: start at Home, not at the saved workspace. Its tabs restore as always.
-        const start = parseReopen(reopen) ? active : (list.find((w) => w.home)?.id ?? active);
+        const start = reopen ? active : (list.find((w) => w.home)?.id ?? active);
         setActiveId(resolveActive(list, start)?.id ?? null);
       })
       .catch((e) => !cancelled && setError(String(e)))

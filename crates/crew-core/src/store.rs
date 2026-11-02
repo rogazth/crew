@@ -509,6 +509,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 44 {
+        let tx = conn.unchecked_transaction()?;
+        // Settings leave `app_state` for a table of their own (see `settings`).
+        tx.execute_batch(crate::settings::MIGRATION_V44)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (44, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1116,7 +1123,7 @@ mod rename_tests {
         assert!(!extra.contains("from_agent"), "{extra}");
 
         assert_eq!(get(&store, "bot:faces".into()).unwrap().as_deref(), Some(r#"{"x":{"seed":"y"}}"#));
-        assert_eq!(get(&store, "bot:avatar".into()).unwrap().as_deref(), Some("robot"));
+        assert_eq!(crate::settings::get(&store, "bot:avatar").unwrap().as_deref(), Some("robot"));
         assert_eq!(get(&store, "agent:faces".into()).unwrap(), None);
         assert_eq!(get(&store, "agent:avatar".into()).unwrap(), None);
         let prefs: serde_json::Value = serde_json::from_str(&get(&store, "sidebar:prefs".into()).unwrap().unwrap()).unwrap();

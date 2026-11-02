@@ -1,36 +1,9 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import * as api from "../lib/api";
-import { DEFAULT_BROWSER_PREFS, parseBrowserPrefs, type BrowserPrefs } from "../lib/browserPrefs";
+import { browserPrefsSetting, type BrowserPrefs } from "../lib/browserPrefs";
+import { saveSetting, useSetting } from "../lib/settingsEngine/store";
 
-const KEY = "browser:prefs";
-
-type Value = { prefs: BrowserPrefs; update: (next: BrowserPrefs) => void };
-
-const Context = createContext<Value>({ prefs: DEFAULT_BROWSER_PREFS, update: () => {} });
+const update = (next: BrowserPrefs) => saveSetting(browserPrefsSetting, next);
 
 /** One store for every page and the settings page; a change applies to open tabs. */
-export function BrowserPrefsProvider({ children }: { children: React.ReactNode }) {
-  const [prefs, setPrefs] = useState(DEFAULT_BROWSER_PREFS);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .stateGet(KEY)
-      .then((raw) => !cancelled && setPrefs(parseBrowserPrefs(raw)))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const update = useCallback((next: BrowserPrefs) => {
-    setPrefs(next);
-    void api.stateSet(KEY, JSON.stringify(next)).catch(() => {});
-  }, []);
-
-  // The window redraws this provider with everything else; a fresh value would redraw every reader.
-  const value = useMemo(() => ({ prefs, update }), [prefs, update]);
-  return createElement(Context.Provider, { value }, children);
+export function useBrowserPrefs() {
+  return { prefs: useSetting(browserPrefsSetting), update };
 }
-
-export const useBrowserPrefs = () => useContext(Context);

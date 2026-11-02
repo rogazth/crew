@@ -9,7 +9,8 @@ import { Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useDefaultAgent } from "../../hooks/useDefaultAgent";
 import * as api from "../../lib/api";
-import { READS, useRead } from "../../lib/settingsReads";
+import { bypassPermissions } from "../../lib/permissions";
+import { setSetting, useSetting } from "../../lib/settingsEngine/store";
 import {
   ACCESSES,
   EFFORT_LABELS,
@@ -25,7 +26,7 @@ import {
   type Access,
   type ProviderDef,
 } from "../../lib/providers";
-import { Heading, Row, SettingsPage } from "./ui";
+import { ConfirmDialog, Heading, Row, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
 
 export function ProvidersPage({ onOpenTerminal }: { onOpenTerminal: (envId: string, input?: string) => Promise<void> }) {
   // A job that ended on any machine: the list of CLIs on this Mac may have changed.
@@ -150,13 +151,19 @@ const ACCESS_HINTS: Record<Access, string> = {
 };
 
 /**
- * What a new session may do without asking: four tiles that never change
- * size, whichever is picked, and the bypass that overrides them all under them.
+ * What a session may do without asking: the bypass that overrides everything,
+ * and under it, while it is off, four tiles that never change size, whichever is
+ * picked.
  */
+const saveBypass = (next: boolean) =>
+  setSetting(bypassPermissions, next).catch((error: unknown) =>
+    toast(`Could not save: ${error instanceof Error ? error.message : String(error)}`, "danger"),
+  );
+
 function Permissions() {
   const { preferred, update } = useDefaultAgent();
-  // Bypass lives in General; it is read here only to say it overrides the tiles.
-  const bypass = useRead(READS.bypass)?.trim() === "on";
+  const bypass = useSetting(bypassPermissions);
+  const [ask, setAsk] = useState<ConfirmAsk | null>(null);
   const supported = accessesOf(preferred.provider);
   const name = PROVIDER_META[preferred.provider].name;
 
@@ -164,9 +171,24 @@ function Permissions() {
     <section className="flex flex-col gap-2" data-setting="access">
       <Heading title="Permissions" />
       <div className="rounded-xl bg-card p-1.5">
-        {bypass && (
-          <p className="px-2.5 py-2 text-[12px] text-text-muted">Bypass permissions is on in General. Sessions run without asking.</p>
-        )}
+        <div className="px-2.5">
+          <ToggleRow
+            id="bypass"
+            label="Bypass permissions"
+            description="All sessions, on every machine, run tools without asking."
+            checked={bypass}
+            onChange={(next) =>
+              next
+                ? setAsk({
+                    title: "Bypass permissions for every session?",
+                    description: "Agents on all your machines edit files and run commands without asking, from their next turn.",
+                    action: "Bypass",
+                    onConfirm: () => void saveBypass(true),
+                  })
+                : void saveBypass(false)
+            }
+          />
+        </div>
         {!bypass && (
           <div className="flex flex-col gap-2 px-1 py-1">
             <p className="px-1.5 text-[12px] font-medium text-text-muted">Default access</p>
@@ -214,6 +236,7 @@ function Permissions() {
           </div>
         )}
       </div>
+      <ConfirmDialog ask={ask} onClose={() => setAsk(null)} />
     </section>
   );
 }
