@@ -184,6 +184,11 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
         state.log.push(request.clone());
         handle(&mut state, &request)
     };
+    // A tool call may ask to take its time, to stand for a slow service.
+    let delay = serde_json::from_str::<Value>(&request.body).ok().and_then(|m| m["params"]["arguments"]["delayMs"].as_u64());
+    if let Some(ms) = delay {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
     let mut head = format!("HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n", reply.status, reply.body.len());
     for (k, v) in &reply.headers {
         head.push_str(&format!("{k}: {v}\r\n"));
@@ -505,10 +510,15 @@ fn mcp(state: &mut State, req: &Recorded) -> Reply {
         }
         "tools/call" => {
             let params = &message["params"];
+            // An answer of this many bytes, for what the size of one does.
+            let text = match params["arguments"]["answerBytes"].as_u64() {
+                Some(bytes) => "x".repeat(bytes as usize),
+                None => params["arguments"].to_string(),
+            };
             reply(
                 200,
                 answer(json!({
-                    "content": [{ "type": "text", "text": params["arguments"].to_string() }],
+                    "content": [{ "type": "text", "text": text }],
                     "structuredContent": { "name": params["name"], "arguments": params["arguments"], "meta": params["_meta"] },
                     "isError": false,
                 })),

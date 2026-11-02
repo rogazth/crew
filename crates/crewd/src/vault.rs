@@ -34,6 +34,7 @@ use crew_core::connectors::lease::{self, Lease, LeaseError, Leaser, RateLimit};
 use crew_core::connectors::seal::{self, Opener};
 use crew_core::store::{self as app_state, Store};
 use crew_protocol::{self as proto, Request, VaultMachine, VaultMinted, VaultStatus};
+use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -43,6 +44,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// How long a handoff token and a move's key last.
 const MOVE_TTL_MS: i64 = 2 * 60 * 1000;
+/// How long a move waits for the calls running on the old vault.
+const MOVE_DRAIN: Duration = Duration::from_secs(30);
 /// Leases one machine may ask for in a minute.
 const LEASES_PER_MINUTE: usize = 120;
 /// A call to the vault that takes longer than this is the vault being away.
@@ -251,10 +254,12 @@ impl VaultHost {
     }
 
     /// The old vault answers a token the new one pulls with, once, within two minutes.
-    pub fn handoff(&self, key: proto::VaultKey) -> Result<String, String> {
+    pub async fn handoff(&self, key: proto::VaultKey) -> Result<String, String> {
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return Err("This machine isn't the vault".into());
         }
+        // No refresh from here on: one could spend a token already sealed.
+        self.connectors.stop_calls(Duration::from_millis(MOVE_TTL_MS as u64), MOVE_DRAIN).await?;
         let token = format!("handoff-{}{}", crate::random_token(), crate::random_token());
         let now = app_state::now_millis();
         let mut handoffs = self.handoffs.lock().unwrap_or_else(|e| e.into_inner());
@@ -330,10 +335,16 @@ impl VaultHost {
             return;
         }
         let mut changes = self.changes.clone();
+        // Each request runs beside the others, so a slow call holds up neither
+        // the next call nor the config. Its work is on the connectors' runtime:
+        // it finishes even when this connection doesn't.
+        let this = &*self;
+        let peer = &peer;
+        let mut running = FuturesUnordered::new();
         loop {
             tokio::select! {
                 changed = changes.changed(), if matches!(peer, PeerKind::Machine(_)) => {
-                    if changed.is_err() {
+                    if changed.is_err() || !this.still_known(peer) {
                         break;
                     }
                     let Ok(event) = proto::event("vault-config", Value::Null).and_then(|e| serde_json::to_string(&e)) else { break };
@@ -348,21 +359,38 @@ impl VaultHost {
                         continue;
                     };
                     let Ok(request) = serde_json::from_str::<Request>(text.as_ref()) else { break };
-                    let answer = match self.peer_call(&peer, &request.method, request.params).await {
-                        Ok(value) => proto::ok(request.id, value),
-                        Err(error) => proto::err(request.id, error),
-                    };
-                    let Ok(text) = serde_json::to_string(&answer) else { break };
-                    if sink.send(Message::Text(text.into())).await.is_err() {
+                    // A token is checked at each request, not only on connecting:
+                    // a revoked machine's open connection stops here.
+                    if !this.still_known(peer) {
                         break;
                     }
-                    if request.method == "vault_handoff_done" {
+                    running.push(async move {
+                        let done = request.method == "vault_handoff_done";
+                        let answer = match this.peer_call(peer, &request.method, request.params).await {
+                            Ok(value) => proto::ok(request.id, value),
+                            Err(error) => proto::err(request.id, error),
+                        };
+                        (done, answer)
+                    });
+                }
+                Some((done, answer)) = running.next(), if !running.is_empty() => {
+                    let Ok(text) = serde_json::to_string(&answer) else { break };
+                    if sink.send(Message::Text(text.into())).await.is_err() || done {
                         break;
                     }
                 }
             }
         }
         let _ = sink.close().await;
+    }
+
+    fn still_known(&self, peer: &PeerKind) -> bool {
+        match peer {
+            PeerKind::Machine(machine) => {
+                self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && lease::is_known(&self.store, &machine.id).unwrap_or(false)
+            }
+            PeerKind::Handoff(_) => true,
+        }
     }
 
     async fn peer_call(&self, peer: &PeerKind, method: &str, params: Value) -> Result<Value, String> {
@@ -374,9 +402,6 @@ impl VaultHost {
                 serde_json::to_value(snap).map_err(|e| e.to_string())
             }
             (PeerKind::Machine(machine), "vault_lease") => {
-                if !self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
-                    return Err("The vault is moving; try again in a moment".into());
-                }
                 if !self.limit.allow(&machine.id) {
                     eprintln!("[crewd] vault: {} asked for too many leases", machine.name);
                     return Err("Too many leases at once".into());
@@ -395,7 +420,8 @@ impl VaultHost {
                 serde_json::to_value(lent?).map_err(|e| e.to_string())
             }
             (PeerKind::Handoff(token), "vault_handoff_take") => {
-                let key = self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).get(token).map(|h| h.public_key.clone());
+                let now = app_state::now_millis();
+                let key = self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).get(token).filter(|h| h.expires_at > now).map(|h| h.public_key.clone());
                 let key = key.ok_or("The handoff ran out")?;
                 if params["publicKey"].as_str() != Some(key.as_str()) {
                     return Err("The handoff is for another key".into());

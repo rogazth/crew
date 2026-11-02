@@ -2190,7 +2190,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "vault_move_open" => json(hosts.vault.move_open()),
-        "vault_handoff" => json(serde_json::json!({ "token": hosts.vault.handoff(parse(params)?)? })),
+        "vault_handoff" => json(serde_json::json!({ "token": hosts.vault.handoff(parse(params)?).await? })),
         "vault_move_pull" => json(serde_json::json!({ "grants": hosts.vault.move_pull(parse(params)?).await? })),
         "vault_move_empty" => {
             hosts.vault.move_empty()?;
@@ -3127,6 +3127,21 @@ mod tests {
         let _hello = peer.next().await;
         let other = rpc(&mut peer, 9, "connectors_list", Value::Null).await;
         assert!(other.error.unwrap().contains("not for this connection"));
+
+        // Revoking a machine stops what it already has open, at its next request.
+        let spare = rpc(&mut wa, 90, "vault_mint", serde_json::json!({ "name": "spare" })).await;
+        let spare: proto::VaultMinted = serde_json::from_value(spare.result.expect("minted")).unwrap();
+        let (mut open, _) = connect_async(a.url()).await.expect("connect");
+        open.send(Message::Text(serde_json::json!({ "auth": spare.token }).to_string().into())).await.unwrap();
+        let _hello = open.next().await;
+        assert!(rpc(&mut open, 91, "vault_config", Value::Null).await.error.is_none(), "known, it answers");
+        assert!(rpc(&mut wa, 92, "vault_revoke", serde_json::json!({ "machineId": spare.machine.id })).await.error.is_none());
+        open.send(Message::Text(serde_json::json!({ "id": 93, "method": "vault_config", "params": null }).to_string().into())).await.unwrap();
+        let mut answered = false;
+        while let Ok(Some(Ok(msg))) = tokio::time::timeout(Duration::from_secs(5), open.next()).await {
+            answered |= matches!(&msg, Message::Text(text) if text.contains("\"id\":93"));
+        }
+        assert!(!answered, "a revoked machine's connection answers nothing more");
 
         // The vault moves to B: B's key, A's handoff for it, B pulls.
         let key = rpc(&mut wb, 10, "vault_move_open", Value::Null).await.result.unwrap();

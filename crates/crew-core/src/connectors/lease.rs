@@ -85,6 +85,11 @@ pub fn machine_of(store: &Store, token: &str) -> Result<Option<VaultMachine>, St
     })
 }
 
+/// Whether a machine is still known here: revoking one ends what it has open.
+pub fn is_known(store: &Store, id: &str) -> Result<bool, String> {
+    store.with(|conn| conn.query_row("SELECT 1 FROM vault_machines WHERE id = ?1", [id], |_| Ok(())).optional().map(|row| row.is_some()))
+}
+
 pub fn leased(store: &Store, id: &str) -> Result<(), String> {
     store.with(|conn| conn.execute("UPDATE vault_machines SET last_lease = ?2 WHERE id = ?1", params![id, now_millis()]).map(drop))
 }

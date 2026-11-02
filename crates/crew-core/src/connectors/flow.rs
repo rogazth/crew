@@ -7,6 +7,7 @@
 //! rotating refresh token is never spent twice.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -64,6 +65,12 @@ pub struct Connectors {
     /// Set on a machine that is not the vault: it leases its tokens.
     leaser: Mutex<Option<Arc<dyn Leaser>>>,
     leases: Mutex<HashMap<String, Held>>,
+    /// Until when no call starts here: a move is taking the grants away, and
+    /// a refresh now could spend a token already sealed for the new vault.
+    moving_until: AtomicI64,
+    /// Held for reading across a call that may refresh; a move takes it to
+    /// wait for the ones running.
+    in_flight: tokio::sync::RwLock<()>,
     on_change: Arc<dyn Fn() + Send + Sync>,
     /// Its own: the bridge's calls come in on plain threads, and the window's
     /// on the daemon's runtime; both wait here for the network.
@@ -98,6 +105,8 @@ impl Connectors {
             gws: Mutex::new(Gws::default()),
             leaser: Mutex::new(None),
             leases: Mutex::new(HashMap::new()),
+            moving_until: AtomicI64::new(0),
+            in_flight: tokio::sync::RwLock::new(()),
             on_change,
             runtime: Some(runtime),
         }))
@@ -353,6 +362,38 @@ impl Connectors {
 
     /* ── Moving the vault ─────────────────────────────────────────────── */
 
+    /// A move begins: for `ttl` no new call starts here, and this waits up to
+    /// `drain` for the calls running. If they don't finish, calls start again
+    /// and the move is refused, with the old vault as it was.
+    pub async fn stop_calls(&self, ttl: Duration, drain: Duration) -> Result<(), String> {
+        let until = |ttl: Duration| now_millis() + ttl.as_millis() as i64;
+        self.moving_until.store(until(ttl), Ordering::SeqCst);
+        if tokio::time::timeout(drain, self.in_flight.write()).await.is_err() {
+            self.moving_until.store(0, Ordering::SeqCst);
+            return Err("Calls are still running on the vault; try the move again".into());
+        }
+        self.moving_until.store(until(ttl), Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn moving(&self) -> bool {
+        now_millis() < self.moving_until.load(Ordering::SeqCst)
+    }
+
+    /// Leave to start a call that may refresh. Asked again after the wait: a
+    /// call that got in behind a move's drain must not run during the move.
+    async fn enter(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, Unavailable> {
+        let refused = || Unavailable("The vault is moving; try again in a moment.".into());
+        if self.moving() {
+            return Err(refused());
+        }
+        let open = self.in_flight.read().await;
+        if self.moving() {
+            return Err(refused());
+        }
+        Ok(open)
+    }
+
     /// Everything a vault move carries: every grant, and the config whole.
     /// Only ever sealed (`seal.rs`) before it leaves the daemon.
     pub fn move_bundle(&self) -> Result<Vec<u8>, String> {
@@ -367,6 +408,7 @@ impl Connectors {
         let bundle: MoveBundle = serde_json::from_slice(bundle).map_err(|_| "The vault's grants didn't read".to_string())?;
         let count = bundle.grants.len();
         self.set_leaser(None);
+        self.moving_until.store(0, Ordering::SeqCst);
         super::lease::import(&self.store, &bundle.config)?;
         self.vault.replace(bundle.grants.clone())?;
         self.remotes.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -404,6 +446,7 @@ impl Connectors {
     /// stays, and every account asks for a sign-in.
     pub fn start_empty(&self) -> Result<(), String> {
         self.set_leaser(None);
+        self.moving_until.store(0, Ordering::SeqCst);
         self.vault.replace(HashMap::new())?;
         for account in super::list(&self.store)?.into_iter().flat_map(|c| c.accounts) {
             super::set_state(&self.store, &account.id, AccountState::Expired, Some("The vault moved; sign in again"))?;
@@ -660,6 +703,7 @@ impl Connectors {
             self.changed();
             return Ok(());
         }
+        let _open = self.enter().await.map_err(|Unavailable(line)| line)?;
         let listed = self
             .with_token(account_id, |remote, token| async move { remote.list_tools(&token).await })
             .await
@@ -686,6 +730,10 @@ impl Connectors {
 
     /// A tool call for a session. Failures are answers for the model.
     pub async fn call(&self, account_id: &str, name: &str, arguments: Value) -> Value {
+        let _open = match self.enter().await {
+            Ok(open) => open,
+            Err(Unavailable(line)) => return tool_error(&line),
+        };
         match super::tool_off(&self.store, account_id, name) {
             Ok(false) => {}
             Ok(true) => return tool_error(&format!("{name} is switched off for {} in Crew.", self.label(account_id))),
@@ -939,6 +987,44 @@ mod tests {
         machine.leases.lock().unwrap().get_mut(&id).unwrap().lease.expires_at = Some(now_millis() - 1);
         let answer = machine.block_on(machine.call(&id, "search", json!({ "text": "c" })));
         assert!(answer["content"][0]["text"].as_str().unwrap().contains("the vault on devbox is offline since"), "{answer}");
+    }
+
+    /// A move waits for the call running, refuses new ones while it lasts, and
+    /// a move that never finishes opens them again when its handoff runs out.
+    #[test]
+    fn a_move_waits_for_calls_and_refuses_new_ones_until_it_runs_out() {
+        let (c, _vault, _fake, id) = signed_in(Options::default());
+        c.block_on(async {
+            let running = c.call(&id, "search", json!({ "delayMs": 300 }));
+            let moving = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                c.stop_calls(Duration::from_millis(600), Duration::from_secs(5)).await
+            };
+            let (answer, stopped) = tokio::join!(running, moving);
+            assert!(answer["isError"] != true, "the call running finishes: {answer}");
+            stopped.unwrap();
+            let refused = c.call(&id, "search", json!({})).await;
+            assert!(refused["content"][0]["text"].as_str().unwrap().contains("The vault is moving"), "{refused}");
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let answer = c.call(&id, "search", json!({})).await;
+            assert!(answer["isError"] != true, "a handoff that ran out doesn't block calls: {answer}");
+        });
+    }
+
+    #[test]
+    fn a_move_that_calls_outlast_is_refused_and_calls_start_again() {
+        let (c, _vault, _fake, id) = signed_in(Options::default());
+        c.block_on(async {
+            let running = c.call(&id, "search", json!({ "delayMs": 400 }));
+            let moving = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                c.stop_calls(Duration::from_secs(60), Duration::from_millis(50)).await
+            };
+            let (_, stopped) = tokio::join!(running, moving);
+            assert!(stopped.unwrap_err().contains("still running"));
+            let answer = c.call(&id, "search", json!({})).await;
+            assert!(answer["isError"] != true, "{answer}");
+        });
     }
 
     fn token_requests(fake: &FakeServer) -> usize {
