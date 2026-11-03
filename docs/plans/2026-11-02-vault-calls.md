@@ -21,8 +21,7 @@ vault's machine". The code doesn't do that yet.
 
 ## The rule
 
-**No connection between machines carries an access or refresh token.** The
-only exception is the sealed move (see "Moving the vault").
+**Access and refresh tokens never cross between machines, without exception.**
 Every call that needs a token runs on the vault's `crewd`. A member holds its
 copy of the config and a machine token, and no credential of any service.
 
@@ -31,7 +30,7 @@ copy of the config and a machine token, and no credential of any service.
 | What | Before | After |
 | --- | --- | --- |
 | Access token | vault → member, in every lease | never |
-| Refresh token | sealed, in a vault move | sealed, in a vault move |
+| Refresh token | sealed, in a vault move | never: a change of vault signs every account in again |
 | Machine token (`machine-…`) | member → vault | the same; it can run tools, and it is no service's credential |
 | Config copy | vault → member | the same |
 | Tool arguments and answers | member ↔ service, over HTTPS | member ↔ vault over `ws://` inside Tailscale (WireGuard), then vault ↔ service over HTTPS |
@@ -87,8 +86,8 @@ before calls can run on it:
 
 1. **One slow call blocks the machine.** `serve_peer` awaits each request
    inline (`vault.rs:351`), so a five-minute call would hold up every other
-   call and `vault-config`. Each request gets its own task, with one writer
-   task owning the sink.
+   call and `vault-config`. Requests now run side by side on the connection, and
+   each call's work runs on the connectors' runtime.
 2. **Timeouts.** `Link::request` gives up after 15 s (`vault.rs:49`), while a
    remote call may take 300 s (`remote.rs:44`), `gws` 120 s (`gws.rs:39`), and
    the shim waits 320 s (`mcp.rs:29`). `vault_call` waits 315 s, so the answer
@@ -106,20 +105,7 @@ before calls can run on it:
    connects (`vault.rs:314`, `lib.rs:995`), so a revoked machine's open socket
    keeps working. Each request looks the machine up again; a gone machine's
    connection is closed. This is what makes the new model's revocation real.
-6. **A failed move stopped the vault for good.** `peer_call` refused while
-   `handoffs` wasn't empty, and an expired handoff was removed only when another
-   was opened. That contradicted "a move that fails leaves the old vault as it
-   was", and would have blocked every call. The gate in 7 replaces the check,
-   and an expired handoff can't be taken.
-7. **A move can race a refresh.** Nothing stops the old vault's calls while the
-   grants are sealed (`flow.rs:358`). A refresh after sealing spends the rotated
-   token, and the new vault's refresh can then trigger reuse detection and
-   revoke the grant. With all calls on the vault this gets more likely, so
-   `Connectors` gets a gate, set by `vault_handoff`: new calls answer "the vault
-   is moving; try again", the move waits up to 30 s for calls in flight and is
-   refused if they don't finish, and the gate opens when the handoff expires or
-   a move lands here. This covers the vault's own sessions too, not only peers.
-8. **The rate limit counts calls now.** `LEASES_PER_MINUTE` (120,
+6. **The rate limit counts calls now.** `LEASES_PER_MINUTE` (120,
    `vault.rs:47`) would throttle normal use. It becomes 600 calls a minute and
    32 in flight per machine, answered with a line the model can read. It is
    there for runaway loops. The vault's own sessions don't pass through it.
@@ -134,8 +120,8 @@ answers. `last_lease` becomes `last_call`.
 - **No margin while the vault is away.** A member's connectors stop at once,
   instead of after up to one token's life. With this Mac as the vault, remotes
   lose Crew's connectors the moment it sleeps. The default stays `local`, but
-  the vault sheet must say this plainly and suggest an always-on remote for
-  anyone who wants connectors with the Mac off.
+  the vault sheet says this plainly under the choice ("Other machines need this
+  Mac awake"). It doesn't suggest an always-on remote.
 - **Latency and load.** One more tailnet hop per call, and the vault carries
   every remote call and `gws` process.
 - **A stolen machine token still runs tools,** on any account, until it is
@@ -143,22 +129,33 @@ answers. `last_lease` becomes `last_call`.
   for that machine's workspaces" is done. The gains: it can't get a token out,
   tool switches bind it, and revoking stops it at once.
 
-## Moving the vault
+## Changing the vault
 
-The sealed move stays. It is the one case where grants still cross between
-machines. It happens only when the user asks, it is sealed end to end to a key
-made for that move, on top of Tailscale, the old vault deletes its copy, and the
-new vault refreshes every grant at once. On a service that doesn't rotate
-refresh tokens, nothing retires the travelled copy, but only the new vault holds
-it. Removing the move ("start empty" only) would leave the rule without an
-exception, at the cost of one sign-in per account on every move. That can still
-be chosen later: `seal.rs`, the handoff RPCs and their tests would go away.
+No token moves (decided by the user 2026-11-02; a sealed move was built first
+and removed, with `seal.rs`, the handoff RPCs and their dependencies). The
+privacy policy can say "no sign-in tokens travel" between machines, and it holds.
+
+The vault sheet is one choice of machine, and Change confirms in one line that
+every account has to sign in again there. Then the window starts the new vault from the old one's config, which
+holds no grant (`vault_config`, `vault_start`), and the old one gives its grants
+back to their services and deletes them (`vault_retire`).
+
+- **The new vault goes first,** so a failure there leaves the old one as it was.
+- **The old vault revokes, then deletes.** Deleting alone would leave a live
+  grant at the service. A refresh running at that moment finishes first, and
+  can't save a grant after it.
+- **An old vault that is off** is remembered in `integrations:vault-retire`, and
+  deletes its grants without revoking when it comes back. By then an account may
+  have signed in on the new vault, and Google revokes a whole account's access to
+  a client, so revoking could sign that out too. Until it comes back its grants
+  sit on that machine, unused, and they stay valid at the service until they are
+  revoked there.
 
 ## Order of work
 
 Each step is its own commit, with tests passing. The workspaces change went in first.
 
-1. **Connection fixes** (1, 5, 6, 7 above). No change in what crosses.
+1. **Connection fixes** (1 and 5 above). No change in what crosses.
 2. **Calls on the vault.** `vault_call`, `vault_tools_refresh`, `VaultLink`,
    timeouts, the size cap, a lost call's line and the new rate limit; lease
    code deleted.
@@ -182,15 +179,14 @@ In the two-daemon test (`crewd/src/lib.rs:3071`) and `flow.rs`, replacing
 - A session on B calls a connector and a Google app. The service and the fake
   `gws` are reached only from A, and `gws` never runs on B.
 - `vault_lease` answers "not for this connection". No frame sent to a peer,
-  across a whole run, contains the grant's access or refresh token (a move's
-  sealed bundle is checked by the existing seal test).
+  across a whole run, contains the grant's access or refresh token.
 - A tool switched off on A is refused for B, even with B's copy still stale.
 - A slow call doesn't delay a second call or `vault-config`.
 - A revoked machine's open connection stops working on its next request.
 - The vault offline: the "offline since" line, nothing retried.
 - The link cut mid-call: the "may have run" line, and the fake server saw one
   call.
-- An expired handoff doesn't block calls, and a move waits for a call in flight.
+- A changed vault: the new one holds no grant and its accounts ask for a sign-in, the old one revoked and deleted, and an account signs in again and calls.
 - An answer over the cap is a tool error, and the link stays up.
 - The vault's log for a call holds neither its arguments nor its answer.
 
@@ -204,11 +200,16 @@ Built, and the tests above pass, with these limits:
   through its tailnet listener, a member on falcon-heavy in a folder of its own
   beside its real `crewd`, the connector's real stdio shim, and the fake service
   on this Mac's loopback, which falcon-heavy can't reach. Calls, switches, the
-  vault dying mid-call, coming back, revoking and the sealed move all behaved as
+  vault dying mid-call, coming back, revoking and changing the vault all behaved as
   above, and neither token was on falcon-heavy's disk or logs. Its process
   memory couldn't be scanned (`ptrace_scope` is 1).
-- **Not tried yet:** a real service (Notion, Gmail), which needs a sign-in in
-  the app, and the page itself with several machines.
+- **Tried with a real service:** Sentry, from a session's shim on falcon-heavy
+  through a vault on this Mac: the vault refreshed an expired token, the call
+  answered, a switch on the vault refused it, and no token reached falcon-heavy.
+- **Not tried yet:** the window's side of changing the vault (`changeVault`, the
+  retire list). It has only been type-checked; its RPCs were run one by one in
+  the trial and the tests. A Google app called from another machine has only run
+  against a fake `gws`.
 - One stdio shim answers its lines in order, as it did before this change, so
   a slow call holds up later calls to the same server in one session. Other
   sessions and servers aren't affected.

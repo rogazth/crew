@@ -26,8 +26,8 @@ the user picks. Update the status table at the bottom as each phase lands.
   Crew's grants, and every other machine sends it its tool calls. A rotating
   refresh token can have one holder only: a copy that refreshes invalidates
   the others, and reuse detection can revoke the whole grant (RFC 9700
-  §4.14.2). No token leaves the vault for another machine
-  (`2026-11-02-vault-calls.md`).
+  §4.14.2). No token ever leaves the vault for another machine, not even when
+  the vault changes (`2026-11-02-vault-calls.md`).
 - **Accounts, each for some workspaces,** are new. The old plan had one
   connection per connector and a per-workspace switch. A connector has no
   switch of its own (2026-10-28): a workspace no account of it is for doesn't
@@ -35,7 +35,8 @@ the user picks. Update the status table at the bottom as each phase lands.
 - **The sign-in redirect is intercepted, not routed.** The old plan sent the
   redirect through `remote-proxy.ts` to the machine's loopback. Now Crew's
   browser catches the redirect and hands the URL to the daemon that waits for
-  it. This works the same way from a phone.
+  it. This works the same way from a phone. Google's sign-in alone goes to the
+  person's browser and a short-lived listener (see Signing in).
 - **Native mode is gone as a fallback.** A server that refuses Crew's client
   (Figma) stays a provider server, signed in through its CLI.
 
@@ -111,9 +112,10 @@ points to the provider server.
    service's page. Crew sees a code and a token, never a password.
 2. **One vault holds Crew's grants.** The user picks the machine: this Mac
    by default, or any remote. Only the vault holds tokens, refreshes them and
-   calls services with them. Every other machine sends it its tool calls. The
-   only time grants cross between machines is a move the user asked for,
-   sealed. A provider server's credential stays in its
+   calls services with them. Every other machine sends it its tool calls.
+   Access and refresh tokens never cross between machines, without exception:
+   changing the vault signs every account in again. A provider server's
+   credential stays in its
    CLI's store on each machine: Crew drives that sign-in but never copies the
    credential.
 3. **Nothing goes in the person's CLI configs** unless the user picks an
@@ -181,8 +183,7 @@ does not: a machine spawns from its copy.
   brings the daemon's own (`{auth}` on the vault's socket). Such a connection
   answers `vault_call`, `vault_tools_refresh` and `vault_config` and hears
   `vault-config` when the config changes; nothing else. Its token is checked
-  at each request, so revoking a machine stops what it has open. A handoff
-  token answers only `vault_handoff_take` and `vault_handoff_done`.
+  at each request, so revoking a machine stops what it has open.
 - **A call.** A machine sends `vault_call {accountId, tool, arguments}` and
   gets the MCP result. The vault runs it with its own token, so its tool
   switches and scopes decide. Requests on a connection run side by side, at
@@ -223,30 +224,28 @@ does not: a machine spawns from its copy.
   it over (`vault_join {address, token}`). The machine keeps it in the
   keychain on a Mac, or in a 0600 file on Linux. Removing the machine
   revokes the token.
-- **Moving the vault** moves the grants, sealed end to end (picked
-  2026-10-28; "start empty" is the other way, and the only one when the old
-  vault is offline, after which every account asks for a sign-in):
-  1. The new vault makes an ephemeral X25519 key pair and hands the window
-     its public key.
-  2. The window asks the old vault for a handoff: a token that works once,
-     for two minutes, for that public key only. The old vault refuses new
-     calls and waits up to 30 s for the ones running, so no refresh spends a
-     token after it is sealed; if they outlast that, the move is refused.
-  3. The new vault pulls with the token. The old vault seals the grants to
-     the public key (X25519, HKDF-SHA256, ChaCha20-Poly1305) and sends them,
-     over Tailscale besides. The window carries the token and the public key,
-     never a grant.
-  4. The new vault writes them to its storage and confirms; only then does
-     the old vault delete its copy and start using the new one. A move that
-     fails before the confirmation leaves the old vault as it was, and its
-     calls start again when the handoff runs out.
-  5. The new vault refreshes every grant at once, so a service that rotates
-     refresh tokens retires the copy that travelled. Then the window points
-     every machine at the new vault and mints them new tokens.
+- **Changing the vault** moves no token (decided 2026-11-02; the sealed move
+  built on 2026-10-28 is gone). The sheet confirms first that every account
+  has to sign in again on the new machine. Then the window:
+  1. Reads the old vault's config, if it is online (`vault_config`). It holds
+     no grant.
+  2. Starts the new vault from it (`vault_start`), with no grant and every
+     account asking for a sign-in. A machine holding sign-ins of its own gives
+     them back to their services first. If this fails, the old vault has lost
+     nothing.
+  3. Has the old vault give its grants back to their services (RFC 7009) and
+     delete them, and forget its machines (`vault_retire`).
+  4. Joins every other machine to the new vault.
+
+  An old vault that is offline, or fails step 3, is remembered, and when it
+  comes back it deletes its grants without giving them back: an account may
+  have signed in on the new vault by then, and Google revokes a whole account's
+  access to a client, which would sign that out too. Until it comes back, its
+  grants stay on that machine, unused.
 
 ### Signing in
 
-Every sign-in opens in a sign-in window of Crew's browser, not a tab: a tab
+Every sign-in but Google's opens in a sign-in window of Crew's browser, not a tab: a tab
 sits in a workspace under the page, agents can drive tabs, and a remote
 workspace's tabs have their loopback rewritten. The window uses the shared
 partition (incognito for another account), so consent is usually one click,
@@ -257,6 +256,33 @@ reaches a socket), cancels it, closes itself, and sends the URL to the daemon
 that waits for it (`electron/browser/sign-in-window.ts`, `sign-in-flows.ts`). A code is useless
 without its PKCE verifier, which never leaves that daemon. Nothing has to
 listen on the redirect URI.
+
+**Google's sign-in runs in the person's default browser.** Google refuses an
+[embedded user agent](https://developers.google.com/identity/protocols/oauth2/native-app),
+and a window that passes for Firefox is turned away too. When the auth URL is
+`https://accounts.google.com` and the redirect is Crew's own URI
+(`opensInSystemBrowser`, checked by main on the request it validated), there is
+no window: main listens on `127.0.0.1:17899`, on loopback alone, opens the page
+with `openExternal`, and hands back the same `caught` URL, so `vault_callback`
+and the daemon don't change (`electron/browser/sign-in-loopback.ts`).
+
+- One listener serves every pending flow, each by its state, and the port closes
+  with the last of them. A second Google app started meanwhile doesn't cancel
+  the first.
+- Only a GET with Host `127.0.0.1:17899`, on the redirect's path, with a pending
+  flow's state, ends a flow. Anything else gets a 404 and the wait goes on: every
+  page the person has open can reach the port, so unlike in the window a wrong
+  state fails nothing. The code is never logged.
+- The port taken, the browser not opening, or 15 minutes passing (the daemon's
+  own limit) fail the flow with why. Cancel, Crew's window reloading or closing,
+  and a second start of the same state end it as closed.
+- The connect sheet and the account's row say "Continue in your browser", with a
+  way to cancel.
+- Agents can't drive that browser. They could only reach the port, and a state
+  they don't know gets them a 404.
+- Another Google account needs no incognito: `prompt=select_account` shows
+  Google's own picker, and only "Continue as" or signing an account in again
+  sends a `login_hint`.
 
 - **A connector account.** The vault registers
   `http://127.0.0.1:<port>/callback` and starts the flow. The tab hands the
@@ -311,9 +337,10 @@ listen on the redirect URI.
 Settings › Integrations, in the Tools group.
 
 - **Header:** the vault ("Credentials on devbox ●"), its state, the machines
-  using it, and Change. Choosing a vault opens one sheet that says what it
-  costs: who can read the file, and that with this Mac as the vault the remotes
-  lose Crew's connectors as soon as the Mac sleeps or shuts down.
+  using it, and Change. The sheet picks one machine, and Change stays off until
+  another is picked. A line under the choice says what it costs: who can read
+  the file there, or that with this Mac as the vault the remotes lose Crew's
+  connectors as soon as it sleeps. Change then confirms in one line.
 - **Crew:** each connector with its accounts (label, state, how many
   workspaces it's for), Connect, Add account, and a registry search. Add
   account asks for its workspaces first, all picked; an account's ⋯ →
@@ -433,7 +460,7 @@ phase that builds the part.
 - **Phase 2.**
   - `crewd` resolves the accounts a shim may call from the session's token,
     never from the `--mcp-connector` argument, which the session controls.
-  - Vault RPCs (connect, callback, mint, move) take the user's token only,
+  - Vault RPCs (connect, callback, mint, start, retire) take the user's token only,
     never a session's.
   - Discovery fetches HTTPS only, refuses private and loopback addresses,
     checks that the resource metadata names the server's own origin, and
@@ -511,7 +538,7 @@ accounts and their workspaces, Connect,
 MCP server for tests and e2e.
 
 **3. Remote vault and calls on it.** Scoped tokens on `crewd serve`, calls
-sent to the vault, the Mac's listener, joining, moving the vault, the Linux
+sent to the vault, the Mac's listener, joining, changing the vault, the Linux
 file, and the offline states.
 
 **4. Password managers** as a kind (`2026-10-15-password-providers.md`).
@@ -543,7 +570,7 @@ needs its own decision against rule 2.
 | Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
 | Vault on this Mac: a change of workspaces reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
 | Vault on this Mac: a change of workspaces reaching opencode's shared server (per folder, next turn) | built |
-| Remote vault: scoped tokens, join, move, Linux file | built (2026-10-28): machine tokens kept hashed, revocable, rate limited and logged (`connectors/machines.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the sealed move from the window (`integrations/vault.ts`) |
+| Remote vault: scoped tokens, join, change of vault, Linux file | built (2026-10-28; the sealed move replaced 2026-11-02): machine tokens kept hashed, revocable, rate limited and logged (`connectors/machines.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the change from the window (`integrations/vault.ts`) |
 | Remote vault: calls run on the vault, no token leaves it (`2026-11-02-vault-calls.md`) | built (2026-11-02): replaces leases; tried between this Mac and falcon-heavy over Tailscale with the fake service, not yet with a real one |
 | Remote vault: only over Tailscale; a machine reached over SSH says "Needs Tailscale" and is left out of joins and moves | built (2026-10-28) |
 | Remote vault: a machine's calls limited to the accounts for its workspaces | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
