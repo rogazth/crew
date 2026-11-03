@@ -84,16 +84,17 @@ test("B1: a tab opened, read, filled, clicked and captured through the relay", a
   });
 });
 
-// The page and a cross-origin iframe in it see Google Chrome, the way the
-// requests name it, and the agent still reads the console without the
-// debugger's Runtime domain, which pages can detect.
-test("B2: a page and its cross-origin iframe see Google Chrome, and the console still reaches the agent", async (t) => {
+// The page and a cross-origin iframe in it see the browser under its own name,
+// because Cloudflare's Turnstile fails one passing for Chrome, and the agent
+// still reads the console without the debugger's Runtime domain, which pages
+// can detect.
+test("B2: a page and its cross-origin iframe see the browser's own name, and the console still reaches the agent", async (t) => {
   const frame = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(`<!doctype html><script>
       parent.postMessage({
         brands: navigator.userAgentData.brands.map((b) => b.brand),
-        chrome: typeof window.chrome?.loadTimes,
+        agent: navigator.userAgent,
       }, "*");
       setTimeout(() => console.log("frame-log"), 300);
     </script>`);
@@ -128,15 +129,12 @@ test("B2: a page and its cross-origin iframe see Google Chrome, and the console 
   const top = JSON.parse(
     text(
       await tool("browser_evaluate", {
-        expression: "({ brands: navigator.userAgentData.brands.map((b) => b.brand), chrome: typeof window.chrome?.loadTimes })",
+        expression: "({ brands: navigator.userAgentData.brands.map((b) => b.brand), agent: navigator.userAgent })",
       }),
     ),
   );
-  assert.ok(top.brands.includes("Google Chrome"), JSON.stringify(top));
-  assert.equal(top.chrome, "function");
-  // navigator.webdriver is not checked: Playwright starts Electron with
-  // --remote-debugging-port, which alone makes it true. The app as it ships
-  // has it false, with the agent's debugger attached too.
+  assert.ok(!top.brands.includes("Google Chrome"), JSON.stringify(top));
+  assert.match(top.agent, /Electron\//);
 
   const inFrame = await waitFor(
     async () => {
@@ -145,8 +143,8 @@ test("B2: a page and its cross-origin iframe see Google Chrome, and the console 
     },
     { timeout: 15_000, message: "the iframe reports what it sees" },
   );
-  assert.ok(inFrame.brands.includes("Google Chrome"), JSON.stringify(inFrame));
-  assert.equal(inFrame.chrome, "function");
+  assert.ok(!inFrame.brands.includes("Google Chrome"), JSON.stringify(inFrame));
+  assert.match(inFrame.agent, /Electron\//);
 
   await tool("browser_evaluate", {
     expression: "console.log('top-log'); console.warn('top-warn'); setTimeout(() => { throw new Error('top-uncaught'); }, 0); 1",

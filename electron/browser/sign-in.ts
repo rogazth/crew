@@ -1,12 +1,12 @@
 /**
  * Installed in the page's own world before its scripts run, like the close
  * guard. On Google's sign-in the requests already go out as Firefox's
- * (identity.ts); this makes the page's scripts agree, since Chrome's client
+ * (identity.ts); this makes the page's scripts agree, since Chromium's client
  * hints and `window.chrome` would give the disguise away and the sign-in
  * would refuse the browser.
  *
  * `agent` is Firefox's user agent. A page reached by a redirect, or a tab's
- * first load, commits with Chrome's in `navigator.userAgent` while its
+ * first load, commits with the browser's own in `navigator.userAgent` while its
  * requests say Firefox, and that mismatch is refused too.
  *
  * The preload hands this function to `executeInMainWorld`, which copies its

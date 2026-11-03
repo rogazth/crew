@@ -44,7 +44,7 @@ export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreloa
   prefs.partition = partition;
   prefs.nodeIntegration = false;
   // Despite the name, no Node: the sandbox keeps it out. It runs the preload in
-  // every iframe too, so a bot check inside one sees the same Chrome as the page.
+  // every iframe too, so a Google sign-in inside one matches its requests.
   prefs.nodeIntegrationInSubFrames = true;
   prefs.contextIsolation = true;
   prefs.sandbox = true;

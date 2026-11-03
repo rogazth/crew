@@ -36,7 +36,7 @@ import {
 import { openExternal } from "../external";
 import { forgetHost, trackDownload } from "./downloads";
 import { followFile, serveFiles } from "./files";
-import { chromeUserAgent, firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
+import { firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
 import { ask, dropHost, dropPrompts, type PromptTarget } from "./prompts";
 import { relayBypassRules, startRelay, type RemoteRelay, type Upstream } from "./remote-proxy";
 import {
@@ -203,13 +203,11 @@ export function pageSession(partition: string): Session {
   const ses = session.fromPartition(partition);
   if (partition === FILES_PARTITION) serveFiles(ses);
   else routeToMachines(ses);
-  ses.setUserAgent(chromeUserAgent(ses.getUserAgent()));
-  const chrome = chromeVersion();
   // The only onBeforeSendHeaders on a page session: Electron keeps one listener per event.
   ses.webRequest.onBeforeSendHeaders((details, callback) =>
     callback({
       requestHeaders: machineHeaders(
-        outgoingHeaders(details.requestHeaders, details.url, chrome),
+        outgoingHeaders(details.requestHeaders, details.url),
         details.url,
         machineOf(details.webContentsId),
       ),
@@ -239,12 +237,6 @@ export function pageSession(partition: string): Session {
 }
 
 let certificatesGuarded = false;
-
-/** Chromium's version as Chrome reports it: the major alone in `sec-ch-ua`, all four parts in the full list. */
-function chromeVersion(): { major: string; full: string } {
-  const full = process.versions.chrome ?? "";
-  return { major: full.split(".")[0] ?? "", full };
-}
 
 /**
  * Site decisions the person asked to keep, as the window last sent them; the
@@ -370,7 +362,7 @@ function openApp(contents: WebContents, url: string): void {
 
 /**
  * Google's sign-in turns away embedded Chromium, so on its pages a page or a
- * popup goes by Firefox's name, and by Chrome's again once it leaves. Most
+ * popup goes by Firefox's name, and by its own again once it leaves. Most
  * arrive there by a redirect, from the site that asked for the sign-in.
  *
  * Never set the agent while a redirect is being handled: Chromium reloads a
@@ -657,7 +649,7 @@ function windowOpen(
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
-        // The preload in every iframe as well; the sandbox still keeps Node out.
+        // The preload in every iframe as well, for a sign-in inside one; the sandbox still keeps Node out.
         nodeIntegrationInSubFrames: true,
         webSecurity: true,
       },

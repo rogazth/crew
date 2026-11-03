@@ -806,7 +806,7 @@ describe("hung pages", () => {
 });
 
 describe("Google sign-in", () => {
-  it("goes by Firefox's name on the sign-in page and by Chrome's elsewhere", () => {
+  it("goes by Firefox's name on the sign-in page and by its own elsewhere", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach() as FakeContents & Record<string, unknown>;
     let agent = "Chrome";
@@ -825,13 +825,12 @@ describe("Google sign-in", () => {
     expect(agent).toBe("Chrome");
   });
 
-  it("names Chrome in every page request's client hints", () => {
+  it("leaves a page request's client hints as they are", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const callback = vi.fn();
-    electron.headers?.({ url: "https://github.com/", requestHeaders: { "sec-ch-ua": '"Chromium";v="152"' } }, callback);
-    expect(callback.mock.calls[0]?.[0]).toMatchObject({
-      requestHeaders: { "sec-ch-ua": expect.stringContaining('"Google Chrome"') },
-    });
+    const requestHeaders = { "sec-ch-ua": '"Chromium";v="152"' };
+    electron.headers?.({ url: "https://github.com/", requestHeaders }, callback);
+    expect(callback.mock.calls[0]?.[0]).toEqual({ requestHeaders });
   });
 });
 
