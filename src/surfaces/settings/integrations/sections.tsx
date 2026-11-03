@@ -217,13 +217,13 @@ export function Installed() {
     if (!s.error)
       return (
         <section className="flex flex-col gap-2.5">
-          <SectionTitle title="Installed" />
+          <SectionTitle title="Installed" action={<VaultLine />} />
           <Empty />
         </section>
       );
     return (
       <section className="flex flex-col gap-2.5">
-        <SectionTitle title="Installed" />
+        <SectionTitle title="Installed" action={<VaultLine />} />
         <p className="px-1 text-[12.5px] text-danger">Couldn’t read the connectors: {s.error}</p>
       </section>
     );

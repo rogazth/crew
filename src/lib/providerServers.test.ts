@@ -111,7 +111,7 @@ describe("rowStatus", () => {
 
   it("sends a claude.ai connector to claude.ai", () => {
     const notion = server("claude", "claude.ai Notion", "needs_auth", { scope: "claude.ai", transport: "claude.ai", canSignIn: false });
-    expect(rowStatus(notion, null)).toMatchObject({ text: "Sign in required · Managed at claude.ai", fix: "claude.ai" });
+    expect(rowStatus(notion, null)).toMatchObject({ text: "Sign in required", fix: "claude.ai" });
   });
 
   it("says what failed and offers a new try", () => {

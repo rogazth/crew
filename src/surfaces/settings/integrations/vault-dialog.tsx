@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import { Button, PANEL, ROW } from "../../../chrome/kit";
 import { LOCAL } from "../../../lib/client/route";
+import { openSettingsSection, requestAddRemote } from "../../../lib/remoteUi";
+import { RowAction } from "./bits";
 import { Dialog, DialogFooter, DialogHeader } from "./dialog";
 import { plural, ui } from "./lib";
 import { reload } from "./store";
@@ -18,11 +20,10 @@ function standing(machine: Machine, vaultEnv: string): string {
   const status = machine.status;
   if (machine.envId === vaultEnv) {
     const using = status?.machines.length ?? 0;
-    const grants = status?.grants ?? 0;
-    return [grants > 0 ? plural(grants, "account") : "No accounts", using > 0 ? `${plural(using, "machine")} connected` : null].filter(Boolean).join(" · ");
+    return using > 0 ? `${plural(using, "machine")} connected` : "";
   }
   if (!status) return "Can’t be reached";
-  if (status.holds) return status.grants > 0 ? `Has ${plural(status.grants, "other account")}` : "Not connected";
+  if (status.holds) return "Not connected";
   return status.online ? `Connected to ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
 }
 
@@ -38,6 +39,7 @@ function costOf(to: Machine, from: Machine | undefined): string {
 /** A machine as the box and its list show it: its mark, its name, where it stands. */
 function MachineLine({ machine, vaultEnv }: { machine: Machine; vaultEnv: string }) {
   const Icon = machine.envId === LOCAL ? LaptopIcon : ServerIcon;
+  const line = needsTailscale(machine.envId) ? "Needs Tailscale" : standing(machine, vaultEnv);
   return (
     <>
       <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface shadow-[0_0_0_1px_var(--color-hairline)]">
@@ -45,7 +47,7 @@ function MachineLine({ machine, vaultEnv }: { machine: Machine; vaultEnv: string
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate font-medium">{machine.envId === LOCAL ? "This Mac" : machine.name}</span>
-        <span className="truncate text-[12px] text-text-muted">{needsTailscale(machine.envId) ? "Needs Tailscale" : standing(machine, vaultEnv)}</span>
+        {line && <span className="truncate text-[12px] text-text-muted">{line}</span>}
       </span>
     </>
   );
@@ -107,6 +109,8 @@ export function VaultDialog() {
       },
     });
   };
+  // The only machine there is: nothing to pick or change, only one to add.
+  const alone = v.machines.length === 1 ? v.machines[0] : undefined;
   return (
     <Dialog label="Vault">
       <DialogHeader
@@ -119,16 +123,33 @@ export function VaultDialog() {
         subtitle="Stores your accounts. Your other machines use it."
       />
       <div className="px-4 pb-5">
-        <MachinePicker machines={v.machines} vaultEnv={v.vaultEnv} value={selected} onChange={setPicked} />
+        {alone ? (
+          <div className="flex flex-col items-start gap-1.5">
+            <div className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-card px-3 py-2">
+              <MachineLine machine={alone} vaultEnv={v.vaultEnv} />
+            </div>
+            <RowAction
+              label="Add a machine"
+              onClick={() => {
+                requestAddRemote();
+                openSettingsSection("environments");
+              }}
+            />
+          </div>
+        ) : (
+          <MachinePicker machines={v.machines} vaultEnv={v.vaultEnv} value={selected} onChange={setPicked} />
+        )}
       </div>
-      <DialogFooter start={target?.envId === LOCAL && <span className="min-w-0 truncate text-[12px] text-text-muted">Other machines need this Mac awake</span>}>
-        <Button variant="ghost" onClick={ui.close}>
-          Cancel
-        </Button>
-        <Button variant="primary" disabled={!target || !!v.busy} onClick={change}>
-          Change
-        </Button>
-      </DialogFooter>
+      {!alone && (
+        <DialogFooter start={target?.envId === LOCAL && <span className="min-w-0 truncate text-[12px] text-text-muted">Other machines need this Mac awake</span>}>
+          <Button variant="ghost" onClick={ui.close}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={!target || !!v.busy} onClick={change}>
+            Change
+          </Button>
+        </DialogFooter>
+      )}
       <ConfirmDialog confirm={confirm} onAsk={setConfirm} onClose={() => setConfirm(null)} />
     </Dialog>
   );

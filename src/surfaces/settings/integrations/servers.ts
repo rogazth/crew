@@ -145,7 +145,7 @@ export function rowStatus(server: Server, busy: Busy): { text: string; working: 
   if (busy === "starting" || server.state === "pending") return { text: "Starting…", working: true, problem: false, fix: null };
   if (server.state === "needs_auth") {
     if (server.canSignIn) return { text: "Sign in required", working: false, problem: true, fix: "sign-in" };
-    if (managedAtClaudeAi(server)) return { text: "Sign in required · Managed at claude.ai", working: false, problem: true, fix: "claude.ai" };
+    if (managedAtClaudeAi(server)) return { text: "Sign in required", working: false, problem: true, fix: "claude.ai" };
     return { text: `Sign in required · Sign in from ${cli}`, working: false, problem: true, fix: null };
   }
   if (server.state === "failed")

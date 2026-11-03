@@ -67,9 +67,10 @@ test("an account reaches only the workspaces it's for", async () => {
   await page.getByRole("button", { name: "Add an account" }).click();
 
   const add = page.getByRole("dialog", { name: "Add an account to Fake" });
-  const all = add.getByRole("checkbox", { name: /^All workspaces/ });
+  const all = add.getByRole("radio", { name: /^All workspaces/ });
   assert.equal(await all.getAttribute("aria-checked"), "true", "every workspace is picked to begin with");
-  await all.click();
+  assert.equal(await add.getByRole("checkbox").count(), 0, "all of them lists none");
+  await add.getByRole("radio", { name: /^Specific workspaces/ }).click();
   assert.equal(await add.getByRole("button", { name: "Sign in" }).isDisabled(), true, "no workspace, no sign-in");
   await add.getByRole("checkbox", { name: /^site/ }).click();
   await add.getByRole("button", { name: "Sign in" }).click();
@@ -93,7 +94,7 @@ test("an account reaches only the workspaces it's for", async () => {
   const edit = page.getByRole("dialog", { name: `Workspaces for ${account.label}` });
   assert.equal(await edit.getByRole("checkbox", { name: /^site/ }).getAttribute("aria-checked"), "true");
   assert.equal(await edit.getByRole("checkbox", { name: /^app/ }).getAttribute("aria-checked"), "false");
-  await edit.getByRole("checkbox", { name: /^All workspaces/ }).click();
+  await edit.getByRole("radio", { name: /^All workspaces/ }).click();
   await edit.getByRole("button", { name: "Save" }).click();
   await waitFor(async () => (await accountOfFake())?.workspaces === null, { message: "it's for every workspace" });
   await accounts.getByText("All workspaces", { exact: true }).waitFor();
