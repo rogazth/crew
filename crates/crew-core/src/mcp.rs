@@ -21,6 +21,12 @@ const WAIT_SLACK_S: u64 = 10;
 /// `_meta` of every `tools/call`. Its MCP server is one per folder, so this is
 /// the only thing that says which session is calling.
 const OPENCODE_SESSION_META: &str = "ai.opencode/sessionID";
+/// Marks a `tools/*` call as one for a connector's server, by its name.
+pub const CONNECTOR_PARAM: &str = "_crewConnector";
+/// The workspace opencode's shared server serves, beside the name.
+pub const CONNECTOR_WORKSPACE_PARAM: &str = "_crewWorkspace";
+/// A remote tool may take a while; the daemon's own budget for one is less.
+const CONNECTOR_TIMEOUT: Duration = Duration::from_secs(320);
 /// The newest revision this shim knows; a client that asks for an older one gets its own back.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -109,6 +115,9 @@ fn unreachable_error(error: &std::io::Error) -> String {
 /// wait `timeout_s` and caps it at 60 itself. `delegate` with `wait` is
 /// the one longer wait. Never less than the default.
 fn call_timeout(method: &str, params: &Value) -> Duration {
+    if params.get(CONNECTOR_PARAM).is_some() {
+        return CONNECTOR_TIMEOUT;
+    }
     if method != "tools/call" {
         return CALL_TIMEOUT;
     }
@@ -163,6 +172,25 @@ pub fn serve_stdio() -> ExitCode {
 /// The same server over a link the caller built: the `crew` CLI outside a
 /// session speaks as the user, from `daemon.json`.
 pub fn serve_stdio_with(link: &Link) -> ExitCode {
+    serve_lines(|method, params| handle(link, method, params))
+}
+
+/// `crewd --mcp-connector <name>`: one of Crew's connectors as a stdio
+/// server. It holds no token of the service: every call goes to the daemon
+/// with the session's own token, and the daemon works out which account
+/// `name` means for that session. `workspace` is for opencode's shared
+/// server, whose token names no session until a call does.
+pub fn serve_connector_stdio(name: &str, workspace: Option<String>) -> ExitCode {
+    match Link::from_env() {
+        Ok(link) => serve_lines(|method, params| handle_connector(&link, name, workspace.as_deref(), method, params)),
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn serve_lines(mut handle: impl FnMut(&str, Value) -> Result<Value, (i64, String)>) -> ExitCode {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -179,7 +207,7 @@ pub fn serve_stdio_with(link: &Link) -> ExitCode {
         };
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
         let params = message.get("params").cloned().unwrap_or(Value::Null);
-        let body = match handle(link, method, params) {
+        let body = match handle(method, params) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err((code, text)) => {
                 json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": text } })
@@ -192,6 +220,57 @@ pub fn serve_stdio_with(link: &Link) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// A connector's server: the handshake here, `tools/*` from the daemon,
+/// marked with the server's name so the daemon answers for that connector
+/// and not for Crew's own tools.
+fn handle_connector(
+    link: &Link,
+    name: &str,
+    workspace: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<Value, (i64, String)> {
+    let mut params = match params {
+        Value::Object(map) => Value::Object(map),
+        _ => json!({}),
+    };
+    params[CONNECTOR_PARAM] = json!(name);
+    if let Some(workspace) = workspace {
+        params[CONNECTOR_WORKSPACE_PARAM] = json!(workspace);
+    }
+    match method {
+        "initialize" => {
+            let requested = params.get("protocolVersion").and_then(Value::as_str);
+            // The name alone does not say where the server comes from, and
+            // the model is asked which account and app its tools act for.
+            Ok(json!({
+                "protocolVersion": requested.unwrap_or(PROTOCOL_VERSION),
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": name, "version": env!("CARGO_PKG_VERSION") },
+                "instructions": connector_instructions(name),
+            }))
+        }
+        "ping" => Ok(json!({})),
+        "tools/list" => link.call(method, params).map_err(|e| (-32603, e)),
+        "tools/call" => {
+            let opencode_session =
+                params.get("_meta").and_then(|meta| meta.get(OPENCODE_SESSION_META)).and_then(Value::as_str).map(str::to_string);
+            Ok(link
+                .call_from(method, params, opencode_session.as_deref())
+                .unwrap_or_else(|e| json!({ "content": [{ "type": "text", "text": e }], "isError": true })))
+        }
+        _ => Err((-32601, format!("Method not found: {method}"))),
+    }
+}
+
+/// What a connector's server tells the model about itself.
+fn connector_instructions(name: &str) -> String {
+    format!(
+        "The `{name}` server is a connector the user installed in Crew, the app this session runs in. \
+         Its tools act for the account the user signed in to there, and Crew holds that sign-in."
+    )
 }
 
 fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, String)> {
@@ -293,6 +372,15 @@ mod tests {
             },
         );
         assert!(listed.get("opencodeSession").is_none(), "{listed}");
+    }
+
+    #[test]
+    fn a_connectors_handshake_says_it_comes_from_crew() {
+        let link = Link::new("/nonexistent/crew.sock", "t", None);
+        let hello = handle_connector(&link, "notion", None, "initialize", json!({})).unwrap();
+        assert_eq!(hello["serverInfo"]["name"], "notion");
+        let text = hello["instructions"].as_str().unwrap();
+        assert!(text.contains("`notion`") && text.contains("installed in Crew"), "{text}");
     }
 
     #[test]

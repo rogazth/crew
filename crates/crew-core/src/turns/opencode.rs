@@ -211,7 +211,7 @@ enum Arm {
 }
 
 /// What a request answered, or why it failed, as a turn's error says it.
-fn ok(reply: Result<Reply, crate::http_local::HttpError>, what: &str) -> Result<Value, String> {
+pub(super) fn ok(reply: Result<Reply, crate::http_local::HttpError>, what: &str) -> Result<Value, String> {
     match reply {
         Ok(reply) if (200..300).contains(&reply.status) => Ok(reply.body),
         Ok(reply) => {
@@ -294,6 +294,7 @@ impl TurnHost {
         };
         self.transcripts.apply(id, HarnessEvent::SessionProviderBound { provider_session_id: oc.clone() });
         self.transcripts.apply(id, HarnessEvent::SessionStarted {});
+        self.opencode_sync_connectors(session, &conn, &params.cwd);
         self.opencode_read_mcp_soon(id, &params.cwd);
         let window = self.opencode_window(&conn, &params.cwd, session);
         if let Some(Live::Opencode(live)) = self.lock().get_mut(id) {
@@ -1909,6 +1910,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"location": {"directory": directory}, "data": [{"id": "nemotron-3.5-lightning-free", "modelID": "nemotron-3.5-lightning-free", "providerID": "opencode", "limit": {"context": 262144, "output": 32768}}]})
         if path == "/api/mcp" and method == "GET":
             return self.reply(200, {"location": {"directory": directory}, "data": [mcp_view(row) for row in mcp.values()]})
+        if len(parts) == 4 and parts[:3] == ["api", "experimental", "mcp"] and method in ("PUT", "DELETE"):
+            name = unquote(parts[3])
+            if method == "PUT": mcp[name] = {"name": name, "status": "connected"}
+            else: mcp.pop(name, None)
+            return self.reply(204)
         if len(parts) == 5 and parts[:3] == ["api", "experimental", "mcp"] and method == "POST":
             name = unquote(parts[3])
             row = mcp.get(name)

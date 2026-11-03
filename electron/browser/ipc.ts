@@ -17,6 +17,7 @@ import {
   setSitePermissions,
 } from "./guests";
 import { answer } from "./prompts";
+import { registerSignInIpc } from "./sign-in-window";
 import { bindTab } from "./tab-guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
@@ -74,6 +75,7 @@ function keyboardLayout(value: unknown): KeyboardLayout | undefined {
 }
 
 export function registerBrowserIpc(): void {
+  registerSignInIpc();
   ipcMain.on(CHANNELS.commands, (event, list: unknown) => setLiveCommands(event.sender, commandList(list)));
   ipcMain.on(CHANNELS.keyboardLayout, (event, layout: unknown) => setKeyboardLayout(event.sender, keyboardLayout(layout)));
 

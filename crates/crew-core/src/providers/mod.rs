@@ -11,6 +11,25 @@ use std::borrow::Cow;
 
 use serde_json::{Map, Value};
 
+/// One more stdio server in a spawn beside Crew's own: a connector account
+/// bound to the session, as `crewd --mcp-connector <name>` (plan
+/// `2026-10-23-integrations.md`, Use). It runs the same executable with the
+/// same environment as Crew's server; which account the name means the
+/// daemon works out from the token, never from the name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServerSpec {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+impl McpServerSpec {
+    /// The shim for the connector server `name`, run by `command` (crewd).
+    pub fn connector(command: &str, name: &str) -> Self {
+        Self { name: name.to_string(), command: command.to_string(), args: vec!["--mcp-connector".into(), name.to_string()] }
+    }
+}
+
 pub fn as_record(value: &Value) -> Option<&Map<String, Value>> {
     value.as_object()
 }
@@ -764,6 +783,7 @@ mod tests {
             user_settings: false,
             fast: false,
             add_dirs: Vec::new(),
+            denied_mcp: Vec::new(),
         });
         assert!(args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona), "{args:?}");
         let message = claude::build_claude_user_message("sid", Some(TAIL), "y ahora?", &[], &[]);
@@ -790,6 +810,7 @@ mod tests {
                 user_settings: false,
                 fast: false,
                 add_dirs: Vec::new(),
+                denied_mcp: Vec::new(),
             })
         };
         let pair = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
@@ -812,6 +833,8 @@ mod tests {
             autonomy: Autonomy::Ask,
             mcp: None,
             mcp_env: Vec::new(),
+            connectors: Vec::new(),
+            off: Vec::new(),
             writable_roots: Vec::new(),
         }
     }
@@ -834,6 +857,7 @@ mod tests {
                 user_settings: false,
                 fast: false,
                 add_dirs: Vec::new(),
+                denied_mcp: Vec::new(),
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask, add_dirs: Vec::new() }),
             grok::build_grok_spawn_args(&Autonomy::Ask),
@@ -870,6 +894,7 @@ mod tests {
             user_settings: false,
             fast: false,
             add_dirs: Vec::new(),
+            denied_mcp: Vec::new(),
         });
         assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");

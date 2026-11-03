@@ -242,15 +242,20 @@ const DONE = {
 
 /* ── Which machine ──────────────────────────────────────────────────── */
 
-/** A fixed-width trigger: picking a machine with a longer name never moves the row. */
-function EnvPicker({ link, links }: { link: EnvLink; links: EnvLink[] }) {
+/**
+ * A fixed-width trigger: picking a machine with a longer name never moves the row.
+ * Providers' and Connectors' share the machine they show (`setProvidersEnv`); `small` sits in a section's title.
+ */
+export function EnvPicker({ link, links, small = false }: { link: EnvLink; links: EnvLink[]; small?: boolean }) {
   return (
     <Menu.Root>
       <Menu.Trigger
         aria-label="Machine"
-        className="flex h-9 w-60 items-center gap-2.5 rounded-lg bg-card pr-2 pl-2.5 text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover"
+        className={`flex items-center rounded-lg bg-card text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover ${
+          small ? "h-7 w-48 gap-2 pr-1.5 pl-1.5 text-[12.5px]" : "h-9 w-60 gap-2.5 pr-2 pl-2.5"
+        }`}
       >
-        <span className="grid size-6 shrink-0 place-items-center rounded-md bg-canvas text-icon">
+        <span className={`grid shrink-0 place-items-center rounded-md bg-canvas text-icon ${small ? "size-5" : "size-6"}`}>
           <EnvGlyph link={link} className="size-3.5" />
         </span>
         <span className="min-w-0 flex-1 truncate font-medium">{link.name}</span>
@@ -258,7 +263,7 @@ function EnvPicker({ link, links }: { link: EnvLink; links: EnvLink[] }) {
         <ChevronsUpDownIcon className="size-3.5 shrink-0 text-icon" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
+        <Menu.Positioner side="bottom" align={small ? "end" : "start"} sideOffset={4} className="z-50">
           <Menu.Popup className={PANEL}>
             <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-text-muted">Machine</div>
             {links.map((l) => (

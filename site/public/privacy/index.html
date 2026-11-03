@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Privacy Policy</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+<p><a href="/">Crew</a></p>
+<h1>Privacy Policy</h1>
+<p class="muted">Last updated: November 2, 2026</p>
+
+<p>Crew runs on your machines. We operate no server that receives your data, and you need no Crew account.</p>
+
+<h2>What we do not do</h2>
+<ul>
+<li>We do not collect, store or see your data.</li>
+<li>We do not sell it or use it for advertising.</li>
+<li>We do not use it to develop, improve or train AI or machine learning models.</li>
+<li>No person on our side reads it.</li>
+</ul>
+
+<h2>Where your data goes</h2>
+<ul>
+<li><strong>Your machines.</strong> Transcripts and settings are stored there.</li>
+<li><strong>Connected services.</strong> Connecting a service is optional. Its sign-in tokens stay in Crew's vault, on the one machine you choose to keep them. Only that machine calls the service with them, directly and over HTTPS.</li>
+<li><strong>Linked machines.</strong> If you link other machines, they send their requests to the vault's machine and get the answers back over your own private network (Tailscale). Those answers can include data from connected services. Sign-in tokens never travel between machines, not even when you change the vault's machine: you sign in again on the new one.</li>
+<li><strong>AI agents.</strong> What an agent reads, including results from connected services, goes to that agent. Its command line tool may send it to its AI provider, under your own account and their terms. You choose which agents run and which tools they may use.</li>
+</ul>
+
+<h2>Google data</h2>
+<p>If you connect Google, Crew asks only for the access of the apps you choose (Gmail, Drive, Calendar, Docs, Sheets) and your email address, to tell your accounts apart.</p>
+<p>Crew's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+<h2>Removing access</h2>
+<p>Disconnect a service in Crew to remove its sign-in. You can also revoke access from the service's own settings; for Google, at <a href="https://myaccount.google.com/permissions">your account's permissions page</a>. When you change the vault's machine, the old one revokes and deletes its sign-ins. If it is off at that moment, it deletes them when it comes back, without revoking them, so revoke them from the service if you need to. To delete what Crew keeps, delete it from your machines.</p>
+
+<h2>Changes and contact</h2>
+<p>If this policy changes, we update this page and its date. Questions: <a href="mailto:gabriel@nerblabs.com">gabriel@nerblabs.com</a></p>
+</main>
+</body>
+</html>

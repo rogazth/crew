@@ -28,6 +28,7 @@ fn daemon(name: &str) -> Handle {
         store,
         agents: AgentHost::new(),
         bridge: Bridge::start(dir).expect("bridge"),
+        vault: None,
     })
     .expect("serve")
 }

@@ -37,6 +37,7 @@ export function usePages() {
     settings: page.kind === "settings" ? page.section : null,
     isWorkspace: page.kind === "workspace",
     isRoutines: page.kind === "routines",
+    isIntegrations: page.kind === "integrations",
     close,
     toggle,
     openSettings,

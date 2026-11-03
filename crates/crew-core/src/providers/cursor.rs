@@ -14,7 +14,9 @@ use crew_protocol::{ApprovalDecision, EditHunk, Question, QuestionOption, ToolDe
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pretty_input, string_field, todo_items};
+use super::{
+    as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pretty_input, string_field, todo_items, McpServerSpec,
+};
 
 /// The name Crew's MCP server goes by in `session/new`: the namespace the
 /// model finds its tools under, and the `providerIdentifier` of its calls.
@@ -95,13 +97,20 @@ pub fn authenticate_params() -> Value {
 /// `mcpCapabilities` `http` and `sse` as true); Crew's own stays stdio
 /// (plan decision 19), and the user's servers stay in Cursor's config. Cursor
 /// does not report how any of them stand, so a session's `mcp_list` says it
-/// does not.
-pub fn mcp_servers(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)]) -> Value {
+/// does not. Each bound connector account follows Crew's, in the same shape
+/// and with the same env.
+pub fn mcp_servers(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)], connectors: &[McpServerSpec]) -> Value {
     let Some((command, args)) = mcp else {
         return json!([]);
     };
     let env: Vec<Value> = env.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect();
-    json!([{ "name": CREW_SERVER, "command": command, "args": args, "env": env }])
+    let mut servers = vec![json!({ "name": CREW_SERVER, "command": command, "args": args, "env": env })];
+    servers.extend(
+        connectors
+            .iter()
+            .map(|server| json!({ "name": server.name, "command": server.command, "args": server.args, "env": env })),
+    );
+    Value::Array(servers)
 }
 
 /// `session/new`, or `session/load` of the conversation a child carries on.
@@ -793,6 +802,7 @@ mod tests {
         let servers = mcp_servers(
             Some(&("/bin/crewd".into(), vec!["--mcp".into()])),
             &[("CREW_SOCKET".into(), "/s".into()), ("CREW_TOKEN".into(), "t".into())],
+            &[],
         );
         assert_eq!(
             servers,
@@ -805,6 +815,24 @@ mod tests {
         let (method, params) = session_request("/w", None, &json!([]));
         assert_eq!(method, "session/new");
         assert!(params.get("sessionId").is_none());
+    }
+
+    /// A bound account follows Crew's server, in its shape and with its env;
+    /// without Crew's server there is neither.
+    #[test]
+    fn a_bound_connector_follows_crews_server() {
+        let crew = ("/bin/crewd".to_string(), vec!["--mcp".to_string()]);
+        let env = [("CREW_TOKEN".to_string(), "t".to_string())];
+        let connectors = [McpServerSpec::connector("/bin/crewd", "notion")];
+        let servers = mcp_servers(Some(&crew), &env, &connectors);
+        assert_eq!(servers[0]["name"], "crew", "{servers}");
+        assert_eq!(
+            servers[1],
+            json!({ "name": "notion", "command": "/bin/crewd", "args": ["--mcp-connector", "notion"], "env": [
+                { "name": "CREW_TOKEN", "value": "t" }
+            ] })
+        );
+        assert_eq!(mcp_servers(None, &env, &connectors), json!([]));
     }
 
     #[test]

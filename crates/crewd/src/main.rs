@@ -43,6 +43,17 @@ fn main() -> ExitCode {
         // falls back to daemon.json, which an old config naming crewd never
         // asked for.
         Some("--mcp") => crew_core::mcp::serve_stdio(),
+        // One of Crew's connectors, beside Crew's own server in a spawn.
+        Some("--mcp-connector") => match args.get(1) {
+            Some(name) => {
+                let workspace = args.iter().position(|a| a == "--workspace").and_then(|at| args.get(at + 1)).cloned();
+                crew_core::mcp::serve_connector_stdio(name, workspace)
+            }
+            None => {
+                eprintln!("--mcp-connector needs the server's name");
+                ExitCode::FAILURE
+            }
+        },
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -212,6 +223,17 @@ fn start_daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Whether Crew's grants go to the login keychain (`connectors::vault`): a
+/// release build on this Mac, not `crewd serve`, not a debug build, which is
+/// ad-hoc signed and would be a new app to the keychain on every rebuild, and
+/// not the e2e sandbox, whose HOME has no login keychain.
+fn keychain_vault(served: bool) -> bool {
+    cfg!(target_os = "macos")
+        && !cfg!(debug_assertions)
+        && !served
+        && std::env::var_os("CREW_SANDBOX").is_none()
+}
+
 fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -> Result<(), Failure> {
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
@@ -351,11 +373,27 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     }
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
+    // The MCP Registry is the window's to browse, so only the Mac's daemon keeps a copy.
+    if !listen.wait_for_addr {
+        crew_core::registry::start_sync(store.clone());
+    }
     let handle = serve_on(
-        Config { pty: pty.clone(), store, processes: processes.clone(), agents: agents.clone(), bridge: bridge.clone() },
+        Config {
+            pty: pty.clone(),
+            store,
+            processes: processes.clone(),
+            agents: agents.clone(),
+            bridge: bridge.clone(),
+            vault: Some(crew_core::connectors::vault::VaultAt {
+                file: dir.join("vault.json"),
+                keychain: keychain_vault(listen.wait_for_addr).then(|| dir.to_path_buf()),
+            }),
+        },
         listen,
     )
     .map_err(Failure::Transient)?;
+    // On every machine: its CLIs are the ones its sessions run.
+    handle.read_provider_servers();
     Ok((pty, agents, processes, handle))
 }
 

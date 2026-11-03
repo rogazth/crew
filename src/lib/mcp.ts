@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { mcpReconnect } from "./api";
+import { mcpReconnect, mcpToggle, providerServersList } from "./api";
 import { client } from "./client";
 import type { McpChanged, McpServer, McpState, McpStatus } from "./protocol";
 
@@ -145,4 +145,38 @@ export async function reconnectAfterSignIn(tabId: string, sessionId: string, ser
   } catch {
     // The status the daemon pushes after the attempt says how it ended.
   }
+}
+
+/**
+ * A provider server's sign-in terminal ended: its machine reads the CLIs'
+ * servers again, and the new lists arrive as `provider-servers`. Once per tab,
+ * as above.
+ */
+export async function refreshAfterServerSignIn(tabId: string, envId: string): Promise<void> {
+  if (reconnected.has(tabId)) return;
+  reconnected.add(tabId);
+  try {
+    await providerServersList(envId, true);
+  } catch {
+    // The page reads them again when it is next open.
+  }
+}
+
+/** Claude only: switches one of a live session's servers on or off; the row shows the answer at once. */
+export async function toggleServer(sessionId: string, server: string, enabled: boolean): Promise<void> {
+  set(sessionId, await mcpToggle(sessionId, server, enabled));
+}
+
+/** Whether a session's provider can switch its servers at runtime: Claude's `mcp_toggle`. */
+export const canToggle = (provider: string) => provider === "claude";
+
+/**
+ * What the chip says when nothing is wrong, for a session whose servers can
+ * be switched (so the sheet with the switches can be opened): how many are on.
+ */
+export function quietLabel(status: McpStatus | null | undefined): string | null {
+  const servers = status?.servers ?? [];
+  if (servers.length === 0) return null;
+  const on = servers.filter((server) => server.state !== "disabled").length;
+  return on === servers.length ? `${on} MCP` : `${on} of ${servers.length} MCP`;
 }

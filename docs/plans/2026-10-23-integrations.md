@@ -3,8 +3,8 @@
 Decided 2026-10-23. Replaces `2026-10-15-integrations.md`, none of which was
 built. One page shows every MCP server a session can get, from wherever it
 comes: the ones each provider CLI already has, and connectors installed from
-Crew. Crew's connectors are signed in once, can hold several accounts, and are
-turned on per workspace, bot or session. Their credentials live on one machine
+Crew. Crew's connectors are signed in once, can hold several accounts, and
+each account is for the workspaces picked. Their credentials live on one machine
 the user picks. Update the status table at the bottom as each phase lands.
 
 ## Why
@@ -23,16 +23,20 @@ the user picks. Update the status table at the bottom as each phase lands.
   them off for its own sessions. It does not replace or hide them.
 - **One vault, not a grant per machine.** Rule 2 of the old plan had each
   machine sign in on its own. Now one machine, which the user picks, holds
-  Crew's grants, and every other machine leases access tokens from it. A
-  rotating refresh token can have one holder only: a copy that refreshes
-  invalidates the others, and reuse detection can revoke the whole grant
-  (RFC 9700 §4.14.2).
-- **Accounts and bindings** are new. The old plan had one connection per
-  connector and a per-workspace switch.
+  Crew's grants, and every other machine sends it its tool calls. A rotating
+  refresh token can have one holder only: a copy that refreshes invalidates
+  the others, and reuse detection can revoke the whole grant (RFC 9700
+  §4.14.2). No token ever leaves the vault for another machine, not even when
+  the vault changes (`2026-11-02-vault-calls.md`).
+- **Accounts, each for some workspaces,** are new. The old plan had one
+  connection per connector and a per-workspace switch. A connector has no
+  switch of its own (2026-10-28): a workspace no account of it is for doesn't
+  get it, so there is one control, not two that can disagree.
 - **The sign-in redirect is intercepted, not routed.** The old plan sent the
   redirect through `remote-proxy.ts` to the machine's loopback. Now Crew's
   browser catches the redirect and hands the URL to the daemon that waits for
-  it. This works the same way from a phone.
+  it. This works the same way from a phone. Google's sign-in alone goes to the
+  person's browser and a short-lived listener (see Signing in).
 - **Native mode is gone as a fallback.** A server that refuses Crew's client
   (Figma) stays a provider server, signed in through its CLI.
 
@@ -77,30 +81,55 @@ the user picks. Update the status table at the bottom as each phase lands.
 | codex 0.163.0 | `codex mcp list --json`; `mcpServerStatus/list` | `mcpServer/oauth/login`, then `mcpServer/oauthLogin/completed` | `mcp_servers.<name>.enabled = false` override on `thread/start` | `config/mcpServer/reload` (reloads every server) |
 | opencode 2.1.2 | `GET /api/mcp` on the shared server | `opencode mcp auth`; an OAuth URL from the server | `mcp.<name>.enabled = false` in the run's config | `POST /api/experimental/mcp/{name}/connect` |
 | cursor-agent 2026.10.19 | `cursor-agent mcp list`, `list-tools` | `cursor-agent mcp login <id>` | none known | none; `mcp disable` writes its approved list |
-| grok 1.0.67 | `grok mcp list --json` | none in the CLI | none known | none; `mcp disable` writes its config |
+| grok 1.0.67 | `grok mcp list --json`; `grok mcp doctor <name> --json` for how one stands | none in the CLI; its TUI's `/mcps` (`i`), or ACP `_x.ai/mcp/auth_trigger`, which opens the system browser. Crew signs in itself and writes `mcp_credentials.json` (checked on 1.0.70, 2026-10-25) | none known | none; `mcp disable` writes its config |
 
 Claude's binary also reads `ENABLE_CLAUDEAI_MCP_SERVERS`, which presumably
 controls the claude.ai connectors. Everything in this table that Crew does not
 call today is checked by the spike.
+
+## Server facts (checked 2026-10-24)
+
+Connectors come from the registry, so the OAuth client is generic. These
+servers were probed without signing in, to find the cases it must cover:
+
+| Server | 401 names its metadata | DCR | CIMD | Public client | Revocation |
+| --- | --- | --- | --- | --- | --- |
+| Notion, Linear, Sentry | yes | yes | yes | yes | yes |
+| Stripe | yes; the authorization server has a path (`access.stripe.com/mcp`) | yes | no | yes | yes |
+| Atlassian | no: fall back to the well-known URIs | yes | no | yes | yes |
+| Figma | yes | yes | no | no: needs a secret | no |
+| GitHub | yes; `github.com/login/oauth` publishes no metadata | no | no | — | — |
+
+So discovery falls back from the header to the path-inserted and then the
+root well-known URIs, and from `oauth-authorization-server` to
+`openid-configuration`. A server with neither DCR nor CIMD, or that refuses
+Crew's registration, cannot be connected from Crew: Connect says so and
+points to the provider server.
 
 ## The rules
 
 1. **The service authenticates the person.** Sign-in happens on the
    service's page. Crew sees a code and a token, never a password.
 2. **One vault holds Crew's grants.** The user picks the machine: this Mac
-   by default, or any remote. Only the vault refreshes. Every other machine
-   leases access tokens from it. A provider server's credential stays in its
+   by default, or any remote. Only the vault holds tokens, refreshes them and
+   calls services with them. Every other machine sends it its tool calls.
+   Access and refresh tokens never cross between machines, without exception:
+   changing the vault signs every account in again. A provider server's
+   credential stays in its
    CLI's store on each machine: Crew drives that sign-in but never copies the
    credential.
 3. **Nothing goes in the person's CLI configs** unless the user picks an
    action that says it does: turning a Cursor or Grok server off, which has
-   no per-spawn way. Crew's connectors, and the servers it turns off, are
-   handled per spawn.
+   no per-spawn way, or removing a server from its CLI. Crew never adds a
+   server to a CLI's config (Install's Per provider was taken out
+   2026-10-28). Crew's connectors, and the servers it turns off, are handled
+   per spawn.
 4. **Each account is its own MCP server to the CLI.** Its tools keep their
    names (`mcp__notion__…`), the CLI defers them like any server's, and
    `McpHost` reports each one's state.
-5. **The CLI never sees a token.** The shim forwards calls to its machine's
-   `crewd`, which holds the leased access token in memory.
+5. **The CLI never sees a token, and neither does a machine that is not the
+   vault.** The shim forwards calls to its machine's `crewd`, which runs them
+   or sends them to the vault.
 6. **A session's autonomy decides,** as for any tool. Crew adds no bypass.
 7. **The phone holds no credential.** Nothing here may need a window to be
    open.
@@ -113,20 +142,21 @@ call today is checked by the spike.
   name, transport, URL or command, its scope (user, project, plugin,
   claude.ai), and its state. The CLI owns it.
 - **Connector.** A remote MCP server installed from Crew: from the official
-  registry (`registry.modelcontextprotocol.io/v0/servers`, cached for a day)
-  or from a URL.
+  registry (`registry.modelcontextprotocol.io/v0.1/servers`, kept by the
+  Mac's `crewd`, phase 1b) or from a URL.
 - **Account.** One sign-in to a connector, with a stable id and a label
   ("Work"). A connector can have several. The label is filled in from the
   authorization server's `id_token` or userinfo (`email`, `name`) when it
   gives one, and typed otherwise.
 - **Grant.** An account's refresh token, kept in the vault.
-- **Binding.** An account turned on, or off, for a scope: everywhere, a
-  workspace, a bot, or a session. The most specific binding wins. A bot
-  follows its workspace unless it has its own binding.
+- **Workspaces of an account.** Every workspace (those added later too), or
+  a list of them. A session gets the accounts its workspace is in; a bot
+  follows its workspace. Kept as `connector_bindings` rows, one `everywhere`
+  row or one `workspace` row each (2026-10-28).
 - **Off in Crew.** A provider server left out of Crew's spawns on one
   machine, for one provider.
 
-What concerns the person (connectors, accounts, bindings, tool switches)
+What concerns the person (connectors, accounts, their workspaces, tool switches)
 lives in the vault's `crewd`, and every machine keeps a copy on disk. What
 concerns one machine (its provider servers and what is off in Crew) lives in
 that machine's `crewd`. Editing a connector needs the vault online. Spawning
@@ -136,57 +166,123 @@ does not: a machine spawns from its copy.
 
 - `integrations:vault` names the machine: `local` or a remote id. The
   default is `local`.
-- **Storage.** On macOS, a keychain item per build, named by `channel.ts`
-  and written by `crewd` through `security-framework` (new: today
-  `crew-core` only reads). On Linux, `<data>/vault.json`, mode 0600. It is
-  not encrypted at rest, because the key would sit on the same disk, and the
-  warning says so.
+- **Storage.** On macOS, a login keychain item per build (service `Crew
+  Connectors`, the data dir as its account), written by `crewd` through
+  `security-framework`. A debug build, `crewd serve` and the e2e sandbox keep
+  `<data>/vault.json` instead: an ad-hoc signed build is a new app to the
+  keychain on every rebuild, and an SSH session's keychain may be locked. On
+  Linux, `<data>/vault.json`, mode 0600. It is not encrypted at rest, because
+  the key would sit on the same disk, and the warning says so.
 - **Only the vault speaks OAuth.** It handles discovery (a 401's
   `WWW-Authenticate`, then protected-resource metadata, then
   authorization-server metadata), client registration (CIMD when the server
   takes it, DCR otherwise, one registration per server, reused), PKCE `S256`,
   `resource` on every request, rotating refresh tokens, and step-up on 403
   `insufficient_scope`.
-- **Lease.** A machine asks `vault_lease {account}` and gets back
-  `{access_token, expires_at, scopes}`. It keeps the token in memory, asks
-  again at 80% of its life, and asks once more after a 401 from the service.
-  The vault refreshes when its own access token is near expiry, and leases
-  that ask at the same time share one refresh.
-- **Vault offline.** A machine keeps using the token it holds until it
-  expires. After that, the account's server answers a tool call with one
-  line ("Notion · Work: the vault on devbox is offline since 14:02"), and
-  `McpHost` shows it Failed, with that reason.
+- **Machines' connections.** A machine brings its token where the window
+  brings the daemon's own (`{auth}` on the vault's socket). Such a connection
+  answers `vault_call`, `vault_tools_refresh` and `vault_config` and hears
+  `vault-config` when the config changes; nothing else. Its token is checked
+  at each request, so revoking a machine stops what it has open.
+- **A call.** A machine sends `vault_call {accountId, tool, arguments}` and
+  gets the MCP result. The vault runs it with its own token, so its tool
+  switches and scopes decide. Requests on a connection run side by side, at
+  most 600 a minute and 32 at once per machine. Arguments or answers over
+  8 MiB are a tool error, not a dropped connection. A machine's `tools/list`
+  answers from its copy and asks the vault to list again if its list is old.
+  The vault refreshes when its access token is near expiry, and calls that
+  ask at the same time share one refresh.
+- **Vault offline.** A machine's call answers at once with one line ("Notion ·
+  Work: the vault on devbox is offline since 14:02"). A call that was sent and
+  lost its connection says it may have run, and is never tried again.
 - **Reaching the vault.** This is new: machines connect to the vault, and
   the vault never connects out.
-  - *A remote vault* takes leases on its `crewd serve` socket, over
+  - *A remote vault* takes machines on its `crewd serve` socket, over
     Tailscale.
-  - *This Mac as the vault* listens on its Tailscale address for leases
+  - *This Mac as the vault* listens on its Tailscale address for machines
     only, on the build's port. It does this only while it is the vault, and
     it takes no other call there.
-  - Each machine leases with a **scoped token**: lease and config read only,
-    minted by the vault for that machine, and revocable on its own. This is
-    new, because `crewd serve` has one full-access token today. The Mac's
-    own `crewd` leases the same way as any machine.
+  - **Only over Tailscale** (decided 2026-10-28): connectors reach your other
+    machines by Tailscale. Any machine on the tailnet can be the vault or
+    use it, either way. A machine reached over SSH still works as a
+    machine, but it doesn't join the vault and its sessions get no Crew
+    connectors; the vault dialog says "Needs Tailscale" beside it, and so
+    does a workspace of it in an account's workspaces. Why: the SSH keys
+    are on the Mac alone, a remote's `crewd` listens on its loopback, and
+    the Mac sits behind NAT, so every SSH path between two machines runs
+    through a tunnel the Mac opened. A vault reached that way would work
+    only while the Mac is on, which undoes the point of moving it (that
+    connectors keep working with the Mac off). Bridging it (`-R`, a relay
+    on the Mac, a route per pair, the tunnels moved into `crewd`) was
+    weighed and left out.
+  - Each machine comes with a **scoped token**: tool calls and config read
+    only, minted by the vault for that machine, and revocable on its own. This
+    is new, because `crewd serve` has one full-access token today. The Mac's
+    own `crewd` uses a remote vault the same way as any machine.
 - **Joining.** When the vault is chosen, or a machine is added, the window,
   which reaches both, asks the vault for a token for that machine and hands
   it over (`vault_join {address, token}`). The machine keeps it in the
   keychain on a Mac, or in a 0600 file on Linux. Removing the machine
   revokes the token.
-- **Moving the vault.** The window mints a one-use handoff token on the old
-  vault. The new vault pulls the grants with it, and the old vault deletes
-  them and starts leasing from the new one. Then the window points every
-  machine at the new vault. At no point do two machines hold a grant. If the
-  old vault is offline, the move offers to start empty, and every account
-  then asks for a sign-in.
+- **Changing the vault** moves no token (decided 2026-11-02; the sealed move
+  built on 2026-10-28 is gone). The sheet confirms first that every account
+  has to sign in again on the new machine. Then the window:
+  1. Reads the old vault's config, if it is online (`vault_config`). It holds
+     no grant.
+  2. Starts the new vault from it (`vault_start`), with no grant and every
+     account asking for a sign-in. A machine holding sign-ins of its own gives
+     them back to their services first. If this fails, the old vault has lost
+     nothing.
+  3. Has the old vault give its grants back to their services (RFC 7009) and
+     delete them, and forget its machines (`vault_retire`).
+  4. Joins every other machine to the new vault.
+
+  An old vault that is offline, or fails step 3, is remembered, and when it
+  comes back it deletes its grants without giving them back: an account may
+  have signed in on the new vault by then, and Google revokes a whole account's
+  access to a client, which would sign that out too. Until it comes back, its
+  grants stay on that machine, unused.
 
 ### Signing in
 
-Every sign-in opens in a Crew browser tab. The tab catches the navigation to
-the redirect URI of a flow it started (`will-redirect` / `will-navigate`, and
-before the loopback rewrite of a remote workspace's tab), cancels it, closes
-itself, and sends the URL to the daemon that waits for it. A code is useless
+Every sign-in but Google's opens in a sign-in window of Crew's browser, not a tab: a tab
+sits in a workspace under the page, agents can drive tabs, and a remote
+workspace's tabs have their loopback rewritten. The window uses the shared
+partition (incognito for another account), so consent is usually one click,
+and no agent can list, open or drive it. It catches the navigation to the
+redirect URI of the flow it started (`will-redirect` / `will-navigate`, and
+the session's `onBeforeRequest` before the loopback rewrite, so the code never
+reaches a socket), cancels it, closes itself, and sends the URL to the daemon
+that waits for it (`electron/browser/sign-in-window.ts`, `sign-in-flows.ts`). A code is useless
 without its PKCE verifier, which never leaves that daemon. Nothing has to
 listen on the redirect URI.
+
+**Google's sign-in runs in the person's default browser.** Google refuses an
+[embedded user agent](https://developers.google.com/identity/protocols/oauth2/native-app),
+and a window that passes for Firefox is turned away too. When the auth URL is
+`https://accounts.google.com` and the redirect is Crew's own URI
+(`opensInSystemBrowser`, checked by main on the request it validated), there is
+no window: main listens on `127.0.0.1:17899`, on loopback alone, opens the page
+with `openExternal`, and hands back the same `caught` URL, so `vault_callback`
+and the daemon don't change (`electron/browser/sign-in-loopback.ts`).
+
+- One listener serves every pending flow, each by its state, and the port closes
+  with the last of them. A second Google app started meanwhile doesn't cancel
+  the first.
+- Only a GET with Host `127.0.0.1:17899`, on the redirect's path, with a pending
+  flow's state, ends a flow. Anything else gets a 404 and the wait goes on: every
+  page the person has open can reach the port, so unlike in the window a wrong
+  state fails nothing. The code is never logged.
+- The port taken, the browser not opening, or 15 minutes passing (the daemon's
+  own limit) fail the flow with why. Cancel, Crew's window reloading or closing,
+  and a second start of the same state end it as closed.
+- The connect sheet and the account's row say "Continue in your browser", with a
+  way to cancel.
+- Agents can't drive that browser. They could only reach the port, and a state
+  they don't know gets them a 404.
+- Another Google account needs no incognito: `prompt=select_account` shows
+  Google's own picker, and only "Continue as" or signing an account in again
+  sends a `login_hint`.
 
 - **A connector account.** The vault registers
   `http://127.0.0.1:<port>/callback` and starts the flow. The tab hands the
@@ -207,22 +303,28 @@ listen on the redirect URI.
 
 ### Use
 
-- Each account bound to a session is one more server in that spawn's config:
+- Each account for a session's workspace is one more server in that spawn's config:
   `crewd --mcp-connector <account>`, a stdio shim with the session's
   `CREW_TOKEN`. The shim forwards `tools/list` and `tools/call` to its
   machine's `crewd`, which calls the remote server over streamable HTTP (SSE
-  when that is all the server has) with the leased token.
+  when that is all the server has). On a machine that is not the vault, that
+  `crewd` sends the call to the vault, which does this instead.
 - **Server names.** A server is named after the connector (`notion`). When
-  that name is taken (two bound accounts, or a provider server of the same
-  name), it becomes `notion_work`. By default, a consumer gets one account
-  per connector.
-- **Tools.** `tools/list` is cached per account on each machine, and
-  refreshed on connect, on `listChanged`, and hourly, so a spawn does not
-  wait on the network. A tool switched off is left out of `tools/list` and
+  that name is taken (two accounts for the workspace, or a provider server of
+  the same name), it becomes `notion_work`.
+- **Tools.** `tools/list` is cached per account, kept fresh by the vault on
+  connect, on `listChanged`, and hourly, and copied to each machine with the
+  config, so a spawn does not wait on the network. A tool switched off is left out of `tools/list` and
   costs no context.
-- **Bindings** are resolved at spawn, from the machine's copy. A change
-  reaches a live Claude process through `mcp_set_servers`. Every other
-  provider gets it on its next spawn.
+- **Workspaces** are resolved at spawn, from the machine's copy. A change
+  reaches a kept Claude process at its next turn through `mcp_set_servers`,
+  without a relaunch. The set replaces all of `--mcp-config`'s servers,
+  Crew's own too, and leaves the user's and claude.ai's alone; the first one
+  reconnects what it keeps, so it is never sent mid-turn (measured on
+  2.1.310). A kept Codex process is launched again, since the connectors are
+  its thread's config. opencode takes one server at a time per folder
+  (`PUT` and `DELETE /api/experimental/mcp/:name`, not written to any
+  config; measured on 2.1.2).
 - **Off in Crew** is applied at spawn, as the provider-facts table says.
   Cursor and Grok have no per-spawn way, so their row offers the CLI's own
   `mcp disable`, labelled "also outside Crew".
@@ -235,21 +337,38 @@ listen on the redirect URI.
 Settings › Integrations, in the Tools group.
 
 - **Header:** the vault ("Credentials on devbox ●"), its state, the machines
-  leasing from it, and Change. Choosing a vault opens one sheet that says
-  what it costs: who can read the file, and that with this Mac as the vault
-  the remotes lose Crew's connectors about an access token's life after the
-  Mac sleeps or shuts down.
-- **Crew:** each connector with its accounts (label, state, where it is
-  on), Connect, Add account, and a registry search.
+  using it, and Change. The sheet picks one machine, and Change stays off until
+  another is picked. A line under the choice says what it costs: who can read
+  the file there, or that with this Mac as the vault the remotes lose Crew's
+  connectors as soon as it sleeps. Change then confirms in one line.
+- **Crew:** each connector with its accounts (label, state, how many
+  workspaces it's for), Connect, Add account, and a registry search. Add
+  account asks for its workspaces first, all picked; an account's ⋯ →
+  Workspaces changes them. Installing a connector signs its first account in
+  for every workspace.
 - **Providers on <machine>:** a machine picker, as on Providers, then each
   provider's servers: state, scope, tool count, Sign in, and Off in Crew.
 - **Detail pane:** tools with switches and their annotations (read only,
-  destructive), bindings, the machines signed in for a provider server, and
+  destructive), the machines signed in for a provider server, and
   Disconnect or Remove.
-- **In the chat**, the MCP chip gains an account label, a runtime switch
-  (Claude's `mcp_toggle`), and the new sign-in flow. A vault that is offline
-  or a grant that ran out shows there with a reconnect button, not only in
-  Settings.
+- **In the chat**, nothing for now: the composer's MCP chip was taken out
+  (2026-10-25). A problem shows as a dot on the rail's Connectors icon: an
+  account signed out or refused, a CLI's server waiting on a sign-in, or a
+  conflict.
+- **Install is always Crew's** (2026-10-28): Per provider, which added the
+  server to each picked CLI's user config (`provider_server_add`), was taken
+  out, front and back. A connector's page keeps "Duplicates in your
+  providers": the copies the CLIs already have, however they got there, that
+  Crew's sessions still load (one off in Crew or in its CLI isn't listed),
+  with Turn off in Crew and Remove. Grok signs in only in its TUI, so
+  Crew signs in for it in its own window and writes the grant into Grok's
+  store, `mcp_credentials.json`, keyed `<name>:<url>` with rmcp's
+  `StoredCredentials`; Grok uses it and refreshes it with Crew's client, and
+  Crew keeps no copy (`provider_servers/grok.rs`). A server that gives its
+  clients a secret can't be signed in this way.
+- **Conflict.** A copy with a connector's URL that Crew's sessions still load
+  shows its tools twice: a conflict on the connector's tile and page, with Turn off in Crew (Cursor's
+  and Grok's can only be removed there).
 
 UX, for the prototype to settle:
 
@@ -259,25 +378,112 @@ UX, for the prototype to settle:
   from pending to connected in place.
 - **Machines.** One dot per machine for a provider server, filling in as
   each one signs in.
-- **Consumers.** The cost in context, shown when an account is turned on for
-  a consumer.
+- **Workspaces.** The cost in context, shown when an account is set to a
+  workspace.
 
 ### What this leaves for mobile
 
 - The phone signs in through the same RPCs and holds nothing.
 - With a remote as the vault, Crew's connectors keep working with the Mac
-  off. With this Mac as the vault, they keep working for about one access
-  token's life, which is the risk the user accepted.
+  off. With this Mac as the vault, the remotes' connectors stop when it sleeps,
+  which the user accepted so that no token leaves the vault.
 - Out of scope here: moving the address book and preferences off the Mac,
   and push notifications.
+
+### Built in phase 2, and how
+
+- `crew-core/src/connectors/`: `mod.rs` (model, migration 44, workspaces,
+  server names), `oauth.rs`, `remote.rs` (streamable HTTP; the 2024-11-05
+  HTTP+SSE transport is refused with a clear error), `net.rs` (one `reqwest`
+  client: HTTPS only, private and local addresses refused in its resolver,
+  no proxy, since a proxy would resolve the host itself), `vault.rs` (the
+  0600 file), `flow.rs` (sign-in, one refresh at a time per account, calls),
+  `fake_server.rs` (the `fakes` feature; `CREW_CONNECTORS_INSECURE=1` lets a
+  daemon reach it).
+- The shim is `crewd --mcp-connector <name>`. It marks `tools/*` with the
+  name; the daemon resolves the account from the session's token.
+- opencode has one shared server per daemon, not per folder: its config is
+  the union of what every workspace has on, each name passing the workspace
+  that has it (`--workspace`), and each call is checked against its session.
+- A tool added or reworded after the first listing starts off, which is the
+  approval the `listChanged` rule asks for.
+- None of the probed servers gives an `id_token` or userinfo unasked, so an
+  account's label is mostly typed.
+- The page is the top-level Connectors page. The prototype is gone; its
+  designs for the vault sheet, which phase 3 builds, are
+  in `src/surfaces/settings/integrations-prototype/` at commit `10784e6`.
+- Tried with Notion on 2026-10-25: consent in the sign-in window, the token
+  exchange, `tools/list`, and calls through the shim from a Claude session.
+  Notion gives no identity, so the label was typed. The token was in no
+  process's arguments or environment, and in no database, transcript or log.
+  After Disconnect, Notion answered the old access token with 401 and the
+  old refresh token with `invalid_grant`.
+- The same session also had claude.ai's Notion (`claude_ai_Notion`), and the
+  agent picked that one first. claude.ai's connectors are listed as Claude's
+  servers, so a copy of a connector there is a duplicate like any other.
 
 ### Risks accepted
 
 - Whoever reads the vault reads every Crew account. On Linux, that is root
   and the user the vault runs as.
-- Sessions run as the user's UID, so one can read its machine's lease token
-  file, as it can read `daemon.json` today.
-- Leases are bearer tokens in a `crewd`'s memory, and they never reach a CLI.
+- Sessions run as the user's UID, so one can read its machine's token file,
+  as it can read `daemon.json` today. Until a machine's calls are limited to
+  its workspaces' accounts, that token runs any account's tools that are on,
+  until it is revoked. It can't get a service's token out.
+- A tool call's arguments and answer cross between machines inside Tailscale,
+  over `ws://`, and the vault logs neither.
+
+## Security
+
+No server of Crew's holds a grant: each person's vault is one of their own
+machines, so there is no store of every user's accounts to breach. What every
+install shares is the update channel and, once there is one, the CIMD
+document. Those two are guarded first. The rest are acceptance criteria of the
+phase that builds the part.
+
+- **Before distributing.**
+  - `latest.json` is signed with an ed25519 key that only the release
+    workflow holds. The app embeds the public key and refuses a manifest
+    whose signature does not verify. The Linux `crewd` ships inside the
+    bundle, so it is covered too. Losing the key means reinstalling by hand,
+    so it is also kept in the owner's password manager.
+  - Release tags `v*` are created only by the owner (a ruleset), the signing
+    key lives in an environment only those tags and master reach, and every
+    action is pinned to a commit. Releases stay automatic.
+  - The app runs with the hardened runtime, so no process of the user's can
+    inject code into it through `DYLD_*` or attach to it.
+  - `cargo deny` and `npm audit` run weekly and on every push to master.
+  - Later, with a Developer ID: notarization, and the updater also checks
+    that the downloaded bundle is signed with the Team ID. An update then
+    passes on either check, as Sparkle does, so losing the manifest key no
+    longer strands installed copies.
+- **Phase 2.**
+  - `crewd` resolves the accounts a shim may call from the session's token,
+    never from the `--mcp-connector` argument, which the session controls.
+  - Vault RPCs (connect, callback, mint, start, retire) take the user's token only,
+    never a session's.
+  - Discovery fetches HTTPS only, refuses private and loopback addresses,
+    checks that the resource metadata names the server's own origin, and
+    sends a token only to the resource it was issued for. The callback's
+    `iss` is checked (RFC 9207).
+  - No log, transcript or crash report holds a token, a `code=` URL or an
+    OAuth body. A test greps the fake server's run for them.
+  - Disconnect revokes the grant at the service (RFC 7009) before deleting it.
+  - Agents cannot consent for the user: sign-in tabs use their own browser
+    partition, and an agent's tab cannot open a flow Crew did not start.
+  - A `listChanged` that adds tools or changes their descriptions is shown
+    and waits for approval.
+  - The vault sits behind a storage trait: a 0600 file first, the keychain
+    on macOS next. This is what Claude Code and Codex do on Linux.
+- **Phase 3.**
+  - A machine's token calls only the accounts bound on that machine, at a
+    limited rate, and every call is logged by who and what, without its
+    arguments or answer.
+  - The Mac's listener binds to its Tailscale address only, as
+    `crewd serve` already does on remotes (`remote-ssh.ts`).
+- **CIMD.** The client document is static, in a repository only the owner
+  can push to, behind two-factor sign-in. Whoever edits it can add a redirect
+  to Crew's client id.
 
 ## Phases
 
@@ -292,8 +498,7 @@ UX, for the prototype to settle:
 - *opencode:* `enabled = false` per run; its auth URL and callback.
 - *Cursor and Grok:* any per-spawn disable; how each signs in.
 - *Servers (Atlassian, Notion, Sentry, Linear, Figma):* CIMD, DCR or
-  refused; access-token lifetimes, which set how long a vault outage is
-  survived; whether each gives an `id_token` or userinfo.
+  refused; access-token lifetimes; whether each gives an `id_token` or userinfo.
 - *Electron:* catching a loopback redirect that nothing serves.
 
 **1. Provider servers.** A thrown-away prototype of the page first. Then: the
@@ -302,23 +507,45 @@ sign-in with caught redirects, Off in Crew for claude, codex and opencode,
 the CLI's disable for cursor and grok, and the runtime switch in the chip.
 This phase needs no vault.
 
+**1b. Registry cache.** The window can't read the registry: it sends no CORS
+headers, and it holds about 49k servers, 32k of them remote, too many to page
+through on open (491 pages, 6.5 min). So the Mac's `crewd` keeps the remote,
+active, latest ones in SQLite (`registry_servers`, FTS5 over name, title,
+description and publisher; migration 43, `crew-core/src/registry.rs`). It
+starts with the daemon, not with the page:
+- the featured list first, a GET each (22, under a second), so Browse has
+  them on the first open;
+- then every page once, committing each and saving the cursor, so search
+  works as it fills and an interrupted pass resumes;
+- then every 6 h, `updated_since` the last pass's start minus an hour
+  (about 2k changes a day).
+- Until the first full pass, a search also asks the registry's own search
+  (on names) and keeps what it finds.
+- Ranking: first party first (served from the publisher's domain; for an
+  `io.github.*` owner, a host that carries the owner's name), then bm25.
+- RPCs `registry_search {text, limit}` (empty text is the featured list) and
+  `registry_status`, both local methods. HTTPS through `curl`, like the npm
+  lookup; nothing under `CREW_SANDBOX`. A `crewd serve` keeps no copy.
+- Logos (the registry's icon, else the publisher's favicon through Google's
+  resolver) load through `crew-icon:`, which the app answers from a cache on
+  disk like an HTTP cache: the last answer at once, asked again
+  conditionally in the background once a day old, a miss remembered as long
+  (`electron/icons.ts`). The window's policy stays closed to the hosts.
+
 **2. Vault on this Mac.** The OAuth client in `crewd`, keychain writes,
-accounts and bindings, the registry catalog, Connect,
+accounts and their workspaces, Connect,
 `crewd --mcp-connector`, tool switches, and the tools cache. A fake OAuth and
 MCP server for tests and e2e.
 
-**3. Remote vault and leases.** Scoped tokens on `crewd serve`, the lease
-protocol, the Mac's lease listener, joining, moving the vault, the Linux
+**3. Remote vault and calls on it.** Scoped tokens on `crewd serve`, calls
+sent to the vault, the Mac's listener, joining, changing the vault, the Linux
 file, and the offline states.
 
-**4. Duplicates and import.** "Move to Crew" makes a connector from a
-provider server's URL, signs it in through the vault, and turns the provider
-server off in Crew. It never deletes anything from the CLI's config.
-
-**5. Password managers** as a kind (`2026-10-15-password-providers.md`).
+**4. Password managers** as a kind (`2026-10-15-password-providers.md`).
 
 **Later.** Local stdio packages with API keys in the vault. A key does not
-rotate, so its lease is a copy.
+rotate, so handing one to a package on another machine would be a copy; that
+needs its own decision against rule 2.
 
 ## Open questions
 
@@ -326,22 +553,25 @@ rotate, so its lease is a copy.
   Pages on the repo, or a domain). Until then, Crew uses DCR only, and each
   vault registers its own client.
 - Should Off in Crew be per workspace too, or per machine only, as here?
-- Should a second account start on nowhere (as here) or ask where?
-
-## How it is built
-
-Subagents build each part in its own worktree and do not commit. The
-orchestrating session reviews each part against the rules above, runs the
-checks, and makes every commit.
 
 ## Status
 
 | Part | State |
 | --- | --- |
-| Spike: provider controls, servers' registration, redirect catching | todo |
-| Prototype of the page | todo |
-| Provider servers: inventory, page, sign-in, Off in Crew, chip switch | todo |
-| Vault on this Mac: OAuth client, keychain, accounts, bindings, connector shim | todo |
-| Remote vault: scoped tokens, leases, join, move, Linux file | todo |
-| Duplicates and import | todo |
+| Security before distributing: signed manifest, release ruleset and environment, hardened runtime, audits | in progress |
+| Notarization and Team ID check in the updater, with a Developer ID | todo (account next week) |
+| Spike: provider controls, servers' registration, redirect catching | servers' registration checked (2026-10-24); redirect catching built |
+| Prototype of the page | done, removed (in history at `10784e6`) |
+| Registry cache in `crewd`, search and featured over RPC | built; logos cached on disk (2026-10-28) |
+| Provider servers: inventory, page, sign-in, Off in Crew | built, covered by tests; the chat's chip removed (2026-10-25) |
+| Provider copies: listed on a connector's page, conflicts, rail dot | built (2026-10-25), Grok's sign-in through its credential store included; adding to the CLIs' configs removed (2026-10-28) |
+| Vault on this Mac: OAuth client, 0600 file vault, accounts, bindings, connector shim, page | built, tried with Notion (2026-10-25), Disconnect's revocation included |
+| Accounts for some workspaces: asked on Add account, changed from ⋯, no switch per connector, bot and session bindings dropped | built (2026-10-28), e2e `connector-workspaces` |
+| Vault on this Mac: keychain storage | built (release builds; a debug build keeps the file) |
+| Vault on this Mac: a change of workspaces reaching a kept Claude (`mcp_set_servers`) or Codex (relaunch) | built |
+| Vault on this Mac: a change of workspaces reaching opencode's shared server (per folder, next turn) | built |
+| Remote vault: scoped tokens, join, change of vault, Linux file | built (2026-10-28; the sealed move replaced 2026-11-02): machine tokens kept hashed, revocable, rate limited and logged (`connectors/machines.rs`); the link and the Mac's tailnet listener (`crewd/src/vault.rs`); join and the change from the window (`integrations/vault.ts`) |
+| Remote vault: calls run on the vault, no token leaves it (`2026-11-02-vault-calls.md`) | built (2026-11-02): replaces leases; tried between this Mac and falcon-heavy over Tailscale with the fake service, not yet with a real one |
+| Remote vault: only over Tailscale; a machine reached over SSH says "Needs Tailscale" and is left out of joins and moves | built (2026-10-28) |
+| Remote vault: a machine's calls limited to the accounts for its workspaces | todo: the vault can't tell which workspaces a machine holds; for now any account, rate limited and logged |
 | Password managers as a kind | todo |

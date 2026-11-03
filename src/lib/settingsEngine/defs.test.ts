@@ -31,6 +31,7 @@ const WINDOW_MEMORY = [
   "src/hooks/useWorktrees.ts",
   "src/lib/api.ts",
   "src/lib/tabsMigration.ts",
+  "src/surfaces/settings/integrations/vault.ts",
 ];
 
 describe("the settings catalog", () => {

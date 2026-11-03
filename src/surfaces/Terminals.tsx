@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect } from 'react';
 import { useCommands } from '../hooks/useCommand';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
-import { reconnectAfterSignIn } from '../lib/mcp';
+import { reconnectAfterSignIn, refreshAfterServerSignIn } from '../lib/mcp';
 import { preloadWhenIdle } from '../lib/preloadable';
 import { restartAfterSignIn } from '../lib/providerSignIn';
 import { isTerminalTab, relativeTo } from '../lib/tabs';
@@ -79,12 +79,14 @@ export function Terminals({ panes, onOpenFile, onInputSent }: Props) {
             {...(tab.input !== undefined && onInputSent && { onInputSent: () => onInputSent(pane.workspaceId, tab.id) })}
             active={visible}
             // A login leaves the shell behind to read what it said. An MCP login
-            // then connects the server; the provider's own login restarts the CLI.
+            // then connects the server; the provider's own login restarts the CLI;
+            // a provider server's has its machine read the CLIs' servers again.
             shellOnExit={signIn !== undefined}
             onExit={
               signIn &&
               ((code) => {
-                if (signIn.server) void reconnectAfterSignIn(pane.id, signIn.sessionId, signIn.server);
+                if ("envId" in signIn) void refreshAfterServerSignIn(pane.id, signIn.envId);
+                else if (signIn.server) void reconnectAfterSignIn(pane.id, signIn.sessionId, signIn.server);
                 else restartAfterSignIn(pane.id, signIn.sessionId, code);
               })
             }

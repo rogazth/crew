@@ -5,9 +5,10 @@ import { LOCAL, envOf, linkOf, reconnect, refreshRemotes, setFocusEnv, wakeAll, 
 import { dispatchNotification } from "../lib/notifications";
 import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, remotesHost } from "../lib/host";
-import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, wakeSetting } from "../lib/remoteUi";
+import { requestAddRemote, setOpenWorkspaceOn, setServerSignInOpener, setSettingsOpener, wakeSetting } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
-import type { Workspace } from "../lib/types";
+import { newSignInTab, newTerminalTab } from "../lib/tabs";
+import type { Tab, Workspace } from "../lib/types";
 import type { useWorkspaces } from "./useWorkspaces";
 import { remoteAliases, useEnvStates } from "./useEnvLinks";
 
@@ -16,8 +17,8 @@ type Deps = {
   active: Workspace | null;
   closePage: () => void;
   openSettings: (section?: SettingsSectionId) => void;
-  /** A new shell in a workspace's main checkout, which need not be on screen yet. */
-  openTerminalIn: (workspaceId: string, input?: string) => void;
+  /** A tab in a workspace's main checkout, which need not be on screen yet. */
+  openTabIn: (workspaceId: string, tab: Tab) => void;
 };
 
 /**
@@ -25,7 +26,7 @@ type Deps = {
  * ⌘O's machine picker, the rail's badge, "Open terminal on machine", and
  * routing each machine's pages to its localhost.
  */
-export function useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn }: Deps) {
+export function useEnvironments({ workspaces, active, closePage, openSettings, openTabIn }: Deps) {
   const links = useEnvStates();
   /** Open, and the machine it starts on: null for the machine list. */
   const [picker, setPicker] = useState<{ start: string | null } | null>(null);
@@ -66,11 +67,11 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
   );
 
   /**
-   * A shell on the machine: in the workspace on its home, or else in the first
-   * workspace it has, or in a new one on its home. `input` is typed into it once it is up.
+   * A terminal tab on the machine: in the workspace on its home, or else in
+   * the first workspace it has, or in a new one on its home.
    */
-  const openTerminalOn = useCallback(
-    async (envId: string, input?: string) => {
+  const openTabOn = useCallback(
+    async (envId: string, tab: Tab) => {
       const link = linkOf(envId);
       const home = link?.home;
       if (!link || link.status !== "online" || !home) throw new Error(`${link?.name ?? "That machine"} is not connected`);
@@ -78,12 +79,15 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
       const existing = here.find((item) => item.path === home) ?? here[0];
       const workspace = existing ?? (await api.createWorkspace(link.name, home, envId));
       closePage();
-      openTerminalIn(workspace.id, input);
+      openTabIn(workspace.id, tab);
       if (existing) activate(existing.id);
       else adopt(workspace);
     },
-    [activate, adopt, closePage, openTerminalIn, workspaces.workspaces],
+    [activate, adopt, closePage, openTabIn, workspaces.workspaces],
   );
+
+  /** A shell on the machine; `input` is typed into it once it is up. */
+  const openTerminalOn = useCallback((envId: string, input?: string) => openTabOn(envId, newTerminalTab(null, input)), [openTabOn]);
 
   useEffect(() => {
     setFocusEnv(active ? envOf(active.id) : LOCAL);
@@ -140,11 +144,16 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
       setPicker({ start: envId });
     });
     setSettingsOpener(openSettings);
+    // A provider server's login runs on the machine whose CLI uses it.
+    setServerSignInOpener((envId, { provider, server, command }) =>
+      openTabOn(envId, newSignInTab(null, { envId, provider, server, command }, `Sign in to ${server}`)),
+    );
     return () => {
       setOpenWorkspaceOn(null);
       setSettingsOpener(null);
+      setServerSignInOpener(null);
     };
-  }, [closePage, openSettings]);
+  }, [closePage, openSettings, openTabOn]);
 
   /** The machine a workspace lives on, for the rail's badge. Null on this Mac. */
   const remoteOf = useCallback(

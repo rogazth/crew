@@ -308,7 +308,7 @@ impl TurnHost {
         mcp_env.sort();
         let args = build_grok_spawn_args(&autonomy);
         self.agents.spawn(session_id.to_string(), path, args, cwd.to_string(), Some(env))?;
-        Ok(mcp_servers(mcp, &mcp_env))
+        Ok(mcp_servers(mcp, &mcp_env, &self.connector_servers(session, mcp)))
     }
 
     fn grok_open(

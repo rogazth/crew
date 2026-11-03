@@ -1,6 +1,6 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { PlusIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { PlugIcon, PlusIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
 import { RoutinesIcon } from "./RoutinesIcon";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
@@ -29,6 +29,9 @@ type Props = {
   sessions: Session[];
   settingsOpen: boolean;
   routinesOpen: boolean;
+  integrationsOpen: boolean;
+  /** A connector or a CLI's server waits on the person: the Connectors icon wears a dot. */
+  integrationsAlert: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRename: (id: string, name: string) => void;
@@ -37,6 +40,7 @@ type Props = {
   onRemove: (workspace: Workspace) => void;
   onReorder: (ids: string[]) => void;
   onOpenRoutines: () => void;
+  onOpenIntegrations: () => void;
   onOpenSettings: () => void;
   /** Opens Settings on Usage. */
   onOpenUsage: () => void;
@@ -165,6 +169,13 @@ export function WorkspaceRail(props: Props) {
         label="Routines"
         active={props.routinesOpen}
         onClick={props.onOpenRoutines}
+      />
+      <RailButton
+        icon={PlugIcon}
+        label="Connectors"
+        active={props.integrationsOpen}
+        alert={props.integrationsAlert}
+        onClick={props.onOpenIntegrations}
       />
       <RailButton
         icon={SettingsIcon}
@@ -373,6 +384,7 @@ function RailButton({
   keys,
   active = false,
   dashed = false,
+  alert = false,
   onClick,
 }: {
   icon: Icon;
@@ -380,6 +392,8 @@ function RailButton({
   keys?: string;
   active?: boolean;
   dashed?: boolean;
+  /** A dot in its corner: something behind it waits on the person. */
+  alert?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -395,7 +409,7 @@ function RailButton({
           aria-label={label}
           aria-pressed={active}
           onClick={onClick}
-          className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
+          className={`relative grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
             dashed
               ? "rounded-[18px] border border-dashed border-border-strong text-text-muted hover:text-text"
               : `rounded-xl ${active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"}`
@@ -404,6 +418,7 @@ function RailButton({
       }
     >
       <Glyph className="size-[18px]" />
+      {alert && <span aria-hidden className="absolute top-1.5 right-1.5 size-2 rounded-full bg-warning ring-2 ring-rail" />}
     </Tooltip>
   );
 }

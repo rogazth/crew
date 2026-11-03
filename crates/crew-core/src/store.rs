@@ -548,6 +548,35 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (44, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 45 {
+        let tx = conn.unchecked_transaction()?;
+        // The daemon's copy of the MCP Registry, for Integrations to browse.
+        tx.execute_batch(crate::registry::MIGRATION_V45)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (45, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 46 {
+        let tx = conn.unchecked_transaction()?;
+        // Crew's connectors, their accounts and where each is on.
+        tx.execute_batch(crate::connectors::MIGRATION_V46)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (46, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 47 {
+        let tx = conn.unchecked_transaction()?;
+        // The machines using this daemon when it is the vault.
+        tx.execute_batch(crate::connectors::machines::MIGRATION_V47)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (47, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 48 {
+        let tx = conn.unchecked_transaction()?;
+        if has_column(&tx, "vault_machines", "last_lease")? {
+            tx.execute_batch(crate::connectors::machines::MIGRATION_V48)?;
+        }
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (48, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

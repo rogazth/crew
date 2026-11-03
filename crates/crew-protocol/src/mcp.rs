@@ -137,3 +137,61 @@ mod tests {
         );
     }
 }
+
+/// A remote server in the official MCP Registry, as the daemon's copy keeps it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RegistryServer {
+    /// Reverse-DNS, unique in the registry: `com.notion/mcp`.
+    pub name: String,
+    pub title: Option<String>,
+    pub description: String,
+    /// The domain that publishes it: `notion.com`.
+    pub publisher: String,
+    pub remote_url: String,
+    pub icon_url: Option<String>,
+    /// Served from its publisher's own domain: a vendor's server, not a wrapper around it.
+    pub first_party: bool,
+    /// When the registry last changed it, as the registry writes it.
+    pub updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RegistrySearch {
+    /// Empty: the featured servers, in their order.
+    pub text: String,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RegistryStatus {
+    /// Servers in the daemon's copy.
+    pub servers: u32,
+    /// When the last full or incremental pass finished.
+    #[ts(type = "number | null")]
+    pub synced_at: Option<i64>,
+    pub syncing: bool,
+}
+
+/// `registry_match`: the registry servers some URLs are, for naming and
+/// marking the servers the CLIs already have.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RegistryMatch {
+    pub urls: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RegistryMatched {
+    /// As it was asked.
+    pub url: String,
+    pub server: RegistryServer,
+}

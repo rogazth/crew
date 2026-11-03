@@ -6,7 +6,7 @@ import { providerOf } from "../lib/providers";
 import { fileTabId, newBrowserTab, newFileBrowserTab, newSignInTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
-import type { ProjectFile, Session, StubKind } from "../lib/types";
+import type { ProjectFile, Session, StubKind, Tab } from "../lib/types";
 import { trace } from "../lib/trace";
 import type { useConfirmations } from "./useConfirmations";
 import type { useTabs } from "./useTabs";
@@ -123,11 +123,11 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
-  /** A new shell in a workspace's main checkout, on screen or not: the tab waits for the workspace's saved tabs. */
-  const openTerminalIn = useCallback(
-    (workspaceId: string, input?: string) => {
+  /** A tab (a shell, a login) in a workspace's main checkout, on screen or not: the tab waits for the workspace's saved tabs. */
+  const openTabIn = useCallback(
+    (workspaceId: string, tab: Tab) => {
       closePage();
-      tabs.openIn(workspaceId, newTerminalTab(null, input));
+      tabs.openIn(workspaceId, tab);
     },
     [closePage, tabs],
   );
@@ -236,7 +236,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openFileInBrowser,
     openStub,
     openTerminal,
-    openTerminalIn,
+    openTabIn,
     openSignIn,
     openLogin,
     openBrowser,

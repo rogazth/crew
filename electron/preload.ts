@@ -9,6 +9,7 @@ import {
   type PagePrompt,
   type PromptAnswer,
   type Responsiveness,
+  type SignInRequest,
   type SitePermissions,
 } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
@@ -140,5 +141,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     reportMachine: (webContentsId: number, machine: string | null) =>
       ipcRenderer.send(CHANNELS.guestMachine, webContentsId, machine),
     onMount: (cb: (request: MountRequest) => void) => listen(CHANNELS.mount, cb),
+    signIn: (request: SignInRequest) => ipcRenderer.invoke(CHANNELS.signIn, request),
+    abortSignIn: (state: string) => ipcRenderer.invoke(CHANNELS.signInAbort, state),
   },
 });

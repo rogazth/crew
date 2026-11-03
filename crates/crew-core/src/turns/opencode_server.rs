@@ -5,7 +5,8 @@
 //! environment only, never on argv. It runs as an agent process under
 //! [`SERVER_KEY`], so its process group is in the registry the startup sweep
 //! reads, and it stops with the daemon like any agent. Its config is the 2.x
-//! format with Crew's MCP server (`providers::opencode::server_config`), in a
+//! format with Crew's MCP server (`providers::opencode::server_config`) and the
+//! connector accounts each workspace has on, read at launch, in a
 //! file only the user can read that `OPENCODE_CONFIG` names: the server's
 //! environment is every shell's it runs (measured on 2.0.26: a session shell
 //! printed the server's whole `env`, `OPENCODE_CONFIG_CONTENT` included), and
@@ -34,6 +35,7 @@ use serde_json::Value;
 use super::{Live, TurnHost, TurnOutcome};
 use crate::http_local::{HttpError, LocalClient};
 use crate::providers::opencode::{migration, server_config, version_check, Migration};
+use crate::providers::McpServerSpec;
 
 /// The agent key the server runs under: no session has it.
 pub(crate) const SERVER_KEY: &str = "opencode:server";
@@ -91,6 +93,12 @@ struct State {
     /// Folders whose `/` menu is being read again, so a burst of
     /// `command.updated` reads it once.
     menu_reads: HashSet<String>,
+    /// The connector servers the launch's config gave every folder, and the
+    /// environment they run with (the run's host token and Crew's socket).
+    launched: Vec<McpServerSpec>,
+    mcp_env: serde_json::Map<String, Value>,
+    /// The connector servers a folder was given since, by folder.
+    folders: HashMap<String, Vec<McpServerSpec>>,
 }
 
 /// The server's state, shared by every clone of the host.
@@ -197,7 +205,12 @@ impl TurnHost {
         if let Ok(info) = self.bridge.info() {
             mcp_env.push(("CREW_SOCKET".into(), info.socket_path));
         }
-        let config = match write_config(&run.run_id, &server_config(self.mcp().as_ref(), &mcp_env)) {
+        let mcp = self.mcp();
+        let connectors = self.opencode_connector_servers(mcp.as_ref());
+        // What is off in Crew as the server starts; a change reaches it on its
+        // next launch.
+        let off = self.provider_servers.opencode_off(&super::kept_servers(&connectors));
+        let config = match write_config(&run.run_id, &server_config(mcp.as_ref(), &mcp_env, &connectors, &off)) {
             Ok(config) => config,
             Err(error) => {
                 self.bridge.opencode().end_run(&run.run_id);
@@ -219,6 +232,9 @@ impl TurnHost {
             state.listening = Some(tx);
             state.output.clear();
             state.run = Some((run.run_id.clone(), config));
+            state.launched = connectors.clone();
+            state.mcp_env = mcp_env.iter().map(|(key, value)| (key.clone(), Value::from(value.as_str()))).collect();
+            state.folders.clear();
             state.epoch
         };
         let cwd = std::env::var("HOME")
@@ -271,6 +287,106 @@ impl TurnHost {
         // The server is shared by every opencode session, so this is the one connection there is.
         tracing::info!(provider = "opencode", version = %conn.version, took_ms = crate::trace::ms(began.elapsed()), "provider.connected");
         Ok(conn)
+    }
+
+    /// The connector accounts the shared server carries: what each workspace
+    /// has on, read when the server starts. Its host token names no session,
+    /// so each entry says which workspace it lists tools for; the daemon still
+    /// checks every call against its own session's bindings. The server is
+    /// one for every workspace and a name is one server, so a name two
+    /// workspaces both have on is listed for the first. A binding changed
+    /// later reaches a folder on its next turn ([`TurnHost::opencode_sync_connectors`]),
+    /// which also gives it its own workspace's alone. None without Crew's server, and
+    /// none when they cannot be read: the launch never waits on them.
+    fn opencode_connector_servers(&self, mcp: Option<&(String, Vec<String>)>) -> Vec<McpServerSpec> {
+        let Some((command, _)) = mcp else {
+            return Vec::new();
+        };
+        let workspaces = match crate::workspace::list(&self.store) {
+            Ok(workspaces) => workspaces,
+            Err(error) => {
+                eprintln!("[connectors] opencode serve: started without connectors: {error}");
+                return Vec::new();
+            }
+        };
+        let mut out: Vec<McpServerSpec> = Vec::new();
+        for workspace in workspaces {
+            let bound = match crate::connectors::bound_servers_for_workspace(&self.store, &workspace.id) {
+                Ok(bound) => bound,
+                Err(error) => {
+                    eprintln!("[connectors] opencode serve: workspace {}: its connectors were left out: {error}", workspace.id);
+                    continue;
+                }
+            };
+            for server in bound {
+                if out.iter().any(|taken| taken.name == server.name) {
+                    continue;
+                }
+                let mut spec = McpServerSpec::connector(command, &server.name);
+                spec.args.extend(["--workspace".to_string(), workspace.id.clone()]);
+                out.push(spec);
+            }
+        }
+        out
+    }
+
+    /// Gives a session's folder the connectors its workspace has on now, one
+    /// server at a time (`PUT` and `DELETE /api/experimental/mcp/:name`,
+    /// which change that folder alone and write no config): a binding changed
+    /// since the launch reaches the next turn there. A server that will not
+    /// take one is said in the log, and tried again on the next turn.
+    pub(super) fn opencode_sync_connectors(&self, session: &crate::session::Session, conn: &Conn, cwd: &str) {
+        let Some((command, _)) = self.mcp() else {
+            return;
+        };
+        let bound = match crate::connectors::bound_servers_for_workspace(&self.store, &session.workspace_id) {
+            Ok(bound) => bound,
+            Err(error) => {
+                eprintln!("[connectors] opencode: {cwd}: its connectors were left as they were: {error}");
+                return;
+            }
+        };
+        let wanted: Vec<McpServerSpec> = bound
+            .iter()
+            .map(|server| {
+                let mut spec = McpServerSpec::connector(&command, &server.name);
+                spec.args.extend(["--workspace".to_string(), session.workspace_id.clone()]);
+                spec
+            })
+            .collect();
+        let (has, environment) = {
+            let state = self.opencode.lock();
+            if !state.conn.as_ref().is_some_and(|up| up.epoch == conn.epoch) {
+                return;
+            }
+            (state.folders.get(cwd).unwrap_or(&state.launched).clone(), state.mcp_env.clone())
+        };
+        if has == wanted {
+            return;
+        }
+        let client = conn.client();
+        let mut taken = true;
+        for server in wanted.iter().filter(|server| !has.contains(server)) {
+            let body = serde_json::json!({ "config": crate::providers::opencode::connector_entry(server, &environment) });
+            let put = client.put_json_in(&format!("/api/experimental/mcp/{}", server.name), &body, cwd);
+            if let Err(error) = super::opencode::ok(put, "add a connector") {
+                eprintln!("[connectors] opencode: {cwd}: {}: {error}", server.name);
+                taken = false;
+            }
+        }
+        for server in has.iter().filter(|server| !wanted.iter().any(|kept| kept.name == server.name)) {
+            let delete = client.delete_in(&format!("/api/experimental/mcp/{}", server.name), cwd);
+            if let Err(error) = super::opencode::ok(delete, "remove a connector") {
+                eprintln!("[connectors] opencode: {cwd}: {}: {error}", server.name);
+                taken = false;
+            }
+        }
+        if taken {
+            let mut state = self.opencode.lock();
+            if state.conn.as_ref().is_some_and(|up| up.epoch == conn.epoch) {
+                state.folders.insert(cwd.to_string(), wanted);
+            }
+        }
     }
 
     /// Says something about the server in a session's transcript.

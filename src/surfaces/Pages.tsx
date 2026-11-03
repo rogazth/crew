@@ -8,13 +8,16 @@ import type { RoutineDraft } from "../lib/routines";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import { RoutinesView } from "./RoutinesView";
+import { IntegrationsPage } from "./settings/integrations/IntegrationsPage";
+import { useIntegrationsTrail } from "./settings/integrations/lib";
 import { SettingsView } from "./SettingsView";
 
 /** A page covers the workspace instead of living in a tab. */
 export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
-  | { kind: "routines"; draft: RoutineDraft | null; editId?: string };
+  | { kind: "routines"; draft: RoutineDraft | null; editId?: string }
+  | { kind: "integrations" };
 
 type Props = {
   page: Page;
@@ -43,6 +46,7 @@ export function Pages({
   onClose,
 }: Props) {
   const bots = sessions.filter((session) => session.kind === "bot");
+  const integrations = useIntegrationsTrail();
   const [heading, setHeading] = useState<PageHeading | null>(null);
   // A page deeper than its top (a routine being edited) says its own trail.
   const [deeper, setDeeper] = useState<Crumb[] | null>(null);
@@ -50,7 +54,7 @@ export function Pages({
   // and its strip stands where the tabs were, so the sheet does not jump.
   const sheet = (children: ReactNode) => (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageStrip trail={deeper ?? trail(page)} heading={heading} inset={inset} onClose={onClose} />
+      <PageStrip trail={deeper ?? (page.kind === "integrations" ? integrations : trail(page))} heading={heading} inset={inset} onClose={onClose} />
       <div data-sheet="page" className="min-h-0 flex-1">
         <PageHeadingContext.Provider value={setHeading}>
           <PageTrailContext.Provider value={setDeeper}>{children}</PageTrailContext.Provider>
@@ -82,13 +86,16 @@ export function Pages({
       />,
     );
   }
+  if (page.kind === "integrations")
+    return sheet(<IntegrationsPage workspaces={workspaces} />);
   return null;
 }
 
 /**
  * Where the page is. Settings swaps the sidebar for its sections, so the strip
- * says whose they are and which is on screen; Routines already heads the sheet
- * with its own name, so the strip leaves it out until a routine is open.
+ * says whose they are and which is on screen; Routines and Integrations already
+ * head the sheet with their own name, so the strip leaves it out until a routine
+ * is open.
  */
 function trail(page: Page): Crumb[] {
   return page.kind === "settings" ? ["Settings", settingsSection(page.section).label] : [];
