@@ -178,7 +178,16 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+/* Clip, not hidden: a hidden box still scrolls from code, and that takes the tab strip off the top of the window. */
+html {
   overflow: hidden;
+}
+
+body,
+#root {
+  overflow: clip;
 }
 
 body {
@@ -190,7 +199,6 @@ body {
   font-size: 13px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
 }
 
 [data-tauri-drag-region] {

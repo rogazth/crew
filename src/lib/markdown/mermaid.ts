@@ -62,6 +62,8 @@ export function renderMermaid(source: string, dark: boolean): Promise<string> {
           securityLevel: "strict",
           theme: wanted,
           fontFamily: "inherit",
+          // Without it a source that does not parse leaves its error diagram in <body>, under the window.
+          suppressErrorRendering: true,
         });
         theme = wanted;
       }
