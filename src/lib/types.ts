@@ -91,6 +91,11 @@ export const STUB_KINDS = ["terminal", "history", "commands"] as const;
 
 export type StubKind = (typeof STUB_KINDS)[number];
 
+/** A login a terminal tab runs: for a session, or for a provider server on a machine. */
+export type SignInRun =
+  | { sessionId: string; command: string[]; server?: string }
+  | { envId: string; provider: string; server: string; command: string[] };
+
 /** A pinned tab keeps to the strip's left end, its face alone. */
 export type Tab = (
   | { id: string; kind: "session"; sessionId: string }
@@ -117,7 +122,8 @@ export type Tab = (
    * A terminal keeps the worktree it was opened in; null or absent is the main checkout.
    * `signIn` runs a login in place of the shell. With `server`, the session
    * reconnects that MCP server when it ends; without one, a clean exit
-   * restarts the session's CLI.
+   * restarts the session's CLI. A provider server's login (`envId`), which
+   * no session asked for, has that machine read its servers again.
    */
   | {
       id: string;
@@ -125,7 +131,7 @@ export type Tab = (
       stub: StubKind;
       title: string;
       worktree?: string | null;
-      signIn?: { sessionId: string; command: string[]; server?: string };
+      signIn?: SignInRun;
       /** Typed into the shell once it is up, then Enter: a command someone asked Crew to start for them. Never written to disk. */
       input?: string;
     }

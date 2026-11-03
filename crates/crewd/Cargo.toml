@@ -30,7 +30,7 @@ tokio-tungstenite.workspace = true
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
 [dev-dependencies]
-crew-core = { path = "../crew-core", features = ["capture"] }
+crew-core = { path = "../crew-core", features = ["fakes", "capture"] }
 futures-util.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }

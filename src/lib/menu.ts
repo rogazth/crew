@@ -36,7 +36,9 @@ export type MenuIcon =
   | "align-left"
   | "align-center"
   | "align-right"
-  | "code";
+  | "code"
+  | "disable"
+  | "enable";
 
 export type MenuAction = {
   id: string;
@@ -44,6 +46,8 @@ export type MenuAction = {
   icon: MenuIcon;
   danger?: boolean;
   disabled?: boolean;
+  /** A second, muted line under the label: why it's disabled, say. */
+  hint?: string;
   /** A setting the action flips: drawn with a check when on. */
   checked?: boolean;
 };

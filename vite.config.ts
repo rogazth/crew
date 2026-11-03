@@ -26,5 +26,14 @@ export default defineConfig({
     port: Number(process.env.CREW_PORT) || 1420,
     strictPort: true,
     watch: { ignored: ["**/reference/**"] },
+    // The mock transport (CREW_MOCK) browses the official MCP Registry live,
+    // and the registry sends no CORS headers.
+    proxy: {
+      "/mcp-registry": {
+        target: "https://registry.modelcontextprotocol.io",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/mcp-registry/, ""),
+      },
+    },
   },
 });

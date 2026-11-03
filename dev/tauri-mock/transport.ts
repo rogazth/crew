@@ -380,6 +380,551 @@ function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
   return rulesOf(String(id));
 }
 
+/* ── The MCP Registry, live through Vite's /mcp-registry proxy ───────── */
+// The daemon keeps its own copy (crates/crew-core/src/registry.rs); the mock
+// reads the live registry, which sends no CORS headers, through vite.config.ts.
+
+// The daemon's list (crates/crew-core/src/registry.rs FEATURED), in its order.
+const FEATURED = [
+  "com.notion/mcp",
+  "app.linear/linear",
+  "io.github.github/github-mcp-server",
+  "com.atlassian/atlassian-mcp-server",
+  "io.github.getsentry/sentry-mcp",
+  "com.figma.mcp/mcp",
+  "com.stripe/mcp",
+  "com.supabase/mcp",
+  "com.vercel/vercel-mcp",
+  "com.cloudflare.mcp/mcp",
+  "com.gitlab/mcp",
+  "com.neon/mcp",
+  "com.airtable/mcp",
+  "com.monday/monday.com",
+  "com.canva.mcp/mcp",
+  "com.webflow/mcp",
+  "com.zapier/mcp",
+  "com.paypal.mcp/mcp",
+  "co.huggingface/hf-mcp-server",
+  "ai.exa/exa",
+  "io.github.upstash/context7",
+  "com.wix/mcp",
+];
+const REGISTRY = "/mcp-registry/v0.1/servers";
+
+type RegistryIcon = { src: string; mimeType?: string; sizes?: string[] };
+type RegistryEntry = {
+  server: { name: string; title?: string; description?: string; icons?: RegistryIcon[]; remotes?: { type: string; url: string }[] };
+  _meta?: Record<string, { status?: string; updatedAt?: string } | undefined>;
+};
+
+function registryHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+const registrable = (host: string) => host.split(".").filter(Boolean).slice(-2).join(".");
+
+/** The daemon's `to_row`: a remote, active server, or nothing. */
+function registryRow(entry: RegistryEntry): Row | null {
+  const official = entry._meta?.["io.modelcontextprotocol.registry/official"];
+  if ((official?.status ?? "active") !== "active") return null;
+  const { server } = entry;
+  const remote = server.remotes?.find((r) => r.type === "streamable-http") ?? server.remotes?.[0];
+  if (!remote) return null;
+  const host = registrable(registryHost(remote.url));
+  const namespace = server.name.split("/")[0] ?? "";
+  const owner = namespace.startsWith("io.github.") ? namespace.slice("io.github.".length).toLowerCase() : null;
+  const labels = namespace.split(".");
+  const publisher = owner !== null ? host || "github.com" : labels.length >= 2 ? `${labels[1]}.${labels[0]}` : namespace;
+  const label = host.split(".")[0] ?? "";
+  const firstParty = owner !== null ? label.length >= 3 && (owner.includes(label) || label.includes(owner)) : host === publisher;
+  const icons = server.icons ?? [];
+  const icon =
+    icons.find((i) => i.mimeType === "image/svg+xml") ??
+    icons.find((i) => i.mimeType === "image/png" && i.sizes?.some((size) => parseInt(size, 10) >= 64)) ??
+    icons[0];
+  return {
+    name: server.name,
+    title: server.title?.trim() || null,
+    description: server.description ?? "",
+    publisher,
+    remoteUrl: remote.url,
+    iconUrl: icon?.src ?? null,
+    firstParty,
+    updatedAt: official?.updatedAt ?? "",
+  };
+}
+
+let featuredRows: Promise<Row[]> | null = null;
+/** Every registry row a search answered, so installing one by name finds its URL and icon. */
+const registryRows = new Map<string, Row>();
+
+async function registrySearch(text: string, limit: number): Promise<Row[]> {
+  const q = text.trim();
+  if (!q) {
+    featuredRows ??= Promise.all(
+      FEATURED.map((name) =>
+        fetch(`${REGISTRY}/${encodeURIComponent(name)}/versions/latest`)
+          .then((r) => (r.ok ? (r.json() as Promise<RegistryEntry>) : null))
+          .then((entry) => (entry ? registryRow(entry) : null))
+          .catch(() => null),
+      ),
+    ).then((rows) => rows.filter((row): row is Row => !!row));
+    const rows = await featuredRows;
+    for (const row of rows) registryRows.set(row.name as string, row);
+    return rows.slice(0, limit);
+  }
+  const params = new URLSearchParams({ search: q, version: "latest", limit: "100" });
+  const response = await fetch(`${REGISTRY}?${params}`);
+  if (!response.ok) throw new Error(`registry ${response.status}`);
+  const { servers } = (await response.json()) as { servers: RegistryEntry[] };
+  const seen = new Set<string>();
+  const rows = servers
+    .map(registryRow)
+    .filter((row): row is Row => !!row && !seen.has(row.name as string) && !!seen.add(row.name as string))
+    .sort((a, b) => Number(b.firstParty) - Number(a.firstParty))
+    .slice(0, limit);
+  for (const row of rows) registryRows.set(row.name as string, row);
+  return rows;
+}
+
+/* ── Crew's connectors and the vault, in memory ───────────────────────── */
+
+type MockTool = { name: string; title: string | null; description: string; readOnly: boolean; destructive: boolean; tokens: number };
+type MockAccount = {
+  id: string;
+  connectorId: string;
+  label: string;
+  identity: string | null;
+  state: "pending" | "connected" | "expired" | "needs-scope" | "failed";
+  error: string | null;
+  /** The workspaces it is for; `null` is every one. */
+  workspaces: string[] | null;
+  tools: MockTool[];
+  toolsOff: string[];
+  createdAt: number;
+};
+type MockConnector = {
+  id: string;
+  name: string;
+  registryName: string | null;
+  url: string;
+  iconUrl: string | null;
+  description: string;
+  publisher: string;
+  refused: string | null;
+  builtin: string | null;
+  accounts: MockAccount[];
+  createdAt: number;
+};
+
+/** Google's apps, as crewd lists its built-ins (`connectors/google.rs`, `gws.rs`). */
+type MockBuiltin = { id: string; name: string; description: string; server: string; iconUrl: string; family: string; unavailable: string | null; tools: MockTool[] };
+const googleTool = (name: string, description: string, tokens: number, kind: "read" | "write" | "destructive" = "write"): MockTool => ({
+  name,
+  title: null,
+  description,
+  readOnly: kind === "read",
+  destructive: kind === "destructive",
+  tokens,
+});
+const google = (id: string, name: string, server: string, icon: string, description: string, tools: MockTool[]): MockBuiltin => ({
+  id: `google.${id}`,
+  name,
+  description,
+  server,
+  iconUrl: `https://ssl.gstatic.com/images/branding/product/2x/${icon}_2020q4_48dp.png`,
+  family: "google",
+  unavailable: null,
+  tools,
+});
+const BUILTINS: MockBuiltin[] = [
+  google("gmail", "Gmail", "gmail.googleapis.com", "gmail", "Search and read mail, draft and send messages, and sort threads with labels.", [
+    googleTool("search_threads", "Search the mailbox with Gmail's search syntax.", 420, "read"),
+    googleTool("read_thread", "Read a thread's messages and the text of each.", 310, "read"),
+    googleTool("list_labels", "List the mailbox's labels.", 160, "read"),
+    googleTool("create_draft", "Write a draft, new or as a reply.", 380),
+    googleTool("send_message", "Send an email, new or as a reply.", 450, "destructive"),
+    googleTool("modify_labels", "Add or remove labels on a thread.", 290),
+    googleTool("trash_thread", "Move a thread to the trash.", 180, "destructive"),
+  ]),
+  google("drive", "Google Drive", "www.googleapis.com/drive", "drive", "Search, read and upload files, make folders, and share or trash files.", [
+    googleTool("search_files", "Search Drive with its query syntax.", 400, "read"),
+    googleTool("read_file", "Read a file's text.", 260, "read"),
+    googleTool("list_folder", "List what a folder holds.", 210, "read"),
+    googleTool("upload_file", "Make a file in Drive from text.", 340),
+    googleTool("create_folder", "Make a folder.", 170),
+    googleTool("share_file", "Share a file with someone.", 330, "destructive"),
+    googleTool("trash_file", "Move a file or folder to the trash.", 160, "destructive"),
+  ]),
+  google("calendar", "Google Calendar", "www.googleapis.com/calendar", "calendar", "List events, find free time, and create, change or delete events.", [
+    googleTool("list_events", "List a calendar's events in a range.", 380, "read"),
+    googleTool("find_free_time", "Answer the busy blocks of calendars in a range.", 300, "read"),
+    googleTool("create_event", "Add an event.", 460),
+    googleTool("update_event", "Change an event.", 390),
+    googleTool("delete_event", "Delete an event.", 170, "destructive"),
+  ]),
+  google("docs", "Google Docs", "docs.googleapis.com", "docs", "Read documents, create new ones, and edit their text.", [
+    googleTool("read_document", "Read a document's title and text.", 240, "read"),
+    googleTool("create_document", "Make a document.", 280),
+    googleTool("edit_document", "Replace text throughout a document, and add text at its end.", 420),
+  ]),
+  google("sheets", "Google Sheets", "sheets.googleapis.com", "sheets", "Read and write ranges, list a spreadsheet's sheets, and create spreadsheets.", [
+    googleTool("read_range", "Read a range's values.", 280, "read"),
+    googleTool("list_sheets", "List a spreadsheet's sheets.", 190, "read"),
+    googleTool("create_spreadsheet", "Make a spreadsheet.", 230),
+    googleTool("write_range", "Write rows of values to a range.", 360),
+    googleTool("clear_range", "Clear a range's values.", 170, "destructive"),
+  ]),
+];
+
+// Linear is seeded, signed in, so an installed registry connector's page shows
+// without a sign-in; remove it to see the page empty.
+const linearTool = (name: string, description: string, tokens: number, extra: Partial<MockTool> = {}): MockTool => ({
+  name,
+  title: null,
+  description,
+  readOnly: false,
+  destructive: false,
+  tokens,
+  ...extra,
+});
+const connectors: MockConnector[] = [
+  {
+    id: "connector-linear",
+    name: "Linear",
+    registryName: "app.linear/linear",
+    url: "https://mcp.linear.app/mcp",
+    iconUrl: null,
+    description: "Issues, projects and cycles in Linear.",
+    publisher: "linear.app",
+    refused: null,
+    builtin: null,
+    createdAt: Date.now() - 86_400_000,
+    accounts: [
+      {
+        id: "account-linear-1",
+        connectorId: "connector-linear",
+        label: "you@example.com",
+        identity: "you@example.com",
+        state: "connected",
+        error: null,
+        workspaces: null,
+        tools: [
+          linearTool("list_issues", "List issues in the user's Linear workspace. Filter by team, assignee, state or label.\nReturns up to 50.", 820, { readOnly: true }),
+          linearTool("get_issue", "Retrieve a Linear issue by its ID, with comments and attachments.", 410, { readOnly: true }),
+          linearTool("list_projects", "List projects in the workspace. Archived ones are left out unless asked.", 380, { readOnly: true }),
+          linearTool("create_issue", "Create a new Linear issue. Title and team are required; the rest is optional.", 960),
+          linearTool("update_issue", "Update an existing issue's title, description, state, assignee or labels.", 880),
+          linearTool("create_comment", "Comment on an issue, in Markdown.", 340),
+          linearTool("delete_issue", "Delete an issue. It moves to the trash for 30 days.", 260, { destructive: true }),
+        ],
+        toolsOff: ["delete_issue"],
+        createdAt: Date.now() - 86_400_000,
+      },
+    ],
+  },
+];
+/** Sign-ins started and not yet redeemed, by state. */
+const signIns = new Map<string, { accountId: string; isNew: boolean; loginHint: string | null }>();
+let connectorSeq = 0;
+const IDENTITIES = ["you@example.com", "you@personal.example"];
+
+const emitConnectors = () => emit("connectors", structuredClone(connectors));
+const findAccount = (id: unknown) => connectors.flatMap((c) => c.accounts).find((a) => a.id === id);
+function needAccount(id: unknown): MockAccount {
+  const account = findAccount(id);
+  if (!account) throw new Error("mock: no such account");
+  return account;
+}
+
+/** A plausible tool list from the connector's name; a delete is destructive and starts off. */
+function mockTools(connector: MockConnector): MockTool[] {
+  const slug = connector.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "server";
+  const tool = (verb: string, what: string, extra: Partial<MockTool>, tokens: number): MockTool => ({
+    name: `${slug}-${verb}`,
+    title: null,
+    description: `${verb.charAt(0).toUpperCase()}${verb.slice(1)} ${what} in ${connector.name}.`,
+    readOnly: false,
+    destructive: false,
+    tokens,
+    ...extra,
+  });
+  return [
+    tool("search", "anything", { readOnly: true }, 420),
+    tool("fetch", "one item", { readOnly: true }, 380),
+    tool("create", "an item", {}, 760),
+    tool("update", "an item", {}, 610),
+    tool("delete", "an item", { destructive: true }, 260),
+  ];
+}
+
+function addConnector({ registryName, builtin, url, name }: Row): MockConnector {
+  const app = BUILTINS.find((b) => b.id === builtin);
+  if (app) {
+    const known = connectors.find((c) => c.builtin === app.id);
+    if (known) return known;
+    const connector: MockConnector = {
+      id: `builtin:${app.id}`,
+      name: app.name,
+      registryName: null,
+      url: `https://${app.server}`,
+      iconUrl: app.iconUrl,
+      description: app.description,
+      publisher: "Built in",
+      refused: null,
+      builtin: app.id,
+      accounts: [],
+      createdAt: Date.now(),
+    };
+    connectors.push(connector);
+    emitConnectors();
+    return connector;
+  }
+  const known = connectors.find((c) => (registryName ? c.registryName === registryName : c.url === url));
+  if (known) return known;
+  let remote = typeof url === "string" ? url : "";
+  let title = typeof name === "string" && name ? name : "";
+  let publisher = registryHost(remote);
+  let iconUrl: string | null = null;
+  if (typeof registryName === "string") {
+    const row = registryRows.get(registryName);
+    remote = (row?.remoteUrl as string | undefined) ?? `https://mcp.${registryName.split("/")[0]?.split(".").reverse().join(".")}/mcp`;
+    publisher = (row?.publisher as string | undefined) ?? registryHost(remote);
+    iconUrl = (row?.iconUrl as string | null | undefined) ?? null;
+    const label = ((row?.title as string | null | undefined) ?? "").replace(/\s+(MCP\s*Server|MCP)$/i, "").trim();
+    const word = registryName.split("/")[0]?.split(".")[1] ?? registryName;
+    title = label || word.charAt(0).toUpperCase() + word.slice(1);
+  }
+  const connector: MockConnector = {
+    id: `connector-${++connectorSeq}`,
+    name: title || publisher || "Connector",
+    registryName: typeof registryName === "string" ? registryName : null,
+    url: remote,
+    iconUrl,
+    description: "",
+    publisher,
+    refused: null,
+    builtin: null,
+    accounts: [],
+    createdAt: Date.now(),
+  };
+  connectors.push(connector);
+  emitConnectors();
+  return connector;
+}
+
+function connectConnector({ connectorId, accountId, label, loginHint, workspaces }: Row) {
+  const connector = connectors.find((c) => c.id === connectorId);
+  if (!connector) throw new Error("mock: no such connector");
+  // A server that refuses Crew's client, so the page's refusal shows.
+  if (connector.registryName?.includes("figma-refused")) {
+    connector.refused = "it registers no public clients";
+    emitConnectors();
+    throw new Error(`${connector.name} doesn’t let Crew sign in. Use it through a CLI’s own sign-in.`);
+  }
+  const state = `mock-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const others = connector.accounts.filter((a) => a.id !== accountId && a.state !== "pending");
+  let account = accountId ? connector.accounts.find((a) => a.id === accountId) : undefined;
+  const isNew = !account;
+  if (!account) {
+    account = {
+      id: `account-${connector.id}-${connector.accounts.length + 1}-${Date.now().toString(36)}`,
+      connectorId: connector.id,
+      label: typeof label === "string" && label ? label : `Account ${others.length + 1}`,
+      identity: null,
+      state: "pending",
+      error: null,
+      workspaces: Array.isArray(workspaces) ? (workspaces as string[]) : null,
+      tools: [],
+      toolsOff: [],
+      createdAt: Date.now(),
+    };
+    connector.accounts.push(account);
+    emitConnectors();
+  }
+  signIns.set(state, { accountId: account.id, isNew, loginHint: typeof loginHint === "string" ? loginHint : null });
+  const redirectUri = "http://127.0.0.1:53682/callback";
+  return {
+    state,
+    authUrl: `${connector.url.replace(/\/mcp\/?$/, "")}/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    redirectUri,
+    accountId: account.id,
+    // Google's own picker shows the other accounts.
+    incognito: others.length > 0 && !connector.builtin,
+  };
+}
+
+function redeem({ state, url }: Row) {
+  const pending = signIns.get(state as string);
+  if (!pending || !String(url).includes(`state=${state as string}`)) throw new Error("mock: no sign-in for that state");
+  signIns.delete(state as string);
+  const account = needAccount(pending.accountId);
+  const connector = connectors.find((c) => c.id === account.connectorId)!;
+  if (account.state === "pending") {
+    const app = BUILTINS.find((b) => b.id === connector.builtin);
+    account.tools = app ? structuredClone(app.tools) : mockTools(connector);
+    account.toolsOff = account.tools.filter((t) => t.destructive).map((t) => t.name);
+    // A built-in signs in as the account picked ("Continue as"), else as the next one Google's picker would offer.
+    const taken = new Set(connector.accounts.map((a) => a.identity));
+    account.identity = app
+      ? (pending.loginHint ?? IDENTITIES.find((i) => !taken.has(i)) ?? `you+${connector.accounts.length}@example.com`)
+      : (IDENTITIES[connector.accounts.indexOf(account) % IDENTITIES.length] ?? null);
+    // Still called "Account N", it takes who signed in as its name.
+    if (account.identity && /^Account \d+$/.test(account.label)) account.label = account.identity;
+  }
+  account.state = "connected";
+  account.error = null;
+  emitConnectors();
+  return structuredClone(account);
+}
+
+function cancelSignIn({ state }: Row) {
+  const pending = signIns.get(state as string);
+  signIns.delete(state as string);
+  if (!pending?.isNew) return null;
+  for (const connector of connectors) connector.accounts = connector.accounts.filter((a) => a.id !== pending.accountId);
+  emitConnectors();
+  return null;
+}
+
+/* ── The servers each provider CLI already has, on this machine ──────── */
+
+type MockMcpState = "connected" | "pending" | "failed" | "needs_auth" | "disabled" | "unknown";
+type MockServer = {
+  provider: string;
+  name: string;
+  transport: string;
+  target: string;
+  scope: string | null;
+  state: MockMcpState;
+  error: string | null;
+  tools: number | null;
+  offInCrew: boolean;
+  canSignIn: boolean;
+  canRemove: boolean;
+};
+type MockInventory = { provider: string; installed: boolean; servers: MockServer[]; error: string | null; checkedAt: number | null; checking: boolean };
+
+function mockServer(provider: string, name: string, transport: string, target: string, scope: string, state: MockMcpState, tools: number | null): MockServer {
+  // A claude.ai connector is signed in at claude.ai; everything else that asks can be signed in from Crew.
+  return { provider, name, transport, target, scope, state, error: null, tools: state === "connected" ? tools : null, offInCrew: false, canSignIn: scope !== "claude.ai", canRemove: scope === "user" };
+}
+
+/** How many tools each server lists once it is signed in. */
+const MOCK_TOOLS: Record<string, number> = { context7: 2, "chrome-devtools": 26, "claude.ai Notion": 14, "plugin:figma:figma": 11, "figma-nerb": 11 };
+const CONTEXT7 = "https://mcp.context7.com/mcp";
+const FIGMA = "https://mcp.figma.com/mcp";
+const DEVTOOLS = "npx -y chrome-devtools-mcp@latest";
+
+const inventory: MockInventory[] = [
+  {
+    provider: "claude",
+    installed: true,
+    servers: [
+      mockServer("claude", "context7", "http", CONTEXT7, "user", "connected", 2),
+      mockServer("claude", "chrome-devtools", "stdio", DEVTOOLS, "user", "connected", 26),
+      mockServer("claude", "claude.ai Notion", "claude.ai", "https://mcp.notion.com/mcp", "claude.ai", "connected", 14),
+      mockServer("claude", "plugin:figma:figma", "http", FIGMA, "plugin", "needs_auth", null),
+    ],
+    error: null,
+    checkedAt: now - 6e5,
+    checking: false,
+  },
+  {
+    provider: "codex",
+    installed: true,
+    servers: [
+      mockServer("codex", "context7", "http", CONTEXT7, "user", "needs_auth", null),
+      mockServer("codex", "figma-nerb", "http", FIGMA, "user", "needs_auth", null),
+      mockServer("codex", "chrome-devtools", "stdio", DEVTOOLS, "user", "connected", 26),
+    ],
+    error: null,
+    checkedAt: now - 6e5,
+    checking: false,
+  },
+  {
+    provider: "cursor",
+    installed: true,
+    servers: [
+      mockServer("cursor", "context7", "http", CONTEXT7, "user", "connected", 2),
+      mockServer("cursor", "figma-nerb", "http", FIGMA, "user", "needs_auth", null),
+    ],
+    error: null,
+    checkedAt: now - 6e5,
+    checking: false,
+  },
+  { provider: "grok", installed: true, servers: [], error: null, checkedAt: now - 6e5, checking: false },
+  { provider: "opencode", installed: false, servers: [], error: null, checkedAt: now - 6e5, checking: false },
+];
+/** Provider-server sign-ins started and not yet called back, by state. */
+const serverSignIns = new Map<string, { provider: string; name: string }>();
+/** Each live session's servers switched off at runtime (`mcp_toggle`). */
+const toggledOff = new Map<string, Set<string>>();
+
+const emitInventory = () => emit("provider-servers", structuredClone(inventory));
+function needServer({ provider, name }: Row): MockServer {
+  const server = inventory.find((i) => i.provider === provider)?.servers.find((x) => x.name === name);
+  if (!server) throw new Error("mock: no such server");
+  return server;
+}
+
+function listServers({ refresh }: Row) {
+  if (refresh) {
+    for (const entry of inventory) if (entry.installed) entry.checking = true;
+    setTimeout(() => {
+      for (const entry of inventory) {
+        entry.checking = false;
+        entry.checkedAt = Date.now();
+      }
+      emitInventory();
+    }, 900);
+  }
+  return structuredClone(inventory);
+}
+
+function signInServer(ref: Row) {
+  const server = needServer(ref);
+  const state = `mock-server-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  serverSignIns.set(state, { provider: server.provider, name: server.name });
+  // Claude's sign-in comes back to Crew's own redirect; the other CLIs' to their own loopback listener.
+  const redirectUri = server.provider === "claude" ? "http://127.0.0.1:17899/callback" : "http://127.0.0.1:60694/callback";
+  const base = server.target.replace(/\/mcp\/?$/, "");
+  return { kind: "browser", state, authUrl: `${base}/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`, redirectUri };
+}
+
+function serverCallback({ state, url }: Row) {
+  const pending = serverSignIns.get(state as string);
+  if (!pending || !String(url).includes(`state=${state as string}`)) throw new Error("mock: no sign-in for that state");
+  serverSignIns.delete(state as string);
+  const server = needServer(pending);
+  // The CLI starts the server again with its new credential: pending, then connected.
+  server.state = "pending";
+  server.error = null;
+  emitInventory();
+  setTimeout(() => {
+    server.state = "connected";
+    server.tools = MOCK_TOOLS[server.name] ?? 4;
+    emitInventory();
+  }, 700);
+  return null;
+}
+
+/** A Claude session's servers, as `mcp_list` answers them: the CLI's, less what is off in Crew. */
+function mcpStatus(sessionId: string) {
+  const row = sessions.find((x) => x.id === sessionId);
+  const provider = row?.provider as string | undefined;
+  if (provider !== "claude") return { servers: [], reported: provider !== "cursor" && provider !== "grok" };
+  const off = toggledOff.get(sessionId) ?? new Set<string>();
+  const servers = (inventory.find((i) => i.provider === "claude")?.servers ?? [])
+    .filter((x) => !x.offInCrew)
+    .map((x) => ({ name: x.name, state: off.has(x.name) ? "disabled" : x.state }));
+  return { servers, reported: true };
+}
+
 /** Plan usage with every pace on show: in reserve, on pace, spending ahead, spent, and no plan windows. */
 function mockUsage() {
   const at = Date.now();
@@ -421,6 +966,91 @@ function mockUsage() {
 }
 
 const commands: Record<string, (args: Row) => unknown> = {
+  connectors_list: () => structuredClone(connectors),
+  builtin_list: () => structuredClone(BUILTINS),
+  // One machine, the vault: nothing else uses it in the mock.
+  vault_status: () => ({
+    holds: true,
+    vaultName: null,
+    vaultAddress: null,
+    online: true,
+    offlineSince: null,
+    listening: null,
+    machines: [],
+    grants: connectors.flatMap((c) => c.accounts).filter((a) => a.state === "connected").length,
+  }),
+  vault_listen: () => null,
+  vault_unlisten: () => null,
+  connector_add: (args) => structuredClone(addConnector(args)),
+  connector_remove: ({ connectorId }) => {
+    const at = connectors.findIndex((c) => c.id === connectorId);
+    if (at >= 0) connectors.splice(at, 1);
+    emitConnectors();
+    return null;
+  },
+  connector_connect: connectConnector,
+  vault_callback: redeem,
+  sign_in_cancel: cancelSignIn,
+  provider_servers_list: listServers,
+  provider_server_off: (args) => {
+    needServer(args).offInCrew = args.off === true;
+    emitInventory();
+    return null;
+  },
+
+  provider_server_remove: (args) => {
+    const gone = needServer(args);
+    for (const entry of inventory) entry.servers = entry.servers.filter((x) => x !== gone);
+    emitInventory();
+    return null;
+  },
+  provider_server_sign_in: signInServer,
+  provider_server_callback: serverCallback,
+  provider_server_sign_in_cancel: ({ state }) => {
+    serverSignIns.delete(state as string);
+    return null;
+  },
+  mcp_list: ({ sessionId }) => mcpStatus(sessionId as string),
+  mcp_toggle: ({ sessionId, name, enabled }) => {
+    const off = toggledOff.get(sessionId as string) ?? new Set<string>();
+    if (enabled) off.delete(name as string);
+    else off.add(name as string);
+    toggledOff.set(sessionId as string, off);
+    const status = mcpStatus(sessionId as string);
+    emit("mcp-changed", { sessionId, status });
+    return status;
+  },
+  account_rename: ({ accountId, label }) => {
+    needAccount(accountId).label = String(label);
+    emitConnectors();
+    return null;
+  },
+  account_remove: ({ accountId }) => {
+    for (const connector of connectors) connector.accounts = connector.accounts.filter((a) => a.id !== accountId);
+    emitConnectors();
+    return null;
+  },
+  account_refresh: ({ accountId }) => {
+    const account = needAccount(accountId);
+    if (account.state === "failed") {
+      account.state = "connected";
+      account.error = null;
+    }
+    emitConnectors();
+    return structuredClone(account);
+  },
+  account_workspaces_set: ({ accountId, workspaces }) => {
+    const account = needAccount(accountId);
+    account.workspaces = Array.isArray(workspaces) ? (workspaces as string[]) : null;
+    emitConnectors();
+    return null;
+  },
+  tool_set: ({ accountId, tool, on }) => {
+    const account = needAccount(accountId);
+    account.toolsOff = on ? account.toolsOff.filter((x) => x !== tool) : [...new Set([...account.toolsOff, tool as string])];
+    emitConnectors();
+    return null;
+  },
   workspace_list: () => workspaces,
   workspace_home: () => {
     const found = workspaces.find((w) => w.home);
@@ -657,6 +1287,17 @@ const commands: Record<string, (args: Row) => unknown> = {
     void pages.set(pageId as string, { pageId, entriesJson, activeIndex, updatedAt: Date.now() }),
   browser_page_get: ({ pageId }) => pages.get(pageId as string) ?? null,
   browser_page_delete: ({ pageId }) => void pages.delete(pageId as string),
+  registry_search: ({ text, limit }) => registrySearch(text as string, limit as number),
+  registry_status: () => ({ servers: 32209, syncedAt: Date.now() - 20 * 60_000, syncing: false }),
+  // The featured list stands in for the daemon's copy: a URL on a featured server's host is that server.
+  registry_match: async ({ urls }) => {
+    const featured = await registrySearch("", 50);
+    const host = (url: string) => URL.canParse(url) ? new URL(url).host : "";
+    return (urls as string[]).flatMap((url) => {
+      const server = featured.find((x) => host(x.remoteUrl) === host(url));
+      return server ? [{ url, server }] : [];
+    });
+  },
 };
 
 /** 160×100 gradient; any image the mock is asked for is this one. */

@@ -13,7 +13,7 @@ use crew_protocol::{ApprovalDecision, AttachedFile, McpServer, McpState, Questio
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, clip, leaf, mcp_label, pretty_input, string_field, todo_items, unwrap_shell};
+use super::{as_record, clip, leaf, mcp_label, pretty_input, string_field, todo_items, unwrap_shell, McpServerSpec};
 
 pub use super::parse_json_line;
 
@@ -41,6 +41,13 @@ pub struct CodexThread {
     pub mcp: Option<(String, Vec<String>)>,
     /// What `crew --mcp` needs in its own environment to reach the bridge.
     pub mcp_env: Vec<(String, String)>,
+    /// The session's bound connector accounts, one server each beside Crew's,
+    /// with the same environment. Only when `mcp` is there.
+    pub connectors: Vec<McpServerSpec>,
+    /// The user's servers left out of this thread, off in Crew: each is
+    /// `enabled = false` over the user's own entry, so it must be a name Codex
+    /// has (an entry with no transport fails the whole config).
+    pub off: Vec<String>,
     /// Folders it may write in besides its own under `workspace-write`: a
     /// bot's folder.
     pub writable_roots: Vec<String>,
@@ -135,20 +142,39 @@ pub fn thread_request(input: &CodexThread) -> (&'static str, Value) {
     if sandbox == "workspace-write" && !input.writable_roots.is_empty() {
         config.insert("sandbox_workspace_write.writable_roots".into(), json!(input.writable_roots));
     }
+    let mut servers = Map::new();
     if let Some((command, args)) = &input.mcp {
         let env: Map<String, Value> = input.mcp_env.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
-        config.insert(
-            "mcp_servers".into(),
+        servers.insert(
+            "crew".into(),
             json!({
-                "crew": {
-                    "command": command,
-                    "args": args,
-                    "env": env,
-                    "tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC,
-                    "default_tools_approval_mode": "approve",
-                }
+                "command": command,
+                "args": args,
+                "env": env,
+                "tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC,
+                "default_tools_approval_mode": "approve",
             }),
         );
+        // A connector's calls are not pre-approved: the session's autonomy
+        // decides them, as any server's.
+        for server in &input.connectors {
+            servers.insert(
+                server.name.clone(),
+                json!({
+                    "command": server.command,
+                    "args": server.args,
+                    "env": env,
+                    "tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC,
+                }),
+            );
+        }
+    }
+    // Merged over the user's entry of the same name (measured on 0.163.0).
+    for name in &input.off {
+        servers.entry(name.clone()).or_insert_with(|| json!({ "enabled": false }));
+    }
+    if !servers.is_empty() {
+        config.insert("mcp_servers".into(), Value::Object(servers));
     }
     let mut params = Map::new();
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
@@ -1107,6 +1133,8 @@ mod protocol_tests {
             autonomy,
             mcp: mcp.then(|| ("/bin/crewd".into(), vec!["--mcp".into()])),
             mcp_env: vec![("CREW_SOCKET".into(), "/tmp/crew.sock".into()), ("CREW_TOKEN".into(), "t-1".into())],
+            connectors: Vec::new(),
+            off: Vec::new(),
             writable_roots: Vec::new(),
         }
     }
@@ -1151,6 +1179,31 @@ mod protocol_tests {
         assert_eq!((params["cwd"].clone(), params["model"].clone()), (json!("/repo"), json!("gpt-5.6-luna")));
         let (_, bare) = thread_request(&thread(None, Autonomy::Ask, false));
         assert!(bare["config"].get("mcp_servers").is_none(), "{bare}");
+    }
+
+    /// A bound account is one more server on the thread, with Crew's env and
+    /// timeout but not its approval: the session's autonomy decides its calls.
+    /// With none bound, Crew's is the only one; without Crew's, there is none.
+    #[test]
+    fn a_bound_connector_rides_on_the_thread_beside_crews() {
+        let (_, params) = thread_request(&thread(None, Autonomy::Ask, true));
+        assert_eq!(params["config"]["mcp_servers"].as_object().map(Map::len), Some(1), "{params}");
+        let mut input = thread(Some("thr-1"), Autonomy::Ask, true);
+        input.connectors = vec![McpServerSpec::connector("/bin/crewd", "notion_work")];
+        let (method, params) = thread_request(&input);
+        assert_eq!(method, "thread/resume");
+        assert_eq!(
+            params["config"]["mcp_servers"]["notion_work"],
+            json!({
+                "command": "/bin/crewd",
+                "args": ["--mcp-connector", "notion_work"],
+                "env": { "CREW_SOCKET": "/tmp/crew.sock", "CREW_TOKEN": "t-1" },
+                "tool_timeout_sec": 3900,
+            })
+        );
+        assert_eq!(params["config"]["mcp_servers"]["crew"]["args"], json!(["--mcp"]));
+        input.mcp = None;
+        assert!(thread_request(&input).1["config"].get("mcp_servers").is_none());
     }
 
     #[test]

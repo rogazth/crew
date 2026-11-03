@@ -1,4 +1,4 @@
-import { ArrowDownAZIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, BellIcon, BetweenHorizontalEndIcon, BetweenHorizontalStartIcon, BetweenVerticalEndIcon, BetweenVerticalStartIcon, CodeIcon, CopyPlusIcon, TextAlignCenterIcon, TextAlignEndIcon, TextAlignStartIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowDownAZIcon, BanIcon, CircleCheckIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, BellIcon, BetweenHorizontalEndIcon, BetweenHorizontalStartIcon, BetweenVerticalEndIcon, BetweenVerticalStartIcon, CodeIcon, CopyPlusIcon, TextAlignCenterIcon, TextAlignEndIcon, TextAlignStartIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { COPY_PATH, SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
@@ -40,6 +40,8 @@ const ICONS: Record<MenuIcon, Icon> = {
   "align-center": TextAlignCenterIcon,
   "align-right": TextAlignEndIcon,
   code: CodeIcon,
+  disable: BanIcon,
+  enable: CircleCheckIcon,
 };
 
 type Props = {
@@ -53,6 +55,8 @@ type Props = {
   path?: string;
   /** When set, the name field sits at the top of the popover and focuses on open. */
   rename?: { initial: string; onCommit: (name: string) => void };
+  /** Narrower floor for menus of short labels. */
+  compact?: boolean;
 };
 
 /** The end of a path, from a folder boundary: the part that tells one checkout from another. */
@@ -76,7 +80,7 @@ function withCopyPath(actions: MenuEntry[]): MenuEntry[] {
  * ↑↓ walk the actions and ↵ runs one.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
  */
-export function ActionMenu({ point, actions: given, onPick: pick, onClose, title, path, rename }: Props) {
+export function ActionMenu({ point, actions: given, onPick: pick, onClose, title, path, rename, compact }: Props) {
   const actions = path ? withCopyPath(given) : given;
   const onPick = (id: string) => {
     if (path && id === COPY_PATH.id && !given.some((entry) => entry !== SEPARATOR && entry.id === id)) {
@@ -175,7 +179,7 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
       aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 min-w-40 max-w-80 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
+      className={`fixed z-50 ${compact ? "min-w-36" : "min-w-40"} max-w-80 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
         rename || path ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}
@@ -219,7 +223,7 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
             onMouseDown={(event) => event.preventDefault()}
             onMouseMove={() => setCursor(runnable.indexOf(entry))}
             onClick={() => onPick(entry.id)}
-            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left ${
+            className={`flex w-full items-center gap-2 ${entry.hint ? "py-1.5" : "h-8"} rounded-md px-2 text-left ${
               entry.disabled
                 ? "text-placeholder"
                 : entry.danger
@@ -230,7 +234,14 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
             }`}
           >
             <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-icon"}`} />
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            {entry.hint ? (
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">{entry.label}</span>
+                <span className="text-[11px] leading-snug text-text-muted">{entry.hint}</span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            )}
             {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
           </button>
         );

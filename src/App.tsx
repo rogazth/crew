@@ -42,6 +42,7 @@ import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
 import { worktreeLabel, worktreeOf } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
+import { useConnectorsAlert } from "./surfaces/settings/integrations/copies";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
@@ -184,6 +185,7 @@ export function App() {
     settings,
     isWorkspace,
     isRoutines,
+    isIntegrations,
     close: closePage,
     toggle: togglePage,
     openSettings,
@@ -191,6 +193,7 @@ export function App() {
     openRoutine,
   } = usePages();
   useUpdateWiring(openSettings);
+  const connectorsAlert = useConnectorsAlert();
   // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
   // Adjusted while rendering, on the page opening or closing, not on a toggle while it is open.
   const settingsOpen = settings !== null;
@@ -263,7 +266,7 @@ export function App() {
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
   const appRoot = useRef<HTMLDivElement>(null);
   useRecede(appRoot, sheet.sheet !== null);
-  const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTerminalIn: nav.openTerminalIn });
+  const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTabIn: nav.openTabIn });
 
   const { activate } = workspaces;
   const openNotified = useNotificationTarget({
@@ -404,6 +407,8 @@ export function App() {
             sessions: all,
             settingsOpen: settings !== null,
             routinesOpen: isRoutines,
+            integrationsOpen: isIntegrations,
+            integrationsAlert: connectorsAlert,
             // Picking a workspace is going back to it, out from under any page.
             onSelect: (id) => {
               closePage();
@@ -417,6 +422,7 @@ export function App() {
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
+            onOpenIntegrations: () => togglePage({ kind: "integrations" }),
             onOpenSettings: () => (settings ? closePage() : openSettings()),
             onOpenUsage: () => openSettings("usage"),
           }}

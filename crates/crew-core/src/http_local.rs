@@ -119,6 +119,16 @@ impl LocalClient {
         self.request_in("GET", path, None, Some(directory))
     }
 
+    /// `PUT path` for one folder, as [`LocalClient::get_json_in`] names it.
+    pub fn put_json_in(&self, path: &str, body: &Value, directory: &str) -> Result<Reply, HttpError> {
+        self.request_in("PUT", path, Some(body), Some(directory))
+    }
+
+    /// `DELETE path` for one folder, as [`LocalClient::get_json_in`] names it.
+    pub fn delete_in(&self, path: &str, directory: &str) -> Result<Reply, HttpError> {
+        self.request_in("DELETE", path, None, Some(directory))
+    }
+
     /// `POST path` for one folder, as [`LocalClient::get_json_in`] names it.
     pub fn post_json_in(&self, path: &str, body: Option<&Value>, directory: &str) -> Result<Reply, HttpError> {
         self.request_in("POST", path, body, Some(directory))
@@ -272,7 +282,7 @@ impl EventStream {
 /// `encodeURIComponent`, which is how opencode's own clients put a folder in
 /// its header and how its server reads it back: everything but the unreserved
 /// characters is percent-encoded, so no byte of the path can end the header.
-fn encode_uri_component(text: &str) -> String {
+pub(crate) fn encode_uri_component(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {

@@ -19,7 +19,9 @@ use crew_protocol::{ApprovalDecision, Question, QuestionOption, ToolDetail, Tool
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, clip, crew_label, crew_result_detail, crew_tool_detail, leaf, mcp_label, pretty_input, string_field};
+use super::{
+    as_record, clip, crew_label, crew_result_detail, crew_tool_detail, leaf, mcp_label, pretty_input, string_field, McpServerSpec,
+};
 
 /// The name Crew's MCP server goes by in `session/new`. The model calls its
 /// tools through `use_tool` as `crew__<name>`.
@@ -106,12 +108,18 @@ pub fn initialize_params() -> Value {
 }
 
 /// Crew's MCP server over stdio. `type` is what grok's `session/new` takes.
-pub fn mcp_servers(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)]) -> Value {
+/// Each bound connector account follows it, in the same shape and with the
+/// same env.
+pub fn mcp_servers(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)], connectors: &[McpServerSpec]) -> Value {
     let Some((command, args)) = mcp else {
         return json!([]);
     };
     let env: Vec<Value> = env.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect();
-    json!([{ "type": "stdio", "name": CREW_SERVER, "command": command, "args": args, "env": env }])
+    let mut servers = vec![json!({ "type": "stdio", "name": CREW_SERVER, "command": command, "args": args, "env": env })];
+    servers.extend(connectors.iter().map(
+        |server| json!({ "type": "stdio", "name": server.name, "command": server.command, "args": server.args, "env": env }),
+    ));
+    Value::Array(servers)
 }
 
 /// `session/new`, or `session/load` of the conversation a child carries on.
@@ -925,6 +933,26 @@ mod tests {
             classify_request("session/request_permission", &crew, &HashMap::new(), &Autonomy::Ask),
             GrokAsk::Allow("allow-once".into())
         );
+    }
+
+    /// A bound account follows Crew's server, stdio and with its env; with
+    /// none bound Crew's is alone, and without Crew's there is neither.
+    #[test]
+    fn a_bound_connector_follows_crews_server() {
+        let crew = ("/bin/crewd".to_string(), vec!["--mcp".to_string()]);
+        let env = [("CREW_TOKEN".to_string(), "t".to_string())];
+        let token = json!([{ "name": "CREW_TOKEN", "value": "t" }]);
+        assert_eq!(
+            mcp_servers(Some(&crew), &env, &[]),
+            json!([{ "type": "stdio", "name": "crew", "command": "/bin/crewd", "args": ["--mcp"], "env": token }])
+        );
+        let connectors = [McpServerSpec::connector("/bin/crewd", "notion")];
+        let servers = mcp_servers(Some(&crew), &env, &connectors);
+        assert_eq!(
+            servers[1],
+            json!({ "type": "stdio", "name": "notion", "command": "/bin/crewd", "args": ["--mcp-connector", "notion"], "env": token })
+        );
+        assert_eq!(mcp_servers(None, &env, &connectors), json!([]));
     }
 
     #[test]

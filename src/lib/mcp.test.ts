@@ -134,3 +134,38 @@ describe("after a sign-in terminal", () => {
     expect(readMcp("s1")).toBeNull();
   });
 });
+
+describe("Claude's runtime switch", () => {
+  it("is Claude's only", async () => {
+    const { canToggle } = await mcp();
+    expect(canToggle("claude")).toBe(true);
+    expect(canToggle("codex")).toBe(false);
+    expect(canToggle("cursor")).toBe(false);
+  });
+
+  it("keeps a quiet chip while every server works, so the switches can be reached", async () => {
+    const { quietLabel } = await mcp();
+    expect(quietLabel(null)).toBeNull();
+    expect(quietLabel(status())).toBeNull();
+    expect(quietLabel(status(server("a", "connected"), server("b", "pending")))).toBe("2 MCP");
+    expect(quietLabel(status(server("a", "connected"), server("b", "disabled"), server("c", "connected")))).toBe("2 of 3 MCP");
+  });
+
+  it("switches a server on the session's machine and shows the answer at once", async () => {
+    const { toggleServer, readMcp } = await mcp();
+    request.mockResolvedValue(status(server("context7", "disabled")));
+    await toggleServer("s1", "context7", false);
+    expect(request).toHaveBeenCalledWith("mcp_toggle", { sessionId: "s1", name: "context7", enabled: false });
+    expect(readMcp("s1")).toEqual(status(server("context7", "disabled")));
+  });
+});
+
+describe("after a provider server's sign-in terminal", () => {
+  it("has that machine read its CLIs' servers again, once per tab", async () => {
+    const { refreshAfterServerSignIn } = await mcp();
+    request.mockResolvedValue([]);
+    await refreshAfterServerSignIn("tab3", "devbox");
+    await refreshAfterServerSignIn("tab3", "devbox");
+    expect(request.mock.calls).toEqual([["provider_servers_list", { refresh: true }, "devbox"]]);
+  });
+});

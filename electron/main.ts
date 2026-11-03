@@ -12,6 +12,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  net,
   Notification,
   session,
   type OpenDialogOptions,
@@ -44,6 +45,8 @@ import { CHANNELS } from "../src/lib/browser/bridge";
 import { NOTIFY_CHANNELS } from "../src/lib/notify";
 import { registerAppInfoIpc } from "./app-info";
 import { installStagedOnQuit, watchForUpdates } from "./update";
+import { iconCache } from "./icons";
+import { ICON_SCHEME } from "../src/lib/icons";
 import { errorText, initTrace, trace } from "./trace";
 import { TRACE_CHANNELS } from "../src/lib/trace";
 
@@ -178,7 +181,8 @@ function csp(): string {
     "style-src 'self' 'unsafe-inline'",
     // crew-file: is an image file tab's picture, served from the worktree it was opened from.
     // Google's favicon service answers from www.google.com by redirecting to a gstatic host.
-    "img-src 'self' data: blob: crew-file: https://www.google.com https://*.gstatic.com",
+    // crew-icon: is a connector's logo, from the app's cache (icons.ts).
+    "img-src 'self' data: blob: crew-file: crew-icon: https://www.google.com https://*.gstatic.com",
     "font-src 'self' data:",
     // blob: is a custom notification sound, read by main and played by the window.
     "media-src 'self' blob:",
@@ -583,7 +587,7 @@ function registerIpc(): void {
   registerAppInfoIpc();
 }
 
-registerFileScheme();
+registerFileScheme([{ scheme: ICON_SCHEME, privileges: { standard: true, secure: true } }]);
 // Only the published release runs on the installed app's userData, where crewd
 // keeps its database and socket: any other build there would drive the installed
 // app's sessions. A dev build takes "Crew Dev"; a package built here (npm run
@@ -671,6 +675,8 @@ app.whenReady().then(async () => {
     });
   });
   serveFiles(session.defaultSession);
+  const icons = iconCache({ dir: path.join(app.getPath("userData"), "icons"), fetch: (url, init) => net.fetch(url, init) });
+  session.defaultSession.protocol.handle(ICON_SCHEME, (request) => icons.serve(request));
   nativeTheme.themeSource = readColorMode();
   nativeTheme.on("updated", () => win?.setBackgroundColor(windowBackground()));
   Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
