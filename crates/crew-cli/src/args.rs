@@ -89,12 +89,66 @@ Examples:
   crew completions fish > ~/.config/fish/completions/crew.fish")]
     Completions { shell: CompletionShell },
 
+    /// Read the trace of the daemon, the app and its window: what happened, in
+    /// order, from files, so it works with crewd stopped.
+    #[command(after_help = "\
+Examples:
+  crew trace                           the last 200 records, newest last
+  crew trace --since 30m --level warn  what went wrong in the last half hour
+  crew trace --session <id>            one session across the daemon, the app and the window
+  crew trace --turn <id> --json        one turn: its session's lines from start to end, raw
+  crew trace --target app.window -f    follow the window's events
+  crew trace path                      where the files are
+
+Merges crewd.ndjson, errors.ndjson and app.ndjson (and their rotated .1, .2...)
+under <data dir>/trace. It reads files, never the daemon. The data dir is
+--data-dir, else $CREW_DATA_DIR, else the installed app's. No prompts, replies,
+terminal text or tool arguments are ever recorded.")]
+    Trace(TraceArgs),
+
     /// The daemon behind the app: status, stop, restart, and running it on its own.
     /// Refused inside a Crew session, unless --as-user.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+}
+
+/// `trace`: what to select. `--json` (global) prints the raw lines.
+#[derive(Args, Debug, Clone, Default)]
+pub struct TraceArgs {
+    #[command(subcommand)]
+    pub command: Option<TraceCommand>,
+    /// Only records of this session id (its own events, and those written inside its spans).
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+    /// One turn: every record of its session between its `turn.start` and its `turn.end`, and those naming the turn id.
+    #[arg(long, value_name = "ID")]
+    pub turn: Option<String>,
+    /// Only records newer than this long ago: 30s, 30m, 2h, 1d, 1w.
+    #[arg(long, value_name = "AGE")]
+    pub since: Option<String>,
+    /// At least this level: trace, debug, info, warn or error.
+    #[arg(long, value_name = "LEVEL")]
+    pub level: Option<String>,
+    /// Only targets starting with this: `app.window`, `crew_core::pty`, `daemon`.
+    #[arg(long, value_name = "PREFIX")]
+    pub target: Option<String>,
+    /// Only records containing this text (any case) anywhere in the line.
+    #[arg(long, value_name = "TEXT")]
+    pub grep: Option<String>,
+    /// How many records at most, the newest; 0 for all. Default 200.
+    #[arg(long, short = 'n', value_name = "N")]
+    pub limit: Option<usize>,
+    /// After the records, keep printing new ones until interrupted.
+    #[arg(short, long)]
+    pub follow: bool,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum TraceCommand {
+    /// Print the trace directory.
+    Path,
 }
 
 /// The flags of `processes logs`, which reads, follows and greps with the

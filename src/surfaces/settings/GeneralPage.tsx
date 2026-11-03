@@ -1,25 +1,19 @@
-// General: cards of rows, all on real state. Retention and bypass live in the
-// daemon's state, Open at login in the app's login item, Reopen in a preference
+// General: cards of rows, all on real state. Retention is a setting every machine
+// holds (lib/settingsEngine), Open at login in the app's login item, Reopen in a preference
 // the workspace list reads at launch, and the `crew` command in the app's link.
 import { useState } from "react";
 import { Button, Select } from "../../chrome/kit";
 import * as api from "../../lib/api";
 import { describeCli, type CliResult } from "../../lib/cli";
 import { cliHost, loginItemHost } from "../../lib/host";
-import { BYPASS_KEY } from "../../lib/permissions";
-import { RETENTION_CHOICES, RETENTION_KEY, parseRetention, type Retention } from "../../lib/retention";
-import { READS, keep, useRead, type Read } from "../../lib/settingsReads";
-import { REOPEN_KEY, parseReopen } from "../../lib/startup";
+import { RETENTION_CHOICES, retention as retentionSetting, type Retention } from "../../lib/retention";
+import { setSetting, useSetting, useSettingsSync } from "../../lib/settingsEngine/store";
+import { syncLine } from "../../lib/settingsEngine/syncLine";
+import { READS, keep, useRead } from "../../lib/settingsReads";
+import { reopenSetting } from "../../lib/startup";
 import { Chip, ConfirmDialog, CopyButton, Group, Row, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-// The shown value moves only once the daemon has kept it.
-async function keepState(read: Read<string | null>, key: string, value: string | null) {
-  if (value === null) await api.stateDelete(key);
-  else await api.stateSet(key, value);
-  keep(read, value);
-}
 
 const saveLogin = (enabled: boolean) =>
   loginItemHost()
@@ -28,28 +22,23 @@ const saveLogin = (enabled: boolean) =>
 
 const saveRetention = async (next: Retention) => {
   try {
-    await keepState(READS.retention, RETENTION_KEY, next === "never" ? null : next);
+    await setSetting(retentionSetting, next);
     if (next !== "never") await api.expireSessions(Number(next));
   } catch (error) {
     toast(`Could not save: ${reason(error)}`, "danger");
   }
 };
 
-const saveBypass = (next: boolean) =>
-  keepState(READS.bypass, BYPASS_KEY, next ? "on" : null).catch(
-    (error: unknown) => toast(`Could not save: ${reason(error)}`, "danger"),
-  );
-
 const saveReopen = (next: boolean) =>
-  keepState(READS.reopen, REOPEN_KEY, next ? null : "off").catch(
+  setSetting(reopenSetting, next).catch(
     (error: unknown) => toast(`Could not save: ${reason(error)}`, "danger"),
   );
 
 export function GeneralPage() {
   // Read ahead as Settings opened (lib/settingsReads), so the page paints with what is saved.
-  const retention = parseRetention(useRead(READS.retention) ?? null);
-  const bypass = useRead(READS.bypass)?.trim() === "on";
-  const reopen = parseReopen(useRead(READS.reopen) ?? null);
+  const retention = useSetting(retentionSetting);
+  const sync = syncLine(useSettingsSync());
+  const reopen = useSetting(reopenSetting);
   const login = useRead(READS.login) ?? null;
   const [ask, setAsk] = useState<ConfirmAsk | null>(null);
 
@@ -70,11 +59,11 @@ export function GeneralPage() {
 
   return (
     <SettingsPage title="General">
-      <Group title="Sessions">
+      <Group title="Sessions" {...(sync ? { description: sync } : {})}>
         <Row
           id="retention"
           label="Delete inactive sessions"
-          description="Working, unread, open and scheduled sessions are kept."
+          description="Bots, and working, unread, open and scheduled sessions, are kept."
         >
           <Select<Retention>
             label="Delete inactive sessions"
@@ -84,22 +73,6 @@ export function GeneralPage() {
             options={RETENTION_CHOICES}
           />
         </Row>
-        <ToggleRow
-          id="bypass"
-          label="Bypass permissions"
-          description="All sessions run tools without asking."
-          checked={bypass}
-          onChange={(next) =>
-            next
-              ? setAsk({
-                  title: "Bypass permissions for every session?",
-                  description: "Agents edit files and run commands without asking, from their next turn.",
-                  action: "Bypass",
-                  onConfirm: () => void saveBypass(true),
-                })
-              : void saveBypass(false)
-          }
-        />
       </Group>
 
       <Group title="Startup">

@@ -194,6 +194,7 @@ impl TurnHost {
     }
 
     fn opencode_launch(&self, notes: Option<&str>) -> Result<Conn, String> {
+        let began = Instant::now();
         let path = self.resolve_bin("opencode")?;
         self.opencode_end_run();
         let password = password();
@@ -243,6 +244,7 @@ impl TurnHost {
         let args = ["serve", "--hostname", "127.0.0.1", "--port", "0"].map(str::to_string).to_vec();
         self.agents.spawn(SERVER_KEY.to_string(), path, args, cwd, Some(env))?;
         let fail = |host: &TurnHost, why: String| -> String {
+            crate::trace::connect_failed("opencode", SERVER_KEY, "serve", &why);
             host.agents.kill(SERVER_KEY);
             let output = host.opencode.output();
             if output.trim().is_empty() {
@@ -282,6 +284,8 @@ impl TurnHost {
         if ready_rx.recv_timeout(LISTEN_TIMEOUT).is_err() {
             return Err(fail(self, "opencode's event stream did not open.".into()));
         }
+        // The server is shared by every opencode session, so this is the one connection there is.
+        tracing::info!(provider = "opencode", version = %conn.version, took_ms = crate::trace::ms(began.elapsed()), "provider.connected");
         Ok(conn)
     }
 
@@ -391,7 +395,8 @@ impl TurnHost {
             Some(id) => {
                 self.transcripts.apply(id, HarnessEvent::SessionNote { message: message.to_string() });
             }
-            None => eprintln!("[opencode] {message}"),
+            // What the server said (a migration's label, why it failed) is its to say: only that it did is traced.
+            None => tracing::info!(len = message.len(), "opencode.note"),
         }
     }
 
@@ -455,6 +460,9 @@ impl TurnHost {
                         continue;
                     }
                 };
+                if dropped {
+                    tracing::info!(provider = "opencode", epoch = conn.epoch, "provider.stream_reopened");
+                }
                 for item in stream {
                     match item {
                         Ok(event) => {
@@ -472,9 +480,12 @@ impl TurnHost {
                             host.opencode_event(&event);
                         }
                         // A frame that was not JSON; the next one starts clean.
-                        Err(HttpError::Protocol(_)) => {}
+                        Err(HttpError::Protocol(_)) => crate::trace::unparsed_frame("opencode"),
                         Err(_) => break,
                     }
+                }
+                if !dropped && host.opencode.current(conn.epoch) {
+                    tracing::warn!(provider = "opencode", epoch = conn.epoch, "provider.stream_lost");
                 }
                 dropped = true;
                 thread::sleep(Duration::from_millis(100));
@@ -564,6 +575,12 @@ impl TurnHost {
             self.close_tray(&id);
         }
         let message = super::exit_message("opencode", code, &[output]);
+        // The server is the one process every opencode session shares: its going takes their turns with it.
+        if running.is_empty() {
+            tracing::info!(provider = "opencode", code, "provider.exit");
+        } else {
+            tracing::warn!(provider = "opencode", code, turns_lost = running.len(), "provider.lost");
+        }
         for id in running {
             self.transcripts.apply(&id, HarnessEvent::SessionEnded { code });
             self.signal(&id, TurnOutcome::Failed(message.clone()));
@@ -621,6 +638,59 @@ mod tests {
         assert_eq!(listening_port("server listening on http://127.0.0.1:47613/\n"), Some(47613));
         assert_eq!(listening_port("server password 0fR6F7pN"), None);
         assert_eq!(listening_port("[17:32:00.355] INFO (#723): spawning process {"), None);
+    }
+
+    /// The pump's own record of its stream: lost when the server hangs up, reopened when the
+    /// pump is let back in, each naming the launch (`epoch`) so a line is the launch's own.
+    #[test]
+    fn a_dropped_event_stream_is_lost_and_then_reopened_in_the_trace() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        crate::trace::capture::install();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let (release, held) = mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            for connection in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                    head.push(byte[0]);
+                }
+                let event = "data: {\"type\":\"server.connected\"}\n\n";
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.write_all(format!("{:x}\r\n{event}\r\n", event.len()).as_bytes());
+                // The first stream is hung up on; the second is kept until the test is done with it.
+                if connection == 1 {
+                    let _ = held.recv();
+                }
+            }
+        });
+
+        let host = crate::turns::TurnHost::test_new();
+        let epoch = 9_000_000_000 + u64::from(uuid::Uuid::new_v4().as_u128() as u32);
+        let conn = Conn { port, password: Arc::new("secret".into()), version: String::new(), epoch, run_id: String::new() };
+        host.opencode.lock().conn = Some(conn.clone());
+        let (ready, heard) = mpsc::channel();
+        host.opencode_pump(conn, ready);
+        heard.recv_timeout(Duration::from_secs(10)).expect("the first event");
+
+        let epoch = epoch.to_string();
+        let lost = crate::trace::capture::expect("provider.stream_lost", "epoch", &epoch);
+        assert_eq!((lost.level, lost.get("provider")), (tracing::Level::WARN, Some("opencode")));
+        let reopened = crate::trace::capture::expect("provider.stream_reopened", "epoch", &epoch);
+        assert_eq!((reopened.level, reopened.get("provider")), (tracing::Level::INFO, Some("opencode")));
+        // One drop, one pair of lines.
+        assert_eq!(crate::trace::capture::find("provider.stream_lost", "epoch", &epoch).len(), 1);
+
+        // Let the pump go: it stops once its launch is no longer the current one.
+        host.opencode.lock().conn = None;
+        let _ = release.send(());
+        server.join().expect("server");
     }
 
     #[test]

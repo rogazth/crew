@@ -359,7 +359,7 @@ fn mcp_note(answer: &Value) -> String {
 
 /// `turn/start`. The instructions go in `additionalContext` on every turn,
 /// not in `developerInstructions`, which newer model catalogs override
-/// (T3 Code found it; plan §7e.7).
+/// (plan §7e.7).
 pub fn turn_start_params(thread_id: &str, text: &str, instructions: Option<&str>) -> Value {
     turn_start_input(thread_id, text_input(text), instructions)
 }

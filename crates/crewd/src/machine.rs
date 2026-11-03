@@ -82,6 +82,17 @@ pub fn dir_list(path: &str) -> Result<DirListing, String> {
     Ok(DirListing { repo: is_repo(&dir), path: dir.to_string_lossy().into_owned(), entries })
 }
 
+/// Makes the folder at `path`, and any above it that are missing; one that is
+/// already there is left as it is. Answers its absolute path.
+pub fn dir_create(path: &str) -> Result<String, String> {
+    let dir = expand(path);
+    if !dir.is_absolute() {
+        return Err(format!("{path}: Not an absolute path"));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// The token a daemon that outlives its clients keeps across restarts, so a
 /// client paired once keeps working. Only the owner can read it.
 pub fn persistent_token(dir: &Path, fresh: impl FnOnce() -> String) -> Result<String, String> {
@@ -266,6 +277,18 @@ mod tests {
     #[test]
     fn a_relative_path_is_refused() {
         assert!(dir_list("code").is_err());
+        assert!(dir_create("code").is_err());
+    }
+
+    #[test]
+    fn dir_create_makes_the_folders_above_and_keeps_one_that_is_there() {
+        let root = temp("dir-create");
+        let deep = root.join("a/b");
+        assert_eq!(dir_create(&deep.to_string_lossy()).unwrap(), deep.to_string_lossy());
+        assert!(deep.is_dir());
+        std::fs::write(deep.join("kept"), "").unwrap();
+        dir_create(&deep.to_string_lossy()).unwrap();
+        assert!(deep.join("kept").exists());
     }
 
     #[test]

@@ -20,7 +20,8 @@ import { remoteUpdater } from "./remote-updates";
 import { sshHosts } from "./ssh-config";
 import { setControlDir } from "./ssh-options";
 import { isLoopback, Tunnels } from "./ssh-tunnel";
-import { tailnetFrom } from "./tailscale";
+import { cliEnv, tailnetFromOutput } from "./tailscale";
+import { errorText, trace } from "./trace";
 import type { Tailnet } from "../src/lib/remotes";
 
 const exec = promisify(execFile);
@@ -37,6 +38,8 @@ type Daemon = { url: string; token: string };
 const REVIVE_EVERY_MS = 60_000;
 
 let machinesChanged: () => void = () => {};
+/** Said once: Settings asks each time it opens. */
+let tailscaleMissing = false;
 
 /** The ssh tunnels to machines whose crewd listens on their own loopback. */
 const tunnels = new Tunnels();
@@ -94,6 +97,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
   setControlDir(path.join(app.getPath("userData"), "tmp", "ssh"));
   powerMonitor.on("resume", () => {
     // Tunnels that slept are dead whatever ssh thinks: the next dial opens fresh ones.
+    trace.info("power.resume");
     tunnels.closeAll();
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send("remotes:wake");
@@ -102,24 +106,23 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
 
   ipcMain.handle("remotes:tailnet", async (): Promise<Tailnet> => {
     const bin = TAILSCALE.find((file) => existsSync(file));
+    if (!bin) {
+      if (!tailscaleMissing) trace.info("tailscale.missing");
+      tailscaleMissing = true;
+    }
     if (!bin) return { state: "missing", account: null, message: "Tailscale is not installed on this Mac", devices: [] };
     const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {}).catch(() => []);
     const added = new Set(
       rows.flatMap((row) => [row.host, row.name, row.ssh, row.ssh?.replace(/^ssh:\/\//, "").replace(/^.*@/, "").replace(/:\d+$/, "")].filter(Boolean)),
     );
     try {
-      const { stdout } = await exec(bin, ["status", "--json"], { timeout: 8_000, maxBuffer: 8_000_000 });
-      return tailnetFrom(JSON.parse(stdout), added);
+      const { stdout } = await exec(bin, ["status", "--json"], { timeout: 8_000, maxBuffer: 8_000_000, env: cliEnv(process.env) });
+      return tailnetFromOutput(stdout, added);
     } catch (error) {
       // A stopped Tailscale exits non-zero and still prints its state.
       const stdout = (error as { stdout?: unknown }).stdout;
-      if (typeof stdout === "string" && stdout.trim().startsWith("{")) {
-        try {
-          return tailnetFrom(JSON.parse(stdout), added);
-        } catch {
-          // Fall through to the error.
-        }
-      }
+      if (typeof stdout === "string" && stdout.trim().startsWith("{")) return tailnetFromOutput(stdout, added);
+      trace.warn("tailscale.status_failed", { error: errorText(error) });
       return { state: "error", account: null, message: error instanceof Error ? error.message : String(error), devices: [] };
     }
   });
@@ -141,6 +144,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     if (installing) throw new Error("Another machine is being set up");
     const controller = new AbortController();
     installing = controller;
+    const began = Date.now();
     const work = (async () => {
       // The form offers the release's port; a dev or local build keeps off it, so it never meets the release's crewd.
       const port = input.port === undefined || input.port === DEFAULT_PORT ? layout().port : input.port;
@@ -181,11 +185,17 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       });
       await putToken(row.id, paired.token);
       machinesChanged();
+      trace.info("machine.added", { machine: row.id, via: "install", took_ms: Date.now() - began });
       return row;
     })();
     settled = work.catch(() => {});
     try {
       return await work;
+    } catch (error) {
+      // The steps say where it stopped (`install.step`); this is that it did.
+      if (error instanceof InstallCancelled) trace.info("machine.install_cancelled", { took_ms: Date.now() - began });
+      else trace.warn("machine.install_failed", { took_ms: Date.now() - began, error: errorText(error) });
+      throw error;
     } finally {
       installing = null;
     }
@@ -241,7 +251,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       const url = new URL(info.url);
       return (await peek(url.hostname, Number(url.port), info.token).catch(() => null))?.version || null;
     },
-    auto: async () => (await localRpc<string | null>(getDaemon, "state_get", { key: AUTO_UPDATE }).catch(() => null)) !== "off",
+    auto: async () => (await localRpc<string | null>(getDaemon, "settings_get", { key: AUTO_UPDATE }).catch(() => null)) !== "off",
     busy: (id) => busy.has(id) || installing !== null,
     update: updateMachine,
     publish: (states: Record<string, RemoteUpdateState>) => broadcast("remotes:update-states", states),
@@ -257,7 +267,16 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     const row = await requireRow(getDaemon, id);
     if (updater.states()[row.id]?.state === "updating") throw new Error(`${row.name} is already being updated`);
     updater.cancel(row.id);
-    return updateMachine(row);
+    const began = Date.now();
+    trace.info("update.start", { machine: row.id, via: "user" });
+    try {
+      const done = await updateMachine(row);
+      trace.info("update.done", { machine: row.id, via: "user", took_ms: Date.now() - began, warning: done.warning !== null });
+      return done;
+    } catch (error) {
+      trace.warn("update.failed", { machine: row.id, via: "user", took_ms: Date.now() - began, error: errorText(error) });
+      throw error;
+    }
   });
 
   /** Its sessions mid-turn or waiting on an answer, which an update now would cut off. */
@@ -287,7 +306,12 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     const last = revived.get(row.id) ?? 0;
     if (Date.now() - last < REVIVE_EVERY_MS) return false;
     revived.set(row.id, Date.now());
-    const said = await reviveDaemon(targetOf(row), layout()).catch(() => "unreachable");
+    const began = Date.now();
+    const said = await reviveDaemon(targetOf(row), layout()).catch((error: unknown) => {
+      trace.warn("machine.revive_failed", { machine: row.id, error: errorText(error) });
+      return "unreachable";
+    });
+    trace.info("machine.revive", { machine: row.id, result: said, took_ms: Date.now() - began });
     if (said === "started") console.warn(`crewd on ${row.name} was stopped; started it again`);
     return said === "started";
   });
@@ -296,8 +320,13 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     if (id === LOCAL) return thisMac.restart();
     const row = await requireRow(getDaemon, id);
     busy.add(row.id);
+    const began = Date.now();
     try {
       await restartDaemon(targetOf(row), layout());
+      trace.info("machine.restarted", { machine: row.id, took_ms: Date.now() - began });
+    } catch (error) {
+      trace.warn("machine.restart_failed", { machine: row.id, error: errorText(error) });
+      throw error;
     } finally {
       busy.delete(row.id);
     }
@@ -311,6 +340,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       await removeDaemon(targetOf(row), wipe === true, layout());
       tunnels.close(row.id);
     } catch (error) {
+      trace.warn("machine.remove_incomplete", { machine: row.id, wipe: wipe === true, error: errorText(error) });
       const reason = error instanceof Error ? error.message : String(error);
       warning = `Removed from Crew, but crewd may still run on ${row.name}: ${reason}`;
     } finally {
@@ -319,6 +349,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     await dropToken(row.id);
     await localRpc(getDaemon, "remote_delete", { id: row.id });
     machinesChanged();
+    trace.info("machine.removed", { machine: row.id, wipe: wipe === true, clean: warning === null });
     return { warning };
   });
 
@@ -349,7 +380,12 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       ssh: input.ssh ?? "",
     });
     await putToken(row.id, input.token);
+    // An edit may have changed where the machine is (its port, its ssh destination): the tunnel it had
+    // goes to the old place, and the next dial opens one to the new.
+    if (input.id) tunnels.close(row.id);
     machinesChanged();
+    // Whether it was an edit of a machine already kept or a new one.
+    trace.info("machine.added", { machine: row.id, via: "manual", edit: Boolean(input.id) });
     return row;
   });
 

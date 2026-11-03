@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 const PATTERNS: [&str; 3] = ["temp_dir()", "var(\"HOME\")", "var_os(\"HOME\")"];
 
-const ALLOWED: [(&str, &str); 17] = [
+const ALLOWED: [(&str, &str); 19] = [
     ("crew-core/src/paths.rs", "the layout itself, and the folder a process without one gets"),
     ("crew-core/src/history_import.rs", "the provider CLIs' own transcripts"),
     ("crew-core/src/claude_title.rs", "Claude's own session files"),
@@ -26,6 +26,8 @@ const ALLOWED: [(&str, &str); 17] = [
     ("crew-core/src/turns/cursor.rs", "Cursor's own plugins and sessions"),
     ("crew-core/src/usage/cursor.rs", "the token `cursor-agent login` stored"),
     ("crew-core/src/provider_servers.rs", "the provider CLIs' own configs, and the folder their servers are listed in"),
+    ("crew-core/src/usage/grok.rs", "the email `grok login` kept"),
+    ("crew-core/src/connectors/gws.rs", "the scratch folder of one `gws` call, removed with it"),
 ];
 
 fn crates_dir() -> PathBuf {

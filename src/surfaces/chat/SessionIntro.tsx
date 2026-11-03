@@ -2,7 +2,6 @@
 // family: who it is above the composer, ways in below it.
 import {
   BookOpenIcon,
-  CpuIcon,
   FlaskConicalIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
@@ -13,7 +12,6 @@ import type { ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { CrewGlyph } from "../../chrome/CrewGlyph";
 import { machineIcon } from "../../chrome/EnvBits";
-import { defaultModelOf, modelLabel } from "../../lib/providers";
 import type { Session } from "../../lib/types";
 import { usePanePlace, WorktreeFact } from "./panePlace";
 import { branchOf, useWhere, type Where } from "./where";
@@ -57,8 +55,7 @@ export function KeyHints({ keys }: { keys: [string, string][] }) {
 
 /**
  * The first screen's head, one skeleton for Home and every session: a mark, a
- * title, a line, and the facts about where it runs. The model is a quiet fact
- * among them; the composer's chip, right under it, is how to change it.
+ * title, a line, and the facts about where it runs.
  */
 export function EmptyHead({
   mark,
@@ -87,34 +84,28 @@ export function EmptyHead({
 export function IntroHead({ session }: { session: Session }) {
   const where = useWhere(session);
   const pane = usePanePlace(session.id);
-  const model = modelLabel(session.provider, session.model || defaultModelOf(session.provider));
-  // The model is a quiet fact here; the composer's chip is how to change it.
-  const modelFact = model ? <Fact icon={CpuIcon}>{model}</Fact> : null;
-  if (session.kind === "bot") {
-    return (
-      <EmptyHead
-        mark={<BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />}
-        title={session.name || "New session"}
-        line={session.description}
-        facts={modelFact}
-      />
-    );
-  }
   const branch = branchOf(where);
+  const bot = session.kind === "bot";
   return (
     <EmptyHead
-      mark={<CrewGlyph className="size-14" />}
-      title="What are we working on?"
+      mark={
+        bot ? (
+          <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-14" />
+        ) : (
+          <CrewGlyph className="size-14" />
+        )
+      }
+      title={bot ? session.name || "New session" : "What are we working on?"}
       facts={
         <>
-          {/* A session nobody has written to can still start in another worktree: its badge is the way to. */}
-          {pane ? (
-            <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
-          ) : (
-            branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
-          )}
+          {/* A bot lives outside any worktree: only a plain session can start in one. */}
+          {!bot &&
+            (pane ? (
+              <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
+            ) : (
+              branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
+            ))}
           <Fact icon={machineIcon(where.remote)}>{where.machine}</Fact>
-          {modelFact}
         </>
       }
     />
@@ -124,8 +115,8 @@ export function IntroHead({ session }: { session: Session }) {
 type Starter = { icon: Icon; title: string; hint: string; text: string };
 
 /** Code starters need a git checkout to talk about: not a bot, not Home, not a folder outside git, and not before git has answered. */
-function startersFor(session: Pick<Session, "kind">, where: Where): Starter[] {
-  if (session.kind === "bot" || where.home || !where.tree) return [];
+function startersFor(kind: Session["kind"] | undefined, where: Where): Starter[] {
+  if (kind === "bot" || where.home || !where.tree) return [];
   const branch = branchOf(where);
   const base = where.base ?? "the default branch";
   const onBranch = branch && !where.tree.main;
@@ -162,7 +153,7 @@ function startersFor(session: Pick<Session, "kind">, where: Where): Starter[] {
 const INTRO_KEYS: [string, string][] = [
   ["↵", "send"],
   ["⇧↵", "new line"],
-  ["@", "mention a file"],
+  ["@", "mention"],
   ["/", "run a command"],
   ["⇧Tab", "step the effort"],
 ];
@@ -171,20 +162,29 @@ const INTRO_KEYS: [string, string][] = [
 export function IntroWaysFrame({ children }: { children?: ReactNode }) {
   return (
     <div className="mx-auto flex w-full max-w-chat flex-col gap-6 px-6 pt-2 pb-8">
-      {children && <div className="grid grid-cols-3 gap-2 px-1">{children}</div>}
+      {children ? <div className="grid grid-cols-3 gap-2 px-1">{children}</div> : null}
       <KeyHints keys={INTRO_KEYS} />
     </div>
   );
 }
 
+/** The code starters for a folder, which a workspace's first screen shows as a session's does. */
+export function Starters({ where, onPick }: { where: Where; onPick: (text: string) => void }) {
+  return startersFor(undefined, where).map((starter) => (
+    <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
+  ));
+}
+
 /** Ways in under the composer: starters and the keys. */
 export function IntroWays({ session, onPick }: { session: Session; onPick: (text: string) => void }) {
   const where = useWhere(session);
+  const starters = startersFor(session.kind, where);
   return (
     <IntroWaysFrame>
-      {startersFor(session, where).map((starter) => (
-        <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
-      ))}
+      {starters.length > 0 &&
+        starters.map((starter) => (
+          <StarterCard key={starter.title} icon={starter.icon} title={starter.title} hint={starter.hint} onClick={() => onPick(starter.text)} />
+        ))}
     </IntroWaysFrame>
   );
 }

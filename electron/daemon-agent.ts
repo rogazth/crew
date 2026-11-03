@@ -8,6 +8,7 @@ import { realpathSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
+import { errorText, trace } from "./trace";
 import {
   classify,
   installNeeded,
@@ -203,6 +204,7 @@ export async function connectAgent(options: Options, sys: System = system): Prom
   const ensureInstalled = async () => {
     const installed = parsePlistJson(await sys.run("/usr/bin/plutil", ["-convert", "json", "-o", "-", plist]).catch(() => ""));
     if (!installNeeded(installed, { program: crewd, dataDir }, sys.realpath)) return;
+    trace.info("daemon.install", { crewd });
     await sys.run(crew, ["daemon", "install", "--crewd", crewd, "--data-dir", dataDir, "--as-user", "--json"], 60_000);
   };
 
@@ -216,8 +218,12 @@ export async function connectAgent(options: Options, sys: System = system): Prom
       () => false,
     );
     if (stopping) return;
-    if (!loaded) await sys.run("/bin/launchctl", ["bootstrap", target.domain, plist]);
+    if (!loaded) {
+      trace.info("daemon.bootstrap", { service: target.service });
+      await sys.run("/bin/launchctl", ["bootstrap", target.domain, plist]);
+    }
     if (stopping) return;
+    trace.info("daemon.kickstart", { service: target.service, kill: kill && loaded });
     await sys.run("/bin/launchctl", kill && loaded ? ["kickstart", "-k", target.service] : ["kickstart", target.service]);
   };
 
@@ -235,7 +241,9 @@ export async function connectAgent(options: Options, sys: System = system): Prom
   // `daemon/shutdown`, or stuck, is stopped by `kickstart -k` instead. Only
   // ever on launch (see nextStep).
   const replace = async (file: DaemonFile) => {
-    if ((await sys.bridgeCall(file, "daemon/shutdown")) && (await exited(file))) await start(false);
+    const asked = (await sys.bridgeCall(file, "daemon/shutdown")) && (await exited(file));
+    trace.info("daemon.replace", { running: file.version, wanted: version, via: asked ? "shutdown" : "kickstart" });
+    if (asked) await start(false);
     else await start(true);
   };
 
@@ -256,16 +264,21 @@ export async function connectAgent(options: Options, sys: System = system): Prom
     // Twice: an update can meet an old daemon, and one replace settles it.
     for (let attempt = 0; attempt < 2; attempt++) {
       const step = nextStep(found);
+      trace.info("daemon.launch_step", { step: step.do, found: found.kind, attempt: attempt + 1 });
       if (step.do === "connect") return step.file;
       if (step.do === "replace") await replace(step.file);
       else await start(step.do === "restart");
       const old = "file" in found ? found.file : null;
       const next = await fresh(old);
-      if (!next) throw new Error(`crewd did not come up within ${ms.start / 1000} s.\nLog: ${log}`);
+      if (!next) {
+        trace.error("daemon.did_not_come_up", { waited_s: ms.start / 1000 });
+        throw new Error(`crewd did not come up within ${ms.start / 1000} s.\nLog: ${log}`);
+      }
       found = next;
     }
     if (found.kind === "ready") return found.file;
     const running = "file" in found ? found.file.version : "?";
+    trace.error("daemon.version_mismatch", { running, wanted: version });
     throw new Error(`crewd ${running} is running, but this Crew is ${version}.\nLog: ${log}`);
   };
 
@@ -277,6 +290,10 @@ export async function connectAgent(options: Options, sys: System = system): Prom
     if (stopping) return;
     const step = watchStep(found, current, strikes, warned);
     strikes = step.do === "wait" ? strikes + 1 : 0;
+    // Most ticks find everything as it was: only a decision to act is a line.
+    if (step.do !== "keep" && step.do !== "leave" && (step.do !== "wait" || strikes === 1)) {
+      trace.info("daemon.watch", { step: step.do, found: found.kind, strikes });
+    }
     switch (step.do) {
       case "keep":
       case "wait":
@@ -334,7 +351,11 @@ export async function connectAgent(options: Options, sys: System = system): Prom
       if (file && (await sys.bridgeCall(file, "daemon/shutdown")) && (await exited(file))) return;
       // Not answering: bootout stops it (SIGTERM, then SIGKILL) and unloads
       // it; the next launch bootstraps it again.
-      await sys.run("/bin/launchctl", ["bootout", target.service]).catch((error: unknown) => console.error(error));
+      trace.info("daemon.bootout", { service: target.service });
+      await sys.run("/bin/launchctl", ["bootout", target.service]).catch((error: unknown) => {
+        trace.warn("daemon.bootout_failed", { error: errorText(error) });
+        console.error(error);
+      });
     },
   };
 }
@@ -343,6 +364,7 @@ export async function connectAgent(options: Options, sys: System = system): Prom
 // up late, or half way, would be a second daemon on the same database. Booted
 // out, it is also not restarted by KeepAlive; the next launch loads it again.
 export async function unloadAgent(uid: number, dataDir: string): Promise<void> {
+  trace.info("daemon.unload_agent", { reason: "fall back to the child" });
   await run("/bin/launchctl", ["bootout", launchctlTarget(uid, dataDir).service], 20_000).catch(() => {});
 }
 

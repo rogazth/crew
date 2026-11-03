@@ -418,9 +418,13 @@ impl TurnHost {
         if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
             live.cwd = cwd.to_string();
         }
-        self.cursor_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false)
-            .map_err(|error| self.cursor_failure(session_id, "Cursor Agent did not start", &error))?;
+        let began = std::time::Instant::now();
+        self.cursor_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false).map_err(|error| {
+            crate::trace::connect_failed("cursor", session_id, "initialize", &error);
+            self.cursor_failure(session_id, "Cursor Agent did not start", &error)
+        })?;
         self.cursor_call(session_id, "authenticate", authenticate_params(), OPEN_TIMEOUT, false).map_err(|error| {
+            crate::trace::connect_failed("cursor", session_id, "authenticate", &error);
             self.cursor_failure(session_id, "Cursor Agent could not log in (run `cursor-agent login` in a terminal)", &error)
         })?;
         let mut text = &texts.resumed;
@@ -433,6 +437,7 @@ impl TurnHost {
                 // A conversation cursor no longer has is not the end of the
                 // session: it starts another, and says so.
                 Err(error) => {
+                    crate::trace::connect_failed("cursor", session_id, "load", &error);
                     let message = format!("Cursor could not load this session's conversation ({error}): it starts a new one.");
                     self.transcripts.apply(session_id, HarnessEvent::SessionNote { message });
                 }
@@ -450,6 +455,7 @@ impl TurnHost {
                 new_session_id(&created).ok_or_else(|| "Cursor Agent opened no session.".to_string())?
             }
         };
+        crate::trace::connected("cursor", session_id, opened, began);
         if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
             live.acp_session = Some(acp_session.clone());
         }
@@ -669,6 +675,7 @@ impl TurnHost {
 
     pub(crate) fn handle_cursor_line(&self, session_id: &str, line: &str) {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
+            crate::trace::unparsed("cursor", session_id, line);
             return;
         };
         let method = message.get("method").and_then(Value::as_str);

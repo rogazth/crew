@@ -110,6 +110,22 @@ describe("send", () => {
     expect(first?.nonce).toEqual(expect.any(String));
   });
 
+  // What the transport throws for every call in flight when the socket closes.
+  it("asks again when the socket closed under the call", async () => {
+    const calls: unknown[] = [];
+    request.mockImplementation((method: string, params: unknown) => {
+      if (method !== "turn_start") return Promise.resolve({ blocks: [], seq: 0, working: false, status: "idle" });
+      calls.push(params);
+      if (calls.length === 1) return Promise.reject(Object.assign(new Error("That machine is offline"), { name: "EnvDown" }));
+      return Promise.resolve({ sessionId: bot.id });
+    });
+    const settled = runtime.send(bot, "/tmp", "hello");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    status("idle");
+    expect(await settled).toBe(true);
+    expect(transcript.read(bot.id).blocks.some((block) => block.text.includes("offline"))).toBe(false);
+  });
+
   it("does not ask again when the daemon itself refused", async () => {
     let starts = 0;
     request.mockImplementation((method: string) => {
@@ -131,6 +147,22 @@ describe("send", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("turn_start", expect.anything()));
     status("error");
     expect(await settled).toBe(false);
+  });
+});
+
+describe("pass", () => {
+  it("asks again with the same nonce when the socket closed under the call", async () => {
+    const calls: Array<{ nonce?: string }> = [];
+    request.mockImplementation((method: string, params: { nonce?: string }) => {
+      if (method !== "turn_start") return Promise.resolve({ blocks: [], seq: 0, working: false, status: "idle" });
+      calls.push(params);
+      if (calls.length === 1) return Promise.reject(Object.assign(new Error("That machine is offline"), { name: "EnvDown" }));
+      return Promise.resolve({ working: true });
+    });
+    expect(await runtime.pass(bot, "/tmp", "and this", [], "queue")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.nonce).toBe(calls[0]?.nonce);
+    expect(calls[0]?.nonce).toEqual(expect.any(String));
   });
 });
 

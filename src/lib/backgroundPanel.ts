@@ -10,7 +10,7 @@ import { isRunning } from "./background";
 import { tokenCount } from "./contextMeter";
 import { summarize } from "./activity";
 import { EFFORT_LABELS, modelLabel, type Effort } from "./providers";
-import { childState, isOwnedChild, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
+import { childState, isOwnedChild, launchedState, pairThread, partyOf, type ChildState, type Party, type ThreadRef } from "./letters";
 import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, BotRef, Process, ProcessRun, ThreadPair } from "./protocol";
 import { duration } from "./time";
 import type { Session } from "./types";
@@ -163,7 +163,7 @@ const ATTENTION: Partial<Record<ChildState, PanelAttention>> = { question: "ques
 
 /** A Crew subagent the session owns, or an independent session it launched. */
 function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
-  const reason = childState(session);
+  const reason = kind === "session" ? launchedState(session) : childState(session);
   const state = CHILD_STATE[reason];
   return {
     id: `session:${session.id}`,
@@ -373,6 +373,9 @@ export const clearedKey = (entry: PanelEntry): string => `${entry.id}@${entry.en
 
 /** The board's own entries are dropped by the daemon when cleared; the others are only hidden here. */
 const onBoard = (entry: PanelEntry) => entry.source.type === "command";
+
+/** An agent, as against what it left running (a shell, a process). */
+export const isAgentEntry = (entry: PanelEntry) => entry.kind === "subagent" || entry.kind === "session";
 
 /** The entries the panel shows: everything running, and what the user has not cleared. */
 export function visibleEntries(entries: readonly PanelEntry[], cleared: ReadonlySet<string>): PanelEntry[] {

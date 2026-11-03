@@ -4,6 +4,7 @@ import type { PanelEntry } from "../../lib/backgroundPanel";
 import type { Process } from "../../lib/processes";
 import type { BackgroundCommand } from "../../lib/protocol";
 import type { Ask } from "../../lib/turnRuntime";
+import type { TreeMention } from "../../lib/agentMentions";
 import type { ProjectFile, Session } from "../../lib/types";
 
 /** What a chat surface can ask of the shell without a prop for every level. */
@@ -26,6 +27,8 @@ export type ChatActions = {
   files: ProjectFile[];
   /** The workspace's other bots and sessions, for `#` mentions; absent outside a session's chat. */
   agents?: readonly Session[];
+  /** The worktrees of the session's repo, for `#` mentions too; absent outside a session's chat. */
+  worktrees?: readonly TreeMention[];
   /** The workspace's commands, whose runs a session started are in its background panel. */
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */
@@ -80,6 +83,14 @@ export type LetterScope = {
   owner: Party | null;
   sessions: readonly Session[];
   openThread: (thread: ThreadRef) => void;
+  /** This chat is an agent's thread: who said what is its spine, not beats. */
+  inThread?: boolean;
+  /** The letter the right panel is open at: its beat says so. */
+  openLetter?: string | undefined;
+  /** A native subagent's thread has no session of its own to name it. */
+  speaker?: { name: string; provider?: string | undefined } | undefined;
+  /** Who asked a native subagent: its prompts are that party's words, not the user's. */
+  asker?: { id?: string | undefined; name: string; provider?: string | undefined; bot?: boolean | undefined } | undefined;
 };
 
 export const LetterContext = createContext<LetterScope>({ owner: null, sessions: [], openThread: () => undefined });

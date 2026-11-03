@@ -10,6 +10,7 @@ import path from "node:path";
 import { app, dialog, ipcMain } from "electron";
 import { CLI_CHANNELS, type CliResult, type CliStatus } from "../src/lib/cli";
 import { release } from "./build-info";
+import { errorText, trace } from "./trace";
 import { channelOf, cliLinkName } from "./channel";
 import {
   adminRemoveScript,
@@ -116,9 +117,18 @@ async function change(dir: string, mine: () => Promise<void>, admin: string): Pr
   return undefined;
 }
 
+/** One line for what a change to the command line link came to; never the path it went to. */
+function traceOutcome(action: "install" | "uninstall", outcome: string, error?: string): void {
+  if (error) trace.warn(`cli.${action}`, { outcome, error: errorText(error) });
+  else trace.info(`cli.${action}`, { outcome });
+}
+
 export async function installCli(): Promise<CliResult> {
   const status = await cliStatus();
-  if (status.state !== "absent") return { status };
+  if (status.state !== "absent") {
+    traceOutcome("install", status.state === "installed" ? "already_installed" : "unavailable");
+    return { status };
+  }
   const source = cliBinary();
   const link = path.join(status.dir, LINK);
   const found = await existing(link, source);
@@ -132,19 +142,29 @@ export async function installCli(): Promise<CliResult> {
       defaultId: 1,
       cancelId: 1,
     });
-    if (response !== 0) return { status };
+    if (response !== 0) {
+      traceOutcome("install", "declined");
+      return { status };
+    }
   }
   const error = await change(status.dir, () => linkAsUser(source, link), adminScript(source, link));
-  return { status: await cliStatus(), error };
+  const after = await cliStatus();
+  traceOutcome("install", error ? "failed" : after.state === "installed" ? "installed" : "cancelled", error);
+  return { status: after, error };
 }
 
 // Only ever Crew's own link: a crew of the user's is not Crew's to remove.
 export async function uninstallCli(): Promise<CliResult> {
   const status = await cliStatus();
-  if (status.state !== "installed") return { status };
+  if (status.state !== "installed") {
+    traceOutcome("uninstall", "not_installed");
+    return { status };
+  }
   const { link } = status;
   const error = await change(path.dirname(link), () => unlink(link), adminRemoveScript(link));
-  return { status: await cliStatus(), error };
+  const after = await cliStatus();
+  traceOutcome("uninstall", error ? "failed" : after.state === "installed" ? "cancelled" : "removed", error);
+  return { status: after, error };
 }
 
 export function registerCliIpc(): void {

@@ -18,6 +18,7 @@ import {
   remoteRequest,
   startChat,
   sessionTab,
+  SSH_USER,
   waitFor,
   workspaceMark,
   worktreeHeader,
@@ -64,7 +65,7 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     // The window dials the proxy from now on.
     await crew.window.evaluate(
       (input) => window.crewHost!.remotes!.add(input),
-      { id: remote.id, name: "devbox", host: "127.0.0.1", port: proxy.port, user: "agent", token: remote.token },
+      { id: remote.id, name: "devbox", host: "127.0.0.1", port: proxy.port, user: SSH_USER, token: remote.token },
     );
     await crew.reload();
 

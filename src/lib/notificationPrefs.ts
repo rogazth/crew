@@ -1,4 +1,5 @@
-import * as api from "./api";
+import { defineSetting } from "./settingsEngine/define";
+import { peekSetting, readSetting, saveSetting, watchSetting } from "./settingsEngine/store";
 
 /** The kinds of news, each with its own banner switch and sound. */
 export type NotificationKind =
@@ -146,44 +147,28 @@ export function pauseEnd(choice: "hour" | "tomorrow", now: Date): number {
   return end.getTime();
 }
 
-/**
- * One copy for the whole window, outside React's tree: the dispatcher reads it
- * on every notification, and Settings writes it.
- */
-let prefs: NotificationPrefs = DEFAULT_NOTIFICATION_PREFS;
-let loading: Promise<void> | null = null;
-const listeners = new Set<() => void>();
+export const notificationPrefsSetting = defineSetting<NotificationPrefs>({
+  key: NOTIFICATION_PREFS_KEY,
+  scope: "device",
+  fallback: DEFAULT_NOTIFICATION_PREFS,
+  parse: parseNotificationPrefs,
+  format: JSON.stringify,
+});
 
-function set(next: NotificationPrefs) {
-  prefs = next;
-  for (const listener of listeners) listener();
-}
-
+/** The dispatcher reads it on every notification, outside React's tree; Settings writes it. */
 export function notificationPrefs(): NotificationPrefs {
-  return prefs;
+  return peekSetting(notificationPrefsSetting);
 }
 
 /** Resolves once the saved prefs are in; a failed read leaves the defaults and tries again next time. */
-export function loadNotificationPrefs(): Promise<void> {
-  loading ??= api
-    .stateGet(NOTIFICATION_PREFS_KEY)
-    .then((raw) => set(parseNotificationPrefs(raw)))
-    .catch(() => {
-      loading = null;
-    });
-  return loading;
+export async function loadNotificationPrefs(): Promise<void> {
+  await readSetting(notificationPrefsSetting).catch(() => {});
 }
 
 export function updateNotificationPrefs(next: NotificationPrefs): void {
-  // A read still in flight would put back what this replaces.
-  loading = Promise.resolve();
-  set(next);
-  void api.stateSet(NOTIFICATION_PREFS_KEY, JSON.stringify(next)).catch(() => {});
+  saveSetting(notificationPrefsSetting, next);
 }
 
 export function subscribeNotificationPrefs(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return watchSetting(notificationPrefsSetting, listener);
 }

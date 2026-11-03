@@ -549,6 +549,9 @@ impl SessionTools {
         // What goes over is the oldest letter, which may not be this one: a
         // queue that delivers out of order is worse than one that waits.
         let started = if resuming { self.turns.drain_mailbox(&target.id) } else { self.turns.deliver_to(&target) };
+        if resuming {
+            tracing::info!(session_id = %target.id, provider = %target.provider, started, "session.resumed");
+        }
         let waiting = mailbox::waiting_count(&self.store, &target.id)?;
         let mut note = if resuming && started {
             format!("{} had exited. It is resumed on its conversation and reads this now.", target.name)
@@ -961,8 +964,18 @@ impl SessionTools {
         }) {
             let _ = mailbox::dispose(&self.store, &letter.id);
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
+            tracing::warn!(session_id = %row.id, error = %crate::trace::error_text(&error), "subagent.start_failed");
             return Err(format!("The session was made ({}) but its first turn did not start: {error}", row.id));
         }
+        tracing::info!(
+            session_id = %row.id,
+            parent_id = row.parent_id.as_deref(),
+            launched_by = caller.session_id(),
+            provider = %row.provider,
+            kind = if how == Start::Delegate { "subagent" } else { "session" },
+            worktree = made_tree,
+            "subagent.started"
+        );
         let out = json!({
             "id": row.id,
             "letter_id": letter.id,
@@ -1539,13 +1552,14 @@ impl SessionTools {
             },
             &crate::messages::Find { tokens: SNIPPET_TOKENS, roles: &roles, whole: WHOLE_CHARS },
         )?;
-        // Every search, so whether words are enough (or vectors are needed)
-        // can be judged from what bots actually looked for and found.
-        eprintln!(
-            "[search] {} in {}: {query:?} → {} hit(s)",
-            caller.label(),
-            row.map(|row| row.id.as_str()).unwrap_or("the workspace"),
-            found.len()
+        // Every search, so whether words are enough (or vectors are needed) can
+        // be judged from how many hits bots get. Never the words they looked for.
+        tracing::info!(
+            session_id = caller.session_id().unwrap_or(""),
+            in_session = row.map(|row| row.id.as_str()),
+            query_chars = query.chars().count(),
+            hits = found.len(),
+            "messages.search"
         );
         let mut spent = 0;
         let mut hits = Vec::new();
@@ -1656,6 +1670,8 @@ impl SessionTools {
 
     /// End one subagent for good and say what it is now.
     fn stop_one(&self, by: &str, row: &Session) -> Result<Session, String> {
+        // Who stopped it is a name; the trace holds the ids.
+        tracing::info!(session_id = %row.id, parent_id = row.parent_id.as_deref(), running = self.turns.is_running(&row.id), "subagent.stopped");
         if self.turns.exit_child(&row.id, by) {
             // Its turn settles on its own thread; give it a moment so the
             // answer says what is true.
@@ -1821,6 +1837,7 @@ impl SessionTools {
         self.may_write(caller, &target)?;
         let running = self.turns.is_running(&target.id);
         let body = text(args.get("text"));
+        tracing::info!(session_id = %target.id, running, redirect = body.is_some(), "session.interrupt_requested");
         let mut out = json!({ "session": target.id, "name": target.name, "interrupted": running });
         match body {
             None => {
@@ -1849,6 +1866,7 @@ impl SessionTools {
                 });
             }
         }
+        tracing::info!(session_id = %target.id, interrupted = running, still_running = self.turns.is_running(&target.id), "session.interrupt_done");
         Ok(out)
     }
 }
@@ -2341,6 +2359,7 @@ impl ToolFamily for SessionTools {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::disallowed_macros)] // tests print what they measured
     use super::*;
     use crate::caller::CallerKind;
     use std::path::{Path, PathBuf};
@@ -2723,6 +2742,7 @@ while True:
     }
 
     fn world() -> World {
+        crate::trace::capture::install();
         let turns = TurnHost::test_new();
         turns.test_agents().set_events(Arc::new(Fanout(turns.clone())));
         let dir = std::env::temp_dir().join(format!("crew-st-{}", uuid::Uuid::new_v4()));
@@ -3128,6 +3148,8 @@ while True:
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
         assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+        let seen = crate::trace::capture::find("provider.connected", "session_id", &id);
+        assert_eq!(seen.iter().map(|e| e.get("resumed").unwrap_or("")).collect::<Vec<_>>(), ["false", "true"], "{seen:?}");
     }
 
     /// `/compact` is not a `turn/start`, so it cannot carry the settings that
@@ -3255,6 +3277,48 @@ while True:
         assert!(launches.iter().all(|launch| after_flag(launch, "--resume").is_none()), "{launches:?}");
     }
 
+    /// A bot's process goes with its turn, so the turn waits for what it left
+    /// running in the background, as a child's does: the CLI wakes on it, and
+    /// what the bot says then ends the turn and lets the process go.
+    #[test]
+    fn a_claude_bot_turn_waits_for_what_it_left_running_in_the_background() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "robin".into(),
+            "claude".into(),
+            "sonnet".into(),
+            String::new(),
+            "full".into(),
+        )
+        .expect("bot");
+        w.type_to(&bot, "BACKGROUND 1.5", None, None);
+        let said = |w: &World| -> Vec<String> {
+            w.blocks(&bot.id).into_iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text).collect()
+        };
+        for _ in 0..400 {
+            if said(&w).iter().any(|text| text == "started it in the background") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(w.row(&bot.id).status, "working", "the turn did not wait for its work");
+
+        // What the user writes meanwhile is answered, and the turn waits on.
+        let steered = w.type_to(&bot, "hello?", None, None);
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
+        w.settle(&bot.id);
+        assert_eq!(
+            said(&w),
+            ["started it in the background", "report: hello?", "report: BACKGROUND 1.5 + the background command finished"]
+        );
+        assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
+    }
+
     /// A `result` that comes while no turn runs belongs to none: it ends
     /// nothing, shows nothing, and the next message still starts a turn.
     #[test]
@@ -3275,6 +3339,41 @@ while True:
     /// A stop interrupts the turn and keeps the process: the CLI closes the
     /// stopped turn with a result of its own, and the next message is a turn
     /// on the same process, with nothing launched.
+    /// A subagent with no turn that still reads as starting has nothing to
+    /// interrupt, so a stop has to be what ends that; anything else keeps
+    /// what it has.
+    #[test]
+    fn stopping_a_subagent_with_no_turn_ends_it_as_stopped() {
+        let w = world();
+        let row = |id: &str| session::get(w.turns.store(), id.to_string()).expect("read").expect("session");
+        let stuck = session::create_child(
+            w.turns.store(),
+            w.workspace.clone(),
+            "stuck".into(),
+            "opencode".into(),
+            "m".into(),
+            "full".into(),
+            None,
+            None,
+        )
+        .expect("child")
+        .id;
+        assert_eq!(row(&stuck).status, "starting");
+
+        w.turns.stop(&stuck).expect("stop");
+        let ended = row(&stuck);
+        assert_eq!(ended.status, "idle");
+        let stopped = ended.last_event.expect("an event");
+        assert_eq!(stopped.kind, "stopped");
+
+        w.turns.stop(&stuck).expect("stop again");
+        assert_eq!(row(&stuck).last_event.expect("an event").cursor, stopped.cursor, "a second stop writes nothing");
+
+        let mine = w.session("terminal", "mine", "full").session_id().expect("id").to_string();
+        w.turns.stop(&mine).expect("stop");
+        assert!(row(&mine).last_event.is_none(), "only a subagent reads its state off its events");
+    }
+
     #[test]
     fn a_stopped_claude_turn_keeps_the_process_and_the_next_turn_runs_on_it() {
         let w = world();
@@ -4366,6 +4465,32 @@ time.sleep(600)
         assert_eq!(resumed[0]["threadId"], json!(bound));
         assert_eq!(resumed[0]["model"], "gpt-5.6-luna");
         assert!(resumed[0]["config"]["mcp_servers"]["crew"].is_object(), "{}", resumed[0]);
+        // Up, gone with nobody asking, and up again on the same thread: each a line.
+        let seen = crate::trace::capture::find("provider.connected", "session_id", &id);
+        assert_eq!(seen.iter().map(|e| e.get("resumed").unwrap_or("")).collect::<Vec<_>>(), ["false", "true"], "{seen:?}");
+    }
+
+    /// An exit nobody asked for is a warning with the code; one Crew asked for is not.
+    #[test]
+    fn a_process_that_dies_unasked_is_a_warning_and_one_that_was_stopped_is_not() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "remember 4817", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        w.turns.on_agent_exit(&id, Some(137));
+        let lost = crate::trace::capture::expect("provider.lost", "session_id", &id);
+        assert_eq!(lost.get("provider"), Some("Codex"));
+        assert_eq!((lost.get("code"), lost.get("mid_turn"), lost.level), (Some("137"), Some("false"), tracing::Level::WARN));
+
+        // A turn stopped from Crew: the process going with it was asked to.
+        let (id, _) = w.codex(&parent, "SLEEP 30", None);
+        until("the turn is up", || w.turns.is_running(&id));
+        w.turns.stop(&id).expect("stop");
+        let asked = crate::trace::capture::expect("turn.stop_requested", "session_id", &id);
+        assert_eq!(asked.get("reason"), Some("stop"));
+        w.settle(&id);
+        assert!(crate::trace::capture::find("provider.lost", "session_id", &id).is_empty());
     }
 
     /// A session whose settings changed is still on the app server it has:
@@ -4637,6 +4762,14 @@ time.sleep(600)
         w.turns.respond(&id, request["request_id"].as_u64().unwrap(), ApprovalDecision::Always).expect("respond");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: acceptForSession", "{done}");
+        // The request is raised and settled in the trace by ids and kind, never what it asked for.
+        let raised = crate::trace::capture::expect("request.raised", "session_id", &id);
+        assert_eq!(raised.get("kind"), Some("approval"));
+        let decided = crate::trace::capture::expect("approval.decided", "session_id", &id);
+        assert_eq!(decided.get("decision"), Some("Always"));
+        for event in [raised, decided] {
+            assert!(event.fields.values().all(|v| !v.contains("touch asked.txt")), "{event:?}");
+        }
         let started = &sent(&log, "thread/start")[0];
         assert_eq!(
             (started["approvalPolicy"].clone(), started["sandbox"].clone()),
@@ -4657,6 +4790,11 @@ time.sleep(600)
         assert_eq!(answered["delivery"], "answered", "{answered}");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], r#"report: QUESTION + answers: {"color": {"answers": ["Blue"]}}"#, "{done}");
+        let settled = crate::trace::capture::expect("question.answered", "session_id", &id);
+        assert_eq!(settled.get("dismissed"), Some("false"));
+        let raised = crate::trace::capture::expect("request.raised", "session_id", &id);
+        assert_eq!((raised.get("kind"), raised.get("questions")), (Some("question"), Some("1")));
+        assert!(raised.fields.values().all(|v| !v.contains("Which color")), "{raised:?}");
     }
 
     /// Stopped: the turn is interrupted, and ends when Codex says so; one
@@ -7358,6 +7496,58 @@ time.sleep(600)
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the steer started another process");
     }
 
+    /// A bot's chat takes what the user writes while it works as a session's
+    /// does: into the turn, as their own message and with no envelope.
+    #[test]
+    fn a_message_sent_while_a_claude_bots_turn_works_is_steered_as_the_users_own() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "Coder".into(),
+            "claude".into(),
+            String::new(),
+            String::new(),
+            "full".into(),
+        )
+        .expect("bot");
+        w.type_to(&bot, "SLEEP 2", None, None);
+        until_claude_turn(&w, &bot.id);
+
+        let steered = w.type_to(&bot, "and this", None, None);
+        assert_eq!((steered.working, steered.delivery.as_deref()), (true, Some("steered")));
+        assert_eq!(w.turns.steer_text(&bot.id, &mailbox::user(), "and this"), "and this");
+
+        w.settle(&bot.id);
+        assert!(w.queue(&bot.id).is_empty(), "the echo did not mark it delivered");
+        let block = w.blocks(&bot.id).into_iter().find(|block| block.text == "and this").expect("the steer");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+        assert!(w.blocks(&bot.id).iter().any(|block| block.text == "report: SLEEP 2 + and this"));
+    }
+
+    /// Where the CLI takes nothing mid-turn, the bot's next turn is what the
+    /// user wrote, as they wrote it.
+    #[test]
+    fn a_message_sent_while_a_bot_works_waits_for_its_next_turn() {
+        let w = world();
+        let bot = w.session("bot", "Coder", "full");
+        let bot = w.row(bot.session_id().unwrap());
+        w.type_to(&bot, "SLEEP 1", None, None);
+        let queued = w.type_to(&bot, "after it", None, None);
+        assert_eq!(queued.delivery.as_deref(), Some("queued"));
+        assert_eq!(w.queue(&bot.id), [("after it".to_string(), "waiting".to_string())]);
+
+        until("the queue went as the next turn", || w.launches().len() == 2);
+        w.settle(&bot.id);
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap_or_default().to_string();
+        assert!(prompt.trim_end().ends_with("after it") && !prompt.contains("## Message"), "{prompt}");
+        let block = w.blocks(&bot.id).into_iter().find(|block| block.text == "after it").expect("the message");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+    }
+
     fn text_block(text: &str) -> (String, String) {
         ("text".into(), text.into())
     }
@@ -9274,6 +9464,59 @@ time.sleep(600)
         assert_eq!((idle["interrupted"].clone(), idle["delivery"].clone()), (json!(false), json!("started")), "{idle}");
         w.settle(&id);
         assert!(w.blocks(&id).iter().any(|block| block.text == "report: and then this"));
+    }
+
+    /// A session's life leaves lines — made, started, interrupted, stopped, resumed, deleted —
+    /// with ids, provider and kind, and never the prompt or what it was sent.
+    #[test]
+    fn a_sessions_life_is_traced_by_ids_without_what_it_was_told() {
+        use crate::trace::capture;
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let other = w.session("terminal", "other", "full");
+        let prompt = "SLEEP 30 PROMPT-MARKER-91ab";
+        let id = w.start(&shell, prompt);
+        until("the turn is up", || w.launches().len() == 1);
+        let started = capture::expect("subagent.started", "session_id", &id);
+        assert_eq!(started.get("provider"), Some("opencode"));
+        assert_eq!(started.get("kind"), Some("subagent"));
+        assert_eq!(started.get("parent_id"), shell.session_id());
+        assert_eq!(capture::expect("session.created", "session_id", &id).get("kind"), Some("child"));
+
+        w.call(&other, "interrupt_session", json!({ "session": id, "text": "TEXT-MARKER-77cd" })).expect("interrupt");
+        let asked = capture::expect("session.interrupt_requested", "session_id", &id);
+        assert_eq!((asked.get("running"), asked.get("redirect")), (Some("true"), Some("true")));
+        capture::expect("session.interrupt_done", "session_id", &id);
+        w.settle(&id);
+
+        w.call(&shell, "stop_session", json!({ "session": id })).expect("stop");
+        capture::expect("subagent.stopped", "session_id", &id);
+        // An independent session that exited takes the next letter as a turn on its conversation.
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.say(&mine, "first");
+        w.turns.transcripts().set_status(&mine.id, "exited", None);
+        w.turns.transcripts().flush(&mine.id);
+        let sent = w.call(&shell, "send_message", json!({ "to": mine.id, "text": "come back TEXT-MARKER-77cd" })).expect("send");
+        assert_eq!(sent["delivery"], "resumed", "{sent}");
+        let resumed = capture::expect("session.resumed", "session_id", &mine.id);
+        assert_eq!(resumed.get("started"), Some("true"));
+        assert!(resumed.fields.values().all(|v| !v.contains("MARKER")), "{resumed:?}");
+        w.settle(&mine.id);
+        session::delete(w.turns.store(), id.clone()).expect("delete");
+        capture::expect("session.deleted", "session_id", &id);
+
+        for message in [
+            "subagent.started",
+            "session.created",
+            "session.interrupt_requested",
+            "session.interrupt_done",
+            "subagent.stopped",
+            "session.resumed",
+        ] {
+            for event in capture::find(message, "session_id", &id) {
+                assert!(event.fields.values().all(|v| !v.contains("MARKER")), "{message}: {event:?}");
+            }
+        }
     }
 
     #[test]

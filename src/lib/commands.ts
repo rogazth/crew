@@ -2,6 +2,7 @@ import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotke
 import { parseChord, toHotkey } from "./chords";
 import { IS_MAC } from "./hotkey";
 import type { LiveCommand } from "./keymap";
+import { trace } from "./trace";
 
 /**
  * `also` are further chords for the same command, for keys that sit elsewhere on other layouts.
@@ -218,11 +219,36 @@ export function registerCommand(id: CommandId, handler: () => void): () => void 
   };
 }
 
-export function runCommand(id: CommandId): boolean {
+/** What ran a command: a chord, the palette, the app menu or a key forwarded from a page, or a button. */
+export type CommandSource = "keyboard" | "palette" | "menu" | "button";
+
+/** A command that fires on a held key is written at most this often, with how many ran in between. */
+const TRACE_REPEAT_MS = 1000;
+const lastTraced = new Map<CommandId, { at: number; skipped: number }>();
+
+/** The one place a command runs, and so the one place it is traced: its id and how it was triggered. */
+export function runCommand(id: CommandId, via: CommandSource = "button"): boolean {
   const handler = handlers.get(id);
   if (!handler) return false;
+  traceCommand(id, via);
   handler();
   return true;
+}
+
+function traceCommand(id: CommandId, via: CommandSource): void {
+  const now = Date.now();
+  if (repeatable(id)) {
+    // Stepping through tabs with a held chord is dozens of runs: the first of a burst is the line.
+    const last = lastTraced.get(id);
+    if (last && now - last.at < TRACE_REPEAT_MS) {
+      last.skipped += 1;
+      return;
+    }
+    lastTraced.set(id, { at: now, skipped: 0 });
+    trace.info("ui.command", { command: id, via, repeatable: true, repeats_before: last?.skipped || undefined });
+    return;
+  }
+  trace.info("ui.command", { command: id, via });
 }
 
 /**

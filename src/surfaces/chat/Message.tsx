@@ -1,18 +1,18 @@
-import { Collapsible } from "@base-ui/react/collapsible";
 import { Tooltip } from "../../chrome/kit";
-import { ChevronRightIcon, ImagesIcon, InfoIcon } from "lucide-react";
+import { GitBranchIcon, ImagesIcon, InfoIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState, type ReactNode } from "react";
 import { FileRef } from "../../chrome/FileRef";
 import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
 import { agentRuns, splitAgentNote, type AgentRef } from "../../lib/agentMentions";
-import { splitMentions } from "../../lib/mentions";
+import { looksLikePath, splitMentions } from "../../lib/mentions";
 import { attachedFrom, imageMime } from "../../lib/attachments";
 import { AttachmentStrip, Lightbox } from "./Attachments";
 import { isAuthFailure, loginArgv } from "../../lib/auth";
 import { LOCAL, envOfSession } from "../../lib/client/registry";
 import { providerOf } from "../../lib/providers";
+import { Beat } from "./Beat";
 import { useChatActions, useChatSession, type ChatSession } from "./context";
 import { CopyButton } from "./CopyButton";
 import { clock, duration } from "../../lib/time";
@@ -56,119 +56,83 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
 });
 
 /**
- * A letter a bot (or a terminal) wrote, folded to one line: who sent it and how it
- * opens. Folded it still shows the first line — a message you cannot see at
- * all is one you have to click to know you can ignore.
+ * A letter with no thread behind it: an old one, or one sent from the command
+ * line. A beat like the rest, its words in a dialog.
  */
 function Letter({ block, from }: { block: Block; from: BotRef }) {
-  const { openSession } = useChatActions();
-  const [open, setOpen] = useState(false);
-  const first = block.text.split("\n").find((line) => line.trim() !== "") ?? "";
+  const you = from.kind === "user";
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen}>
-      <Collapsible.Trigger
-        className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] leading-[18px] ring-1 ring-hairline transition-colors hover:bg-hover"
-        data-block={block.id}
-        data-letter-row
-      >
-        <BotAvatar seed={from.id} bare className="size-5" />
-        {from.kind === "user" ? (
-          <span className="shrink-0 text-text-muted">You sent this from the command line</span>
-        ) : (
-          <span className="shrink-0">
-            <span className="font-medium">{from.name}</span>
-            <span className="text-text-muted"> wrote to you</span>
-          </span>
-        )}
-        {open ? <span className="flex-1" /> : <span className="min-w-0 flex-1 truncate text-text-muted">{first}</span>}
-        <ChevronRightIcon
-          className={`size-3.5 shrink-0 text-icon transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-        />
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="crew-phase-panel">
-        <div className="flex flex-col items-start gap-1.5 pt-2">
-          {block.text ? (
-            <div className="crew-md-row">
-              <div className="crew-bubble is-from-bot" data-bubble>
-                <p className="whitespace-pre-wrap">{block.text}</p>
-              </div>
-              <CopyButton text={block.text} className="crew-copy crew-copy-aside" />
-            </div>
-          ) : null}
-          {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
-          {/* The user, and a sender deleted since, have no session to open. */}
-          {from.id ? (
-            <button
-              type="button"
-              onClick={() => openSession(from.id)}
-              className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
-              title={`Open ${from.name}`}
-            >
-              Open {from.name}
-            </button>
-          ) : null}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
+    <Beat
+      id={block.id}
+      first={you ? "you" : { id: from.id, name: from.name, bot: from.kind === undefined }}
+      verb={you ? "sent this from the command line" : "wrote to you"}
+      at={block.at}
+      peek={{
+        title: you ? "From the command line" : `Message from ${from.name}`,
+        text: block.text,
+        ...(block.files?.length ? { extra: <AttachmentStrip files={block.files} /> } : {}),
+      }}
+    />
   );
 }
 
 /**
- * `@path` runs become pills that open the file, an image in the viewer; `#name` runs of the agents the
- * message's note names become pills that open that session. The rest is the text as typed.
+ * `@name` runs of the agents and worktrees the message's note names become pills that open that session
+ * or that folder (`#name` too, as messages from before wrote them). `@path` runs that read as paths become
+ * pills that open the file, an image in the viewer. The rest is the text as typed.
  */
 function MentionText({ text, agents }: { text: string; agents: AgentRef[] }) {
-  const { openPath, openFolder, resolvePath, openSession } = useChatActions();
+  const { openPath, openFolder, resolvePath, openSession, files } = useChatActions();
   const [image, setImage] = useState<string | null>(null);
-  const segments = splitMentions(text);
   const open = (path: string) => {
     if (path.endsWith("/")) return openFolder(path);
     if (imageMime(path)) return setImage(resolvePath(path) ?? path);
     openPath(path);
   };
-  return (
-    <>
-      {segments.map((segment, index) =>
-        segment.kind === "mention" ? (
-          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
-          <FileRef key={index} path={segment.path} onOpen={open} />
-        ) : (
-          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
-          <AgentText key={index} text={segment.text} agents={agents} onOpen={openSession} />
-        ),
-      )}
-      {image && <Lightbox images={[attachedFrom(image)]} index={0} onIndex={() => {}} onClose={() => setImage(null)} />}
-    </>
-  );
-}
-
-function AgentText({ text, agents, onOpen }: { text: string; agents: AgentRef[]; onOpen: (id: string) => void }) {
-  if (agents.length === 0) return <span>{text}</span>;
+  const paths = { has: (token: string) => looksLikePath(token, files) };
   const parts: ReactNode[] = [];
+  const plain = (from: number, to: number) => {
+    for (const [index, segment] of splitMentions(text.slice(from, to), paths).entries())
+      parts.push(
+        segment.kind === "mention" ? (
+          <FileRef key={`${from}:${index}`} path={segment.path} onOpen={open} />
+        ) : (
+          <span key={`${from}:${index}`}>{segment.text}</span>
+        ),
+      );
+  };
   let at = 0;
-  for (const run of agentRuns(text, agents)) {
-    if (run.from > at) parts.push(text.slice(at, run.from));
+  for (const run of agentRuns(text, agents, "@#")) {
+    if (run.from > at) plain(at, run.from);
+    const { agent } = run;
     parts.push(
       <button
         key={run.from}
         type="button"
-        onClick={() => onOpen(run.agent.id)}
-        title={`${run.agent.kind} ${run.agent.id}`}
+        onClick={() => (agent.kind === "worktree" ? openFolder(agent.id) : openSession(agent.id))}
+        title={`${agent.kind} ${agent.id}`}
         className="crew-file-ref"
-        data-agent-ref={run.agent.id}
+        data-agent-ref={agent.id}
       >
-        {run.agent.kind === "bot" ? (
-          <BotAvatar seed={run.agent.id} bare className="size-3.5 self-center" />
+        {agent.kind === "worktree" ? (
+          <GitBranchIcon className="size-3 self-center" aria-hidden />
+        ) : agent.kind === "bot" ? (
+          <BotAvatar seed={agent.id} bare className="size-3.5 self-center" />
         ) : (
-          <ProviderIcon provider={run.agent.provider} className="size-3 self-center" />
+          <ProviderIcon provider={agent.provider} className="size-3 self-center" />
         )}
-        <span className="crew-file-ref-name">{run.agent.name}</span>
+        <span className="crew-file-ref-name">{agent.name}</span>
       </button>,
     );
     at = run.to;
   }
-  if (at < text.length) parts.push(text.slice(at));
-  return <span>{parts}</span>;
+  if (at < text.length) plain(at, text.length);
+  return (
+    <>
+      {parts}
+      {image && <Lightbox images={[attachedFrom(image)]} index={0} onIndex={() => {}} onClose={() => setImage(null)} />}
+    </>
+  );
 }
 
 export const AssistantMessage = memo(function AssistantMessage({ block }: { block: Block }) {

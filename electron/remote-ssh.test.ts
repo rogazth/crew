@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { lines, named } from "./trace-recorder";
+
+vi.mock("./trace.ts", async () => (await import("./trace-recorder")).mockedTrace());
 import {
   isTailnetIp,
   LINGER_COMMAND,
@@ -10,6 +13,7 @@ import {
   linuxArch,
   remoteLayout,
   reviveCommand,
+  step,
   serviceUnit,
   sshArgs,
   sshDestination,
@@ -166,5 +170,29 @@ describe("an SSH port", () => {
     expect(sshDestination({ destination: "falcon" })).toBe("falcon");
     expect(sshDestination({ destination: "falcon", port: 2222 })).toBe("ssh://falcon:2222");
     expect(sshDestination({ destination: "ssh://falcon:2222", port: 2222 })).toBe("ssh://falcon:2222");
+  });
+});
+
+describe("an install's trace", () => {
+  it("says each step by its name with how long it took, and a failed one with a line of why", async () => {
+    lines.length = 0;
+    const reports: string[] = [];
+    const report = (update: { id: string; state: string }) => void reports.push(`${update.id}:${update.state}`);
+    await step(report, "reach", async () => "devbox.example:22 SECRET-HOST-DETAIL");
+    await expect(
+      step(report, "upload", async () => {
+        throw new Error("scp: /home/agent/bin/crewd.new: No space left on device\nsecond line SECRET-OUTPUT");
+      }),
+    ).rejects.toThrow("No space left");
+    expect(reports).toEqual(["reach:running", "reach:done", "upload:running", "upload:error"]);
+    const steps = named("install.step");
+    expect(steps.map((line) => [line.level, line.fields.step, line.fields.state])).toEqual([
+      ["INFO", "reach", "done"],
+      ["WARN", "upload", "error"],
+    ]);
+    expect(steps[1]?.fields.error).toBe("scp: /home/agent/bin/crewd.new: No space left on device");
+    expect(typeof steps[0]?.fields.took_ms).toBe("number");
+    // The step's detail (a host, a version) is for the window's card, not the trace.
+    expect(JSON.stringify(lines)).not.toContain("SECRET");
   });
 });

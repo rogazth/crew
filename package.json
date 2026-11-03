@@ -1,7 +1,7 @@
 {
   "name": "crew",
   "private": true,
-  "version": "0.3.30",
+  "version": "0.3.44",
   "license": "MIT",
   "type": "module",
   "main": "electron-dist/main.cjs",
@@ -47,6 +47,7 @@
     "@lezer/highlight": "^1.2.4",
     "@lezer/markdown": "^1.7.2",
     "@pierre/diffs": "^1.3.6",
+    "@pierre/theming": "^1.0.1",
     "@streamdown/math": "^1.0.2",
     "@tanstack/react-hotkeys": "^0.10.0",
     "@xterm/addon-fit": "^0.12.0-beta.301",
@@ -130,6 +131,12 @@
       }
     ],
     "mac": {
+      "extraResources": [
+        {
+          "from": "macos/menubar/.build/release/CrewMenuBar",
+          "to": "crew-menubar"
+        }
+      ],
       "target": [
         {
           "target": "dir",

@@ -330,8 +330,11 @@ impl TurnHost {
         if let Some(Live::Grok(live)) = self.lock().get_mut(session_id) {
             live.cwd = cwd.to_string();
         }
-        self.grok_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false)
-            .map_err(|error| self.grok_failure(session_id, "Grok did not start", &error))?;
+        let began = std::time::Instant::now();
+        self.grok_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false).map_err(|error| {
+            crate::trace::connect_failed("grok", session_id, "initialize", &error);
+            self.grok_failure(session_id, "Grok did not start", &error)
+        })?;
         let mut text = &texts.resumed;
         let mut acp_session = None;
         if let Some(id) = resume {
@@ -340,12 +343,17 @@ impl TurnHost {
                 Ok(_) => acp_session = Some(id.to_string()),
                 Err(_) if self.stop_requested(session_id) => return Err("cancelled".into()),
                 Err(error) if session_missing(&error) => {
+                    crate::trace::connect_failed("grok", session_id, "load", &error);
                     let message = format!("Grok could not load this session's conversation ({error}): it starts a new one.");
                     self.transcripts.apply(session_id, HarnessEvent::SessionNote { message });
                 }
-                Err(error) => return Err(self.grok_failure(session_id, "Grok could not load this session", &error)),
+                Err(error) => {
+                    crate::trace::connect_failed("grok", session_id, "load", &error);
+                    return Err(self.grok_failure(session_id, "Grok could not load this session", &error));
+                }
             }
         }
+        let loaded = acp_session.is_some();
         let acp_session = match acp_session {
             Some(id) => id,
             None => {
@@ -357,6 +365,7 @@ impl TurnHost {
                 new_session_id(&created).ok_or_else(|| "Grok opened no session.".to_string())?
             }
         };
+        crate::trace::connected("grok", session_id, loaded, began);
         if let Some(Live::Grok(live)) = self.lock().get_mut(session_id) {
             live.acp_session = Some(acp_session.clone());
         }
@@ -569,6 +578,7 @@ impl TurnHost {
 
     pub(crate) fn handle_grok_line(&self, session_id: &str, line: &str) {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
+            crate::trace::unparsed("grok", session_id, line);
             return;
         };
         let method = message.get("method").and_then(Value::as_str);

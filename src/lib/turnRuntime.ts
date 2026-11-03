@@ -101,18 +101,9 @@ export async function send(
     nonce: crypto.randomUUID(),
   };
   try {
-    await api.turnStart(params);
+    await startOnce(params);
   } catch (error) {
-    // A socket that dropped mid-send says nothing about whether the daemon got
-    // it. Asking again with the same nonce is safe: it accepts the id once, so
-    // either the first one landed and this is answered with it, or it did not
-    // and this one runs. Any other error is the daemon's answer, not a gap.
-    if (!dropped(error)) return failed(id, error);
-    try {
-      await api.turnStart(params);
-    } catch (again) {
-      return failed(id, again);
-    }
+    return failed(id, error);
   }
   await transcript.reload(id);
   return finished;
@@ -136,7 +127,7 @@ export async function pass(
   remember(session);
   await boot();
   try {
-    await api.turnStart({
+    await startOnce({
       sessionId: id,
       cwd,
       text,
@@ -145,6 +136,7 @@ export async function pass(
       ...(options.mentions && options.mentions.length > 0 ? { mentions: options.mentions } : {}),
       ...(options.command ? { command: options.command } : {}),
       ...(options.skills && options.skills.length > 0 ? { skills: options.skills } : {}),
+      nonce: crypto.randomUUID(),
     });
     return true;
   } catch (error) {
@@ -181,8 +173,27 @@ export async function crewAction(id: string, action: "reload" | "restart", ask?:
   }
 }
 
-/** The transport's own words for "I never found out". */
+/**
+ * A socket that dropped mid-send says nothing about whether the daemon got
+ * it. Asking again with the same nonce is safe: it accepts the id once, so
+ * either the first one landed and this is answered with it, or it did not
+ * and this one runs. Any other error is the daemon's answer, not a gap.
+ */
+async function startOnce(params: TurnStart): Promise<void> {
+  try {
+    await api.turnStart(params);
+  } catch (error) {
+    if (!dropped(error)) throw error;
+    await api.turnStart(params);
+  }
+}
+
+/**
+ * The transport's own words for "I never found out": the socket closed under
+ * the call (`EnvDown`, "That machine is offline"), or there was no daemon yet.
+ */
 function dropped(error: unknown): boolean {
+  if (error instanceof Error && error.name === "EnvDown") return true;
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith("Crew daemon");
 }

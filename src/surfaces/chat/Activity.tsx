@@ -15,7 +15,7 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { allFailed, answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { AttachmentStrip } from "./Attachments";
@@ -198,7 +198,7 @@ function RunShell({
   // A running call waits on the agent, not the reader: it may not open the run
   // only to shut it again a moment later.
   const waiting = blocks.some(awaitsUser);
-  const failed = blocks.some((block) => block.tool?.status === "failed");
+  const failed = allFailed(blocks);
   // A row nobody can see is a row nobody can be sent to, and the mark outlives
   // the request, so the run stays open after the reader has been taken there.
   const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);

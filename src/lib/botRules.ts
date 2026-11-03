@@ -1,15 +1,15 @@
-import type { BotRule, BotRulesSave, CitedMessage } from "./protocol";
+import type { BotRule, BotRulesSave } from "./protocol";
 
 /**
  * One rule being edited in the bot sheet: `id` is the stored rule's (`r3`),
  * null for one being added; `key` keeps its row while the text changes.
  */
-export type RuleRow = { key: number; id: string | null; text: string; cited?: CitedMessage };
+export type RuleRow = { key: number; id: string | null; text: string };
 
 let nextKey = 0;
 
 export function ruleRows(rules: BotRule[]): RuleRow[] {
-  return rules.map((rule) => ({ key: nextKey++, id: rule.id, text: rule.body, ...(rule.cited ? { cited: rule.cited } : {}) }));
+  return rules.map((rule) => ({ key: nextKey++, id: rule.id, text: rule.body }));
 }
 
 export function newRuleRow(): RuleRow {

@@ -3,7 +3,7 @@ import { COMMAND_IDS, keysFor, repeatable } from "../commands";
 import { resolveForward, type LiveCommand } from "../keymap";
 import { newBrowserTab, openTab, patchBrowserTab, type TabState } from "../tabs";
 import { createPageStore } from "./pageStore";
-import { liveGuests, touch } from "./retention";
+import { IDLE_MS, liveGuests, sweep, touch, type Warm } from "./retention";
 import { capSnapshot } from "./snapshot";
 import { buildSuggestions } from "./suggest";
 import { resolveAddress } from "./url";
@@ -57,17 +57,24 @@ describe("stress", () => {
     expect(ms).toBeLessThan(BUDGET_MS);
   });
 
-  it("keeps the retention budget through 10,000 switches among 1,000 pages", () => {
-    let order: readonly string[] = [];
+  it("sweeps 1,000 pages through 10,000 switches", () => {
+    const ids = new Set(Array.from({ length: 1000 }, (_, n) => `p${n}`));
+    const none = new Set<string>();
+    let warm: Warm = new Map();
     let live = new Set<string>();
+    let now = 0;
     const ms = timed(() => {
       for (let i = 0; i < 10_000; i++) {
+        now += 10_000;
         const visible = `p${(i * 7) % 1000}`;
-        order = touch(order, visible);
-        live = liveGuests({ order, visible, keep: 6, pinned: new Set() });
+        warm = touch(warm, [visible], now);
+        if (i % 30 === 0) warm = sweep({ warm, ids, visible, pinned: none, busy: none, pressure: "normal", now });
+        live = liveGuests({ warm, visible, pinned: none });
       }
     });
-    expect(live.size).toBe(7);
+    // A switch every ten seconds: what was shown in the last hour is warm, give or take a sweep.
+    expect(live.size).toBeGreaterThanOrEqual(IDLE_MS / 10_000);
+    expect(live.size).toBeLessThanOrEqual(IDLE_MS / 10_000 + 30);
     expect(ms).toBeLessThan(BUDGET_MS * 4);
   });
 

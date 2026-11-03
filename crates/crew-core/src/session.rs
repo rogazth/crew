@@ -476,6 +476,14 @@ fn insert(
         tx.commit()
     })?;
 
+    tracing::info!(
+        session_id = %session.id,
+        kind = %session.kind,
+        provider = %session.provider,
+        parent_id = session.parent_id.as_deref(),
+        worktree = session.worktree.is_some(),
+        "session.created"
+    );
     // Read back for what the row derives from others: its parent's name.
     Ok(get(store, session.id.clone())?.unwrap_or(session))
 }
@@ -698,6 +706,7 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     if let Some(folder) = folder {
         crate::bot_folder::remove(&folder);
     }
+    tracing::info!(session_id = %id, "session.deleted");
     Ok(())
 }
 
@@ -728,23 +737,34 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }
-    store.with(|conn| {
+    let previous = store.with(|conn| {
+        let previous: Option<String> = conn
+            .prepare_cached("SELECT status FROM sessions WHERE id = ?1")?
+            .query_row(params![id], |row| row.get(0))
+            .optional()?;
         conn.prepare_cached("UPDATE sessions SET status = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![
             id,
             status,
             now_millis()
-        ])
+        ])?;
+        Ok(previous)
     })?;
+    if previous.as_deref() != Some(status.as_str()) {
+        tracing::info!(session_id = %id, from = previous.as_deref().unwrap_or("none"), to = %status, "session.status");
+    }
     Ok(())
 }
 
 /// A turn that already started must keep its status, so only a finished or a
-/// failed one is cleared.
+/// failed one is cleared. Every other window, and the menu bar, hears it.
 pub fn mark_read(store: &Store, id: String) -> Result<(), String> {
-    store.with(|conn| {
+    let cleared = store.with(|conn| {
         conn.prepare_cached("UPDATE sessions SET status = 'idle' WHERE id = ?1 AND status IN ('done', 'error')")?
             .execute(params![id])
     })?;
+    if cleared > 0 {
+        store.session_changed(&id);
+    }
     Ok(())
 }
 
@@ -848,8 +868,20 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
 pub const RETENTION_KEY: &str = "sessions:retention";
 
 pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
-    let raw = crate::store::get(store, RETENTION_KEY.into())?;
+    let raw = crate::settings::get(store, RETENTION_KEY)?;
     Ok(raw.and_then(|raw| raw.trim().parse::<u32>().ok()).filter(|days| *days > 0))
+}
+
+/// The retention the daemon may act on by itself: none on a copy no client has
+/// confirmed lately, which may be one the user has since changed. Waiting only
+/// keeps old sessions a little longer.
+pub fn retention_to_act_on(store: &Store) -> Result<Option<u32>, String> {
+    let confirmed = crate::settings::confirmed_within(store, crate::store::now_millis(), crate::settings::CONFIRM_FOR_MS)?;
+    if confirmed {
+        retention_days(store)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Where Settings keeps whether every session runs without asking, whatever
@@ -857,19 +889,20 @@ pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
 pub const BYPASS_KEY: &str = "sessions:bypass-permissions";
 
 pub fn bypass_permissions(store: &Store) -> bool {
-    crate::store::get(store, BYPASS_KEY.into()).ok().flatten().is_some_and(|raw| raw.trim() == "on")
+    crate::settings::get(store, BYPASS_KEY).ok().flatten().is_some_and(|raw| raw.trim() == "on")
 }
 
 /// The sessions last touched before `before`, less the ones deleting would
-/// cost something: a routine goes with its session, a tab would open onto
-/// nothing, and anything but idle still has a turn, a question or an unread
-/// answer in it. A process still running is the caller's to spare.
+/// cost something: a bot's history is its memory, a routine goes with its
+/// session, a tab would open onto nothing, and anything but idle still has a
+/// turn, a question or an unread answer in it. A process still running is the
+/// caller's to spare.
 pub fn stale(store: &Store, before: i64) -> Result<Vec<String>, String> {
     let (ids, tabs) = store.with(|conn| {
         let ids = conn
             .prepare(
                 "SELECT id FROM sessions
-                 WHERE updated_at < ?1 AND status = 'idle'
+                 WHERE updated_at < ?1 AND status = 'idle' AND kind <> 'bot'
                    AND id NOT IN (SELECT session_id FROM routines)
                  ORDER BY updated_at ASC",
             )?
@@ -1155,6 +1188,25 @@ mod tests {
         assert_eq!(get(&store, made.id).unwrap().unwrap().status, "working");
     }
 
+    /// The menu bar lists what waits on the user; reading a session in the
+    /// window has to reach it then, not at its next sweep.
+    #[test]
+    fn reading_a_finished_turn_is_heard_once() {
+        let (store, workspace) = world();
+        let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
+        set_status(&store, made.id.clone(), "done".into()).expect("done");
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        store.set_listener(std::sync::Arc::new(move |what| {
+            if let crate::store::Changed::Session(id) = what {
+                log.lock().unwrap().push(id.to_string());
+            }
+        }));
+        mark_read(&store, made.id.clone()).expect("read");
+        mark_read(&store, made.id.clone()).expect("read again");
+        assert_eq!(*heard.lock().unwrap(), [made.id]);
+    }
+
     #[test]
     fn only_the_statuses_the_runtime_writes_are_accepted() {
         let (store, workspace) = world();
@@ -1194,17 +1246,18 @@ mod tests {
     }
 
     #[test]
-    fn stale_spares_the_recent_the_busy_the_open_and_the_scheduled() {
+    fn stale_spares_the_recent_the_busy_the_open_the_scheduled_and_every_bot() {
         let (store, workspace) = world();
         let old = terminal(&store, &workspace, "Old", "codex");
         let recent = terminal(&store, &workspace, "Recent", "codex");
         let busy = terminal(&store, &workspace, "Busy", "codex");
         let unread = terminal(&store, &workspace, "Unread", "codex");
         let open = terminal(&store, &workspace, "Open", "codex");
-        let scheduled = bot(&store, &workspace, "Nightly", "ask").expect("bot");
+        let scheduled = terminal(&store, &workspace, "Nightly", "codex");
+        let idle_bot = bot(&store, &workspace, "Keeper", "ask").expect("bot");
         set_status(&store, busy.id.clone(), "working".into()).expect("busy");
         set_status(&store, unread.id.clone(), "done".into()).expect("unread");
-        for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id] {
+        for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id, &idle_bot.id] {
             age(&store, id, 1_000);
         }
         age(&store, &recent.id, 5_000);
@@ -1232,9 +1285,18 @@ mod tests {
         let (store, _) = world();
         assert_eq!(retention_days(&store).unwrap(), None);
         for (raw, days) in [("30", Some(30)), ("0", None), ("never", None), (" 7 ", Some(7))] {
-            crate::store::set(&store, RETENTION_KEY.into(), raw.into()).expect("set");
+            crate::settings::set(&store, RETENTION_KEY, Some(raw), crate::settings::GLOBAL).expect("set");
             assert_eq!(retention_days(&store).unwrap(), days, "{raw}");
         }
+    }
+
+    #[test]
+    fn the_daemon_acts_on_retention_only_once_a_client_has_confirmed_it() {
+        let (store, _) = world();
+        crate::settings::set(&store, RETENTION_KEY, Some("30"), crate::settings::GLOBAL).expect("set");
+        assert_eq!(retention_to_act_on(&store).unwrap(), None);
+        crate::settings::merge(&store, &[]).expect("confirm");
+        assert_eq!(retention_to_act_on(&store).unwrap(), Some(30));
     }
 
     #[test]
@@ -1242,7 +1304,7 @@ mod tests {
         let (store, _) = world();
         assert!(!bypass_permissions(&store));
         for (raw, on) in [("on", true), (" on ", true), ("off", false), ("true", false), ("", false)] {
-            crate::store::set(&store, BYPASS_KEY.into(), raw.into()).expect("set");
+            crate::settings::set(&store, BYPASS_KEY, Some(raw), crate::settings::GLOBAL).expect("set");
             assert_eq!(bypass_permissions(&store), on, "{raw}");
         }
     }

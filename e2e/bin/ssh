@@ -1,0 +1,13 @@
+#!/bin/sh
+# Stands in for `ssh` on the sandbox's PATH (the harness copies it to
+# $HOME/bin/ssh). ssh reads ~/.ssh/config from the account's home, not from
+# $HOME, so the sandbox cannot redirect it; this runs the system ssh with the
+# sandbox's own config, written by the harness beside its private sshd
+# (e2e/harness.ts, `enableSsh`): that sshd's port, key and known_hosts. -F
+# also leaves out /etc/ssh/ssh_config. Without that config (no spec asked for
+# a machine over ssh) it is plain ssh.
+config="$HOME/.e2e-ssh/config"
+if [ -f "$config" ]; then
+  exec /usr/bin/ssh -F "$config" "$@"
+fi
+exec /usr/bin/ssh "$@"

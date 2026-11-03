@@ -388,15 +388,21 @@ function openApp(contents: WebContents, url: string): void {
  * Google's sign-in turns away embedded Chromium, so on its pages a page or a
  * popup goes by Firefox's name, and by Chrome's again once it leaves. Most
  * arrive there by a redirect, from the site that asked for the sign-in.
+ *
+ * Never set the agent while a redirect is being handled: Chromium reloads a
+ * loading page when its agent changes, which destroys the navigation still on
+ * the stack and aborts the whole app. A redirect's own requests and scripts go
+ * by the header rewrite and the preload; the agent catches up when it settles.
  */
 export function followSignIn(contents: WebContents): void {
-  const follow = (details: { url: string; isMainFrame: boolean; isSameDocument: boolean }) => {
-    if (!details.isMainFrame || details.isSameDocument) return;
-    const agent = isGoogleSignIn(details.url) ? firefoxUserAgent() : contents.session.getUserAgent();
+  const follow = (url: string) => {
+    const agent = isGoogleSignIn(url) ? firefoxUserAgent() : contents.session.getUserAgent();
     if (contents.getUserAgent() !== agent) contents.setUserAgent(agent);
   };
-  contents.on("did-start-navigation", follow);
-  contents.on("did-redirect-navigation", follow);
+  contents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) follow(details.url);
+  });
+  contents.on("did-stop-loading", () => follow(contents.getURL()));
 }
 
 /** Only local dev servers get past a bad certificate; everything else keeps Chromium's refusal. */

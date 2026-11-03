@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, startChat, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, SSH_USER, startChat, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 function badge(crew: Crew, name: string): Promise<string | null> {
   return workspaceMark(crew, name)
@@ -133,7 +133,7 @@ test("a machine that is off when Crew opens keeps its workspaces on the rail, an
     const remoteCard = await peekOf(crew, "web");
     assert.equal(remoteCard.machine, "remote");
     assert.match(remoteCard.text, /homepc/);
-    assert.match(remoteCard.text, /agent@127\.0\.0\.1/, "the card shows how the machine is reached");
+    assert.match(remoteCard.text, new RegExp(`${SSH_USER}@127\\.0\\.0\\.1`), "the card shows how the machine is reached");
     assert.match(remoteCard.text, /\d+ ms/, "the card shows the machine answering");
     assert.ok(remoteCard.text.includes(web), "the card shows the folder on the machine");
     const localCard = await peekOf(crew, "app");

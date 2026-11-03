@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bearer, Bridge, ToolHost};
@@ -24,6 +24,7 @@ use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
 use crew_core::session_tools::SessionTools;
+use crew_core::settings;
 use crew_core::store::{self as app_state, Store};
 use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
@@ -31,11 +32,11 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
-    NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
-    PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
-    SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
-    TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
+    self as proto, Auth, BotRules, BotRulesCap, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue,
+    ListProjectFiles, Name, NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached,
+    PtyKill, PtyResize, PtySpawn, PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate,
+    SessionCreated, SessionId, SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile,
+    TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -43,12 +44,15 @@ use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 
 mod http;
 pub mod lock;
 mod vault;
 pub mod machine;
 mod socks;
+mod stall;
+pub mod trace;
 
 pub struct Config {
     pub pty: PtyHost,
@@ -189,8 +193,13 @@ pub fn remove_daemon_file(dir: &std::path::Path, url: &str) {
     }
 }
 
+/// What a thread of its own lets pile up for a client before it waits.
 const OUT_CAP: usize = 1024;
+/// Room past that for code on the runtime, which never waits: the replies and
+/// events a window gets while an agent keeps its queue at `OUT_CAP`.
+const OUT_ROOM: usize = 16 * OUT_CAP;
 const SEND_WAIT: Duration = Duration::from_secs(5);
+const SEND_POLL: Duration = Duration::from_millis(5);
 
 enum Outgoing {
     Text(String),
@@ -209,7 +218,6 @@ struct Hub {
     /// host has no use for transcripts and statuses, and would pay for them.
     quiet: Mutex<HashSet<u64>>,
     next: AtomicU64,
-    runtime: Mutex<Option<tokio::runtime::Handle>>,
     /// Told when the last client watching a terminal goes.
     unwatch: std::sync::OnceLock<Box<dyn Fn(u32) + Send + Sync>>,
 }
@@ -221,20 +229,19 @@ impl Hub {
             pty_attached: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
-            runtime: Mutex::new(None),
             unwatch: std::sync::OnceLock::new(),
         }
     }
 
-    fn set_runtime(&self, handle: tokio::runtime::Handle) {
-        *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-    }
-
     fn subscribe(&self) -> (u64, mpsc::Receiver<Outgoing>) {
-        let (tx, rx) = mpsc::channel(OUT_CAP);
+        let (tx, rx) = mpsc::channel(OUT_ROOM);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(id, tx);
         (id, rx)
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id)
     }
 
     fn watch_pty(&self, id: u64, stream_id: u32) {
@@ -281,28 +288,13 @@ impl Hub {
         let Some(tx) = tx else {
             return;
         };
-        match tx.try_send(msg) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => self.unsubscribe(id),
-            Err(mpsc::error::TrySendError::Full(msg)) => {
-                if !self.send_wait(&tx, msg) {
-                    self.unsubscribe(id);
-                }
+        if !send_wait(&tx, msg) {
+            // Too far behind (or already gone): the window reconnects and replays.
+            if !tx.is_closed() {
+                tracing::warn!(client_id = id, queued = tx.max_capacity() - tx.capacity(), "conn.dropped");
             }
+            self.unsubscribe(id);
         }
-    }
-
-    fn send_wait(&self, tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
-        let send = async { tokio::time::timeout(SEND_WAIT, tx.send(msg)).await };
-        let result = if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(send))
-        } else {
-            let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
-                return false;
-            };
-            handle.block_on(send)
-        };
-        matches!(result, Ok(Ok(())))
     }
 
     fn broadcast(&self, msg: Outgoing, to_quiet: bool) {
@@ -337,6 +329,28 @@ impl Hub {
         };
         self.broadcast(Outgoing::Text(text), to_quiet);
     }
+}
+
+/// Queues one message for a client; false when it is gone or too far behind.
+/// A thread of its own, a terminal's reader or an agent's, waits a while once
+/// `OUT_CAP` are queued, which slows what it reads to what the window can take.
+/// Code on the runtime never waits: a worker parked here holds back the writer
+/// that would make room and the timer that would end the wait, and once every
+/// worker was parked on a window that slept the daemon froze for good. It has
+/// the room past `OUT_CAP` instead, so a reply to a window a streaming agent
+/// keeps busy goes through; past that room the client is dropped, and its
+/// window reconnects and replays.
+fn send_wait(tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
+    if tokio::runtime::Handle::try_current().is_err() {
+        let deadline = Instant::now() + SEND_WAIT;
+        while tx.max_capacity() - tx.capacity() >= OUT_CAP {
+            if tx.is_closed() || Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(SEND_POLL);
+        }
+    }
+    tx.try_send(msg).is_ok()
 }
 
 impl PtyEvents for Hub {
@@ -431,8 +445,10 @@ impl ToolHost for ToolDispatch {
         // the daemon could stop every other session with it.
         if method == "daemon/shutdown" {
             if caller.kind() != crew_core::caller::CallerKind::User {
+                tracing::warn!(target: "daemon", caller = ?caller.kind(), "daemon.shutdown_refused");
                 return Err("Only the user can stop Crew's daemon.".into());
             }
+            tracing::info!(target: "daemon", via = "cli", "daemon.shutdown_requested");
             let _ = self.exit.send(());
             return Ok(Value::Null);
         }
@@ -524,9 +540,9 @@ impl ToolDispatch {
 }
 
 /// A bot's rules, after writing the user's edit when given. Only a bot has
-/// rules. What the user wrote in the sheet is theirs: it cites no message.
+/// rules.
 fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotRules, String> {
-    use crew_core::rules::{self, Change, Source};
+    use crew_core::rules::{self, Change};
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
     if let Some(BotRulesSave { add, edit, remove, .. }) = save {
         // A rule the bot removed while the sheet was open is not the user's
@@ -537,19 +553,12 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
             .iter()
             .filter_map(|label| known(label))
             .map(Change::Remove)
-            .chain(
-                edit.into_iter()
-                    .filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body, message_id: None })),
-            )
-            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add {
-                body,
-                message_id: None,
-                source: Source::Sheet,
-            }))
+            .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
+            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add { body }))
             .collect();
         rules::apply(store, &row.id, changes)?.map_err(|refused| match refused {
-            rules::Refused::Full { used } => {
-                format!("Rules hold at most {} characters; these are {}.", rules::thousands(rules::CAP), rules::thousands(used))
+            rules::Refused::Full { used, cap } => {
+                format!("Rules hold at most {} characters; these are {}.", rules::thousands(cap), rules::thousands(used))
             }
             other => other.say(),
         })?;
@@ -557,25 +566,9 @@ fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotR
     let listed = rules::list(store, &row.id)?;
     Ok(BotRules {
         used: rules::used(&listed) as u32,
-        cap: rules::CAP as u32,
-        rules: listed
-            .into_iter()
-            .map(|rule| proto::BotRule {
-                id: rules::label(rule.id),
-                body: rule.body,
-                cited: rule.cited.map(|cited| proto::CitedMessage { excerpt: excerpt(&cited.text, 160), at: cited.at }),
-            })
-            .collect(),
+        cap: rules::cap(store, &row.id)? as u32,
+        rules: listed.into_iter().map(|rule| proto::BotRule { id: rules::label(rule.id), body: rule.body }).collect(),
     })
-}
-
-/// The start of a message, on one line.
-fn excerpt(text: &str, limit: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match flat.chars().count() > limit {
-        true => format!("{}…", flat.chars().take(limit - 1).collect::<String>().trim_end()),
-        false => flat,
-    }
 }
 
 fn proto_session(row: &crew_core::session::Session) -> proto::Session {
@@ -818,7 +811,7 @@ async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
                 if listen.wait_for_addr
                     && matches!(error.kind(), std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse) =>
             {
-                eprintln!("[crewd] {}: {error}; trying again in {wait:?}", listen.addr);
+                tracing::warn!(addr = %listen.addr, error = %crew_core::trace::error_text(&error.to_string()), retry_in_ms = wait.as_millis() as u64, "daemon.bind_retry");
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(10));
             }
@@ -864,12 +857,14 @@ async fn run(
                     let token = token.clone();
                     tokio::spawn(socks::run(listener, token));
                 }
-                Err(error) => eprintln!("[crewd] socks {socks_at}: {error}"),
+                Err(error) => {
+                    tracing::warn!(addr = %socks_at, error = %crew_core::trace::error_text(&error.to_string()), "socks.bind_failed")
+                }
             }
         }
     }
     machine::start_sampler();
-    hub.set_runtime(tokio::runtime::Handle::current());
+    tokio::spawn(stall::watch("daemon", stall::TICK, stall::STALL_AT));
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
     // Routines are the daemon's to fire: a standing order outlives the window.
@@ -896,22 +891,24 @@ async fn run(
             every.tick().await;
             let children = children.clone();
             if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
-                eprintln!("[crewd] reaping idle sessions: {error}");
+                tracing::warn!(error = %crew_core::trace::error_text(&error.to_string()), "sessions.reap_failed");
             }
             let turns = turns.clone();
             let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
         }
     });
-    // The first tick is now: what aged out while the app was closed goes before anyone looks.
+    // The first tick waits: a choice made while this daemon was down reaches it
+    // through a client, and that client gets the time to connect before anything goes.
     let expiring = hosts.clone();
     tokio::spawn(async move {
-        let mut every = tokio::time::interval(EXPIRE_EVERY);
+        let first = tokio::time::Instant::now() + EXPIRE_GRACE;
+        let mut every = tokio::time::interval_at(first, EXPIRE_EVERY);
         loop {
             every.tick().await;
             let store = expiring.store.clone();
-            if let Ok(Some(days)) = block(move || session::retention_days(&store)).await {
+            if let Ok(Some(days)) = block(move || session::retention_to_act_on(&store)).await {
                 if let Err(error) = expire_sessions(&expiring, days).await {
-                    eprintln!("[crewd] expiring sessions: {error}");
+                    tracing::warn!(error = %crew_core::trace::error_text(&error.to_string()), "sessions.expire_failed");
                 }
             }
         }
@@ -977,24 +974,29 @@ fn notice_dead_peer(stream: &TcpStream) {
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
+    let peer = stream.peer_addr().map(|addr| addr.ip().to_string()).unwrap_or_default();
     let Some(ws) = http::accept(stream, &token).await else {
+        tracing::debug!(%peer, "conn.not_a_window");
         return;
     };
     let (mut sink, mut source) = ws.split();
     let first = source.next().await;
     let Some(Ok(Message::Text(text))) = first else {
+        tracing::warn!(%peer, reason = "no_auth_frame", "conn.auth_failed");
         let _ = sink.close().await;
         return;
     };
     let Ok(Auth { auth }) = serde_json::from_str::<Auth>(text.as_ref()) else {
+        tracing::warn!(%peer, reason = "unreadable_auth_frame", "conn.auth_failed");
         let _ = sink.close().await;
         return;
     };
     if auth != token {
         // Another machine using this vault.
         match hosts.vault.peer_of(&auth) {
-            Some(peer) => hosts.vault.clone().serve_peer(peer, sink, source).await,
+            Some(machine) => hosts.vault.clone().serve_peer(machine, sink, source).await,
             None => {
+                tracing::warn!(%peer, reason = "wrong_token", "conn.auth_failed");
                 let _ = sink.close().await;
             }
         }
@@ -1009,6 +1011,10 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     let (client_id, mut outgoing) = hub.subscribe();
+    // Every line from this connection's tasks carries `client_id`.
+    let span = tracing::info_span!("conn", client_id);
+    let opened = Instant::now();
+    tracing::info!(parent: &span, %peer, "conn.accepted");
     replay_busy_sessions(&hosts, &hub, client_id);
     let writer = tokio::spawn(async move {
         while let Some(msg) = outgoing.recv().await {
@@ -1028,8 +1034,15 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     // The last call on each terminal: the next one on it waits for it to finish.
     let mut pty_last: HashMap<String, oneshot::Receiver<()>> = HashMap::new();
 
+    let mut closed = "stream_ended".to_string();
     while let Some(msg) = source.next().await {
-        let Ok(msg) = msg else { break };
+        let msg = match msg {
+            Ok(msg) => msg,
+            Err(error) => {
+                closed = format!("socket_error: {error}");
+                break;
+            }
+        };
         match msg {
             Message::Text(text) => {
                 let hosts = hosts.clone();
@@ -1044,20 +1057,24 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                     let (done, rx) = oneshot::channel::<()>();
                     (pty_last.insert(id, rx), done)
                 });
-                tokio::spawn(async move {
-                    let _done = match turn {
-                        Some((before, done)) => {
-                            if let Some(before) = before {
-                                let _ = before.await;
+                let span = span.clone();
+                tokio::spawn(
+                    async move {
+                        let _done = match turn {
+                            Some((before, done)) => {
+                                if let Some(before) = before {
+                                    let _ = before.await;
+                                }
+                                Some(done)
                             }
-                            Some(done)
+                            None => None,
+                        };
+                        if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
+                            hub.send(client_id, Outgoing::Text(reply));
                         }
-                        None => None,
-                    };
-                    if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
-                        hub.send(client_id, Outgoing::Text(reply));
                     }
-                });
+                    .instrument(span),
+                );
             }
             Message::Binary(bytes) => {
                 if bytes.len() < 4 {
@@ -1066,7 +1083,10 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
                 enqueue_pty_input(&pty_in, &hosts, &hub, stream_id, bytes[4..].to_vec());
             }
-            Message::Close(_) => break,
+            Message::Close(_) => {
+                closed = "client_closed".to_string();
+                break;
+            }
             Message::Ping(payload) => {
                 hub.send(client_id, Outgoing::Pong(payload.to_vec()));
             }
@@ -1074,6 +1094,11 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         }
     }
 
+    // Taken off the hub already: it fell behind (`conn.dropped`) and the writer ended.
+    if !hub.contains(client_id) {
+        closed = "dropped_behind".to_string();
+    }
+    tracing::info!(parent: &span, reason = %crew_core::trace::error_text(&closed), duration_ms = opened.elapsed().as_millis() as u64, "conn.closed");
     hub.unsubscribe(client_id);
     hosts.browser.relay().client_gone(client_id);
     writer.abort();
@@ -1163,6 +1188,8 @@ async fn drain_pty_input(host: PtyHost, hub: Arc<Hub>, stream_id: u32, mut rx: m
 
 fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<String>) {
     let id = host.session_of_stream(stream_id).unwrap_or_else(|| stream_id.to_string());
+    let error = error.into();
+    tracing::warn!(%id, stream_id, error = %crew_core::trace::error_text(&error), "pty.input_failed");
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
 }
 
@@ -1190,7 +1217,8 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         Err(error) => return Some(encode(&proto::err(0, format!("Bad request: {error}")))),
     };
     if request.method == "pty_attach" {
-        attach_pty(hosts, hub, client_id, request.id, request.params).await;
+        let span = rpc_span(client_id, request.id, "pty_attach", None);
+        attach_pty(hosts, hub, client_id, request.id, request.params).instrument(span).await;
         return None;
     }
     // These speak for the connection itself, so they need to know which one it is.
@@ -1249,11 +1277,87 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
             Err(error) => proto::err(request.id, error),
         }));
     }
-    let result = dispatch(hosts, request.method.as_str(), request.params).await;
+    let span = rpc_span(client_id, request.id, &request.method, session_of(&request.params));
+    let started = Instant::now();
+    let result = dispatch(hosts, request.method.as_str(), request.params).instrument(span.clone()).await;
+    span.in_scope(|| rpc_done(&request.method, started, result.as_ref().err()));
     Some(encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
     }))
+}
+
+/// Calls the window makes all the time: keystrokes, resizes, flow-control acks, pings, polls
+/// and the reads behind a screen opening. One INFO line each would bury the rest of
+/// the trace (a typing user makes dozens a second), so they are DEBUG unless they fail
+/// or take long. `pty_write` carries the user's keystrokes: no call's params are ever recorded.
+const HOT_METHODS: &[&str] = &[
+    "pty_write",
+    "pty_resize",
+    "pty_ack",
+    "ping",
+    "machine_metrics",
+    "daemon_info",
+    "state_get",
+    "state_set",
+    "state_keys",
+    "session_mark_seen",
+    "session_mark_read",
+    "transcript_tail",
+    "background_list",
+    "process_log_tail",
+    "upload_chunk",
+    "read_file_range",
+    "path_exists",
+    "path_is_file",
+    "list_folder",
+    "dir_list",
+    "list_project_files",
+    "search_files",
+    "browser_pages_list",
+    "browser_leases_list",
+    "browser_ack",
+    "browser_result",
+    "browser_host_focus",
+    "browser_host_pages",
+    "usage_read",
+    "mailbox_pending",
+];
+
+/// A hot call slower than this is worth a line anyway.
+const SLOW_CALL: Duration = Duration::from_secs(1);
+
+fn is_hot(method: &str) -> bool {
+    HOT_METHODS.contains(&method)
+}
+
+/// One span per call: `client_id` and `method`, so whatever the call does is
+/// found by either. Hot calls get a DEBUG one, which costs nothing unless asked for.
+fn rpc_span(client_id: u64, req_id: u32, method: &str, session_id: Option<&str>) -> tracing::Span {
+    if is_hot(method) {
+        tracing::debug_span!("rpc", client_id, req_id, method, session_id)
+    } else {
+        tracing::info_span!("rpc", client_id, req_id, method, session_id)
+    }
+}
+
+/// The session a call is about, so `crew trace --session` finds the call. It is
+/// the one thing read out of a call's params, and only when it has the shape of
+/// an id (at most 64 of `A-Za-z0-9-_`); anything else is ignored, never cut or quoted.
+fn session_of(params: &Value) -> Option<&str> {
+    let id = params.get("sessionId").or_else(|| params.get("session_id"))?.as_str()?;
+    let shaped = !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    shaped.then_some(id)
+}
+
+/// `rpc.done` or `rpc.failed`, with the method, how long it took and, for a failure, why.
+fn rpc_done(method: &str, started: Instant, error: Option<&String>) {
+    let duration_ms = crew_core::trace::ms(started.elapsed());
+    match error {
+        Some(error) => tracing::warn!(method, duration_ms, error = %crew_core::trace::error_text(error), "rpc.failed"),
+        None if !is_hot(method) || started.elapsed() >= SLOW_CALL => tracing::info!(method, duration_ms, "rpc.done"),
+        None => tracing::debug!(method, duration_ms, "rpc.done"),
+    }
 }
 
 async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, params: Value) {
@@ -1291,8 +1395,11 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
+/// Runs `work` on the blocking pool. A `tracing` span is per thread, so the
+/// caller's (connection, request) is carried over by hand.
 async fn block<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tokio::task::spawn_blocking(work).await.map_err(|e| e.to_string())?
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(work)).await.map_err(|e| e.to_string())?
 }
 
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
@@ -1327,6 +1434,7 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often the daemon lets go of sessions Settings no longer keeps.
 const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
+const EXPIRE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// How often idle child sessions are looked at.
 const REAP_EVERY: Duration = Duration::from_secs(20);
@@ -1567,6 +1675,18 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let id = save.id.clone();
             json(block(move || bot_rules(&store, &id, Some(save))).await?)
         }
+        // The most this bot's rules may hold; what they hold now stays.
+        "bot_rules_cap_set" => {
+            let BotRulesCap { id, cap } = parse(params)?;
+            let store = hosts.store.clone();
+            json(
+                block(move || {
+                    crew_core::rules::set_cap(&store, &id, cap as usize)?;
+                    bot_rules(&store, &id, None)
+                })
+                .await?,
+            )
+        }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
             let store = hosts.store.clone();
@@ -1685,7 +1805,9 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             })
             .await?;
             let scheduler = hosts.scheduler.clone();
-            tokio::task::spawn_blocking(move || scheduler.arm());
+            // Part of the request that saved the routine.
+            let span = tracing::Span::current();
+            tokio::task::spawn_blocking(move || span.in_scope(|| scheduler.arm()));
             json(row)
         }
         "routine_delete" => {
@@ -1693,7 +1815,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             block(move || routine::delete(&store, id)).await?;
             let scheduler = hosts.scheduler.clone();
-            tokio::task::spawn_blocking(move || scheduler.arm());
+            let span = tracing::Span::current();
+            tokio::task::spawn_blocking(move || span.in_scope(|| scheduler.arm()));
             Ok(Value::Null)
         }
         "routine_run_now" => {
@@ -1735,6 +1858,31 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 hosts.hub.emit("browser-pages-changed", Value::Null);
             }
             Ok(Value::Null)
+        }
+        "settings_get" => {
+            let Key { key } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || settings::get(&store, &key)).await?)
+        }
+        "settings_list" => {
+            let store = hosts.store.clone();
+            json(block(move || settings::list(&store)).await?)
+        }
+        "settings_set" => {
+            let proto::SettingSet { key, value, scope } = parse(params)?;
+            let store = hosts.store.clone();
+            let row = block(move || settings::set(&store, &key, value.as_deref(), &scope)).await?;
+            hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: vec![row.clone()] });
+            json(row)
+        }
+        "settings_merge" => {
+            let proto::SettingsMerge { rows } = parse(params)?;
+            let store = hosts.store.clone();
+            let taken = block(move || settings::merge(&store, &rows)).await?;
+            if !taken.is_empty() {
+                hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: taken.clone() });
+            }
+            json(taken)
         }
         // Every browser tab in this Mac's strips, for main to tell each machine its own.
         "browser_pages_list" => {
@@ -1868,6 +2016,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "dir_list" => {
             let proto::DirList { path } = parse(params)?;
             json(block(move || machine::dir_list(&path)).await?)
+        }
+        "dir_create" => {
+            let proto::DirList { path } = parse(params)?;
+            json(block(move || machine::dir_create(&path)).await?)
         }
         "agent_resolve_claude" => json(block(AgentHost::resolve_claude).await?),
         "agent_resolve" => {
@@ -2316,6 +2468,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         // "Quit Crew and Stop Everything". Answered before the daemon goes, so
         // the window hears it was heard.
         "daemon_shutdown" => {
+            tracing::info!(target: "daemon", via = "window", "daemon.shutdown_requested");
             let _ = hosts.exit.send(());
             Ok(Value::Null)
         }
@@ -2490,6 +2643,19 @@ mod tests {
         test_serve_bridged(dir).0
     }
 
+    /// The trace of this test binary, to files and to memory ([`crew_core::trace::capture`]):
+    /// a process has one subscriber, so every test that wants a line shares this one.
+    /// The directory holding the files is returned.
+    pub(crate) fn traced() -> &'static std::path::Path {
+        static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let dir = test_dir("trace-shared");
+            std::env::set_var("CREW_TRACE", "trace");
+            trace::init(&dir).expect("trace");
+            dir
+        })
+    }
+
     /// The bridge too, for a test that has to hold a session's token. Nothing
     /// hands one out over the wire: it is minted when a turn starts, and a test
     /// that never runs a turn has to ask the bridge itself.
@@ -2536,6 +2702,58 @@ mod tests {
 
     async fn send_json(ws: &mut Ws, value: &impl serde::Serialize) {
         ws.send(Message::Text(serde_json::to_string(value).unwrap().into())).await.expect("send");
+    }
+
+    fn fill(hub: &Hub, id: u64, count: usize) {
+        for _ in 0..count {
+            hub.send(id, Outgoing::Pong(Vec::new()));
+        }
+    }
+
+    fn subscribed(hub: &Hub, id: u64) -> bool {
+        hub.clients.lock().unwrap().contains_key(&id)
+    }
+
+    /// A window that stops reading, a Mac that sleeps, never parks a worker:
+    /// enough of them waiting on it froze the daemon for good.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_behind_is_dropped_without_parking_the_runtime() {
+        let hub = Hub::new();
+        let (id, _rx) = hub.subscribe();
+        fill(&hub, id, OUT_ROOM);
+        let started = Instant::now();
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!subscribed(&hub, id));
+    }
+
+    /// An agent streaming faster than a remote window reads keeps the queue at
+    /// its share; the reply to the window's next call still goes through, it
+    /// does not drop the window, which then flashed "offline" as it reconnected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reply_to_a_client_a_reader_keeps_busy_is_queued() {
+        let hub = Arc::new(Hub::new());
+        let (id, _rx) = hub.subscribe();
+        let reader = hub.clone();
+        thread::spawn(move || fill(&reader, id, OUT_CAP)).join().unwrap();
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(subscribed(&hub, id));
+    }
+
+    /// A terminal's reader waits for the window to catch up rather than drop it.
+    #[test]
+    fn a_reader_thread_waits_for_a_client_behind_to_catch_up() {
+        let hub = Hub::new();
+        let (id, mut rx) = hub.subscribe();
+        fill(&hub, id, OUT_CAP);
+        let reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            rx.blocking_recv();
+            rx
+        });
+        hub.send(id, Outgoing::Pong(Vec::new()));
+        assert!(subscribed(&hub, id));
+        drop(reader.join());
     }
 
     #[tokio::test]
@@ -2851,6 +3069,8 @@ mod tests {
     /// its own socket. Either only asks: the request lands where `main` waits.
     #[tokio::test]
     async fn only_the_user_and_the_window_can_ask_the_daemon_to_stop() {
+        use crew_core::trace::capture;
+        traced();
         let dir = test_dir("shutdown");
         let (handle, bridge) = test_serve_bridged(&dir);
         let requests = handle.exit_requests().expect("requests");
@@ -2870,6 +3090,12 @@ mod tests {
         let reply = rpc(&mut ws, 900, "daemon_shutdown", serde_json::json!({})).await;
         assert!(reply.ok, "{:?}", reply.error);
         requests.recv_timeout(Duration::from_secs(2)).expect("the window's request");
+        // Each way of asking, and the one refused, is a line saying so.
+        let vias: Vec<_> =
+            capture::all("daemon.shutdown_requested").iter().filter_map(|e| e.get("via").map(String::from)).collect();
+        assert!(vias.iter().any(|v| v == "cli") && vias.iter().any(|v| v == "window"), "{vias:?}");
+        let refused = capture::all("daemon.shutdown_refused");
+        assert!(refused.iter().any(|e| e.get("caller") == Some("Bot") && e.level == tracing::Level::WARN), "{refused:?}");
         handle.shutdown();
     }
 
@@ -2952,8 +3178,7 @@ mod tests {
         handle.shutdown();
     }
 
-    /// What a bot writes with `rules` is what the sheet reads, with the
-    /// user's message it cites, and the user's edit from the sheet goes by
+    /// What a bot writes with `rules` is what the sheet reads, and the user's edit from the sheet goes by
     /// id: the bot's rule written meanwhile stays.
     #[tokio::test]
     async fn the_bot_sheet_reads_and_writes_the_rules_the_bot_keeps() {
@@ -2961,15 +3186,12 @@ mod tests {
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
-        handle.turns.transcripts().append_user(&session_id, "nunca\nhagas push a master", false, None, None);
-        // The sheet reads the cited message from the database.
-        handle.turns.transcripts().flush_all();
         let info = bridge.info().expect("info");
         let add = |content: &str| {
             serde_json::json!({
                 "token": bridge.mint(&session_id),
                 "method": "tools/call",
-                "params": { "name": "rules", "arguments": { "action": "add", "content": content, "from": 1 } }
+                "params": { "name": "rules", "arguments": { "action": "add", "content": content } }
             })
         };
         let reply = unix_call(&info.socket_path, &add("Never push to master"));
@@ -2979,7 +3201,6 @@ mod tests {
         assert_eq!((rules.used, rules.cap, rules.rules.len()), (20, 1_500, 1));
         let first = rules.rules[0].clone();
         assert_eq!((first.id.as_str(), first.body.as_str()), ("r1", "Never push to master"));
-        assert_eq!(first.cited.as_ref().map(|cited| cited.excerpt.as_str()), Some("nunca hagas push a master"));
 
         // The bot writes another while the sheet is open; the sheet's save
         // edits the first and adds one, and the bot's stays.
@@ -2993,7 +3214,6 @@ mod tests {
             serde_json::from_value(rpc(&mut ws, 51, "bot_rules_save", save).await.result.expect("saved")).unwrap();
         let bodies: Vec<&str> = saved.rules.iter().map(|rule| rule.body.as_str()).collect();
         assert_eq!(bodies, ["Never push to main", "Run the tests before pushing", "Ask before deleting a branch"]);
-        assert!(saved.rules[0].cited.is_some() && saved.rules[2].cited.is_none());
         let ids: Vec<&str> = saved.rules.iter().map(|rule| rule.id.as_str()).collect();
         assert_eq!(ids, ["r1", "r2", "r3"]);
         let again = rpc(&mut ws, 52, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
@@ -3004,7 +3224,22 @@ mod tests {
             serde_json::from_value(rpc(&mut ws, 53, "bot_rules_save", removed).await.result.expect("removed")).unwrap();
         assert_eq!(left.rules.len(), 2);
         let over = serde_json::json!({ "id": session_id, "add": ["x".repeat(1_501)] });
-        assert!(rpc(&mut ws, 54, "bot_rules_save", over).await.result.is_none(), "over the cap");
+        assert!(rpc(&mut ws, 54, "bot_rules_save", over.clone()).await.result.is_none(), "over the cap");
+
+        // Its own cap: what it may hold from then on.
+        let raised: BotRules = serde_json::from_value(
+            rpc(&mut ws, 55, "bot_rules_cap_set", serde_json::json!({ "id": session_id, "cap": 4_000 }))
+                .await
+                .result
+                .expect("cap"),
+        )
+        .unwrap();
+        assert_eq!(raised.cap, 4_000);
+        assert!(rpc(&mut ws, 56, "bot_rules_save", over).await.result.is_some(), "under the new cap");
+        let low = serde_json::json!({ "id": session_id, "cap": 10 });
+        let floored: BotRules =
+            serde_json::from_value(rpc(&mut ws, 57, "bot_rules_cap_set", low).await.result.expect("cap")).unwrap();
+        assert_eq!(floored.cap, 1_500, "under the default is the default");
         handle.shutdown();
     }
 
@@ -3965,6 +4200,42 @@ elif args[:2] == ["mcp", "enable"]:
         write_fake_claude_script(dir, false, false)
     }
 
+    /// A claude that asks to run a command made of the prompt it was given, so an approval
+    /// request holds what the user typed.
+    fn write_fake_claude_approval_echo(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-approval-echo");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    print(json.dumps({"type":"control_request","request_id":"c1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo " + line}}}), flush=True)
+    for answer in sys.stdin:
+        try:
+            if json.loads(answer).get("type") == "control_response":
+                break
+        except Exception:
+            continue
+    print(json.dumps({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"done " + line}}}), flush=True)
+    print(json.dumps({"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
     fn write_fake_claude_approval(dir: &std::path::Path) -> std::path::PathBuf {
         write_fake_claude_script(dir, true, false)
     }
@@ -4899,6 +5170,266 @@ for line in sys.stdin:
         let read = rpc(&mut ws, 1, "usage_read", serde_json::json!({})).await;
         assert!(read.ok, "{}", read.error.unwrap_or_default());
         assert_eq!(read.result, Some(serde_json::json!({ "readings": [], "history": [] })));
+        handle.shutdown();
+    }
+    /// A fake `claude` that answers by repeating what it was sent, so the
+    /// marker is in the prompt, the provider's output and the transcript.
+    fn write_fake_claude_echo(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-echo");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    print(json.dumps({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"echo " + line}}}), flush=True)
+    sys.stderr.write("stderr " + line)
+    print(json.dumps({"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// The privacy rule of the trace, held to a run: a prompt, a provider reply,
+    /// a keystroke and a tool call each carry a marker through the daemon, at
+    /// the most verbose level there is, and no file under `trace/` has it.
+    #[tokio::test]
+    async fn nothing_a_user_typed_or_a_model_said_reaches_the_trace_files() {
+        const MARKER: &str = "CANARY-5d1e9f3a7c2b";
+        let dir = test_dir("trace-canary");
+        let trace_dir = traced().to_path_buf();
+        let (handle, bridge) = test_serve_bridged(&dir);
+        handle.override_agent_binary("claude", write_fake_claude_echo(&dir).to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+
+        // A prompt, and a reply that repeats it.
+        let started = rpc(
+            &mut ws,
+            10,
+            "turn_start",
+            serde_json::json!({ "sessionId": session_id, "cwd": dir.to_string_lossy(), "text": format!("please {MARKER}") }),
+        )
+        .await;
+        assert!(started.ok, "{:?}", started.error);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut req = 100u32;
+        let page = loop {
+            let page = transcript_of(&mut ws, req, &session_id).await;
+            req += 1;
+            if !page.working && page.blocks.iter().any(|b| b.role == proto::BlockRole::Assistant) {
+                break page;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "the turn did not end");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert!(page.blocks.iter().any(|b| b.text.contains(MARKER)), "the fake did not repeat the prompt");
+
+        // A keystroke, echoed back by the shell.
+        let spawn = spawn_req(20, "canary-pty");
+        let spawned = rpc(&mut ws, 20, &spawn.method, spawn.params).await;
+        assert!(spawned.ok, "{:?}", spawned.error);
+        let wrote =
+            rpc(&mut ws, 21, "pty_write", serde_json::json!({ "id": "canary-pty", "data": format!("echo {MARKER}\n") })).await;
+        assert!(wrote.ok, "{:?}", wrote.error);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let killed = rpc(&mut ws, 22, "pty_kill", serde_json::json!({ "id": "canary-pty" })).await;
+        assert!(killed.ok);
+
+        // Tool calls whose arguments carry it: one that works, one that is refused.
+        let socket = bridge.info().expect("info").socket_path;
+        let token = bridge.mint(&session_id);
+        for (name, arguments) in [
+            ("save_process", serde_json::json!({ "name": MARKER, "command": format!("echo {MARKER}") })),
+            ("update_description", serde_json::json!({ "description": MARKER, "extra": MARKER })),
+            ("no_such_tool", serde_json::json!({ "x": MARKER })),
+            ("read_logs", serde_json::json!({ "process": MARKER, "grep": MARKER })),
+        ] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({ "token": token, "method": "tools/call", "params": { "name": name, "arguments": arguments } }),
+            );
+            assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
+        }
+        // A letter between two sessions, a session's title, a subagent's name and prompt, and an
+        // approval request that holds the marker: each is something a family of lines is about.
+        let other_dir = dir.clone();
+        handle.override_agent_binary("claude", write_fake_claude_approval_echo(&dir).to_string_lossy().into_owned());
+        let workspaces = rpc(&mut ws, 39, "workspace_list", serde_json::json!({})).await;
+        let workspace = workspaces.result.expect("workspaces")[0]["id"].as_str().expect("id").to_string();
+        let made = rpc(
+            &mut ws,
+            38,
+            "session_create",
+            serde_json::json!({
+                "workspaceId": workspace, "kind": "bot", "name": "B", "provider": "claude",
+                "model": "m", "description": "", "autonomy": "ask"
+            }),
+        )
+        .await;
+        assert!(made.ok, "{:?}", made.error);
+        let second = made.result.expect("session")["id"].as_str().expect("id").to_string();
+        let renamed =
+            rpc(&mut ws, 40, "session_rename", serde_json::json!({ "id": second, "name": format!("title {MARKER}") })).await;
+        assert!(renamed.ok, "{:?}", renamed.error);
+        let asked = rpc(
+            &mut ws,
+            41,
+            "turn_start",
+            serde_json::json!({ "sessionId": second, "cwd": other_dir.to_string_lossy(), "text": format!("run {MARKER}") }),
+        )
+        .await;
+        assert!(asked.ok, "{:?}", asked.error);
+        let raised = crew_core::trace::capture::expect("request.raised", "session_id", &second);
+        let request_id: u64 = raised.get("request_id").expect("request id").parse().expect("number");
+        let decided = rpc(
+            &mut ws,
+            42,
+            "turn_respond",
+            serde_json::json!({ "sessionId": second, "requestId": request_id, "decision": "allow" }),
+        )
+        .await;
+        assert!(decided.ok, "{:?}", decided.error);
+        crew_core::trace::capture::expect("approval.decided", "session_id", &second);
+        for (name, arguments) in [
+            ("send_message", serde_json::json!({ "to": second, "text": format!("letter {MARKER}") })),
+            (
+                "delegate",
+                serde_json::json!({ "prompt": format!("subagent {MARKER}"), "name": format!("name {MARKER}"), "provider": "claude", "effort": "low" }),
+            ),
+        ] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({ "token": token, "method": "tools/call", "params": { "name": name, "arguments": arguments } }),
+            );
+            assert!(reply.get("result").is_some() || reply.get("error").is_some(), "{reply}");
+        }
+        // A call whose params name a session with something that is not an id.
+        let polluted =
+            rpc(&mut ws, 30, "no_such_method_canary", serde_json::json!({ "sessionId": format!("not an id {MARKER}") })).await;
+        assert!(!polluted.ok);
+        drop(ws);
+        handle.shutdown();
+        trace::flush();
+
+        let mut seen = String::new();
+        let mut files = 0;
+        for entry in std::fs::read_dir(trace_dir.join(trace::DIR)).expect("trace dir").flatten() {
+            let text = std::fs::read_to_string(entry.path()).expect("read");
+            assert!(
+                !text.contains(MARKER),
+                "{} holds the marker:\n{}",
+                entry.path().display(),
+                text.lines().filter(|l| l.contains(MARKER)).collect::<Vec<_>>().join("\n")
+            );
+            files += 1;
+            seen.push_str(&text);
+        }
+        assert!(files >= 2, "the files are there");
+        // Not an empty pass: the boundaries it is about did write.
+        for line in
+            ["turn.start", "turn.end", "tool.call", "rpc.done", "rpc.failed", "pty.spawn", "conn.accepted", "session.status"]
+        {
+            assert!(seen.contains(line), "no {line} in the trace:\n{seen}");
+        }
+    }
+
+    /// `crew trace --session` finds a call by the session its params name, and a
+    /// param that is not shaped like an id is not written down at all.
+    #[tokio::test]
+    async fn an_rpc_line_carries_the_session_its_params_name_when_that_is_an_id() {
+        use crew_core::trace::capture;
+        traced();
+        let dir = test_dir("rpc-session");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session = format!("rpc-sess-{}_A1", std::process::id());
+        let snake = rpc(&mut ws, 1, "no_such_method_snake", serde_json::json!({ "session_id": session })).await;
+        let camel = rpc(&mut ws, 2, "no_such_method_camel", serde_json::json!({ "sessionId": session })).await;
+        let spaced = rpc(&mut ws, 3, "no_such_method_spaced", serde_json::json!({ "sessionId": "has a space" })).await;
+        let long = rpc(&mut ws, 4, "no_such_method_long", serde_json::json!({ "sessionId": "a".repeat(65) })).await;
+        let number = rpc(&mut ws, 5, "no_such_method_number", serde_json::json!({ "sessionId": 7, "text": "private" })).await;
+        let other = rpc(&mut ws, 6, "no_such_method_other", serde_json::json!({ "id": "a-pty", "text": "private" })).await;
+        for reply in [&snake, &camel, &spaced, &long, &number, &other] {
+            assert!(!reply.ok);
+        }
+        let failed = |method: &str| capture::expect("rpc.failed", "method", method);
+        assert_eq!(failed("no_such_method_snake").get("session_id"), Some(session.as_str()));
+        assert_eq!(failed("no_such_method_camel").get("session_id"), Some(session.as_str()));
+        for method in ["no_such_method_spaced", "no_such_method_long", "no_such_method_number", "no_such_method_other"] {
+            let line = failed(method);
+            assert_eq!(line.get("session_id"), None, "{method}: {line:?}");
+            assert!(line.fields.values().all(|v| !v.contains("private") && !v.contains("has a space")), "{line:?}");
+        }
+        // The same goes for a call that works.
+        let ok = rpc(&mut ws, 7, "mailbox_pending", serde_json::json!({ "sessionId": session })).await;
+        assert!(ok.ok, "{:?}", ok.error);
+        let done = capture::expect("rpc.done", "method", "mailbox_pending");
+        assert_eq!(done.get("session_id"), Some(session.as_str()));
+        handle.shutdown();
+    }
+
+    /// What goes wrong between the window and the daemon is a line each time: a client that
+    /// cannot prove who it is, one that falls too far behind, keystrokes with nowhere to go.
+    #[tokio::test]
+    async fn a_connection_that_fails_leaves_a_warning_saying_how() {
+        use crew_core::trace::capture;
+        traced();
+        let dir = test_dir("conn-failures");
+        let handle = test_serve(&dir);
+        let count = |reason: &str| capture::all("conn.auth_failed").iter().filter(|e| e.get("reason") == Some(reason)).count();
+        let before = (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame"));
+
+        // Wrong token; a frame that is not an auth frame; nothing said at all.
+        let (mut wrong, _) = connect_async(handle.url()).await.expect("connect");
+        wrong.send(Message::Text(r#"{"auth":"not-the-token-SECRET-TOKEN"}"#.into())).await.expect("send");
+        let (mut garbled, _) = connect_async(handle.url()).await.expect("connect");
+        garbled.send(Message::Text("not json at all".into())).await.expect("send");
+        let (mut silent, _) = connect_async(handle.url()).await.expect("connect");
+        silent.close(None).await.expect("close");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (count("wrong_token"), count("unreadable_auth_frame"), count("no_auth_frame"))
+            < (before.0 + 1, before.1 + 1, before.2 + 1)
+        {
+            assert!(Instant::now() < deadline, "not all three were traced: {:?}", capture::all("conn.auth_failed"));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        for event in capture::all("conn.auth_failed") {
+            assert_eq!(event.level, tracing::Level::WARN);
+            assert!(event.fields.values().all(|v| !v.contains("SECRET-TOKEN")), "{event:?}");
+        }
+
+        // Keystrokes for a terminal that is not there.
+        let mut ws = connect_authed(&handle).await;
+        let mut frame = Vec::from(987_654u32.to_le_bytes());
+        frame.extend_from_slice(b"KEYSTROKES-SECRET");
+        ws.send(Message::Binary(frame.into())).await.expect("write");
+        let failed = capture::expect("pty.input_failed", "id", "987654");
+        assert_eq!(failed.level, tracing::Level::WARN);
+        assert!(failed.fields.values().all(|v| !v.contains("KEYSTROKES")), "{failed:?}");
+
+        // A client whose queue is full is let go, and the line says how deep it was.
+        let hub = Hub::new();
+        let (id, _held) = hub.subscribe();
+        for _ in 0..OUT_ROOM + 8 {
+            hub.send(id, Outgoing::Pong(Vec::new()));
+        }
+        let dropped = capture::expect("conn.dropped", "client_id", &id.to_string());
+        assert_eq!(dropped.level, tracing::Level::WARN);
+        assert!(dropped.get("queued").is_some_and(|q| q.parse::<usize>().unwrap() > 0), "{dropped:?}");
+        assert!(!hub.contains(id), "the client was not unsubscribed");
         handle.shutdown();
     }
 }

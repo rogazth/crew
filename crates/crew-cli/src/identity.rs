@@ -147,6 +147,7 @@ pub enum Identity {
 }
 
 impl Identity {
+    #[allow(clippy::disallowed_macros)] // the CLI's own message to its user; no subscriber runs here
     pub fn resolve(global: &Global, env: &Env) -> Result<Self, CliError> {
         match choose(global, env)? {
             Source::Session { socket, token } => {

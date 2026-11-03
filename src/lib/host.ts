@@ -13,6 +13,7 @@ import type {
   SitePermissions,
 } from "./browser/bridge";
 import type { MachineRoute } from "./browser/machines";
+import type { MemoryPressure } from "./browser/retention";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
 import type { LoginItemState } from "./loginItem";
@@ -22,6 +23,7 @@ import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState, SshHost, Tailnet } from "./remotes";
 import type { AppInfo } from "./appInfo";
 import type { ReleaseList, UpdateState } from "./update";
+import type { TraceHost } from "./trace";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
 
@@ -45,6 +47,8 @@ type CrewHost = {
   keybindings?: KeybindingsHost;
   cli?: CliHost;
   loginItem?: LoginItemHost;
+  /** The window's events for the trace main keeps. Absent outside Electron. */
+  trace?: TraceHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
@@ -80,6 +84,8 @@ export type FilesHost = {
   reveal(path: string): Promise<void>;
   /** Resolves to why it could not open, or "" once it did. */
   openExternal(path: string): Promise<string>;
+  /** From a dragstart: the drag becomes the file itself, for any app to take. */
+  drag(path: string): void;
 };
 
 /** Machines other than this Mac. Absent outside Electron. */
@@ -197,6 +203,9 @@ export type BrowserHost = {
   prepareRestore(token: string, entriesJson: string, index: number, machine: string | null): Promise<boolean>;
   /** Through the pages' session, so an icon behind a sign-in loads; an incognito page's through its in-memory one. */
   favicon(url: string, incognito?: boolean): Promise<string | null>;
+  /** How tight the machine's memory is, read from the OS. */
+  memoryPressure(): Promise<MemoryPressure>;
+  safeStart(): Promise<boolean>;
   /** Into every page's session; incognito pages never see them. */
   importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
   /** Every other machine a workspace lives on, so `<alias>.localhost` reaches its loopback. */

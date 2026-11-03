@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::store::{now_millis, Store};
 
-pub const MIGRATION_V45: &str = r#"
+pub const MIGRATION_V47: &str = r#"
 -- The machines using this vault: each one's token, hashed.
 CREATE TABLE IF NOT EXISTS vault_machines (
   id         TEXT PRIMARY KEY,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS vault_machines (
 "#;
 
 /// A machine's calls run on the vault now: it no longer leases anything.
-pub const MIGRATION_V46: &str = "ALTER TABLE vault_machines RENAME COLUMN last_lease TO last_call;";
+pub const MIGRATION_V48: &str = "ALTER TABLE vault_machines RENAME COLUMN last_lease TO last_call;";
 
 fn hash(token: &str) -> String {
     Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()

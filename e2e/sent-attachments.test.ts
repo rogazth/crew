@@ -36,8 +36,8 @@ for (const provider of ["claude", "codex", "opencode"]) {
   test(`a message sent to ${provider} with a picture shows it as an attachment, not a path`, async () => {
     const [workspace] = crew.workspaces;
     assert.ok(workspace);
-    await crew.request("state_set", {
-      key: "providers:default",
+    await crew.request("settings_set", {
+      key: "providers:default", scope: "global",
       value: JSON.stringify({ provider, model: "", effort: "", access: "full" }),
     });
     await crew.reload();

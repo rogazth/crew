@@ -33,7 +33,7 @@ export function SlashPicker({ results, active, onHover, onPick, left }: Props) {
             onMouseEnter={() => onHover(index)}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPick(entry)}
-            className={`flex h-8 w-full items-center gap-2 px-3 text-left text-[13px] ${index === active ? "bg-hover" : ""}`}
+            className={`flex h-8 w-full items-center gap-2 px-2 text-left text-[13px] ${index === active ? "bg-hover" : ""}`}
           >
             <span className="shrink-0">/{entry.name}</span>
             {entry.argumentHint && <span className="shrink-0 text-text-muted">{entry.argumentHint}</span>}

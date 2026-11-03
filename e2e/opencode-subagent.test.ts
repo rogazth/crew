@@ -3,7 +3,7 @@
 // Codex's are. The chat's CLI is the fake opencode 2.x, which on SUBAGENT runs
 // the real shape (the call, the child's `session.created` with its `parentID`,
 // the call naming the child, the child's own execution): the card opens the
-// thread with the child's steps, the child is in the work sheet, and Stop ends
+// thread with the child's steps, the child is in the list of sub-agents, and Stop ends
 // the child only.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -19,8 +19,8 @@ before(async () => {
   crew = await launchCrew();
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "opencode", model: "opencode/nemotron-3.5-lightning-free", effort: "", access: "full" }),
   });
   await installFakeOpencode(crew);
@@ -33,10 +33,9 @@ after(async () => {
   await crew?.close();
 });
 
-const composer = () => composerOf(crew);
-const sheet = () => crew.window.locator("[data-work-sheet]");
+const composer = () => composerOf(crew, chat);
 const page = () => crew.window.locator("[data-agent-view]");
-const card = () => crew.window.locator("[data-agent-card]").last();
+const card = () => crew.window.locator("[data-agent-start]").last();
 
 async function send(text: string): Promise<void> {
   const field = composer();
@@ -65,7 +64,7 @@ const interrupts = async () =>
     .filter((line) => line.includes("/interrupt"))
     .map((line) => JSON.parse(line) as { path: string });
 
-test("a subagent that ran opens as a thread with the child's steps, and is in the work sheet", async () => {
+test("a subagent that ran opens as a thread with the child's steps, and is in the list of sub-agents", async () => {
   await send("look into it SUBAGENT");
   await idle();
   await card().waitFor({ timeout: 20_000 });
@@ -74,9 +73,11 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
 
   await card().click();
   await page().waitFor();
-  await page().getByText("echo child").first().waitFor();
+  // What it said is the thread's spine; what it did is one line that opens.
   await page().getByText("pong").first().waitFor();
-  assert.match(await page().locator("[data-thread-header]").innerText(), /Done/);
+  assert.equal(await page().getByText("echo child").count(), 0, "the work is folded");
+  await page().getByRole("button", { name: /^Worked/ }).first().click();
+  await page().getByText("echo child").first().waitFor();
   // It is the chat's own transcript: its words select as the chat's do, and ⌘A keeps to the thread.
   const thread = page().locator('[data-selectable="blocks"]');
   assert.equal(await thread.count(), 1, "the thread is one transcript");
@@ -90,27 +91,29 @@ test("a subagent that ran opens as a thread with the child's steps, and is in th
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });
 
-  const work = crew.window.getByRole("button", { name: /1 agent/ });
-  await work.click();
-  await sheet().waitFor();
-  const rows = await sheet().getByRole("option").allTextContents();
-  assert.equal(rows.length, 1, rows.join("\n"));
-  assert.match(rows[0]!, /Reply with pong.*Subagent · (?:[^·]+ · )?done/s, rows[0]);
+  await crew.window.locator("[data-agents-segment]").first().click();
+  const list = crew.window.locator("[data-agent-list]");
+  const rows = list.locator("[data-entry]");
+  await rows.first().waitFor();
+  assert.equal(await rows.count(), 1, (await rows.allTextContents()).join("\n"));
+  assert.match((await rows.first().innerText()).replace(/\s+/g, " "), /Reply with pong/);
+  await list.locator('[data-list-section="done"]').waitFor();
   await shoot("work");
   await crew.window.keyboard.press("Escape");
-  await sheet().waitFor({ state: "hidden" });
+  await list.waitFor({ state: "hidden" });
 });
 
 test("Stop on a running subagent ends the child and not the parent's turn", async () => {
   const before = (await interrupts()).length;
   // The card of the test before is there already: wait for this call's own.
-  const cards = await crew.window.locator("[data-agent-card]").count();
+  const cards = await crew.window.locator("[data-agent-start]").count();
   await send("hold on SUBAGENT SLOW");
-  await waitFor(async () => (await crew.window.locator("[data-agent-card]").count()) > cards, { timeout: 20_000, message: "the call's card shows" });
+  await waitFor(async () => (await crew.window.locator("[data-agent-start]").count()) > cards, { timeout: 20_000, message: "the call's card shows" });
   await card().click();
   await page().waitFor();
   await page().getByText("echo child").first().waitFor();
-  await page().locator("[data-thread-header]").getByText("Running").waitFor();
+  const stopButton = page().locator("[data-thread-header]").getByRole("button", { name: /Stop/ });
+  await stopButton.waitFor();
   // The working line counts from when the call started, as the chat's does.
   await page().getByText(/^Working for \d+s$/).waitFor();
   await shoot("running");
@@ -118,7 +121,7 @@ test("Stop on a running subagent ends the child and not the parent's turn", asyn
   assert.equal((await crew.request<Session>("session_get", { id: chat.id })).status, "working");
 
   await crew.window.keyboard.press("x");
-  await page().locator("[data-thread-header]").getByText("Stopped").waitFor({ timeout: 20_000 });
+  await stopButton.waitFor({ state: "detached", timeout: 20_000 });
   await idle();
   await shoot("stopped");
   await crew.window.keyboard.press("Escape");
@@ -132,9 +135,9 @@ test("a second call that continues the same subagent is its own card and opens t
   await send("again SUBAGENT RESUME");
   await idle();
   await crew.window.getByText("Done: again SUBAGENT RESUME", { exact: true }).waitFor();
-  const cards = crew.window.locator("[data-agent-card]");
+  const cards = crew.window.locator("[data-agent-start]");
   await waitFor(async () => (await cards.count()) >= 2, { message: "one card per call" });
-  const resumed = crew.window.getByText("Resumed a subagent");
+  const resumed = crew.window.locator("[data-agent-start]").filter({ hasText: "resumed" });
   await resumed.last().waitFor();
   assert.equal(await resumed.count(), 1);
   // Each call brought its own report back, in order.
@@ -152,7 +155,6 @@ test("a second call that continues the same subagent is its own card and opens t
   assert.ok(text.indexOf("Again, reply") < text.indexOf("pong again"), text);
   // No wrapper card around the answers: they are chat messages.
   assert.equal(await thread.locator("[data-prose]").count(), 0);
-  assert.equal(await thread.locator("[data-hang]").count(), 0);
   await shoot("thread");
   await crew.window.keyboard.press("Escape");
   await page().waitFor({ state: "detached" });

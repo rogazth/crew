@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { resolveTheme } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
+import { normalizeThemeColors } from "@pierre/theming/color";
 import { CodeView, EditProvider } from "@pierre/diffs/react";
 import { useDarkScheme } from "../../hooks/useDarkScheme";
 import { editorSessions } from "../../lib/editorSessions";
 import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
 import { onDiscard } from "../../lib/unsavedEdits";
 import {
+  OFFLOAD_HIGHLIGHT_MIN_LENGTH,
   THEME,
   TOKENIZE_MAX_LENGTH,
   TOKENIZE_MAX_LINE_LENGTH,
@@ -23,8 +26,9 @@ const OPTIONS = {
   theme: THEME,
   disableFileHeader: true,
   overflow: "scroll" as const,
-  tokenizeMaxLength: TOKENIZE_MAX_LENGTH,
   tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+  // Read by the @pierre/diffs patch: a bigger file is highlighted off the main thread.
+  offloadHighlightMinLength: OFFLOAD_HIGHLIGHT_MIN_LENGTH,
 };
 
 /**
@@ -76,16 +80,16 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
     };
   }, [editor, path]);
 
+  // From the theme itself, not the painted lines: those still wear the last
+  // theme for a frame or two after a switch, and a read then sticks.
   useEffect(() => {
-    let frame = 0;
-    const read = (tries = 30) => {
-      const lines = host.current?.querySelector("diffs-container");
-      const colour = lines && getComputedStyle(lines).backgroundColor;
-      if (colour && colour !== "rgba(0, 0, 0, 0)") setPaper(colour);
-      else if (tries > 0) frame = requestAnimationFrame(() => read(tries - 1));
+    let live = true;
+    resolveTheme(THEME[dark ? "dark" : "light"])
+      .then((resolved) => live && setPaper(normalizeThemeColors(resolved).bg))
+      .catch(() => {});
+    return () => {
+      live = false;
     };
-    read();
-    return () => cancelAnimationFrame(frame);
   }, [dark]);
 
   // A click below the last line belongs to the document: the caret goes to its end.
@@ -104,7 +108,8 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
       {
         id: path,
         type: "file" as const,
-        file: { name, contents: loaded, cacheKey: path },
+        // The library's own cap counts lines; this one is the characters FileEditor labels "plain text".
+        file: { name, contents: loaded, cacheKey: path, ...(loaded.length > TOKENIZE_MAX_LENGTH && { lang: "text" as const }) },
         edit: true,
       },
     ],

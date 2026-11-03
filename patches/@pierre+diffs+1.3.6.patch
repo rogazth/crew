@@ -1,3 +1,15 @@
+diff --git a/node_modules/@pierre/diffs/dist/components/CodeView.js b/node_modules/@pierre/diffs/dist/components/CodeView.js
+index 051e7d0..815aa9a 100644
+--- a/node_modules/@pierre/diffs/dist/components/CodeView.js
++++ b/node_modules/@pierre/diffs/dist/components/CodeView.js
+@@ -56,6 +56,7 @@ const CODE_VIEW_FILE_OPTION_KEYS = [
+ 	"useTokenTransformer",
+ 	"tokenizeMaxLineLength",
+ 	"tokenizeMaxLength",
++	"offloadHighlightMinLength",
+ 	"unsafeCSS",
+ 	"lineHoverHighlight",
+ 	"enableTokenInteractionsOnWhitespace",
 diff --git a/node_modules/@pierre/diffs/dist/editor/editor.js b/node_modules/@pierre/diffs/dist/editor/editor.js
 index 0cd91b0..0036354 100644
 --- a/node_modules/@pierre/diffs/dist/editor/editor.js
@@ -33,3 +45,134 @@ index 0cd91b0..0036354 100644
  				if (modelLinePosition.height > 0 && this.#isLineRenderable(line)) {
  					this.#scrollingToLine = line;
  					this.#scrollingToLineChar = char;
+diff --git a/node_modules/@pierre/diffs/dist/renderers/FileRenderer.js b/node_modules/@pierre/diffs/dist/renderers/FileRenderer.js
+index fb146c3..01d45e5 100644
+--- a/node_modules/@pierre/diffs/dist/renderers/FileRenderer.js
++++ b/node_modules/@pierre/diffs/dist/renderers/FileRenderer.js
+@@ -39,6 +39,8 @@ var FileRenderer = class {
+ 	pendingStructuralRows;
+ 	textDocumentCache = /* @__PURE__ */ new WeakMap();
+ 	editSessionActive = false;
++	/** The file whose highlight an edit session handed the pool, shown plain until it comes back. */
++	offloadedFile;
+ 	constructor(options = { theme: DEFAULT_THEMES }, onRenderUpdate, workerManager) {
+ 		this.options = options;
+ 		this.onRenderUpdate = onRenderUpdate;
+@@ -79,6 +81,7 @@ var FileRenderer = class {
+ 	/** Leave edit-session mode. Rendering returns to the pool when one works. */
+ 	endEditSession() {
+ 		this.editSessionActive = false;
++		this.offloadedFile = void 0;
+ 	}
+ 	/**
+ 	* Ensures that the DOM is compatible with editor render updates
+@@ -349,7 +352,10 @@ var FileRenderer = class {
+ 			const hasThemes = this.highlighter != null && areThemesAttached(options.theme);
+ 			const hasLangs = this.highlighter != null && areLanguagesAttached(this.computedLang);
+ 			const canHighlight = !forcePlainText && hasLangs;
+-			if (this.highlighter != null && hasThemes && (forceHighlight || forcePlainText || !this.renderCache.highlighted && canHighlight || this.renderCache.result == null)) {
++			if (!forcePlainText && this.shouldOffloadHighlight(file)) {
++				const ready = this.renderCache.result != null && !forceHighlight && (this.renderCache.highlighted || this.offloadedFile === file);
++				if (!ready) this.offloadHighlight(file, options, lines);
++			} else if (this.highlighter != null && hasThemes && (forceHighlight || forcePlainText || !this.renderCache.highlighted && canHighlight || this.renderCache.result == null)) {
+ 				const { result, options } = this.renderFileWithHighlighter(file, this.highlighter, forcePlainText || !hasLangs);
+ 				this.renderCache = {
+ 					file,
+@@ -359,13 +365,46 @@ var FileRenderer = class {
+ 					renderRange: void 0
+ 				};
+ 			}
+-			if (!hasThemes || !forcePlainText && !hasLangs) this.asyncHighlight(file).then(({ result, options }) => {
++			if (this.offloadedFile !== file && (!hasThemes || !forcePlainText && !hasLangs)) this.asyncHighlight(file).then(({ result, options }) => {
+ 				if (this.renderCache != null) this.renderCache.highlighted = false;
+ 				this.applyHighlightResult(file, result, options, !forcePlainText);
+ 			});
+ 		}
+ 		return this.renderCache.result != null ? this.processFileResult(this.renderCache.file, renderRange, this.renderCache.result) : void 0;
+ 	}
++	/**
++	* An edit session highlights on the main thread, all of the file at once:
++	* past `offloadHighlightMinLength` characters that froze the window for
++	* seconds. Such a file is highlighted by the pool instead, as a view is.
++	*/
++	shouldOffloadHighlight(file) {
++		const { offloadHighlightMinLength } = this.options;
++		return this.editSessionActive && offloadHighlightMinLength != null && file.contents.length > offloadHighlightMinLength && this.workerManager?.isWorkingPool() === true;
++	}
++	/** Paints `file` plain, now, and asks the pool for its highlight; a result the pool already holds paints at once. */
++	offloadHighlight(file, options, lines) {
++		const cached = this.workerManager.getFileResultCache(file);
++		if (cached != null && areFileRenderOptionsEqual(options, cached.options)) {
++			this.offloadedFile = void 0;
++			this.renderCache = {
++				file,
++				options: cached.options,
++				highlighted: true,
++				result: cached.result,
++				renderRange: void 0
++			};
++			return;
++		}
++		this.offloadedFile = file;
++		this.renderCache = {
++			file,
++			options,
++			highlighted: false,
++			result: this.workerManager.getPlainFileAST(file, 0, Infinity, lines),
++			renderRange: void 0
++		};
++		this.workerManager.highlightFileAST(this, file);
++	}
+ 	async asyncRender(file, renderRange = DEFAULT_RENDER_RANGE) {
+ 		const { result } = await this.asyncHighlight(file);
+ 		return this.processFileResult(file, renderRange, result);
+@@ -489,7 +528,11 @@ var FileRenderer = class {
+ 		return this.highlighter;
+ 	}
+ 	onHighlightSuccess(file, result, options, highlighted = true) {
+-		if (this.editSessionActive) return;
++		if (this.editSessionActive) {
++			// Only the highlight this session handed the pool, and only while nothing was typed since.
++			if (this.offloadedFile !== file || this.renderCache?.isDirty === true) return;
++			this.offloadedFile = void 0;
++		}
+ 		this.applyHighlightResult(file, result, options, highlighted);
+ 	}
+ 	applyHighlightResult(file, result, options, highlighted = true) {
+diff --git a/node_modules/@pierre/diffs/dist/utils/getFileRendererOptions.js b/node_modules/@pierre/diffs/dist/utils/getFileRendererOptions.js
+index 7d08e24..ff71324 100644
+--- a/node_modules/@pierre/diffs/dist/utils/getFileRendererOptions.js
++++ b/node_modules/@pierre/diffs/dist/utils/getFileRendererOptions.js
+@@ -15,6 +15,7 @@ function getFileRendererOptions(options) {
+ 		useTokenTransformer: shouldUseTokenTransformer(options),
+ 		tokenizeMaxLineLength: options?.tokenizeMaxLineLength,
+ 		tokenizeMaxLength: options?.tokenizeMaxLength,
++		offloadHighlightMinLength: options?.offloadHighlightMinLength,
+ 		unsafeCSS: options?.unsafeCSS,
+ 		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
+ 	};
+diff --git a/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js b/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
+index 653af02..6616f5d 100644
+--- a/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
++++ b/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
+@@ -71,7 +71,9 @@ var WorkerPoolManager = class {
+ 		return !this.workersFailed;
+ 	}
+ 	getFileResultCache(file) {
+-		return file.cacheKey != null ? this.fileCache.get(file.cacheKey) : void 0;
++		const cached = file.cacheKey != null ? this.fileCache.get(file.cacheKey) : void 0;
++		// The key names a file, and its text may have changed since: a result of other text is not this file's.
++		return cached != null && cached.contents === file.contents ? cached : void 0;
+ 	}
+ 	getDiffResultCache(diff) {
+ 		return diff.cacheKey != null ? this.diffCache.get(diff.cacheKey) : void 0;
+@@ -638,7 +640,8 @@ var WorkerPoolManager = class {
+ 					this.syncCustomExtensionVersion(managedWorker, request);
+ 					if (task.cacheKeyAtDispatch != null) this.fileCache.set(task.cacheKeyAtDispatch, {
+ 						result,
+-						options
++						options,
++						contents: request.file.contents
+ 					});
+ 					this.resolveRenderTaskCallbacks(task);
+ 					this.notifyFileInstances(task, result, options);

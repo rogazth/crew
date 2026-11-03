@@ -7,6 +7,7 @@ import { fileTabId, newBrowserTab, newFileBrowserTab, newSignInTab, newTerminalT
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
 import type { ProjectFile, Session, StubKind, Tab } from "../lib/types";
+import { trace } from "../lib/trace";
 import type { useConfirmations } from "./useConfirmations";
 import type { useTabs } from "./useTabs";
 
@@ -57,6 +58,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
   const openSession = useCallback(
     (session: Session, focus?: string) => {
       const owner = routeAgent(session, sessions);
+      trace.info("session.open", { session: session.id, kind: session.kind, provider: session.provider, thread: Boolean(owner) });
       if (!owner) return openTabOf(session);
       requestRoute(owner, focus);
       openTabOf(owner.root);

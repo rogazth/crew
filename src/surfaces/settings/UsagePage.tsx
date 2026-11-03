@@ -1,9 +1,9 @@
-// Usage: each provider's plan limits in full (every window, when it resets,
-// where the pace lands it, the last week day by day), which providers get a
-// ring on the rail, and when to be told. Read from every connected machine,
-// one card per account.
+// Usage: each provider's plan limits in full (what is left of every window,
+// when it resets, how it stands against an even pace, the last week day by
+// day), which providers get a ring on the rail, and when to be told. Read from
+// every connected machine, one card per account.
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, GripVerticalIcon, RefreshCwIcon, RotateCcwIcon, TrendingUpIcon } from "lucide-react";
+import { CheckIcon, GripVerticalIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { PointerActivationConstraints } from "@dnd-kit/dom";
 import { PointerSensor } from "@dnd-kit/react";
@@ -12,22 +12,19 @@ import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { SortableItem, SortableList } from "../../chrome/SortableList";
 import { Rings } from "../../chrome/UsageButton";
 import { Tokens } from "../../chrome/UsageTokens";
+import { WindowRow } from "../../chrome/UsageWindow";
 import {
   MAX_RINGS,
   RING_COLORS,
-  TEXT,
   canToggleRing,
-  clock,
   colorOf,
   inOrder,
   refreshUsage,
   reorderRings,
   resetRings,
-  runsOutIn,
   setAlerts,
   setRingColor,
   toggleRing,
-  tone,
   updatedLabel,
   useAlerts,
   useFreshness,
@@ -112,108 +109,87 @@ function PlanLimits() {
 
 /** Memoised: a reorder or another provider's colour change leaves this card alone. */
 const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: Reading; color: string }) {
+  const longest = reading.windows.reduce<Window | null>(
+    (best, window) => (!best || (window.length ?? 0) > (best.length ?? 0) ? window : best),
+    null,
+  );
   return (
-    <div className={`flex flex-col gap-3 rounded-xl p-3 ${RAISED}`}>
-      <div className="flex items-center gap-2 px-0.5">
+    <div className={`flex flex-col gap-3 rounded-xl px-3.5 py-3 ${RAISED}`}>
+      <div className="flex items-center gap-2">
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="font-semibold">{reading.name}</span>
         {reading.plan && (
-          <span className="rounded-md bg-fill px-1.5 py-px text-[11px] font-medium text-text-muted">{reading.plan}</span>
+          <span className="rounded-md bg-fill px-1.5 py-px text-[11px] font-medium text-text-muted capitalize">{reading.plan}</span>
         )}
         <span className="ml-auto truncate text-[12px] text-text-muted">{reading.account}</span>
       </div>
 
-      {hasWindows(reading) ? (
+      {longest ? (
         <>
-          <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2">
+          <div className="grid grid-cols-1 gap-x-6 gap-y-3 @[560px]:grid-cols-2">
             {reading.windows.map((window) => (
-              <WindowTile key={window.id} window={window} color={color} />
+              <WindowRow key={window.id} window={window} color={color} at />
             ))}
           </div>
-          <Week days={reading.history} color={color} />
+          <Week days={reading.history} color={color} limit={longest.label} />
         </>
+      ) : reading.tokens !== null || reading.cost !== null ? (
+        <Tokens reading={reading} />
       ) : (
-        <div className="rounded-lg bg-card px-3 py-2.5">
-          {reading.tokens !== null || reading.cost !== null ? (
-            <Tokens reading={reading} />
-          ) : (
-            <span className="text-[12px] text-text-muted">Limits unavailable</span>
-          )}
-        </div>
+        <span className="text-[12px] text-text-muted">Limits unavailable</span>
       )}
     </div>
   );
 });
 
-function WindowTile({ window, color }: { window: Window; color: string }) {
-  const level = tone(window.used);
-  const out = runsOutIn(window);
-  const fill = level === "neutral" ? color : `var(--color-${level})`;
-  return (
-    <div className="flex flex-col gap-1.5 rounded-lg bg-card px-3 py-2.5">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[12px] text-text-muted">{window.label}</span>
-        {window.resetsIn !== null && (
-          <span className="text-[11.5px] text-text-muted tabular-nums">Resets {resetAt(window.resetsIn)}</span>
-        )}
-      </div>
-      <span className="text-[18px] leading-6 font-semibold tracking-[-0.02em] tabular-nums">{window.used}%</span>
-      <div className="h-1.5 overflow-hidden rounded-full bg-hairline">
-        <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${window.used}%`, background: fill }} />
-      </div>
-      <span className={`flex items-center gap-1.5 text-[11.5px] ${out === null ? "text-text-muted" : TEXT[tone(Math.max(window.used, 75))]}`}>
-        <TrendingUpIcon className="size-3.5 shrink-0" />
-        {out === null
-          ? "Lasts until reset"
-          : `Runs out ~${clock(out)}`}
-      </span>
-    </div>
-  );
-}
-
-/** When a window resets: the time today, else the weekday and time, else the date. */
-function resetAt(minutes: number): string {
-  const at = new Date(Date.now() + minutes * 60_000);
-  const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (minutes < 1440 && at.getDate() === new Date().getDate()) return `at ${time}`;
-  if (minutes < 7 * 1440) return `${at.toLocaleDateString([], { weekday: "short" })} ${time}`;
-  return at.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
 /* ── The last seven days ────────────────────────────────────────────── */
 
 /**
- * One bar per day, the share of the provider's longest window spent that day,
- * in the provider's colour. A single series, so the heading names it and no
- * legend is needed; each bar says its day and value on hover.
+ * One thin bar per day: the most of the provider's longest window spent that
+ * day, on a fixed 0‥100 scale so a short bar means room to spare. Each column
+ * keeps a faint track to 100%; hovering one says its day and value.
  */
-function Week({ days: points, color }: { days: UsageDayPoint[]; color: string }) {
-  const top = Math.max(...points.map((point) => point.percent), 1);
+function Week({ days: points, color, limit }: { days: UsageDayPoint[]; color: string; limit: string }) {
   const days = points.map((point, index) => ({
     value: point.percent,
     day: new Date(`${point.day}T12:00:00Z`).toLocaleDateString([], { weekday: "short", timeZone: "UTC" }),
     key: point.day,
     today: index === points.length - 1,
   }));
+  const peak = days.reduce((best, day) => (day.value > best.value ? day : best), days[0]!);
+  const of = `of the ${limit.toLowerCase()} limit`;
   return (
-    <div className="flex flex-col gap-1.5 px-0.5">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[12px] text-text-muted">Last 7 days</span>
+    <div className="flex flex-col gap-2 border-t border-hairline pt-3">
+      <div className="flex items-baseline justify-between text-[12px] text-text-muted">
+        <span>Last 7 days</span>
+        {peak.value > 0 && (
+          <span className="tabular-nums">
+            Peak <span className="font-medium text-text">{peak.value}%</span> {peak.today ? "today" : `on ${peak.day}`}
+          </span>
+        )}
       </div>
-      <div className="flex h-12 items-end gap-1 border-b border-hairline">
+      <div
+        role="img"
+        aria-label={`Daily high ${of}: ${days.map((day) => `${day.day} ${day.value}%`).join(", ")}`}
+        className="flex h-10 gap-1.5"
+      >
         {days.map((day) => (
-          <div key={day.key} className="group relative flex h-full flex-1 items-end justify-center">
-            <div
-              className="w-full rounded-t-[4px] transition-opacity group-hover:opacity-80"
-              style={{ height: day.value ? `${(day.value / top) * 100}%` : 2, background: day.value ? color : "var(--color-hairline)" }}
-            />
-            <span className="pointer-events-none absolute bottom-full z-10 mb-1 rounded-md bg-surface px-2 py-1 text-[11px] whitespace-nowrap opacity-0 shadow-float transition-opacity group-hover:opacity-100">
-              {day.day} · <span className="font-medium tabular-nums">{day.value}%</span>
+          <div key={day.key} className="group relative flex h-full flex-1 justify-center">
+            <div className="relative h-full w-full rounded-[4px] bg-card transition-colors group-hover:bg-hover">
+              {day.value > 0 && (
+                <div
+                  className="absolute inset-x-0 bottom-0 min-h-[3px] rounded-[4px] transition-[height] duration-500"
+                  style={{ height: `${day.value}%`, background: color }}
+                />
+              )}
+            </div>
+            <span className="pointer-events-none absolute bottom-full z-10 mb-1.5 rounded-md bg-surface px-2 py-1 text-[11px] whitespace-nowrap opacity-0 shadow-float transition-opacity group-hover:opacity-100">
+              {day.today ? "Today" : day.day} · <span className="font-medium tabular-nums">{day.value}%</span> {of}
             </span>
           </div>
         ))}
       </div>
-      <div className="flex gap-1">
+      <div className="flex gap-1.5">
         {days.map((day) => (
           <span key={day.key} className={`flex-1 text-center text-[11px] ${day.today ? "font-medium text-text" : "text-text-muted"}`}>
             {day.today ? "Today" : day.day}

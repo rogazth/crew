@@ -17,6 +17,7 @@ import {
 } from "../src/lib/update";
 import { release } from "./build-info";
 import { openSigned } from "./update-signature";
+import { errorText, trace } from "./trace";
 
 const REPO = "rogazth/crew";
 const RELEASES = `https://github.com/${REPO}/releases`;
@@ -195,6 +196,15 @@ function snapshot() {
 
 /** Sends the phase to every window; one that opens later asks for it. */
 function set(next: UpdatePhase): void {
+  // A step of the update, once: not each chunk of a download.
+  if (next.phase !== phase.phase) {
+    trace.info("update.phase", {
+      from: phase.phase,
+      to: next.phase,
+      version: "offer" in next ? next.offer.version : next.phase === "latest" ? next.version : undefined,
+      error: next.phase === "error" ? errorText(next.message) : undefined,
+    });
+  }
   phase = next;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNELS.state, snapshot());
 }
@@ -253,6 +263,7 @@ async function stage(manifest: Manifest, target: string): Promise<void> {
 function applyStaged(reopen: boolean): boolean {
   if (!staged || applied) return false;
   applied = true;
+  trace.info("update.apply", { reopen });
   const { script, target, app: bundled, stage: dir } = staged;
   const swap = spawn("/bin/sh", [script, String(process.pid), target, bundled, dir, reopen ? "1" : "0"], {
     detached: true,
@@ -304,6 +315,7 @@ export async function checkForUpdates(manual = false): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (manual) set({ phase: "error", message });
     else {
+      trace.warn("update.check_failed", { error: errorText(message) });
       console.error(`update check failed: ${message}`);
       set(phase);
     }

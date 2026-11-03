@@ -17,6 +17,8 @@ export const FILE_CHANNELS = {
   reveal: "files:reveal",
   /** Opens the file in the app macOS picks for it. */
   openExternal: "files:open-external",
+  /** window → main, during a dragstart: hands the file to macOS to drop in Finder, Slack, Mail. */
+  drag: "files:drag",
 } as const;
 
 /**

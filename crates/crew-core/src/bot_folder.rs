@@ -27,7 +27,7 @@ pub fn ensure(store: &Store, bot_id: &str) -> Option<PathBuf> {
     match std::fs::create_dir_all(&folder) {
         Ok(()) => Some(folder),
         Err(error) => {
-            eprintln!("[bot folder] {}: {error}", folder.display());
+            tracing::warn!(folder = %folder.display(), error = %crate::trace::error_text(&error.to_string()), "bot_folder.failed");
             None
         }
     }
@@ -98,12 +98,12 @@ fn remove_under(folder: &Path, work: &Path) {
         && folder != root
         && !folder.components().any(|part| matches!(part, std::path::Component::ParentDir));
     if !ours {
-        eprintln!("[bot folder] not removing {}: not under {}", folder.display(), root.display());
+        tracing::warn!(folder = %folder.display(), root = %root.display(), "bot_folder.refused_outside_root");
         return;
     }
     if let Err(error) = std::fs::remove_dir_all(folder) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!("[bot folder] {}: {error}", folder.display());
+            tracing::warn!(folder = %folder.display(), error = %crate::trace::error_text(&error.to_string()), "bot_folder.failed");
         }
     }
 }

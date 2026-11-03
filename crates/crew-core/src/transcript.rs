@@ -222,6 +222,23 @@ impl TranscriptHub {
     }
 
     pub fn apply(&self, session_id: &str, event: HarnessEvent) -> u64 {
+        // Whatever the provider, this is where a request for the user's word is raised and settled.
+        // Ids and the way it was settled; never what it asks or the tool and its input.
+        match &event {
+            HarnessEvent::ApprovalRequested { request_id, .. } => {
+                tracing::info!(session_id, request_id, kind = "approval", "request.raised")
+            }
+            HarnessEvent::QuestionRequested { request_id, questions } => {
+                tracing::info!(session_id, request_id, kind = "question", questions = questions.len(), "request.raised")
+            }
+            HarnessEvent::ApprovalResolved { request_id, decision } => {
+                tracing::info!(session_id, request_id, kind = "approval", decision = ?decision, "request.settled")
+            }
+            HarnessEvent::QuestionResolved { request_id, answers } => {
+                tracing::info!(session_id, request_id, kind = "question", answered = answers.is_some(), "request.settled")
+            }
+            _ => {}
+        }
         if let HarnessEvent::SessionProviderBound { provider_session_id } = &event {
             let _ = session::set_provider_session(&self.store, session_id.to_string(), provider_session_id.clone());
         }
@@ -386,7 +403,7 @@ impl TranscriptHub {
 mod tests {
     use super::*;
     use crate::store::Store;
-    use crew_protocol::BlockRole;
+    use crew_protocol::{ApprovalResolution, BlockRole};
 
     fn tmp_store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-transcript-{}", uuid::Uuid::new_v4()));
@@ -418,6 +435,39 @@ mod tests {
         assert_eq!(snap.blocks.iter().filter(|b| b.role == BlockRole::Assistant).count(), 1);
         let stored = store.with(|conn| crate::messages::all(conn, &session.id)).expect("read back");
         assert!(stored.iter().any(|block| block.text == "ok"));
+    }
+
+    /// Whatever the provider, a request settled passes through `apply`, and the trace says
+    /// which one and how: ids and the outcome, never what was asked or the answers given.
+    #[test]
+    fn a_settled_request_is_traced_by_its_ids_and_outcome_only() {
+        crate::trace::capture::install();
+        let hub = TranscriptHub::new(tmp_store());
+        let session = format!("settled-{}", uuid::Uuid::new_v4());
+        hub.apply(&session, HarnessEvent::ApprovalResolved { request_id: 7, decision: ApprovalResolution::Always });
+        hub.apply(
+            &session,
+            HarnessEvent::QuestionResolved {
+                request_id: 8,
+                answers: Some(HashMap::from([("q".into(), "SECRET-ANSWER".into())])),
+            },
+        );
+        hub.apply(&session, HarnessEvent::QuestionResolved { request_id: 9, answers: None });
+        let settled = crate::trace::capture::find("request.settled", "session_id", &session);
+        let seen: Vec<_> = settled
+            .iter()
+            .map(|line| (line.get("request_id").unwrap(), line.get("kind").unwrap(), line.get("decision"), line.get("answered")))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("7", "approval", Some("Always"), None),
+                ("8", "question", None, Some("true")),
+                ("9", "question", None, Some("false"))
+            ]
+        );
+        assert!(settled.iter().all(|line| line.level == tracing::Level::INFO));
+        assert!(settled.iter().all(|line| line.fields.values().all(|value| !value.contains("SECRET"))));
     }
 
     /// A live reading takes a number in the counter and reaches the windows,

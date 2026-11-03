@@ -273,7 +273,7 @@ checks.push([
 const state = Object.fromEntries(db.prepare("SELECT key, value FROM app_state").all().map((row) => [row.key, row.value]));
 checks.push([
   "the window's keys moved to bot:",
-  state["bot:faces"] === JSON.stringify({ s1: { seed: "s1" } }) && state["bot:avatar"] === "robot" &&
+  state["bot:faces"] === JSON.stringify({ s1: { seed: "s1" } }) && db.prepare("SELECT value FROM settings WHERE key = 'bot:avatar'").get()?.value === "robot" &&
     !("agent:faces" in state) && !("agent:avatar" in state) &&
     JSON.stringify(JSON.parse(state["sidebar:prefs"] ?? "{}").hiddenKinds) === JSON.stringify(["bot"]),
   JSON.stringify(state),

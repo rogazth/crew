@@ -54,8 +54,12 @@ export const CHANNELS = {
   closeDevtools: "browser:close-devtools",
   snapshot: "browser:snapshot",
   prepareRestore: "browser:prepare-restore",
+  /** window → main: whether the launch before this one died before it settled. */
+  safeStart: "browser:safe-start",
   /** The window's CSP keeps remote images out, so main fetches a page's icon and hands back a data: URL. */
   favicon: "browser:favicon",
+  /** window → main: how tight the machine's memory is, for how soon hidden pages go cold. */
+  memoryPressure: "browser:memory-pressure",
   /** main → window: where a download is; a page with one in flight must not be discarded meanwhile. */
   downloads: "browser:downloads",
   /** window → main: cancel, open or show one of this window's downloads. */

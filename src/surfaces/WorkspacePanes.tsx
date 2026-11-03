@@ -118,7 +118,9 @@ export function WorkspacePanes({
         // `~` is the home of the machine the chat runs on, which may not be this Mac.
         const absolute = resolvePath(path, cwd, homeFor(cwd) ?? homePath());
         const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
-        onOpenFile({ path: absolute, relative, name: relative.split('/').pop() ?? relative });
+        // An HTML file the chat names is one it built to be seen: it opens rendered.
+        if (/\.html?$/i.test(absolute)) onOpenFileInBrowser({ path: absolute, relative });
+        else onOpenFile({ path: absolute, relative, name: relative.split('/').pop() ?? relative });
       },
       openFolder: (path) => {
         if (!cwd) return;
@@ -139,7 +141,7 @@ export function WorkspacePanes({
       openLogin: onOpenLogin,
       confirm: onConfirm,
     }),
-    [cwd, onOpenFile, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onOpenLogin, onConfirm],
+    [cwd, onOpenFile, onOpenFileInBrowser, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onOpenLogin, onConfirm],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_macros)] // tests print what they measured
 use super::*;
 
 struct Fixture {
@@ -27,6 +28,7 @@ fn fast() -> ProcessConfig {
 }
 
 fn fixture(name: &str, config: ProcessConfig) -> Fixture {
+    crate::trace::capture::install();
     let dir = std::env::temp_dir().join(format!("crew-proc-{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let store = Store::open(dir.join("crew.sqlite3")).unwrap();
@@ -147,6 +149,11 @@ fn a_crashing_process_restarts_until_the_limit_and_stays_crashed() {
     assert_eq!(done.main().exit_code, Some(3));
     let logs = f.host.read_logs(&f.workspace, "flaky", None, None, Some(0), None).unwrap();
     assert_eq!(logs.text.lines().filter(|line| *line == "boom").count(), 3, "{:?}", logs.text);
+    // Giving up is a warning that names the process and how many crashes it took; each start before it is a line.
+    let crashed = crate::trace::capture::expect("process.crashed", "process_id", &process.id);
+    assert_eq!((crashed.level, crashed.get("crashes")), (tracing::Level::WARN, Some("3")));
+    assert!(crashed.fields.values().all(|v| !v.contains("boom")), "{crashed:?}");
+    assert!(crate::trace::capture::find("process.start", "process_id", &process.id).len() >= 3);
     // A start by hand is a fresh count.
     let again = f.host.start(&f.workspace, "flaky", RunRequest::default()).unwrap();
     assert_eq!(again.main().restarts, 0);
@@ -262,6 +269,25 @@ fn pause_and_resume_stop_and_continue_the_group() {
     assert!(!after.starts_with('T'), "resumed stat {after}");
     assert_eq!(stopped.main().state, ProcessState::Stopped);
     assert!(f.host.resume(&f.workspace, &process.id, None).is_err());
+}
+
+#[test]
+fn stopping_a_live_process_is_traced_once_and_says_whether_it_was_paused() {
+    let f = fixture("stop-trace", fast());
+    let running = f.add("running", "sleep 30");
+    f.host.start(&f.workspace, &running.id, RunRequest::default()).unwrap();
+    f.host.stop(&f.workspace, &running.id, None).unwrap();
+    let line = crate::trace::capture::expect("process.stop", "process_id", &running.id);
+    assert_eq!((line.level, line.get("paused")), (tracing::Level::INFO, Some("false")));
+    // Stopping what is already stopped is not another stop.
+    f.host.stop(&f.workspace, &running.id, None).unwrap();
+    assert_eq!(crate::trace::capture::find("process.stop", "process_id", &running.id).len(), 1);
+
+    let paused = f.add("paused", "sleep 30");
+    f.host.start(&f.workspace, &paused.id, RunRequest::default()).unwrap();
+    f.host.pause(&f.workspace, &paused.id, None).unwrap();
+    f.host.stop(&f.workspace, &paused.id, None).unwrap();
+    assert_eq!(crate::trace::capture::expect("process.stop", "process_id", &paused.id).get("paused"), Some("true"));
 }
 
 #[test]

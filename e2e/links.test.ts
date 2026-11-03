@@ -94,7 +94,7 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
   await toggle.click();
   await waitFor(
     async () => {
-      const raw = await crew.request<string | null>("state_get", { key: "browser:prefs" });
+      const raw = await crew.request<string | null>("settings_get", { key: "browser:prefs" });
       return raw !== null && (JSON.parse(raw) as { openLinksInCrew?: boolean }).openLinksInCrew === true;
     },
     { message: "crewd keeps the setting on" },

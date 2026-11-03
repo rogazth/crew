@@ -184,6 +184,7 @@ impl Scheduler {
         // minute at a time, without a line in the history for each try.
         if once && busy {
             let _ = routine::reschedule(&self.store, &row.routine.id, started + ONCE_RETRY_MS);
+            tracing::info!(routine_id = %row.routine.id, session_id = %row.session.id, "routine.deferred");
             self.changed();
             return;
         }
@@ -205,6 +206,14 @@ impl Scheduler {
             other => other,
         };
         self.changed();
+        // The routine and where it went; its name and prompt are the user's.
+        tracing::info!(
+            routine_id = %row.routine.id,
+            session_id = %row.session.id,
+            trigger = ?trigger,
+            result = if busy { "skipped_busy" } else if moved.is_err() { "history_unwritten" } else { "started" },
+            "routine.fired"
+        );
         // Without a written next_run_at nothing bounds a re-fire, so a history
         // we could not write is a turn we do not start.
         if moved.is_err() || busy {
@@ -280,6 +289,7 @@ impl Scheduler {
     /// one the user saved in between is the one that stands.
     fn finish(&self, routine_id: &str, run: &RoutineRun, status: RunStatus) {
         let done = RoutineRun { finished_at: Some(now_millis()), status, ..run.clone() };
+        tracing::info!(routine_id, status = ?status, duration_ms = done.finished_at.map(|at| at - run.started_at), "routine.finished");
         let _ = routine::finish_run(&self.store, routine_id, &done);
         self.changed();
     }
@@ -357,6 +367,7 @@ mod tests {
     }
 
     fn world() -> World {
+        crate::trace::capture::install();
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Fanout(host.clone())));
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -580,6 +591,10 @@ mod tests {
         let after = world.reload(&routine.id);
         assert!(after.enabled);
         assert!(after.next_run_at.is_some_and(|at| at >= before + ONCE_RETRY_MS), "{:?}", after.next_run_at);
+        // The wait is the one line it leaves, by the routine and the bot it is waiting for; it is not a `routine.fired`.
+        let deferred = crate::trace::capture::expect("routine.deferred", "routine_id", &routine.id);
+        assert_eq!((deferred.level, deferred.get("session_id")), (tracing::Level::INFO, Some(coder.id.as_str())));
+        assert!(crate::trace::capture::find("routine.fired", "routine_id", &routine.id).is_empty());
     }
 
     /// Run now ahead of its time is a run, and the time still stands.
@@ -967,6 +982,14 @@ mod tests {
         assert_eq!(run.trigger, RunTrigger::Manual);
         assert_eq!(run.status, RunStatus::Ok);
         assert!(wake_text(&world, &coder.id).contains("was run on demand"), "the manual cue is missing");
+        // The routine and where it went, at both ends; never its name or its prompt.
+        let fired = crate::trace::capture::expect("routine.fired", "routine_id", &routine.id);
+        assert_eq!((fired.get("trigger"), fired.get("result")), (Some("Manual"), Some("started")));
+        let finished = crate::trace::capture::expect("routine.finished", "routine_id", &routine.id);
+        assert_eq!(finished.get("status"), Some("Ok"));
+        for event in [fired, finished] {
+            assert!(event.fields.values().all(|v| !v.contains("Standup")), "{event:?}");
+        }
         world.scheduler.stop();
     }
 

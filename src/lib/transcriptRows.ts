@@ -6,7 +6,7 @@
  * the turn. The component below this renders rows and nothing else, so the
  * decisions live here where they can be checked.
  */
-import { type Block, type TurnUsage } from "./blocks";
+import { allFailed, type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, isSteering, letterIdOf } from "./letters";
 import { controlOf, isReportLetter, nativeReportAt, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
@@ -17,7 +17,8 @@ const DATE_BREAK_MS = 30 * 60_000;
 const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 
 export type Row =
-  | { kind: "message"; block: Block }
+  /** `answer`: in an agent's thread, what the agent said at the end of a turn; a report when another party woke it. */
+  | { kind: "message"; block: Block; answer?: "reply" | "report" }
   | { kind: "activity"; id: string; blocks: Block[] }
   /** `text` is the reply the footer closes, for its copy button; absent under a group.
    *  `folded`: the turn's work sits behind a fold that already says how long it took. */
@@ -383,10 +384,90 @@ function foldTurn(turn: Row[]): Row[] {
     id: `fold-${rowId(work[0]!)}`,
     rows: work,
     ...(durationMs !== undefined && durationMs > 0 ? { durationMs } : {}),
-    failed: blocks.some((block) => block.tool?.status === "failed"),
+    failed: allFailed(blocks),
   };
   const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
   return [...turn.slice(0, opening), fold, ...out, ...rest];
+}
+
+/**
+ * An agent's thread as one conversation: who said what is its spine, and what
+ * the agent did between two messages is one line that opens. The agent's own
+ * notes between tools are work. What waits on someone (a question, an approval)
+ * and what is still running is never folded.
+ */
+export function threadRows(rows: readonly Row[], working: boolean): Row[] {
+  const out: Row[] = [];
+  let work: Row[] = [];
+  /** Another party's letter started this turn: what ends it goes back to them. */
+  let woken = false;
+  const flush = () => {
+    if (work.length === 0) return;
+    const blocks = work.flatMap(rowBlocks);
+    const first = blocks[0]?.at;
+    const last = blocks.at(-1)?.at;
+    out.push({
+      kind: "fold",
+      id: `fold-${rowId(work[0]!)}`,
+      rows: work,
+      ...(first !== undefined && last !== undefined && last > first ? { durationMs: last - first } : {}),
+      failed: allFailed(blocks),
+    });
+    work = [];
+  };
+  rows.forEach((row, index) => {
+    switch (row.kind) {
+      case "footer":
+        return;
+      case "activity": {
+        let tools: Block[] = [];
+        const close = () => {
+          if (tools.length > 0) work.push({ kind: "activity", id: tools[0]!.id, blocks: tools });
+          tools = [];
+        };
+        for (const block of row.blocks) {
+          if (block.role !== "question" && block.role !== "approval") {
+            tools.push(block);
+            continue;
+          }
+          close();
+          flush();
+          out.push({ kind: "activity", id: block.id, blocks: [block] });
+        }
+        close();
+        return;
+      }
+      case "control":
+      case "background":
+        work.push(row);
+        return;
+      case "message": {
+        if (row.block.role !== "assistant") {
+          flush();
+          if (row.block.role === "user") woken = false;
+          out.push(row);
+          return;
+        }
+        const ends = rows[index + 1]?.kind === "footer" || (!working && index === rows.length - 1);
+        if (!ends) {
+          work.push(row);
+          return;
+        }
+        flush();
+        out.push({ ...row, answer: woken ? "report" : "reply" });
+        woken = false;
+        return;
+      }
+      default:
+        flush();
+        if (row.kind === "letter" && row.block.role === "user") woken = true;
+        out.push(row);
+    }
+  });
+  // The work going on now is what the reader is watching.
+  if (working) out.push(...work);
+  else flush();
+  return out;
 }
 
 function rowId(row: Row): string {

@@ -27,7 +27,7 @@ use serde_json::Value;
 use crate::http_local::encode_uri_component;
 use crate::store::{now_millis, read_state, write_state, Store};
 
-pub const MIGRATION_V43: &str = r#"
+pub const MIGRATION_V45: &str = r#"
 CREATE TABLE IF NOT EXISTS registry_servers (
   name        TEXT PRIMARY KEY,
   title       TEXT,

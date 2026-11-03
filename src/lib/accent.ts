@@ -1,3 +1,4 @@
+import { defineSetting } from "./settingsEngine/define";
 /**
  * The app's palette. One shape for every accent (radii, shadows, layout);
  * only the colour tokens change, keyed on `<html data-accent>` in index.css.
@@ -29,3 +30,11 @@ export function accentFromDirection(raw: string | null | undefined): AccentId | 
       return null;
   }
 }
+
+export const accentSetting = defineSetting<AccentId>({
+  key: "app:accent",
+  scope: "global",
+  fallback: DEFAULT_ACCENT,
+  parse: parseAccent,
+  format: (value) => value,
+});

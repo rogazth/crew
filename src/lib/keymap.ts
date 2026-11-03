@@ -3,8 +3,7 @@
  * them the same way: the window matches its own keydowns here, and a focused
  * page swallows its keys, so the main process matches those here too.
  *
- * The rules are Orca's. The key a chord names is the key typed, not where it
- * sits: ⌘] is whatever key types ] or }, so on a Latin American Mac it is the
+ * The key a chord names is the key typed, not where it sits: ⌘] is whatever key types ] or }, so on a Latin American Mac it is the
  * } key, and ⌘+ on the key a US board calls ] is not ⌘]. Braces are brackets,
  * as ⇧ makes them on a US board. Only when the event names no key (a dead key)
  * or ⌥ turned it into another character does the physical key decide, read

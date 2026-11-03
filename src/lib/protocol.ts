@@ -192,11 +192,7 @@ export type BotRule = {
 /**
  * Its id within the bot, as the bot names it: `r3`.
  */
-id: string, body: string, 
-/**
- * The user's message that set it, while the transcript has it.
- */
-cited?: CitedMessage, };
+id: string, body: string, };
 
 /**
  * A rule's new text.
@@ -208,6 +204,12 @@ export type BotRuleEdit = { id: string, body: string, };
  * first, and the characters they take of the most they may.
  */
 export type BotRules = { rules: Array<BotRule>, used: number, cap: number, };
+
+/**
+ * `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
+ * sheet; less than the default is taken as the default.
+ */
+export type BotRulesCap = { id: string, cap: number, };
 
 /**
  * `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
@@ -350,11 +352,6 @@ unavailable: string | null,
  * What each tool does, before anything is installed.
  */
 tools: Array<ConnectorTool>, };
-
-/**
- * The start of the user's message a rule cites, and when it was written.
- */
-export type CitedMessage = { excerpt: string, at: number, };
 
 /**
  * A session's `/` menu as it stood when it was read.
@@ -1671,6 +1668,27 @@ export type SessionsDeleted = { ids: Array<string>, };
  * How many days untouched a session outlives, for `sessions_stale` and `sessions_expire`.
  */
 export type SessionsRetention = { days: number, };
+
+/**
+ * One setting as a daemon keeps it: `settings` in crew-core says what the
+ * columns mean. A null value is the default, chosen at that revision.
+ */
+export type SettingRow = { key: string, value: string | null, scope: string, revision: number, origin: string, };
+
+/**
+ * `settings_set`: a choice made on this daemon.
+ */
+export type SettingSet = { key: string, value: string | null, scope: string, };
+
+/**
+ * `settings-changed`: rows that just changed on the daemon that sends it.
+ */
+export type SettingsChanged = { rows: Array<SettingRow>, };
+
+/**
+ * `settings_merge`: rows from the other copies. Empty still confirms this daemon.
+ */
+export type SettingsMerge = { rows: Array<SettingRow>, };
 
 /**
  * What the window opens for a sign-in. The tab catches the navigation to

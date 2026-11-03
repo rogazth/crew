@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { watch } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -83,10 +84,44 @@ process.on("SIGTERM", () => shutdown(0));
 try {
   await waitForPort(PORT);
   await run("cargo", ["build", "-p", "crewd", "-p", "crew-cli"]);
+  // The menu bar extra; without Xcode's tools the app runs without it.
+  if (process.platform === "darwin")
+    await run("swift", ["build", "--package-path", "macos/menubar"]).catch((error) => console.warn(`crew: menu bar helper: ${error.message}`));
 } catch (error) {
   console.error(error);
   shutdown(1);
 }
+
+// A crate edit rebuilds crewd and the CLI; Electron sees the new crewd and
+// restarts it. Edits during a build queue one more build. CREW_RUST_WATCH=0 opts out.
+function watchRust() {
+  let building = false;
+  let again = false;
+  let timer;
+  const build = async () => {
+    if (building) {
+      again = true;
+      return;
+    }
+    building = true;
+    do {
+      again = false;
+      console.log("crew: rust changed, rebuilding crewd");
+      await run("cargo", ["build", "-p", "crewd", "-p", "crew-cli"]).catch((error) => console.error(error.message));
+    } while (again);
+    building = false;
+  };
+  const changed = (_event, name) => {
+    if (!name || !/\.(rs|toml)$|Cargo\.lock$/.test(name)) return;
+    clearTimeout(timer);
+    timer = setTimeout(build, 300);
+  };
+  const root = git("--show-toplevel");
+  watch(path.join(root, "crates"), { recursive: true }, changed);
+  watch(root, changed);
+}
+
+if (env.CREW_RUST_WATCH !== "0") watchRust();
 
 if (env.CREW_USER_DATA) console.log(`crew: data in ${env.CREW_USER_DATA}, dev server on ${PORT}`);
 const app = spawn(electron, ["."], { stdio: "inherit", env });

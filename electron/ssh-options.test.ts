@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BASE_OPTIONS, controlPath, setControlDir } from "./ssh-options";
+import { BASE_OPTIONS, controlOption, controlPath, setControlDir } from "./ssh-options";
 
 describe("ssh options", () => {
   // Connections nobody watches: never a prompt, never this Mac's agent or X11 handed over.
@@ -20,6 +20,13 @@ describe("ssh options", () => {
     expect(controlPath({ destination: "atlas", user: "deploy" })).not.toBe(atlas);
     expect(controlPath({ destination: "atlas", port: 2222 })).not.toBe(atlas);
     rmSync(path.dirname(dir), { recursive: true, force: true });
+  });
+
+  // The data dir lives under "Application Support"; unquoted, ssh rejects the space.
+  it("quotes the socket path for a folder with a space", () => {
+    expect(controlOption("/Users/me/Library/Application Support/Crew/tmp/ssh/ab")).toBe(
+      'ControlPath="/Users/me/Library/Application Support/Crew/tmp/ssh/ab"',
+    );
   });
 
   it("goes without one when the path would be too long for a socket", () => {

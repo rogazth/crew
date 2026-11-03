@@ -20,9 +20,9 @@ async function newBot(name: string) {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   await pressChord(crew, `${MOD}+Shift+a`);
-  const sheet = crew.window.getByRole("dialog", { name: "New bot" });
+  const sheet = crew.window.getByRole("complementary", { name: "New bot" });
   await sheet.waitFor();
-  await sheet.getByPlaceholder("e.g. Research").fill(name);
+  await sheet.getByLabel("Name", { exact: true }).fill(name);
   await sheet.getByRole("button", { name: "Create bot" }).click();
   await sheet.waitFor({ state: "detached" });
   return waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.name === name), {

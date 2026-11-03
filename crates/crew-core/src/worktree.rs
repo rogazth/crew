@@ -165,6 +165,18 @@ pub fn add(path: &str, branch: &str) -> Result<Worktree, String> {
 }
 
 pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, String> {
+    let began = std::time::Instant::now();
+    let result = add_in(root, path, branch);
+    // The branch is a name the user chose for the work; the path stays out of the line.
+    let branch = branch.trim();
+    match &result {
+        Ok(_) => tracing::info!(branch, took_ms = crate::trace::ms(began.elapsed()), "worktree.created"),
+        Err(error) => tracing::warn!(op = "add", branch, error = %crate::trace::error_text(error), "worktree.failed"),
+    }
+    result
+}
+
+fn add_in(root: &Path, path: &str, branch: &str) -> Result<Worktree, String> {
     let branch = branch.trim();
     if branch.is_empty() {
         return Err("Branch name is required".into());
@@ -202,6 +214,15 @@ pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, Stri
 /// removed; a worktree with changes nobody committed, or one a tool locked,
 /// is removed only when `force` says to throw them away or break the lock.
 pub fn remove(repo: &str, path: &str, force: bool) -> Result<String, String> {
+    let result = remove_in(repo, path, force);
+    match &result {
+        Ok(_) => tracing::info!(force, "worktree.removed"),
+        Err(error) => tracing::warn!(op = "remove", force, error = %crate::trace::error_text(error), "worktree.failed"),
+    }
+    result
+}
+
+fn remove_in(repo: &str, path: &str, force: bool) -> Result<String, String> {
     let trees = run(repo, &["worktree", "list", "--porcelain"])
         .or_else(|_| run(path, &["worktree", "list", "--porcelain"]))
         .map(|out| parse(&out))
@@ -326,6 +347,35 @@ mod tests {
 
     fn at(path: &Path) -> String {
         path.to_string_lossy().into_owned()
+    }
+
+    /// A worktree made, removed or refused leaves its branch name and a line of why;
+    /// the folder it lives in is not written.
+    #[test]
+    fn worktrees_made_removed_and_refused_are_traced_by_branch_without_the_path() {
+        use crate::trace::capture;
+        capture::install();
+        let repo = repo();
+        let root = temp("crew-trees");
+        let name = format!("trace-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let tree = add_under(&root, &at(&repo), &name).expect("add");
+        let made = capture::expect("worktree.created", "branch", &name);
+        assert!(made.fields.values().all(|v| !v.contains("crew-trees")), "{made:?}");
+        // The branch is checked out in it already: a second one on the same name is refused.
+        assert!(add_under(&root, &at(&repo), &name).is_err());
+        let refused = capture::expect("worktree.failed", "branch", &name);
+        assert_eq!((refused.get("op"), refused.level), (Some("add"), tracing::Level::WARN));
+        // A name git will not take.
+        assert!(add_under(&root, &at(&repo), "bad name~").is_err());
+        capture::expect("worktree.failed", "branch", "bad name~");
+        // Removing it, and the main checkout, which cannot go.
+        remove(&at(&repo), &tree.path, false).expect("remove");
+        assert!(!capture::all("worktree.removed").is_empty());
+        let error = remove(&at(&repo), &at(&repo), false).unwrap_err();
+        let kept = capture::all("worktree.failed")
+            .into_iter()
+            .find(|e| e.get("op") == Some("remove") && e.get("error") == Some(error.as_str()));
+        assert!(kept.is_some());
     }
 
     #[test]

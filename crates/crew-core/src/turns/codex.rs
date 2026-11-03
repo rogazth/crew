@@ -31,8 +31,8 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, driven, offers_fast, path_list, typed_by_user, Harness, Launch, QuestionReply,
-    Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, offers_fast, path_list, typed_by_user, Harness, Launch, QuestionReply, Steer,
+    TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::command_sources::{codex_commands, codex_skills};
 use crate::mailbox;
@@ -451,14 +451,19 @@ impl TurnHost {
 
     /// The handshake and the thread. Returns the thread's id.
     fn codex_open(&self, session_id: &str, thread: &CodexThread) -> Result<String, String> {
-        self.codex_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT)
-            .map_err(|error| self.codex_failure(session_id, "Codex did not start", &error))?;
+        let began = std::time::Instant::now();
+        self.codex_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT).map_err(|error| {
+            crate::trace::connect_failed("codex", session_id, "initialize", &error);
+            self.codex_failure(session_id, "Codex did not start", &error)
+        })?;
         self.codex_notify(session_id, "initialized", json!({}))?;
         let (method, params) = thread_request(thread);
-        let opened = self
-            .codex_call(session_id, method, params, OPEN_TIMEOUT)
-            .map_err(|error| self.codex_failure(session_id, "Codex could not open its thread", &error))?;
+        let opened = self.codex_call(session_id, method, params, OPEN_TIMEOUT).map_err(|error| {
+            crate::trace::connect_failed("codex", session_id, "thread", &error);
+            self.codex_failure(session_id, "Codex could not open its thread", &error)
+        })?;
         let thread_id = thread_id(&opened).ok_or_else(|| "Codex opened no thread.".to_string())?;
+        crate::trace::connected("codex", session_id, thread.resume.is_some(), began);
         if let Some(Live::Codex(live)) = self.lock().get_mut(session_id) {
             live.thread_id = Some(thread_id.clone());
             live.cwd = thread.cwd.clone();
@@ -853,12 +858,7 @@ impl TurnHost {
         files: Vec<crew_protocol::AttachedFile>,
         rest: Vec<super::Extra>,
     ) -> Result<(), String> {
-        let typed = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(driven)
-            .is_some_and(|drive| typed_by_user(drive, &from));
+        let typed = typed_by_user(&from);
         // Files go in the text, as a turn's do.
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         let sent = crate::providers::with_files(self.steer_text_all(session_id, &from, text, &rest).trim(), &paths);
@@ -923,6 +923,7 @@ impl TurnHost {
 
     pub(crate) fn handle_codex_line(&self, session_id: &str, line: &str) {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
+            crate::trace::unparsed("codex", session_id, line);
             return;
         };
         let method = message.get("method").and_then(Value::as_str);

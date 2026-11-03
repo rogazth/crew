@@ -273,6 +273,19 @@ describe("keys inside a page", () => {
   });
 });
 
+describe("the sign-in's user agent", () => {
+  it("leaves the agent alone during a redirect, which would abort the app, and catches up once loaded", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const url = "https://accounts.google.com/ServiceLogin";
+    guest.emit("did-redirect-navigation", { url, isMainFrame: true, isSameDocument: false });
+    expect(guest.setUserAgent).not.toHaveBeenCalled();
+    guest.url = url;
+    guest.emit("did-stop-loading");
+    expect(guest.setUserAgent).toHaveBeenCalledWith(expect.stringContaining("Firefox"));
+  });
+});
+
 describe("popups and navigation", () => {
   const open = (guest: FakeContents, url: string, disposition = "foreground-tab", features = "") =>
     guest.openHandler?.({ url, disposition, features, frameName: "", referrer: {} }) as { action: string };

@@ -61,8 +61,8 @@ export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block
         block.fromBot ? (
           <div key={block.id} className="flex max-w-[78%] items-center gap-1.5 text-[13px] leading-[18px]">
             <Face party={{ id: block.fromBot.id, name: block.fromBot.name, ...(block.fromBot.kind ? { kind: block.fromBot.kind } : {}) }} sessions={sessions} className="size-4" />
-            <span className="shrink-0 font-medium">{block.fromBot.name}</span>
-            <span className="min-w-0 truncate text-text-muted">{block.text.split("\n").find((line) => line.trim() !== "") ?? ""}</span>
+            <span className="min-w-0 truncate font-medium">{block.fromBot.name}</span>
+            <span className="shrink-0 text-text-muted">wrote</span>
           </div>
         ) : (
           // Stretched to the row, as a sent bubble's is: shrunk to its content,

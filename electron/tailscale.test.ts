@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { devicesFrom, tailnetFrom } from "./tailscale";
+import { describe, expect, it, vi } from "vitest";
+import { lines, named } from "./trace-recorder";
+
+vi.mock("./trace", async () => (await import("./trace-recorder")).mockedTrace());
+import { cliEnv, devicesFrom, tailnetFrom, tailnetFromOutput } from "./tailscale";
 
 const status = {
   Self: {
@@ -88,5 +91,49 @@ describe("tailnetFrom", () => {
   it("says so when Tailscale is stopped or signed out", () => {
     expect(tailnetFrom({ BackendState: "Stopped" }, new Set())).toMatchObject({ state: "stopped", devices: [] });
     expect(tailnetFrom({ BackendState: "NeedsLogin" }, new Set()).message).toBe("Tailscale is signed out");
+  });
+});
+
+describe("tailnetFromOutput", () => {
+  it("reads the status the CLI printed", () => {
+    expect(tailnetFromOutput(JSON.stringify({ BackendState: "Stopped" }), new Set()).state).toBe("stopped");
+  });
+
+  it("shows what Tailscale said when it did not print JSON", () => {
+    const stdout = "The Tailscale GUI failed to start: The operation couldn't be completed.\n\n";
+    expect(tailnetFromOutput(stdout, new Set())).toEqual({
+      state: "error",
+      account: null,
+      message: "The Tailscale GUI failed to start: The operation couldn't be completed.",
+      devices: [],
+    });
+  });
+
+  it("says so when it printed nothing", () => {
+    expect(tailnetFromOutput("", new Set()).message).toBe("Tailscale said nothing");
+  });
+});
+
+describe("cliEnv", () => {
+  it("gives an app opened from Finder a TERM and keeps the rest", () => {
+    expect(cliEnv({ HOME: "/Users/me" })).toEqual({ HOME: "/Users/me", TERM: "dumb" });
+  });
+
+  it("keeps a TERM it already has", () => {
+    expect(cliEnv({ TERM: "xterm" }).TERM).toBe("xterm");
+  });
+});
+
+describe("tailscale's trace", () => {
+  it("says what the CLI could not tell, in a line, and a device with no address once while the count stays", () => {
+    lines.length = 0;
+    tailnetFromOutput("failed to connect to local tailscaled\nsecond line", new Set());
+    expect(named("tailscale.status_failed")[0]?.fields.error).toBe("failed to connect to local tailscaled");
+    const noAddress = { ...status, Peer: { ...status.Peer, b: { HostName: "ghost", OS: "linux", Online: true, TailscaleIPs: ["fd7a::9"] } } };
+    devicesFrom(noAddress, new Set());
+    devicesFrom(noAddress, new Set());
+    expect(named("tailscale.no_address")).toHaveLength(1);
+    expect(named("tailscale.no_address")[0]?.fields).toEqual({ devices: 1 });
+    expect(JSON.stringify(lines)).not.toContain("ghost");
   });
 });

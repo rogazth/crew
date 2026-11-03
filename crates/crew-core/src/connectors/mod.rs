@@ -31,7 +31,7 @@ use serde_json::Value;
 use crate::session::Session;
 use crate::store::{now_millis, Store};
 
-pub const MIGRATION_V44: &str = r#"
+pub const MIGRATION_V46: &str = r#"
 CREATE TABLE IF NOT EXISTS connectors (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,

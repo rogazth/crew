@@ -1,10 +1,10 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
-import { LANGS } from "../lib/highlighting";
+import { LANGS, TOKENIZE_MAX_LINE_LENGTH } from "../lib/highlighting";
 
 type Provider = ComponentType<{
   children: ReactNode;
   poolOptions: { workerFactory: () => Worker; poolSize: number };
-  highlighterOptions: { langs: typeof LANGS };
+  highlighterOptions: { langs: typeof LANGS; useTokenTransformer: boolean; tokenizeMaxLineLength: number };
 }>;
 
 /**
@@ -48,7 +48,9 @@ export function DiffsPool({ children }: { children: ReactNode }) {
   return (
     <pool.Provider
       poolOptions={{ workerFactory: pool.worker, poolSize: 4 }}
-      highlighterOptions={{ langs: LANGS }}
+      // The editor's own token markup: a big file it handed the pool to
+      // highlight (see the @pierre/diffs patch) paints from this result.
+      highlighterOptions={{ langs: LANGS, useTokenTransformer: true, tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH }}
     >
       {children}
     </pool.Provider>

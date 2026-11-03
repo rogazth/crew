@@ -13,13 +13,13 @@ let workspace: Workspace;
 
 before(async () => {
   crew = await launchCrew();
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   const repo = await crew.makeRepo("files", { ".gitignore": "reference/\n", "README.md": "# files\n" });
   // More than the index takes of a folder git ignores.
-  for (const name of ["t3code", "zeron"]) {
+  for (const name of ["acme", "mesa"]) {
     const dir = path.join(repo, "reference", name);
     await mkdir(dir, { recursive: true });
     await Promise.all(Array.from({ length: 700 }, (_, i) => writeFile(path.join(dir, `f${i}.ts`), "")));
@@ -56,17 +56,18 @@ test("`@` offers a folder git ignores, and the message sends it", async () => {
   const session = await newSession(crew, workspace.id);
   const field = composerOf(crew, session);
   await field.fill("look at @refer");
-  const menu = crew.window.getByRole("listbox", { name: "Files" });
+  const menu = crew.window.getByRole("listbox", { name: "Mentions" });
   const folder = menu.getByRole("option").filter({ hasText: "reference/" }).first();
   await folder.waitFor();
   // Tab goes into the folder: the mention stays `@reference/`, with no space after it.
   await field.press("Tab");
   assert.equal(await field.textContent(), "look at @reference/");
   // Into the folder: what it holds, read from disk.
-  await menu.getByRole("option").filter({ hasText: "t3code/" }).first().waitFor();
+  const inside = crew.window.getByRole("listbox", { name: "Files" });
+  await inside.getByRole("option").filter({ hasText: "acme/" }).first().waitFor();
   await field.press("End");
   await field.pressSequentially(" please");
-  await waitFor(async () => (await menu.count()) === 0, { message: "the menu closes past the mention" });
+  await waitFor(async () => (await inside.count()) === 0, { message: "the menu closes past the mention" });
   await sendInChat(crew, "look at @reference/ please");
 
   const cwd = workspace.path;
@@ -80,12 +81,26 @@ test("a folder mentioned in a sent message opens in the explorer", async () => {
   const session = await newSession(crew, workspace.id);
   const field = composerOf(crew, session);
   await field.fill("look at @refer");
-  await crew.window.getByRole("listbox", { name: "Files" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
+  await crew.window.getByRole("listbox", { name: "Mentions" }).getByRole("option").filter({ hasText: "reference/" }).first().click();
   await field.pressSequentially(" now");
   await sendInChat(crew, "look at @reference/ now");
 
   await crew.window.locator('[data-file-ref="reference/"]').filter({ visible: true }).last().click();
   const explorer = crew.window.getByRole("complementary", { name: "Explorer" });
-  await explorer.getByText("t3code", { exact: true }).waitFor();
-  await explorer.getByText("zeron", { exact: true }).waitFor();
+  await explorer.getByText("acme", { exact: true }).waitFor();
+  await explorer.getByText("mesa", { exact: true }).waitFor();
+});
+
+test("an HTML file the reply names opens rendered in a page", async () => {
+  await writeFile(path.join(workspace.path, "page.html"), "<!doctype html><title>Page</title><h1>Hello</h1>");
+  await newSession(crew, workspace.id);
+  await sendInChat(crew, "built `page.html`");
+  const reply = crew.window.locator('[data-message="assistant"]').filter({ hasText: "Reply 1:" });
+  await reply.locator("[data-file-ref]").filter({ hasText: "page.html" }).click();
+
+  const served = () =>
+    crew.app.evaluate(({ webContents }) =>
+      webContents.getAllWebContents().some((wc) => wc.getURL().startsWith("crew-file://") && wc.getURL().endsWith("/page.html")),
+    );
+  await waitFor(served, { message: "the file is served in a page, not opened in the editor" });
 });

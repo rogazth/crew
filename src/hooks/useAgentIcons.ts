@@ -6,7 +6,7 @@ import type { Session } from "../lib/types";
 import { useBotAvatar } from "./useBotAvatar";
 import { useBotFaces } from "./useBotFaces";
 
-/** What a `#name` chip wears: a bot's face, a session's provider logo (a mask, for a one-colour one). */
+/** What an `@name` chip wears: a bot's face, a session's provider logo (a mask, for a one-colour one). */
 export type AgentIcon = { src: string; mask: boolean };
 
 /**

@@ -779,9 +779,12 @@ impl ProcessHost {
                 run.pid = self.inner.pty.pid(&id);
                 run.started_at = Some(now_millis());
                 run.started = Some(Instant::now());
+                // The id and the pid; the command line is the user's, and stays out.
+                tracing::info!(process_id = %key.0, pid = run.pid, generation = run.generation, "process.start");
                 Ok(())
             }
             Err(error) => {
+                tracing::warn!(process_id = %key.0, error = %crate::trace::error_text(&error), "process.start_failed");
                 log.note(&error);
                 run.state = ProcessState::Exited;
                 run.pid = None;
@@ -817,6 +820,13 @@ impl ProcessHost {
         run.exit_code = code;
         run.url = None;
         let log = self.log(key).ok();
+        tracing::info!(
+            process_id = %key.0,
+            code,
+            uptime_ms = crate::trace::ms(uptime),
+            stopping = run.stopping,
+            "process.exit"
+        );
         if let Some(log) = &log {
             let how = code.map_or("killed by a signal".to_string(), |code| format!("exited with code {code}"));
             log.note(&how);
@@ -844,6 +854,7 @@ impl ProcessHost {
                     });
                 }
                 None => {
+                    tracing::warn!(process_id = %key.0, crashes = self.inner.config.crash_limit, "process.crashed");
                     run.state = ProcessState::Crashed;
                     if let Some(log) = &log {
                         let limit = self.inner.config.crash_limit;
@@ -884,7 +895,7 @@ impl ProcessHost {
         };
         drop(runs);
         if let Err(error) = result {
-            eprintln!("[process] {}: restart failed: {error}", key.0);
+            tracing::warn!(process = %key.0, error = %crate::trace::error_text(&error.to_string()), "process.restart_failed");
         }
         self.inner.moved.notify_all();
         self.emit(&key.0);
@@ -916,6 +927,7 @@ impl ProcessHost {
             return;
         }
         let paused = run.state == ProcessState::Paused;
+        tracing::info!(process_id = %key.0, paused, "process.stop");
         run.stopping = true;
         let generation = run.generation;
         drop(runs);
@@ -1046,6 +1058,7 @@ impl ProcessHost {
     /// fifty. The PTY host kills what is left after that.
     pub fn shutdown(&self) {
         self.inner.closing.store(true, Ordering::Release);
+        tracing::info!(running = self.runs().values().filter(|run| live(run.state)).count(), "process.shutdown");
         let running: Vec<(Key, u64)> = self
             .runs()
             .iter_mut()

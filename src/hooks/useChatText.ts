@@ -1,8 +1,7 @@
 import { useSyncExternalStore } from "react";
-import * as api from "../lib/api";
-import { clampChatText, DEFAULT_CHAT_TEXT, parseChatText } from "../lib/chatText";
+import { chatTextSetting, clampChatText, DEFAULT_CHAT_TEXT, parseChatText } from "../lib/chatText";
+import { peekSetting, readSetting, saveSetting, watchSetting } from "../lib/settingsEngine/store";
 
-const KEY = "app:chat-text";
 /** This window's copy of the pick, so the first paint is already in the right size. */
 const MIRROR = "crew-chat-text";
 
@@ -29,21 +28,16 @@ function set(next: number) {
   for (const listener of listeners) listener();
 }
 
-/** Applies the size to <html> before the first render, then reconciles with the stored pick. */
+/** Applies the size to <html> before the first render, then follows the stored pick, wherever it is made. */
 export function bootChatText() {
   set(parseChatText(read()));
-  api
-    .stateGet(KEY)
-    .then((stored) => set(parseChatText(stored)))
-    .catch(() => {
-      // The store is not up yet: the mirror stands.
-    });
+  watchSetting(chatTextSetting, () => set(peekSetting(chatTextSetting)));
+  // The store not up yet leaves the mirror standing.
+  readSetting(chatTextSetting).then(set, () => {});
 }
 
 export function setChatText(next: number) {
-  const size = clampChatText(next);
-  set(size);
-  void api.stateSet(KEY, String(size)).catch(() => {});
+  saveSetting(chatTextSetting, clampChatText(next));
 }
 
 const subscribe = (listener: () => void) => {

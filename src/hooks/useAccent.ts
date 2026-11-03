@@ -1,8 +1,7 @@
 import { useSyncExternalStore } from "react";
-import * as api from "../lib/api";
-import { accentFromDirection, DEFAULT_ACCENT, parseAccent, type AccentId } from "../lib/accent";
+import { accentFromDirection, accentSetting, DEFAULT_ACCENT, parseAccent, type AccentId } from "../lib/accent";
+import { hasSetting, peekSetting, readSetting, saveSetting, setSetting, watchSetting } from "../lib/settingsEngine/store";
 
-const KEY = "app:accent";
 /** This window's copy of the pick, so the first paint is in the right palette before the store answers. */
 const MIRROR = "crew-accent";
 /** The redesign's dev bar kept its pick here; read once, then gone. */
@@ -49,17 +48,15 @@ function set(next: AccentId) {
  */
 export function bootAccent() {
   set(parseAccent(read(MIRROR)));
+  watchSetting(accentSetting, () => set(peekSetting(accentSetting)));
   void reconcile();
 }
 
 async function reconcile() {
   try {
-    const stored = await api.stateGet(KEY);
     const legacy = accentFromDirection(read(LEGACY.direction));
-    if (stored === null && legacy) {
-      await api.stateSet(KEY, legacy);
-      set(legacy);
-    } else set(parseAccent(stored));
+    if (legacy && !(await hasSetting(accentSetting))) await setSetting(accentSetting, legacy);
+    else set(await readSetting(accentSetting));
     for (const key of Object.values(LEGACY)) write(key, null);
   } catch {
     // The store is not up yet: the mirror stands, and the old keys wait for the next launch.
@@ -67,8 +64,7 @@ async function reconcile() {
 }
 
 export function setAccent(next: AccentId) {
-  set(next);
-  void api.stateSet(KEY, next).catch(() => {});
+  saveSetting(accentSetting, next);
 }
 
 const subscribe = (listener: () => void) => {

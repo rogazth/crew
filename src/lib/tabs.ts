@@ -226,6 +226,15 @@ export function activateTab(state: TabState, index: number): TabState {
   return tab && tab.id !== state.activeId ? { ...state, activeId: tab.id } : state;
 }
 
+/** A strip whose page on screen may be what took the app down: the tab used last that is no page takes over. */
+export function offPages(state: TabState): TabState {
+  const isPage = (id: string | null) => state.tabs.some((tab) => tab.id === id && tab.kind === "browser");
+  if (!isPage(state.activeId)) return state;
+  const others = state.tabs.flatMap((tab) => (tab.kind === "browser" ? [] : [tab.id]));
+  const next = (state.recent ?? []).find((id) => others.includes(id)) ?? others[0] ?? null;
+  return { ...state, activeId: next };
+}
+
 export function selectTab(state: TabState, id: string | null): TabState {
   return state.activeId === id ? state : { ...state, activeId: id };
 }

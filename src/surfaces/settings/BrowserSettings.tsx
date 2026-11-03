@@ -2,7 +2,7 @@ import { Button, Select, Toggle, type Option } from "../../chrome/kit";
 import { SettingsRow, SettingsSection } from "../../chrome/SettingsRow";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { changeSitePermissions, useSitePermissions } from "../../hooks/useSitePermissions";
-import { KEEP_CHOICES, SEARCH_ENGINES } from "../../lib/browserPrefs";
+import { SEARCH_ENGINES } from "../../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../../lib/browser/permissions";
 import { BROWSER_CLICK } from "../../lib/external";
 
@@ -32,18 +32,6 @@ export function BrowserSettings() {
             value={prefs.searchTemplate}
             onChange={(searchTemplate) => update({ ...prefs, searchTemplate })}
             options={SEARCH_ENGINES.map((engine): Option<string> => ({ value: engine.template, label: engine.label }))}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Background pages"
-          description="Hidden tabs kept loaded. Others reload when shown."
-        >
-          <Select
-            label="Background pages"
-            className="w-40"
-            value={String(prefs.keep)}
-            onChange={(value) => update({ ...prefs, keep: Number(value) })}
-            options={KEEP_CHOICES.map((keep) => ({ value: String(keep), label: String(keep) }))}
           />
         </SettingsRow>
       </SettingsSection>

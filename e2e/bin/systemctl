@@ -1,0 +1,68 @@
+#!/bin/sh
+# Stands in for `systemctl --user` on the machine the e2e sshd plays (a Mac has no systemd). It keeps
+# the one thing Crew asks of it: start, stop and restart the unit Crew wrote, which runs the crewd
+# Crew uploaded, and say whether it runs. State is under $HOME/.fake-systemd, and $HOME is the machine's
+# (the sshd sets it), never the account's. The daemon ends with the spec (--exit-with-pid).
+set -u
+[ -n "${CREW_E2E_OWNER_PID:-}" ] || { echo "systemctl: not in an e2e machine" >&2; exit 1; }
+state="$HOME/.fake-systemd"
+mkdir -p "$state"
+[ "${1:-}" = "--user" ] && shift
+verb="${1:-}"
+[ $# -gt 0 ] && shift
+unit=""
+quiet=""
+for arg in "$@"; do
+  case "$arg" in
+    --quiet) quiet=1 ;;
+    -*) ;;
+    *) unit="$arg" ;;
+  esac
+done
+unit="${unit%.service}"
+pidfile="$state/$unit.pid"
+
+running() {
+  [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null
+}
+
+stop() {
+  if running; then
+    pid="$(cat "$pidfile")"
+    kill "$pid" 2>/dev/null
+    n=0
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do
+      sleep 0.1
+      n=$((n + 1))
+    done
+    kill -9 "$pid" 2>/dev/null
+  fi
+  rm -f "$pidfile"
+}
+
+start() {
+  running && return 0
+  file="$HOME/.config/systemd/user/$unit.service"
+  [ -f "$file" ] || { echo "Unit $unit.service not found." >&2; return 5; }
+  exec_line="$(sed -n 's/^ExecStart=//p' "$file" | head -n 1 | sed "s|%h|$HOME|g")"
+  # Detached from the ssh session, which would otherwise wait on its output.
+  nohup $exec_line --exit-with-pid "$CREW_E2E_OWNER_PID" >>"$state/$unit.log" 2>&1 </dev/null &
+  echo $! >"$pidfile"
+}
+
+case "$verb" in
+  daemon-reload) ;;
+  enable | start) start || exit $? ;;
+  restart) stop; start || exit $? ;;
+  stop) stop ;;
+  disable) stop ;;
+  is-active)
+    if running; then
+      [ -n "$quiet" ] || echo active
+    else
+      [ -n "$quiet" ] || echo inactive
+      exit 3
+    fi
+    ;;
+  *) echo "systemctl: $verb is not part of the e2e stand-in" >&2; exit 1 ;;
+esac

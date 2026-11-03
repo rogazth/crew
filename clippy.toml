@@ -1,0 +1,9 @@
+# Not eprintln!/eprint!: a stderr closed under the daemon makes them panic, and
+# release builds abort on panic. Write a `tracing` event (see docs/ARCHITECTURE.md,
+# "Tracing"), or `let _ = writeln!(io::stderr(), ...)` where a line must reach stderr
+# whatever the subscriber is. The CLI's own messages to its user, and the daemon's
+# before its subscriber is up, `#[allow(clippy::disallowed_macros)]` with a reason.
+disallowed-macros = [
+  { path = "std::eprintln", reason = "use a tracing event; a closed stderr makes eprintln! panic" },
+  { path = "std::eprint", reason = "use a tracing event; a closed stderr makes eprint! panic" },
+]

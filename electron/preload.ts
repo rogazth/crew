@@ -19,6 +19,7 @@ import { LOGIN_ITEM_CHANNELS } from "../src/lib/loginItem";
 import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
 import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
+import { TRACE_CHANNELS, type TraceRecord } from "../src/lib/trace";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, value: T) => cb(value);
@@ -50,6 +51,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     url: (root: string, path: string, envId?: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path, envId),
     reveal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.reveal, path),
     openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
+    drag: (path: string) => ipcRenderer.send(FILE_CHANNELS.drag, path),
   },
   remotes: {
     tailnet: () => ipcRenderer.invoke("remotes:tailnet"),
@@ -78,6 +80,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     status: () => ipcRenderer.invoke(CLI_CHANNELS.status),
     install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
     uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
+  },
+  // Over IPC and not the WebSocket: the socket may be what is failing.
+  trace: {
+    write: (records: TraceRecord[]) => ipcRenderer.send(TRACE_CHANNELS.window, records),
   },
   loginItem: {
     get: () => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.get),
@@ -127,6 +133,8 @@ contextBridge.exposeInMainWorld("crewHost", {
     prepareRestore: (token: string, entriesJson: string, index: number, machine: string | null) =>
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index, machine),
     favicon: (url: string, incognito = false) => ipcRenderer.invoke(CHANNELS.favicon, url, incognito),
+    memoryPressure: () => ipcRenderer.invoke(CHANNELS.memoryPressure),
+    safeStart: () => ipcRenderer.invoke(CHANNELS.safeStart),
     importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
     setMachines: (machines: unknown) => ipcRenderer.invoke(CHANNELS.machines, machines),
     reportGuest: (tab: string, webContentsId: number) => ipcRenderer.send(CHANNELS.pageGuest, tab, webContentsId),

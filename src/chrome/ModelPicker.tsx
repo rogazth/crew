@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
@@ -19,12 +19,21 @@ import {
 /** Lets the composer open a chip's menu, as the `/` menu's actions do. */
 export type Opener = { open: () => void };
 
+/** A whole row as the trigger, in a card of rows: its icon, its label, and the value with a chevron at the right end. */
+export const ROW_TRIGGER =
+  "group flex min-h-12 w-full items-center gap-3 py-2.5 text-left text-[13px] outline-none focus-visible:[&_[data-row-value]]:text-text data-popup-open:[&_[data-row-value]]:text-text";
+
+/** What a row trigger shows: the row's own icon and label; the picker fills in the value. */
+export type RowLabel = { icon: ReactNode; label: string };
+
 type Props = {
   ref?: Ref<Opener>;
   provider: string;
   model: string;
   /** "field" is the sheet's full-width control; "chip" is the composer's compact trigger. */
   trigger?: "field" | "chip";
+  /** The whole row is the trigger instead, labelled as given (ROW_TRIGGER). */
+  row?: RowLabel;
   disabled?: boolean;
   /** A running session keeps its CLI: only its own provider's models are offered. */
   lockProvider?: boolean;
@@ -34,7 +43,7 @@ type Props = {
 type KeyDown = KeyboardEvent<HTMLDivElement> & { preventBaseUIHandler?: () => void };
 
 /** Providers beside their models: hover a provider, click a model. A query searches every provider at once. */
-export function ModelPicker({ ref, provider, model, trigger = "field", disabled = false, lockProvider = false, onChange }: Props) {
+export function ModelPicker({ ref, provider, model, trigger = "field", row, disabled = false, lockProvider = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const [query, setQuery] = useState("");
@@ -44,6 +53,8 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const chip = trigger === "chip";
+  // A row's picker sits in a narrow pane: the providers go in a strip over the models, not a column beside them.
+  const compact = row !== undefined;
   const installed = useInstalledProviders(open);
   useListedModels(provider);
   // The session's own provider stays reachable even after its CLI is gone.
@@ -85,6 +96,11 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
 
   function onKeyDown(event: KeyDown) {
     if (pickerKeyDown(event, "P", () => setOpen(false))) return;
+    // Typing anywhere in it searches: focus on a provider or a model hands the keys to the search, which takes this one too.
+    if (event.target !== search.current && typed(event)) {
+      search.current?.focus();
+      return;
+    }
     if (event.key === "Escape" && query) {
       event.preventDefault();
       event.stopPropagation();
@@ -120,7 +136,28 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
 
   return (
     <Popover.Root open={open} onOpenChange={openChange} modal={false}>
-      {chip ? (
+      {row ? (
+        <Popover.Trigger
+          disabled={disabled}
+          className={ROW_TRIGGER}
+          // Typing on the row opens it searching for what was typed.
+          onKeyDown={(event) => {
+            if (open || !typed(event) || event.key.length !== 1) return;
+            event.preventDefault();
+            openChange(true);
+            setQuery(event.key);
+            setCursor(0);
+          }}
+        >
+          <span className="grid size-5 shrink-0 place-items-center text-icon">{row.icon}</span>
+          <span className="min-w-0 flex-1 font-medium">{row.label}</span>
+          <span data-row-value className="flex min-w-0 items-center gap-1.5 text-text-muted transition-colors group-hover:text-text">
+            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
+            <span className="truncate">{modelLabel(provider, model)}</span>
+            <ChevronDownIcon className="size-3.5 shrink-0 text-icon" />
+          </span>
+        </Popover.Trigger>
+      ) : chip ? (
         <Popover.Trigger
           disabled={disabled}
           title={`${providerOf(provider)?.label ?? provider} ${modelLabel(provider, model)}`}
@@ -140,18 +177,42 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
       )}
 
       <Popover.Portal>
-        <Popover.Positioner side={chip ? "top" : "bottom"} align="start" sideOffset={4} className="z-50">
+        <Popover.Positioner side={chip && !row ? "top" : "bottom"} align={row ? "end" : "start"} sideOffset={4} className="z-50">
           <Popover.Popup
             initialFocus={search}
             onKeyDown={onKeyDown}
-            className="flex h-[380px] w-[420px] origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
+            className={`flex ${compact ? "h-[320px] w-[288px]" : "h-[380px] w-[420px]"} origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0`}
           >
             {open && tabs.map((p) => <WarmModels key={p.id} provider={p.id} />)}
+            {/* Compact: the providers' faces, the search, the models; nothing else. Picking a provider leaves a search. */}
+            {compact && (
+              <div role="tablist" aria-label="Provider" className="flex shrink-0 items-center gap-0.5 border-b border-hairline p-1.5">
+                {tabs.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={p.id === tab && !searching}
+                    aria-label={p.label}
+                    title={p.label}
+                    onClick={() => {
+                      setQuery("");
+                      showTab(p.id);
+                    }}
+                    className={`grid size-8 place-items-center rounded-lg transition-colors ${p.id === tab && !searching ? "bg-selected" : "hover:bg-hover"}`}
+                  >
+                    <ProviderIcon provider={p.id} className="size-4" />
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
               <SearchIcon className="size-3.5 shrink-0 text-icon" />
               <input
                 ref={search}
                 value={query}
+                // Opened by a key typed on the row: the caret goes after it, not before.
+                onFocus={(event) => event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length)}
                 placeholder="Search models"
                 aria-label="Search models"
                 spellCheck={false}
@@ -203,6 +264,23 @@ export function ModelPicker({ ref, provider, model, trigger = "field", disabled 
                     />
                   ))
                 )}
+              </div>
+            ) : compact ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div ref={list} role="tabpanel" className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
+                  {rows.map((row, index) => (
+                    <ModelRow
+                      key={row.model.id}
+                      row={row}
+                      index={index}
+                      active={marked && index === active}
+                      current={isCurrent(provider, model, row)}
+                      showProvider={false}
+                      onHover={() => setCursor(index)}
+                      onPick={() => pick(row)}
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="flex min-h-0 flex-1">
@@ -286,13 +364,15 @@ function ModelRow({
     >
       {showProvider && <ProviderIcon provider={row.provider} className="size-4 shrink-0" />}
       <span className={`min-w-0 flex-1 truncate ${current ? "font-medium" : ""}`}>{row.model.label}</span>
-      {showProvider && <span className="shrink-0 text-[12px] text-text-muted">{providerOf(row.provider)?.label}</span>}
-      {row.model.note && (
-        <span className="shrink-0 rounded-full px-1.5 py-px text-[10px] text-text-muted ring-1 ring-hairline">{row.model.note}</span>
-      )}
       {current && <CheckIcon className="size-4 shrink-0 text-icon" />}
     </button>
   );
+}
+
+/** A key that writes a character, or takes one away: what a search field would take. A space stays a button's press. */
+function typed(event: KeyboardEvent): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.key === " ") return false;
+  return event.key.length === 1 || event.key === "Backspace";
 }
 
 /** Asks a provider for the models its CLI lists, so a search can see them before that provider is hovered. */

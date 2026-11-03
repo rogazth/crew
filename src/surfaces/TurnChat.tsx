@@ -5,7 +5,7 @@ import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
 import { useCommands as useShortcuts } from "../hooks/useCommand";
 import { useCommands } from "../hooks/useCommands";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
+import { showLetter, useAgentLetters, useChatLetters, usePending } from "../hooks/useLetters";
 import { useMarkSeen } from "../hooks/useMarkSeen";
 import { useThread } from "../hooks/useThread";
 import { useUploads } from "../hooks/useUploads";
@@ -17,11 +17,11 @@ import { focusEnv } from "../lib/client/registry";
 import { LOCAL } from "../lib/client/route";
 import { extensionFor, pathSource, upload } from "../lib/upload";
 import { markedCalls, turnTray } from "../lib/background";
-import { commandEntryId, conversationsOf, type PanelEntry } from "../lib/backgroundPanel";
+import { commandEntryId, conversationsOf, isAgentEntry, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
-import { queuedLetters, sessionParty } from "../lib/letters";
+import { queuedLetters, sessionParty, withLetters } from "../lib/letters";
 import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPrompt, takeCarried } from "../lib/firstPrompt";
-import { agentNote, mentionedAgents } from "../lib/agentMentions";
+import { agentNote, mentionedAgents, mentionedTrees, treeMentions } from "../lib/agentMentions";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
 import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
@@ -32,9 +32,14 @@ import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
 import type { PanelScope } from "./chat/Panel";
 import type { QueueScope } from "./chat/Queue";
+import { AgentList } from "./chat/AgentList";
+import type { AgentNoticeItem } from "./chat/ComposerParts";
+import type { AgentsLine } from "./chat/Composer";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
+import { SidePanel } from "./chat/SidePanel";
 import { AgentView, type Crumb } from "./chat/AgentView";
 import { Thread } from "./chat/Thread";
+import { useRepoTrees } from "./chat/where";
 import type { PromptHandle } from "./chat/PromptEditor";
 
 type Props = {
@@ -84,17 +89,25 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   // What waits in its box: others' letters and the user's steers under the
   // turn that is running, the user's messages for the next turn above the composer.
   const pending = usePending(session.id, true);
-  const blocks = useMemo(() => [...held, ...queuedLetters(transcriptPending(pending), held)], [held, pending]);
+  // An agent's thread also has what was said to it that its transcript has no place for.
+  const told = useAgentLetters(embedded ? session.id : null, trail?.at(-1)?.id);
+  const blocks = useMemo(
+    () => [...(embedded ? withLetters(held, told, session.id) : held), ...queuedLetters(transcriptPending(pending), held)],
+    [embedded, held, pending, session.id, told],
+  );
   // A session with history draws nothing until it is read: drawn early, its empty chat (the intro, the
   // composer centred) would show for a beat and then jump away as the transcript lands.
   const settling = !ready && held.length === 0 && (!!session.providerSessionId || (session.cursor ?? 0) > 0);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
-  const whileWorking = whileWorkingOf(session.kind, session.provider);
+  const whileWorking = whileWorkingOf(session.provider);
   const panel = useBackgroundPanel(session, sessions, processes);
   const menu = useCommands(session.id);
   const commands = useMemo(() => turnTray(panel.board), [panel.board]);
   // One thing over the transcript at a time: a pair's thread, or an entry of the background panel.
   const [output, setOutput] = useState<{ sessionId: string; id: string; focus?: string } | null>(null);
+  // Everyone this chat has worked with, in the right panel, under whichever agent is open there.
+  const [listOpen, setListOpen] = useState(false);
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
   const shown = output?.sessionId === session.id ? panel.all.find((entry) => entry.id === output.id) : undefined;
   const { closeThread, openThread: openLetters } = letters;
   const openEntry = useCallback(
@@ -107,6 +120,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         return;
       }
       closeThread();
+      setListOpen(false);
       setOutput({ sessionId: session.id, id: entry.id, ...(focus ? { focus } : {}) });
     },
     [closeThread, openProcessRun, processes, session.id],
@@ -115,6 +129,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const openThread = useCallback(
     (ref: ThreadRef) => {
       setOutput(null);
+      setListOpen(false);
       openLetters(ref);
     },
     [openLetters],
@@ -152,7 +167,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     () => sessions.filter((row) => row.workspaceId === session.workspaceId && row.id !== session.id),
     [sessions, session.workspaceId, session.id],
   );
-  const chatActions = useMemo(() => ({ ...actions, openAgent, agents }), [actions, openAgent, agents]);
+  const trees = useRepoTrees(cwd);
+  const worktrees = useMemo(() => treeMentions(trees), [trees]);
+  const chatActions = useMemo(() => ({ ...actions, openAgent, agents, worktrees }), [actions, openAgent, agents, worktrees]);
   const openOutput = useCallback(
     (commandId: string) => {
       closeThread();
@@ -160,7 +177,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     },
     [closeThread, session.id],
   );
-  const letterScope = useMemo<LetterScope>(() => ({ ...letters.scope, openThread }), [letters.scope, openThread]);
+  const openLetter = !embedded && output?.sessionId === session.id ? output.focus : undefined;
+  const letterScope = useMemo<LetterScope>(() => ({ ...letters.scope, openThread, inThread: embedded, openLetter }), [embedded, letters.scope, openLetter, openThread]);
   const backgroundScope = useMemo<BackgroundScope>(() => ({ calls: markedCalls(commands), open: openOutput }), [commands, openOutput]);
 
   // Opening the tab means "talk to this session"; the caret should already be there.
@@ -170,8 +188,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
 
   // Opened from a letter: the thread starts at the block carrying it.
   useEffect(() => {
-    if (focusLetter && ready) showLetter(pane.current, focusLetter);
-  }, [focusLetter, ready]);
+    if (focusLetter && ready) showLetter(pane.current, focusLetter, !embedded);
+  }, [embedded, focusLetter, ready]);
 
   // What home's composer wrote before the session existed is its first turn.
   useEffect(() => {
@@ -265,8 +283,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     (mode?: "steer" | "queue") => {
       const text = draft.trim();
       if ((!text && files.length === 0) || !ready || uploading) return;
-      // A message while it works goes into the turn or after it; a bot takes none.
-      if (working && !(mode && whileWorking)) return;
+      // A message while it works goes into the turn or after it.
+      if (working && !mode) return;
       const attached = files;
       const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
       // A folder, or a file the index leaves out, goes too when it was picked from the menu.
@@ -276,30 +294,72 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       }
       const { command, skills } = dispatchOf(text, menu?.entries ?? []);
       const asked = { mentions, ...(command ? { command } : {}), skills };
-      // The agents it names go under it with their ids, which the agent acts on; a command's arguments take none.
-      const sent = command ? text : text + agentNote(mentionedAgents(text, agents));
+      // The agents and worktrees it names go under it with their ids and paths, which the agent acts on; a command's arguments take none.
+      const sent = command ? text : text + agentNote(mentionedAgents(text, agents), mentionedTrees(text, worktrees, agents));
       setDraft("");
       setFiles([]);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
-      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
+      if (working || waiting.length > 0) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
       else void send(session, cwd, sent, attached, asked);
     },
-    [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working],
+    [actions, agents, cwd, draft, files, menu, projectFiles, ready, session, uploading, waiting.length, whileWorking, working, worktrees],
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);
+  // A chat's agents live in the right panel; the sheet keeps what they left running. In a thread there is no panel to open, so the sheet keeps the agent's own agents too.
   const work = useMemo<PanelScope>(
     () => ({
-      entries: panel.entries,
+      entries: embedded ? panel.entries : panel.entries.filter((entry) => !isAgentEntry(entry)),
       failed: panel.failed,
       onOpen: openEntry,
       onStop: panel.stop,
       onClear: panel.clear,
-      conversations,
+      conversations: embedded ? conversations : [],
       sessions,
       onOpenConversation: openThread,
     }),
-    [conversations, openEntry, openThread, panel.clear, panel.entries, panel.failed, panel.stop, sessions],
+    [conversations, embedded, openEntry, openThread, panel.clear, panel.entries, panel.failed, panel.stop, sessions],
+  );
+
+  const agentEntries = useMemo(() => panel.all.filter(isAgentEntry), [panel.all]);
+  const [dismissed, setDismissed] = useState<readonly string[]>([]);
+  const openedId = output?.sessionId === session.id ? output.id : null;
+  const notices = useMemo<AgentNoticeItem[]>(
+    () =>
+      agentEntries.flatMap((entry): AgentNoticeItem[] => {
+        if (entry.id === openedId) return [];
+        const child = entry.source.type === "session" ? sessions.find((row) => row.id === entry.source.id) : undefined;
+        const asks = entry.attention ?? (entry.state === "failed" && child?.lastEvent && child.lastEvent.cursor > (child.userSeen ?? 0) ? "failed" : null);
+        if (!asks) return [];
+        const key = `${entry.id}@${child?.lastEvent?.cursor ?? entry.startedAt}`;
+        return dismissed.includes(key) ? [] : [{ key, entry, asks }];
+      }),
+    [agentEntries, dismissed, openedId, sessions],
+  );
+  const closePanel = useCallback(() => {
+    setOutput(null);
+    setListOpen(false);
+    closeThread();
+  }, [closeThread]);
+  const showList = useCallback(() => {
+    setOutput(null);
+    closeThread();
+    setListOpen(true);
+  }, [closeThread]);
+  const agentsLine = useMemo<AgentsLine>(
+    () => ({
+      notices,
+      working: agentEntries.filter((entry) => entry.state === "running" && !entry.attention).length,
+      any: agentEntries.length + conversations.length > 0,
+      onOpenNotice: () => {
+        const [only] = notices;
+        if (only && notices.length === 1) openEntry(only.entry);
+        else showList();
+      },
+      onDismiss: () => setDismissed((was) => [...was, ...notices.map((one) => one.key)]),
+      onToggleList: () => (listOpen && !output ? closePanel() : showList()),
+    }),
+    [agentEntries, closePanel, conversations.length, listOpen, notices, openEntry, output, showList],
   );
 
   const queue = useMemo<QueueScope>(
@@ -323,14 +383,11 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     [session],
   );
 
-  const thread =
-    letters.thread &&
-    host &&
-    createPortal(
+  const threadBody =
+    letters.thread && (
       <Thread
         key={`${letters.thread.a.id}|${letters.thread.b.id}|${letters.thread.focus ?? ""}`}
         thread={letters.thread}
-        owner={letters.owner}
         sessionId={session.id}
         sessions={sessions}
         active={active}
@@ -340,9 +397,10 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
           letters.closeThread();
           showLetter(pane.current, letterId);
         }}
-      />,
-      host,
+      />
     );
+  // A pair's conversation opens in the right panel, as an agent does; inside a thread, over it.
+  const thread = embedded && threadBody && host ? createPortal(threadBody, host) : null;
   const live = panel.board?.live ?? false;
 
   // What the opened entry is made of: a board command, a Crew subagent's session.
@@ -358,7 +416,10 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     ],
     [trail, session.id, session.name, session.provider, session.kind],
   );
-  const threadOpen = Boolean(shown) || Boolean(letters.thread);
+  // A shell's output still takes the whole pane; an agent and a conversation open beside the chat.
+  const shellOpen = shown?.kind === "shell";
+  const threadOpen = embedded ? Boolean(shown) || Boolean(letters.thread) : shellOpen;
+  const panelOpen = !embedded && (listOpen || (Boolean(shown) && !shellOpen) || Boolean(letters.thread));
 
   // ⌘F finds in the chat you see: under a thread, the thread's own chat has it.
   const [finding, setFinding] = useState<number | null>(null);
@@ -368,11 +429,9 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     field.current?.focus();
   }, []);
   useShortcuts(active && !threadOpen && held.length > 0 ? { find: openFind } : {});
-  const agentView =
+  const agentBody =
     shown &&
-    !letters.thread &&
-    host &&
-    createPortal(
+    !letters.thread && (
       <AgentView
         key={shown.id}
         entry={shown}
@@ -385,7 +444,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         error={panel.failed[shown.id]}
         active={active}
         onStop={() => panel.stop(shown)}
-        onClose={() => setOutput(null)}
+        onClose={embedded || shellOpen ? () => setOutput(null) : closePanel}
+        {...(shellOpen ? {} : { onBack: embedded ? () => setOutput(null) : showList })}
         {...(openedChild
           ? {
               chat: (
@@ -401,9 +461,41 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               ),
             }
           : {})}
-      />,
-      host,
+      />
     );
+  const agentView = agentBody && host && (embedded || shellOpen) ? createPortal(agentBody, host) : null;
+
+  // The list and whoever is open over it. Mounted from the first time it opens: a thread keeps its draft and its scroll.
+  const [everOpen, setEverOpen] = useState(false);
+  if (panelOpen && !everOpen) setEverOpen(true);
+  const side = !embedded && everOpen && (
+    <SidePanel open={panelOpen} active={active} onHost={setPanelEl}>
+      <AgentList
+        entries={agentEntries}
+        conversations={conversations}
+        sessions={sessions}
+        failed={panel.failed}
+        onOpen={(entry) => openEntry(entry)}
+        onOpenConversation={openThread}
+        onStop={panel.stop}
+        onClose={closePanel}
+      />
+      <PaneContext value={panelEl}>{!shellOpen && agentBody}</PaneContext>
+      {threadBody}
+    </SidePanel>
+  );
+
+  // Esc closes the list; an agent and a conversation answer it themselves.
+  const listOnly = panelOpen && !shown && !letters.thread;
+  useEffect(() => {
+    if (!active || !listOnly) return;
+    const key = (event: KeyboardEvent) => {
+      // A menu open over the list takes its own Esc.
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="menu"]')) closePanel();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [active, closePanel, listOnly]);
 
   return (
     <div
@@ -436,7 +528,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onSend={submit}
               onStop={() => void stop(session)}
               work={work}
-              {...(whileWorking ? { whileWorking, queue } : {})}
+              whileWorking={whileWorking}
+              queue={queue}
               onAttach={() => void attach()}
               onPasteFiles={uploadFiles}
               onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
@@ -446,7 +539,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onAnswer={reply}
               onOptions={changeOptions}
               switchProvider={fresh || botSwitch}
-              {...(embedded ? { inThread: true } : {})}
+              {...(embedded ? { inThread: true } : { agents: agentsLine, panelOpen })}
               readOnly={readOnly}
               finding={finding}
               onCloseFind={closeFind}
@@ -454,6 +547,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
             </div>
             {agentView}
             {thread}
+            {side}
             </WorkContext>
           </BackgroundContext>
         </LetterContext>

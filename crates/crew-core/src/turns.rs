@@ -138,8 +138,7 @@ const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else 
 /// warm start.
 pub const RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// How long a process that background work pins stays up past
-/// [`RELEASE_AFTER`]. t3code keeps such a process up to four hours, then lets
-/// it go whatever still runs in it.
+/// [`RELEASE_AFTER`]: up to four hours, then it goes whatever still runs in it.
 pub const PIN_CAP: Duration = Duration::from_secs(4 * 60 * 60);
 const STDERR_TAIL: usize = 12;
 /// Whether a session running with `autonomy` would do what `request` asks
@@ -197,16 +196,17 @@ fn driven(session: &crate::session::Session) -> Option<Driven> {
     }
 }
 
-/// Whether `letter` is the user's own message to a session that is theirs: it
-/// reaches the model as they typed it, with no envelope.
+/// Whether `letter` is the user's own message to a session that is theirs, or
+/// to a bot they write to in its chat: it reaches the model as they typed it,
+/// with no envelope.
 fn is_own(drive: Driven, letter: &mailbox::Letter) -> bool {
-    drive == Driven::User && letter.from.kind.as_deref() == Some("user")
+    drive != Driven::Child && letter.from.kind.as_deref() == Some("user")
 }
 
-/// Whether `from` is the user typing to a session Crew drives for them: the
-/// transcript shows the message as theirs, not as a letter from "You".
-fn typed_by_user(drive: Driven, from: &crew_protocol::BotRef) -> bool {
-    drive != Driven::Bot && from.kind.as_deref() == Some("user")
+/// Whether `from` is the user typing to a session Crew drives: the transcript
+/// shows the message as theirs, not as a letter from "You".
+fn typed_by_user(from: &crew_protocol::BotRef) -> bool {
+    from.kind.as_deref() == Some("user")
 }
 
 /// The CLIs that take a message into a turn that is running; a message to any
@@ -449,6 +449,22 @@ enum TurnOutcome {
     Stopped,
 }
 
+/// The span of one turn, with an id made now (see [`crate::trace::turn_id`]).
+fn turn_span(row: &crate::session::Session) -> tracing::Span {
+    tracing::info_span!("turn", session_id = %row.id, turn_id = %crate::trace::turn_id(), provider = %row.provider)
+}
+
+fn trace_turn_end(outcome: &TurnOutcome, started: Instant) {
+    let duration_ms = crate::trace::ms(started.elapsed());
+    match outcome {
+        TurnOutcome::Completed => tracing::info!(outcome = "completed", duration_ms, "turn.end"),
+        TurnOutcome::Stopped => tracing::info!(outcome = "stopped", duration_ms, "turn.end"),
+        TurnOutcome::Failed(message) => {
+            tracing::warn!(outcome = "failed", duration_ms, error = %crate::trace::error_text(message), "turn.end")
+        }
+    }
+}
+
 enum QuestionReply {
     Answers(Answers),
     Dismiss,
@@ -570,10 +586,11 @@ struct ClaudeLive {
     applied: Launch,
     claude_session_id: String,
     /// Whether a result waits for the background commands: a child's turn
-    /// does, since its report is the last thing it says. The user's and a
-    /// bot's end on their result: the user's process stays up with the work,
-    /// and the turn the CLI starts by itself when it reports is taken as one
-    /// nobody sent ([`TurnHost::adopt_claude_turn`]).
+    /// does, since its report is the last thing it says, and a bot's, since
+    /// its process and the work go with the turn. The user's ends on its
+    /// result: its process stays up with the work, and the turn the CLI
+    /// starts by itself when it reports is taken as one nobody sent
+    /// ([`TurnHost::adopt_claude_turn`]).
     waits_for_background: bool,
     /// Results that ended nothing yet, so the grace timer can tell its own
     /// wait from a later one. Counts on for the life of the process: it is
@@ -937,6 +954,7 @@ impl TurnHost {
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
             let rules = crate::rules::list(&self.store, &session.id).unwrap_or_default();
+            let rules_cap = crate::rules::cap(&self.store, &session.id).unwrap_or(crate::rules::CAP);
             let folder = self.bot_folder(session);
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
@@ -946,6 +964,7 @@ impl TurnHost {
                 harness,
                 tools: &tools,
                 rules: &rules,
+                rules_cap,
                 folder: folder.as_deref(),
             }));
         }
@@ -1092,18 +1111,14 @@ impl TurnHost {
     ///   this message is the user saying go on. It joins the queue, and all of
     ///   it goes as one turn, in order.
     ///
-    /// A bot, and a message that is hidden or another bot's, only ever start
-    /// a turn.
+    /// To a bot it is the same, but an idle bot's turn carries no letter: what
+    /// the user typed is the turn's own message, as it always was. A message
+    /// that is hidden or another bot's only ever starts a turn.
     pub fn start_by_user(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         params.letter_id = None;
         let session = session::get(&self.store, params.session_id.clone())?.ok_or_else(|| "Session not found".to_string())?;
         let drive = driven(&session);
-        if !matches!(drive, Some(Driven::Child | Driven::User)) || params.hidden == Some(true) || params.from_bot.is_some() {
-            // A bot the user writes to is theirs again too: its count starts
-            // over (plan decision 27).
-            if drive == Some(Driven::Bot) && params.hidden != Some(true) && params.from_bot.is_none() {
-                self.user_wrote(&session.id);
-            }
+        if drive.is_none() || params.hidden == Some(true) || params.from_bot.is_some() {
             return self.start(params);
         }
         if drive == Some(Driven::Child) && session.status == "exited" {
@@ -1117,7 +1132,12 @@ impl TurnHost {
             Some(other) => return Err(format!("mode is auto, steer or queue, not \"{other}\"")),
         };
         if !self.is_running(&session.id) && mailbox::waiting_count(&self.store, &session.id)? == 0 {
-            match self.start_with_letter(&session, params.clone()) {
+            let started = if drive == Some(Driven::Bot) {
+                self.start(params.clone()).map(|started| TurnStarted { delivery: Some("started".into()), ..started })
+            } else {
+                self.start_with_letter(&session, params.clone())
+            };
+            match started {
                 // A turn began between the look and the start: this message is
                 // for the one that is running.
                 Err(error) if error == ALREADY_RUNNING => {}
@@ -1212,7 +1232,7 @@ impl TurnHost {
     /// behind it, only later.
     pub fn send_now(&self, session_id: &str, letter_id: &str) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or_else(|| "Session not found".to_string())?;
-        if !matches!(driven(&session), Some(Driven::Child | Driven::User)) {
+        if driven(&session).is_none() {
             return Err(format!("{} has no queue of the user's to send from.", session.name));
         }
         mailbox::send_first(&self.store, session_id, letter_id)?;
@@ -1234,7 +1254,7 @@ impl TurnHost {
     fn stop_and_hand_over(&self, session_id: &str, letter_id: &str) -> TurnStarted {
         if self.is_running(session_id) {
             self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
-            self.cancel(session_id, true);
+            self.cancel(session_id, true, "interrupt_with_message");
         }
         // The stop's own end hands the queue over; with no turn left to wait
         // for (none was running, or it ended meanwhile) it goes now.
@@ -1321,7 +1341,7 @@ impl TurnHost {
             // name of whoever wrote it; the envelopes are for the model. What
             // the user typed is their message, not mail, and keeps its files.
             for letter in &letters {
-                if typed_by_user(drive, &letter.from) {
+                if typed_by_user(&letter.from) {
                     self.transcripts.append_user(
                         &params.session_id,
                         &letter.text,
@@ -1344,7 +1364,7 @@ impl TurnHost {
             let as_typed = |letter: &mailbox::Letter| {
                 is_own(drive, letter)
                     || (letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some())
-                        && typed_by_user(drive, &letter.from))
+                        && typed_by_user(&letter.from))
             };
             params.text =
                 letters
@@ -1400,7 +1420,7 @@ impl TurnHost {
             }
         }
         // Under the tail, the header of this turn names the blocks its message
-        // took: the number `rules` cites a decision of the user's by.
+        // took, numbered as the trail's messages are.
         let history = trail.map(|trail| {
             let last = self.transcripts.len(&params.session_id);
             working_set::with_turn(trail, (last + 1).saturating_sub(appended).max(1), last)
@@ -1429,8 +1449,33 @@ impl TurnHost {
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
-        self.cancel(session_id, true);
+        let no_turn = !self.is_running(session_id) && !self.is_settling(session_id);
+        self.cancel(session_id, true, "stop");
+        if no_turn {
+            self.settle_turnless_child(session_id);
+        }
         Ok(())
+    }
+
+    /// A subagent with no turn that still reads as starting or working has
+    /// nothing to interrupt, and no turn's end will ever say otherwise:
+    /// stopping it is what ends that. One whose last event says how it ended
+    /// keeps it.
+    fn settle_turnless_child(&self, session_id: &str) {
+        let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
+            return;
+        };
+        let stale = match session.status.as_str() {
+            "starting" | "working" => true,
+            "idle" => session.last_event.is_none(),
+            _ => false,
+        };
+        if session.kind == "child" && stale {
+            self.transcripts.append_system(session_id, "Stopped");
+            self.transcripts.set_status(session_id, "idle", None);
+            self.transcripts.flush(session_id);
+            self.child_event(&session, "turn", "stopped", None);
+        }
     }
 
     /// What a session's turn left running in the background.
@@ -1459,7 +1504,7 @@ impl TurnHost {
             let held = if live { self.commands.holds("claude", &cwd) } else { self.commands.is_fresh("claude", &cwd, now) };
             if !held {
                 if let Err(error) = self.probe_claude_commands(session_id, &cwd, false) {
-                    eprintln!("[commands] {error}");
+                    tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "commands.probe_failed");
                 }
             }
         }
@@ -1467,7 +1512,7 @@ impl TurnHost {
         // fresh is held, and again whenever it says the folder's changed.
         if session.provider == "opencode" && !self.commands.is_fresh("opencode", &cwd, crate::store::now_millis()) {
             if let Err(error) = self.opencode_menu(Some(session_id), &cwd) {
-                eprintln!("[commands] {error}");
+                tracing::warn!(error = %crate::trace::error_text(&error.to_string()), "commands.probe_failed");
             }
         }
         Ok(self.menu_of(&session, &cwd))
@@ -1906,6 +1951,7 @@ impl TurnHost {
     /// was already answered.
     pub fn respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Result<(), String> {
         let key = (session_id.to_string(), request_id);
+        let decided = format!("{decision:?}");
         let taken = self.codex_respond(session_id, request_id, decision.clone()).is_some()
             || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
             || self.grok_respond(session_id, request_id, decision.clone()).is_some()
@@ -1934,6 +1980,7 @@ impl TurnHost {
             return Err("No approval is waiting".into());
         }
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        tracing::info!(session_id, request_id, decision = %decided, "approval.decided");
         // Decided: an approval letter still waiting to wake the parent has
         // nothing left to ask.
         if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {
@@ -1981,6 +2028,7 @@ impl TurnHost {
     /// first answer wins, and the other is told it was already answered.
     pub fn answer(&self, session_id: &str, request_id: u64, answers: Option<Answers>) -> Result<(), String> {
         let key = (session_id.to_string(), request_id);
+        let dismissed = answers.is_none();
         let taken = self.codex_answer(session_id, request_id, answers.clone()).is_some()
             || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
             || self.grok_answer(session_id, request_id, answers.clone()).is_some()
@@ -2008,6 +2056,7 @@ impl TurnHost {
             return Err("No question is waiting".into());
         }
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        tracing::info!(session_id, request_id, dismissed, "question.answered");
         // Answered: a question letter still waiting to wake the parent has
         // nothing left to ask.
         if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {
@@ -2064,6 +2113,20 @@ impl TurnHost {
             Live::Grok(_) => "Grok",
             Live::Opencode(_) => "opencode",
         };
+        // Whether a turn was in it, and whether Crew asked it to go (a stop, a kill): an exit
+        // nobody asked for is the line to look for.
+        let (mid_turn, asked) = match &*live {
+            Live::Claude(row) => (row.active, row.cancelled),
+            Live::Codex(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Cursor(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Grok(row) => (row.active, row.cancelled || (row.active && row.settled)),
+            Live::Opencode(_) => (false, true),
+        };
+        if asked {
+            tracing::info!(session_id, provider, code, mid_turn, "provider.exit");
+        } else {
+            tracing::warn!(session_id, provider, code, mid_turn, "provider.lost");
+        }
         match live {
             Live::Claude(row) => {
                 let mid = row.active;
@@ -2191,7 +2254,8 @@ impl TurnHost {
     /// Code does): what it left running in the background goes on, and is
     /// stopped from the panel one by one. With `kill`, a CLI that does not
     /// answer the stop is let go after [`INTERRUPT_GRACE`].
-    fn cancel(&self, session_id: &str, kill: bool) {
+    fn cancel(&self, session_id: &str, kill: bool, reason: &'static str) {
+        tracing::info!(session_id, kill, reason, "turn.stop_requested");
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
         // this one. Without a turn to interrupt, it settles here.
@@ -2468,6 +2532,14 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
         let row = session.clone();
+        // A span is per thread, and a line holds only its innermost span's
+        // fields: what this thread logs directly carries the turn's ids, but
+        // the agent's lines carry the agent's span and a tool call has only its
+        // session. `crew trace --turn` finds those by session and time.
+        let span = turn_span(&row);
+        let _in_turn = span.enter();
+        let started = Instant::now();
+        tracing::info!(kind = %row.kind, letters = carried.len(), "turn.start");
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params, history),
             "codex" => self.run_codex(session, params, history),
@@ -2476,6 +2548,7 @@ impl TurnHost {
             "opencode" => self.run_opencode(session, params, history),
             other => TurnOutcome::Failed(format!("{other} agents are not wired up yet. Pick Claude for now.")),
         };
+        trace_turn_end(&outcome, started);
         self.finish_turn(row, outcome, carried);
     }
 
@@ -2901,7 +2974,7 @@ impl TurnHost {
         let written =
             crate::session_events::record_reporting(&self.store, id, cursor, kind, outcome, &report, request, letter.as_ref());
         if let Err(error) = &written {
-            eprintln!("[crewd] session {id}: the event was not written: {error}");
+            tracing::warn!(session_id = %id, error = %crate::trace::error_text(&error.to_string()), "transcript.event_unwritten");
         }
         self.signal.notify();
         if let (Ok(()), Some(letter)) = (written, letter) {
@@ -2989,7 +3062,7 @@ impl TurnHost {
             return false;
         }
         self.exiting.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string(), by.to_string());
-        self.cancel(session_id, true);
+        self.cancel(session_id, true, "exit");
         true
     }
 
@@ -3198,7 +3271,13 @@ impl TurnHost {
         let host = self.clone();
         let row = row.clone();
         thread::spawn(move || {
+            // A turn the CLI began by itself: no Crew turn started it, but it is one all the same.
+            let span = turn_span(&row);
+            let _in_turn = span.enter();
+            let started = Instant::now();
+            tracing::info!(kind = %row.kind, adopted = true, "turn.start");
             let outcome = host.block_on(rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+            trace_turn_end(&outcome, started);
             if row.provider == "opencode" {
                 host.opencode_turn_ended(&row, &outcome);
             } else {
@@ -3339,7 +3418,12 @@ impl TurnHost {
         thread::spawn(move || {
             let _one = host.naming_gate.lock().unwrap_or_else(|e| e.into_inner());
             if let Err(error) = host.name_now(&session) {
-                eprintln!("[titles] {}: {error}", session.id);
+                // The CLI answered without a name, which it does often: not a fault.
+                if error.ends_with("no name") {
+                    tracing::debug!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.unnamed");
+                } else {
+                    tracing::warn!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.failed");
+                }
             }
         });
     }
@@ -3441,12 +3525,7 @@ impl TurnHost {
         if grok {
             return Err("Grok cannot take a message in the middle of a turn".into());
         }
-        let typed = session::get(&self.store, session_id.to_string())
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(driven)
-            .is_some_and(|drive| typed_by_user(drive, &from));
+        let typed = typed_by_user(&from);
         let steered = self.steer_text_all(session_id, &from, text, &rest);
         let images = crate::files::load_inline_images(&files);
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
@@ -3487,10 +3566,11 @@ impl TurnHost {
     }
 
     /// A message written into a running turn, under the envelope a queued one
-    /// would have; the user's own to their own session goes as they typed it.
+    /// would have; the user's own to their own session or a bot goes as they
+    /// typed it.
     pub(crate) fn steer_text(&self, session_id: &str, from: &crew_protocol::BotRef, text: &str) -> String {
         let row = session::get(&self.store, session_id.to_string()).ok().flatten();
-        if row.as_ref().and_then(driven) == Some(Driven::User) && from.kind.as_deref() == Some("user") {
+        if matches!(row.as_ref().and_then(driven), Some(Driven::User | Driven::Bot)) && from.kind.as_deref() == Some("user") {
             return text.to_string();
         }
         let parent = row.and_then(|row| row.parent_id);
@@ -3588,7 +3668,9 @@ impl TurnHost {
             Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
             _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         };
-        let waits_for_background = driven(session) == Some(Driven::Child);
+        // A bot's process goes with its turn, and what it ran in the
+        // background with it: the turn waits for that work instead.
+        let waits_for_background = matches!(driven(session), Some(Driven::Child | Driven::Bot));
         self.lock().insert(
             session_id.to_string(),
             Live::Claude(Box::new(ClaudeLive::new(claude_session_id, waits_for_background, applied))),
@@ -3630,7 +3712,7 @@ impl TurnHost {
                     taken = self.claude_control_on(session_id, Some(epoch), request);
                 }
                 if let Err(error) = taken {
-                    eprintln!("[crewd] session {session_id}: Claude Code did not take a setting ({error}); it is launched again");
+                    tracing::warn!(%session_id, error = %crate::trace::error_text(&error.to_string()), "claude.setting_refused");
                     return false;
                 }
             }
@@ -3722,6 +3804,7 @@ impl TurnHost {
             Some({
                 let mut env = self.agent_env(&session_id);
                 env.insert("CLAUDE_CODE_ARTIFACT".into(), "1".into());
+                env.insert("CLAUDE_CODE_ENTRYPOINT".into(), crate::providers::claude::ENTRYPOINT.into());
                 env
             }),
         )?;
@@ -3730,6 +3813,7 @@ impl TurnHost {
             return Err("cancelled".into());
         }
 
+        let began = Instant::now();
         let (init_tx, init_rx) = oneshot::channel();
         {
             let mut map = self.lock();
@@ -3773,10 +3857,12 @@ impl TurnHost {
         match init {
             // Up: how large its window is, for a meter before the first answer.
             Ok(Ok(true)) => {
+                crate::trace::connected("claude", &session_id, spawn.resume.is_some(), began);
                 self.ask_claude_context(&session_id, false, None);
                 self.ask_claude_mcp(&session_id, true);
             }
             Ok(Ok(false)) | Ok(Err(_)) => {
+                crate::trace::connect_failed("claude", &session_id, "init", "the CLI exited before it said it was up");
                 let stderr = self
                     .lock()
                     .get(&session_id)
@@ -3792,6 +3878,7 @@ impl TurnHost {
                 });
             }
             Err(_) => {
+                crate::trace::connect_failed("claude", &session_id, "init", NO_ANSWER);
                 return Err(NO_ANSWER.into());
             }
         }
@@ -3817,6 +3904,7 @@ impl TurnHost {
                 }
             };
             if silent {
+                tracing::warn!(session_id = %id, waited_s = FIRST_OUTPUT_TIMEOUT.as_secs(), reason = "silent", "turn.aborted");
                 host.signal(
                     &id,
                     TurnOutcome::Failed(format!(
@@ -3861,6 +3949,10 @@ impl TurnHost {
 
     pub(crate) fn handle_claude_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
+            // A blank line is not a message; anything else that is not JSON is worth a count.
+            if !line.trim().is_empty() {
+                crate::trace::unparsed("claude", session_id, line);
+            }
             return;
         };
         if string_field(Some(&rec), "type").as_deref() == Some("keep_alive") {
@@ -5112,9 +5204,9 @@ mod mailbox_tests {
     }
 
     /// The block numbers a bot is shown — under the trail for this turn, and
-    /// on each message the user typed — are the ones `rules` takes as `from`.
+    /// on each message the user typed — are those messages' blocks.
     #[test]
-    fn the_block_numbers_a_bot_is_shown_are_the_ones_from_accepts() {
+    fn the_block_numbers_a_bot_is_shown_are_the_users_messages() {
         let world = world();
         let ws = workspace(&world);
         let probe = bot(&world, &ws, "Probe");
@@ -5134,13 +5226,13 @@ mod mailbox_tests {
         let header = prompt.split("## This turn (block ").nth(1).expect("the header").split(')').next().unwrap();
         let now: usize = header.parse().expect("a number");
         assert_eq!(rows[now - 1].text, "y corre los tests", "{prompt}");
-        assert!(crate::rules::user_message(&rows, now as i64).is_ok());
+        assert!(crate::rules::typed_by_user(&rows[now - 1]));
         assert!(prompt.contains("[#1 · ") && prompt.contains("· user] nunca hagas push a master"), "{prompt}");
         let numbered: Vec<&str> = prompt.lines().filter(|line| line.starts_with("[#")).collect();
         assert!(!numbered.is_empty(), "{prompt}");
         for line in numbered {
             let n: i64 = line[2..].split(' ').next().unwrap().parse().unwrap();
-            assert!(crate::rules::user_message(&rows, n).is_ok(), "{line}");
+            assert!(crate::rules::typed_by_user(&rows[n as usize - 1]), "{line}");
         }
     }
 
@@ -5187,11 +5279,12 @@ mod mailbox_tests {
         turn(&world, &asker, "one");
         assert!(!allowed_all(), "an asking bot asks by default");
 
-        crate::store::set(world.host.test_store(), crate::session::BYPASS_KEY.into(), "on".into()).expect("set");
+        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, Some("on"), crate::settings::GLOBAL)
+            .expect("set");
         turn(&world, &asker, "two");
         assert!(allowed_all(), "bypass runs it without asking");
 
-        crate::store::delete(world.host.test_store(), crate::session::BYPASS_KEY.into()).expect("delete");
+        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, None, crate::settings::GLOBAL).expect("off");
         turn(&world, &asker, "three");
         assert!(!allowed_all(), "off again, it asks again");
     }

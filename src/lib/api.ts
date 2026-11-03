@@ -168,6 +168,9 @@ export const getBotRules = (id: string): Promise<BotRules> => client.request("bo
 export const saveBotRules = (id: string, changes: Omit<BotRulesSave, "id">): Promise<BotRules> =>
   client.request("bot_rules_save", { id, ...changes });
 
+/** The most a bot's rules may hold; what they hold now stays. */
+export const setBotRulesCap = (id: string, cap: number): Promise<BotRules> => client.request("bot_rules_cap_set", { id, cap });
+
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });
 
@@ -658,6 +661,9 @@ export const deleteRemoteRecord = (id: string): Promise<void> => client.request(
 
 export const listDir = (envId: string, path: string): Promise<DirListing> =>
   client.request("dir_list", { path }, envId);
+
+/** Makes the folder at `path` on `envId`, and any missing above it; answers its absolute path. */
+export const createDir = (envId: string, path: string): Promise<string> => client.request("dir_create", { path }, envId);
 
 /**
  * The agent CLIs on one machine, as that machine's daemon sees them: path,

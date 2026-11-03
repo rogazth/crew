@@ -23,8 +23,8 @@ export function mentionAt(text: string, cursor: number): { start: number; end: n
   return { start: at, end, query };
 }
 
-/** Text split into runs, so a bubble or an overlay can paint the mentions. */
-export function splitMentions(text: string, known?: Set<string>): Segment[] {
+/** Text split into runs, so a bubble or an overlay can paint the mentions; with `known`, only the paths it has. */
+export function splitMentions(text: string, known?: { has: (path: string) => boolean }): Segment[] {
   const segments: Segment[] = [];
   let last = 0;
   for (const match of text.matchAll(MENTION)) {
@@ -145,6 +145,16 @@ export function rememberMention(path: string) {
 
 export function wasPicked(path: string): boolean {
   return picked.has(path.replace(/\/+$/, ""));
+}
+
+/**
+ * Whether a sent `@token` reads as a path, for a bubble that has no record of what was picked: one the
+ * index holds, or one with a folder or an extension. `@.` or `@someone` is just text.
+ */
+export function looksLikePath(token: string, files: readonly ProjectFile[]): boolean {
+  const path = token.replace(/\/+$/, "");
+  if (/\//.test(token) || /\w\.\w+$/.test(path)) return true;
+  return files.some((file) => file.relative === path);
 }
 
 /** The `@` tokens of a draft, in order, without repeats. */

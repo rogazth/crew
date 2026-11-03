@@ -6,6 +6,7 @@
 import type { RemoteEnv } from "../src/lib/protocol";
 import type { RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
 import { decide, FRESH, type Memory } from "./remote-updates-plan";
+import { errorText, trace } from "./trace";
 
 /** How often every machine is looked at. */
 export const LOOK_EVERY_MS = 30_000;
@@ -41,6 +42,8 @@ export type RemoteUpdater = {
 export function remoteUpdater(deps: Deps): RemoteUpdater {
   const memory = new Map<string, Memory>();
   const states = new Map<string, RemoteUpdateState>();
+  /** Machines already said to be skipped as busy: one line per stretch, not one per look. */
+  const skipping = new Set<string>();
   let looking: Promise<void> | null = null;
   let first: ReturnType<typeof setTimeout> | null = null;
   let every: ReturnType<typeof setInterval> | null = null;
@@ -63,26 +66,44 @@ export function remoteUpdater(deps: Deps): RemoteUpdater {
   }
 
   async function lookAt(row: RemoteEnv, target: string, auto: boolean) {
-    if (deps.busy(row.id) || states.get(row.id)?.state === "updating") return;
+    if (deps.busy(row.id) || states.get(row.id)?.state === "updating") return skipBusy(row.id);
     // One that does not answer keeps what was known: it is looked at again next time.
     const seen = await deps.peek(row).catch(() => null);
-    if (!seen || deps.busy(row.id)) return;
+    if (!seen) return;
+    if (deps.busy(row.id)) return skipBusy(row.id);
+    skipping.delete(row.id);
     const { action, memory: next } = decide({ ...seen, target, auto, now: Date.now() }, memory.get(row.id) ?? FRESH);
     memory.set(row.id, next);
     if (action === "none") return set(row.id, null);
     const state = { version: target, queued: next.queued, agentsRunning: seen.agentsRunning };
-    if (action === "wait") return set(row.id, { state: "waiting", ...state });
+    if (action === "wait") {
+      if (states.get(row.id)?.state !== "waiting") {
+        trace.info("update.waiting", { machine: row.id, agents_running: seen.agentsRunning, queued: next.queued });
+      }
+      return set(row.id, { state: "waiting", ...state });
+    }
     set(row.id, { state: "updating", ...state });
+    const began = Date.now();
+    trace.info("update.start", { machine: row.id, from: seen.version, to: target, auto: !next.queued });
     try {
       const { warning } = await deps.update(row);
       memory.set(row.id, FRESH);
+      trace.info("update.done", { machine: row.id, took_ms: Date.now() - began, warning: warning !== null });
       deps.finished({ id: row.id, name: row.name, version: target, ok: true, message: warning });
     } catch (error) {
       memory.set(row.id, { ...FRESH, heldBack: { version: target, at: Date.now() } });
+      trace.warn("update.failed", { machine: row.id, took_ms: Date.now() - began, error: errorText(error) });
       deps.finished({ id: row.id, name: row.name, version: target, ok: false, message: error instanceof Error ? error.message : String(error) });
     } finally {
       set(row.id, null);
     }
+  }
+
+  /** Another job holds the machine, so an update waits for it. Said once for as long as that lasts. */
+  function skipBusy(id: string) {
+    if (skipping.has(id)) return;
+    skipping.add(id);
+    trace.info("update.skipped", { machine: id, why: "busy" });
   }
 
   function look(): Promise<void> {
@@ -103,6 +124,7 @@ export function remoteUpdater(deps: Deps): RemoteUpdater {
     },
     look,
     async queue(id) {
+      trace.info("update.queued", { machine: id });
       memory.set(id, { ...(memory.get(id) ?? FRESH), queued: true, heldBack: null });
       // A look on its way may have read the memory before the queue: the next one starts after it.
       await looking;
@@ -111,6 +133,7 @@ export function remoteUpdater(deps: Deps): RemoteUpdater {
     cancel(id) {
       const state = states.get(id);
       if (!state || state.state === "updating") return;
+      trace.info("update.cancelled", { machine: id });
       memory.set(id, { ...FRESH, heldBack: { version: state.version, at: Date.now() } });
       set(id, null);
     },

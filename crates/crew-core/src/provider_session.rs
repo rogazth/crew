@@ -68,7 +68,7 @@ fn cached_cursor_models() -> Option<(Instant, Vec<ListedModel>)> {
 
 fn refresh_cursor_models() -> Vec<ListedModel> {
     let models = list_cursor_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
         Vec::new()
     });
     if !models.is_empty() {
@@ -523,7 +523,7 @@ fn cached_codex_models() -> Option<(Instant, Vec<ListedModel>)> {
 
 fn refresh_codex_models() -> Vec<ListedModel> {
     let models = list_codex_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
         Vec::new()
     });
     if !models.is_empty() {
@@ -690,7 +690,7 @@ fn cached_grok_listing() -> Option<(Instant, GrokListing)> {
 
 fn refresh_grok_models() -> GrokListing {
     let listing = list_grok_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
         GrokListing { models: Vec::new(), default_model: String::new() }
     });
     if !listing.models.is_empty() {
@@ -731,7 +731,7 @@ fn list_grok_models() -> Result<GrokListing, String> {
         }
     }
     Ok(grok_models_from_cli(&binary).unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
         GrokListing { models: Vec::new(), default_model: String::new() }
     }))
 }
@@ -1134,7 +1134,7 @@ fn refresh_claude_fast_mode() {
     for _ in 0..FAST_MODE_PROBES {
         match probe_claude_fast_mode(&binary) {
             Ok(answer) => answers.push(answer),
-            Err(err) => eprintln!("[fast mode] {err}"),
+            Err(err) => tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "fast_mode.read_failed"),
         }
     }
     if let Some((state, reason)) = believed_fast_mode(answers) {
@@ -1212,6 +1212,7 @@ fn spawn_claude_control(
     let mut child = Command::new(binary)
         .args(args)
         .env("PATH", shell_path::joined())
+        .env("CLAUDE_CODE_ENTRYPOINT", crate::providers::claude::ENTRYPOINT)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1370,7 +1371,7 @@ fn cached_opencode_listing() -> Option<(Instant, OpencodeListing)> {
 
 fn refresh_opencode_models() -> OpencodeListing {
     let listing = list_opencode_models().unwrap_or_else(|err| {
-        eprintln!("[models] {err}");
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
         OpencodeListing { models: Vec::new(), default_model: String::new() }
     });
     if !listing.models.is_empty() {
@@ -2156,7 +2157,7 @@ time.sleep(600)
             format!(
                 r#"#!/usr/bin/env python3
 import json, os, sys, time
-open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json"), "w").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}))
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json"), "w").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT")}}))
 first = json.loads(sys.stdin.readline())
 second = json.loads(sys.stdin.readline())
 assert first["request"]["subtype"] == "initialize" and second["request"]["subtype"] == "reload_skills"
@@ -2196,6 +2197,7 @@ time.sleep(600)
         assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
         assert!(argv.contains(&"--strict-mcp-config"), "{argv:?}");
         assert_eq!(std::fs::canonicalize(seen["cwd"].as_str().unwrap()).unwrap(), std::fs::canonicalize(&work).unwrap());
+        assert_eq!(seen["entrypoint"].as_str(), Some(crate::providers::claude::ENTRYPOINT));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

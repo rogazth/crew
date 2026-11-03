@@ -1,6 +1,6 @@
 import { SlideShell } from "./chrome/SidebarSlide";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BotSheetHost } from "./chrome/BotSheet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BotPaneHost } from "./chrome/BotPane";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { MachineBanner } from "./chrome/MachineBanner";
 import { MachinePalette } from "./chrome/MachinePalette";
@@ -22,6 +22,7 @@ import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
 import { useExplorer } from "./hooks/useExplorer";
+import { useRecede } from "./hooks/useRecede";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useNotificationTarget } from "./hooks/useNotificationTarget";
@@ -33,9 +34,6 @@ import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
-import { BotAvatarProvider } from "./hooks/useBotAvatar";
-import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
-import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
@@ -50,6 +48,9 @@ import { useProcesses } from "./hooks/useProcesses";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
+import { showToast } from "./lib/toasts";
+import { GLOBAL_KEYS } from "./lib/settingsEngine/defs";
+import { onSettingSaveFailed, startSettings } from "./lib/settingsEngine/store";
 import { boot } from "./lib/turnRuntime";
 import { unlockNotificationAudio } from "./lib/notificationSound";
 import { watchProcesses } from "./lib/processAlerts";
@@ -75,6 +76,19 @@ export function App() {
   // due, a bot writes to another — so the window listens from the moment it
   // opens rather than from the first thing the user sends.
   useEffect(() => void boot(), []);
+  useEffect(() => startSettings(GLOBAL_KEYS), []);
+  useEffect(
+    () =>
+      onSettingSaveFailed((_key, error) =>
+        showToast({
+          title: "Could not save a setting",
+          body: error instanceof Error ? error.message : String(error),
+          source: "error",
+          target: null,
+        }),
+      ),
+    [],
+  );
   useEffect(unlockNotificationAudio, []);
   useSelectAllScope();
   useBrowserBridge();
@@ -176,6 +190,7 @@ export function App() {
     toggle: togglePage,
     openSettings,
     openRoutines,
+    openRoutine,
   } = usePages();
   useUpdateWiring(openSettings);
   const connectorsAlert = useConnectorsAlert();
@@ -249,6 +264,8 @@ export function App() {
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
+  const appRoot = useRef<HTMLDivElement>(null);
+  useRecede(appRoot, sheet.sheet !== null);
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTabIn: nav.openTabIn });
 
   const { activate } = workspaces;
@@ -260,6 +277,9 @@ export function App() {
     openSession: nav.openSession,
     closePage,
   });
+
+  // What the start screen's `@` names: the workspace's bots and sessions, as a session's composer does.
+  const startAgents = useMemo(() => all.filter((session) => session.workspaceId === active?.id), [all, active?.id]);
 
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
@@ -307,7 +327,8 @@ export function App() {
       closePage();
       explorer.toggle("search", selectedLine());
     },
-    newBot: () => sheet.newBot(),
+    // The chord that opened a new bot's pane closes it again.
+    newBot: () => (sheet.sheet?.session === null ? sheet.close() : sheet.newBot()),
     newSession: () => void newSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
@@ -363,12 +384,11 @@ export function App() {
     paneMove && panePlace && paneSession ? { sessionId: paneSession.id, place: panePlace, places: panePlaces, onMove: paneMove } : null;
 
   return (
-    <TerminalPrefsProvider>
-    <BrowserPrefsProvider>
+    <>
     <LinkRouter open={nav.openBrowser} />
     <Toaster onOpen={openNotified} />
-    <BotAvatarProvider>
-    <div className="flex h-full">
+    {/* Under a bot's pane the whole window steps back (useRecede); the pane is portaled out of it. */}
+    <div ref={appRoot} data-app className="flex h-full">
       <SlideShell
         open={sidebarOpen}
         width={sidebar.width}
@@ -536,6 +556,7 @@ export function App() {
                     key={active.id}
                     workspaceId={active.id}
                     places={panePlaces}
+                    agents={startAgents}
                     defaultPath={startIn ?? work.placeIn ?? active.path}
                     onPlace={(path) => {
                       setStartIn(null);
@@ -545,9 +566,6 @@ export function App() {
                       setStartIn(null);
                       void newSession(choice, path === active.path ? null : path, text, files);
                     }}
-                    onNewBot={() => sheet.newBot()}
-                    onOpenFile={() => openPalette("files")}
-                    onOpenBrowser={() => nav.openBrowser("")}
                   />
                 ) : undefined
               }
@@ -625,6 +643,8 @@ export function App() {
           </div>
         </div>
       </main>
+      {/* The right panel hangs here, from the main sheet's edge; each chat brings its own (SidePanel). */}
+      <div data-side-slot hidden={!isWorkspace} className="ds-side-col" style={{ width: 0 }} />
       </SlideShell>
 
       {envs.picker && (
@@ -675,16 +695,23 @@ export function App() {
 
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
-
-      <BotSheetHost
+      {/* Over the window, not beside the tabs: a bot's pane is no tab. */}
+      <BotPaneHost
         sheet={sheet}
         sessions={sessions}
-        onNewRoutine={openRoutines}
+        // Going to another page leaves the pane: it is about the window it stepped back from.
+        onNewRoutine={(id) => {
+          sheet.close();
+          openRoutines(id);
+        }}
+        onOpenRoutine={(id) => {
+          sheet.close();
+          openRoutine(id);
+        }}
       />
+
     </div>
-    </BotAvatarProvider>
-    </BrowserPrefsProvider>
-    </TerminalPrefsProvider>
+    </>
   );
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { agentMeta, exitedless, optionless, askOf, isQuickQuestion, controlOf, deliveryNote, envelopeOf, firstLine, foldsLongText, nativeName, nativeReport, sentOf, startedOf, startedSessionsSentence } from "./orchestration";
+import { exitedless, controlOf, deliveryNote, nativeName, nativeReport, sentOf, startedOf } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -12,18 +12,6 @@ const tool = (detail: ToolDetail): Block => ({
 });
 
 describe("agent cards", () => {
-  it("says tokens and where it stands, with how long it took once it ended", () => {
-    expect(agentMeta({ state: "done", tokens: 31_000, startedAt: 0, endedAt: 48_000 })).toBe("31k tokens · done after 48s");
-    expect(agentMeta({ state: "running", activity: "Editing policy.rs" })).toBe("Editing policy.rs");
-    expect(agentMeta({ state: "running" })).toBe("running");
-    expect(agentMeta({ state: "failed", startedAt: 0, endedAt: 5_000 })).toBe("failed after 5s");
-    expect(agentMeta({ state: "stopped" })).toBe("stopped");
-  });
-
-  it("takes the first line with words in it", () => {
-    expect(firstLine("\n\n  Find every caller\nmore")).toBe("Find every caller");
-  });
-
   it("names a native subagent by its type, else what it was for", () => {
     expect(nativeName({ kind: "agent", description: "Explore the repo", agentType: "Explore" })).toBe("Explore");
     expect(nativeName({ kind: "agent", description: "Explore the repo" })).toBe("Explore the repo");
@@ -32,14 +20,6 @@ describe("agent cards", () => {
   it("has a report only once the call brought something back", () => {
     expect(nativeReport(tool({ kind: "agent", description: "d", output: "  4 callers " }))).toBe("4 callers");
     expect(nativeReport(tool({ kind: "agent", description: "d" }))).toBeNull();
-  });
-});
-
-describe("long text", () => {
-  it("folds after seven lines, with two lines of slack", () => {
-    const lines = (count: number) => Array.from({ length: count }, (_, index) => `line ${index}`).join("\n");
-    expect(foldsLongText(lines(9))).toBe(false);
-    expect(foldsLongText(lines(10))).toBe(true);
   });
 });
 
@@ -54,10 +34,6 @@ describe("what a Crew call started", () => {
     expect(startedOf(tool({ kind: "crew", verb: "read_session", targets: [] }))).toBeNull();
   });
 
-  it("counts the sessions that started and the ones that did not", () => {
-    expect(startedSessionsSentence([{ name: "a" }, { name: "b" }, { name: "c" }])).toBe("Started 3 sessions");
-    expect(startedSessionsSentence([{ name: "a" }, { name: "b", note: "no repo" }])).toBe("Started 1 session, 1 failed");
-  });
 });
 
 describe("the rows a transcript groups into", () => {
@@ -193,45 +169,6 @@ describe("messages", () => {
     expect(sentOf(message({ error: "no such session" }))).toBeNull();
   });
 
-  it("names a letter in by its kind", () => {
-    expect(envelopeOf("message")).toEqual({ word: "wrote" });
-    expect(envelopeOf("question")).toEqual({ word: "asks", tag: "waits on an answer" });
-    expect(envelopeOf("started")).toEqual({ word: "started this session" });
-  });
-});
-
-describe("a child's open request, as its parent's letter carries it", () => {
-  const question = (text: string, options = ["Keep", "Allow"], multiSelect = false): Block => ({
-    id: text,
-    role: "question",
-    text,
-    question: { requestId: 1, questions: [{ question: text, header: "Q", multiSelect, options: options.map((label) => ({ label })) }] },
-  });
-  const approval = (title: string): Block => ({ id: title, role: "approval", text: title, approval: { requestId: 2, name: "shell" } });
-
-  it("finds the newest card whose words the letter carries", () => {
-    const blocks = [question("Allow partial refunds?"), question("Which color?"), approval("touch asked.txt")];
-    expect(askOf(blocks, "question", "## Question\n\n1. Allow partial refunds?")?.id).toBe("Allow partial refunds?");
-    expect(askOf(blocks, "approval", "It wants to use shell: touch asked.txt")?.id).toBe("touch asked.txt");
-    expect(askOf(blocks, "question", "1. Something else entirely")).toBeNull();
-    expect(askOf(blocks, "approval", "1. Allow partial refunds?")).toBeNull();
-  });
-
-  it("answers with one click only a single-choice question with a few options", () => {
-    expect(isQuickQuestion(question("a"))).toBe(true);
-    expect(isQuickQuestion(question("a", ["1", "2", "3", "4", "5"]))).toBe(false);
-    expect(isQuickQuestion(question("a", ["x"], true))).toBe(false);
-    expect(isQuickQuestion(question("a", []))).toBe(false);
-  });
-});
-
-describe("optionless", () => {
-  it("drops the options the daemon lists under each question, and keeps the questions", () => {
-    const letter = "1. Which color?\n   Options: Red (warm); Blue\n2. Ship it?\n   Options (several allowed, comma-separated): Yes; No";
-    expect(optionless(letter)).toBe("1. Which color?\n2. Ship it?");
-    expect(optionless("1. Free text?")).toBe("1. Free text?");
-    expect(optionless("Options: not a daemon line")).toBe("Options: not a daemon line");
-  });
 });
 
 describe("exitedless", () => {

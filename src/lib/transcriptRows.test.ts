@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, TurnUsage } from "./blocks";
-import { foldTurns, gapBefore, groupRows, speaker, splitQueued, turnStart, underway, type Row } from "./transcriptRows";
+import { foldTurns, gapBefore, groupRows, speaker, splitQueued, threadRows, turnStart, underway, type Row } from "./transcriptRows";
 
 const COST: TurnUsage = { costUsd: 0.02 };
 
@@ -181,6 +181,45 @@ describe("footer", () => {
   });
 });
 
+describe("threadRows", () => {
+  const tool = (id: string, status = "completed") => block("tool", id, { tool: { callId: id, name: "Bash", title: id, status: status as "completed" } });
+  const letter = (id: string, text: string, at: number) => block("user", text, { at, letterId: id, letterKind: "message", fromBot: { id: "lead", name: "Lead" } });
+  const answer = (text: string, at: number) => block("assistant", text, { at, usage: { durationMs: 1 } });
+
+  it("keeps who said what as the spine, with the work between as one line", () => {
+    const rows = threadRows(groupRows([letter("L1", "go", 1), tool("t1"), block("assistant", "looking", { at: 2 }), tool("t2"), answer("done", 3)]), false);
+    expect(kinds(rows)).toEqual(["date", "letter", "fold", "message"]);
+    expect((rows[3] as Extract<Row, { kind: "message" }>).answer).toBe("report");
+    expect(kinds((rows[2] as Extract<Row, { kind: "fold" }>).rows)).toEqual(["activity", "message", "activity"]);
+  });
+
+  it("calls what ends a turn the user started a reply, and has no footer for it", () => {
+    const rows = threadRows(groupRows([block("user", "hi", { at: 1 }), answer("hello", 2)]), false);
+    expect(kinds(rows)).toEqual(["date", "message", "message"]);
+    expect((rows[2] as Extract<Row, { kind: "message" }>).answer).toBe("reply");
+  });
+
+  it("never folds what waits on someone", () => {
+    const ask = block("question", "Which?", { at: 2 });
+    const rows = threadRows(groupRows([letter("L1", "go", 1), tool("t1"), ask, tool("t2")]), false);
+    expect(kinds(rows)).toEqual(["date", "letter", "fold", "activity", "fold"]);
+    expect((rows[3] as Extract<Row, { kind: "activity" }>).blocks).toEqual([ask]);
+  });
+
+  it("leaves the work going on now open", () => {
+    const rows = threadRows(groupRows([letter("L1", "go", 1), tool("t1"), block("assistant", "looking", { at: 2 })]), true);
+    expect(kinds(rows)).toEqual(["date", "letter", "activity", "message"]);
+    expect((rows[3] as Extract<Row, { kind: "message" }>).answer).toBeUndefined();
+  });
+
+  it("reads the work as failed only when all of it failed", () => {
+    const some = threadRows(groupRows([letter("L1", "go", 1), tool("t1", "failed"), tool("t2"), answer("done", 3)]), false);
+    const all = threadRows(groupRows([letter("L1", "go", 1), tool("t1", "failed"), answer("done", 3)]), false);
+    expect((some[2] as Extract<Row, { kind: "fold" }>).failed).toBe(false);
+    expect((all[2] as Extract<Row, { kind: "fold" }>).failed).toBe(true);
+  });
+});
+
 describe("foldTurns", () => {
   const turn = () => [
     block("user", "fix it", { at: 1_000 }),
@@ -196,8 +235,14 @@ describe("foldTurns", () => {
     const fold = rows[2] as Extract<Row, { kind: "fold" }>;
     expect(kinds(fold.rows)).toEqual(["activity", "message", "activity"]);
     expect(fold.durationMs).toBe(60_000);
-    expect(fold.failed).toBe(true);
+    expect(fold.failed).toBe(false);
     expect((rows[4] as Extract<Row, { kind: "footer" }>).folded).toBe(true);
+  });
+
+  it("reads a run as failed only when every tool in it failed", () => {
+    const failing = (id: string) => block("tool", id, { tool: { callId: id, name: "Bash", title: id, status: "failed" } });
+    const rows = foldTurns(groupRows([block("user", "fix it", { at: 1_000 }), failing("c1"), block("assistant", "trying again", { at: 2_000 }), failing("c2"), block("assistant", "gave up", { at: 3_000, usage: { durationMs: 2_000 } })]), false);
+    expect((rows.find((row) => row.kind === "fold") as Extract<Row, { kind: "fold" }>).failed).toBe(true);
   });
 
   it("leaves the turn the agent is still working on alone", () => {

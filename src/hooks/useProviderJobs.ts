@@ -1,3 +1,5 @@
+import { defineSetting, type SettingDef } from "../lib/settingsEngine/define";
+import { readSetting, saveSetting, setSetting } from "../lib/settingsEngine/store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { PROVIDERS } from "../lib/providers";
@@ -43,6 +45,36 @@ const known = new Map<string, Record<string, ProviderJob>>();
  * with their live progress. Call `useProviderStatus().refresh()` when one ends:
  * the daemon already dropped its caches, so the next read is fresh.
  */
+/** How a CLI was last installed on a machine: that machine's own, so it is kept on it. */
+const methodSettings = new Map<string, SettingDef<string | null>>();
+function methodSetting(provider: string): SettingDef<string | null> {
+  let def = methodSettings.get(provider);
+  if (!def) {
+    def = defineSetting<string | null>({
+      key: `providers:method:${provider}`,
+      scope: "env",
+      fallback: null,
+      parse: (raw) => raw,
+      format: (value) => value,
+    });
+    methodSettings.set(provider, def);
+  }
+  return def;
+}
+
+/** The machine's own, or what this Mac kept for it before there was one, which moves there. */
+async function rememberedMethod(envId: string, provider: string): Promise<string | null> {
+  const def = methodSetting(provider);
+  const held = await readSetting(def, { env: envId });
+  if (held) return held;
+  const legacyKey = api.providerMethodKey(envId, provider);
+  const legacy = await api.stateGet(legacyKey);
+  if (!legacy) return null;
+  await setSetting(def, legacy, { env: envId });
+  await api.stateDelete(legacyKey);
+  return legacy;
+}
+
 export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) => void): ProviderJobsState {
   const [jobs, setJobs] = useState<Record<string, ProviderJob>>(known.get(envId) ?? {});
   const [methods, setMethods] = useState<Record<string, ProviderJobMethod>>({});
@@ -118,7 +150,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
   useEffect(() => {
     let alive = true;
     const providers = PROVIDERS.map((provider) => provider.id);
-    void Promise.all(providers.map((p) => api.stateGet(api.providerMethodKey(envId, p)).catch(() => null))).then((values) => {
+    void Promise.all(providers.map((p) => rememberedMethod(envId, p).catch(() => null))).then((values) => {
       if (!alive) return;
       const found: Record<string, ProviderJobMethod> = {};
       providers.forEach((provider, at) => {
@@ -138,7 +170,7 @@ export function useProviderJobs(envId: string, onSettled?: (job: ProviderJob) =>
       put(job);
       if (method && method !== "native") {
         setMethods((all) => ({ ...all, [provider]: method }));
-        void api.stateSet(api.providerMethodKey(envId, provider), method).catch(() => {});
+        saveSetting(methodSetting(provider), method, { env: envId });
       }
       return job;
     },

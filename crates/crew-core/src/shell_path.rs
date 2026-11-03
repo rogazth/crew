@@ -186,7 +186,7 @@ fn read_login_path() -> Option<String> {
             _ => {
                 unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
                 let _ = child.wait();
-                eprintln!("[path] {shell} -ilc did not answer in {LOGIN_TIMEOUT:?}");
+                tracing::warn!(%shell, timeout_ms = LOGIN_TIMEOUT.as_millis() as u64, "shell_path.login_timeout");
                 return None;
             }
         }

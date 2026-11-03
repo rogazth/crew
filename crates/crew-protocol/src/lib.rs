@@ -254,6 +254,46 @@ pub struct RemoteEnv {
     pub ssh: String,
 }
 
+/// One setting as a daemon keeps it: `settings` in crew-core says what the
+/// columns mean. A null value is the default, chosen at that revision.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingRow {
+    pub key: String,
+    pub value: Option<String>,
+    pub scope: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub origin: String,
+}
+
+/// `settings_set`: a choice made on this daemon.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingSet {
+    pub key: String,
+    pub value: Option<String>,
+    pub scope: String,
+}
+
+/// `settings_merge`: rows from the other copies. Empty still confirms this daemon.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingsMerge {
+    pub rows: Vec<SettingRow>,
+}
+
+/// `settings-changed`: rows that just changed on the daemon that sends it.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SettingsChanged {
+    pub rows: Vec<SettingRow>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -504,19 +544,6 @@ pub struct BotRule {
     /// Its id within the bot, as the bot names it: `r3`.
     pub id: String,
     pub body: String,
-    /// The user's message that set it, while the transcript has it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cited: Option<CitedMessage>,
-}
-
-/// The start of the user's message a rule cites, and when it was written.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct CitedMessage {
-    pub excerpt: String,
-    #[ts(type = "number")]
-    pub at: i64,
 }
 
 /// `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
@@ -532,6 +559,15 @@ pub struct BotRulesSave {
     pub edit: Vec<BotRuleEdit>,
     #[serde(default)]
     pub remove: Vec<String>,
+}
+
+/// `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
+/// sheet; less than the default is taken as the default.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct BotRulesCap {
+    pub id: String,
+    pub cap: u32,
 }
 
 /// A rule's new text.

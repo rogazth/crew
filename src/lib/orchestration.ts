@@ -2,53 +2,11 @@
  * What the transcript's orchestration rows say, as text: pure, so the
  * sentences and the fold can be checked without a render.
  */
-import type { PanelState } from "./backgroundPanel";
-import { tokenCount } from "./contextMeter";
 import type { Block, CrewTarget } from "./protocol";
 import { agentDetail, type AgentDetail } from "./subagent";
-import { duration } from "./time";
-
-/** The first line with words in it. */
-export function firstLine(text: string): string {
-  return text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
-}
 
 /** A long text folds past this many lines, and shows that many. */
 export const FOLD_LINES = 7;
-
-/** Slack of two lines: a text only just over the limit is not worth a fold. */
-export function foldsLongText(text: string, lines = FOLD_LINES): boolean {
-  return text.split("\n").length > lines + 2;
-}
-
-/** What a started agent's card says after its title: tokens, and where it stands. */
-export function agentMeta(facts: {
-  state: PanelState;
-  tokens?: number | undefined;
-  activity?: string | null | undefined;
-  startedAt?: number | undefined;
-  endedAt?: number | undefined;
-}): string {
-  const parts: string[] = [];
-  if (facts.tokens !== undefined && facts.tokens > 0) parts.push(`${tokenCount(facts.tokens)} tokens`);
-  const took =
-    facts.startedAt !== undefined && facts.endedAt !== undefined ? ` after ${duration(Math.max(0, facts.endedAt - facts.startedAt))}` : "";
-  switch (facts.state) {
-    case "running":
-      parts.push(facts.activity?.trim() || "running");
-      break;
-    case "done":
-      parts.push(`done${took}`);
-      break;
-    case "failed":
-      parts.push(`failed${took}`);
-      break;
-    case "stopped":
-      parts.push(`stopped${took}`);
-      break;
-  }
-  return parts.join(" · ");
-}
 
 /** What a Crew call started. */
 export type Started =
@@ -70,14 +28,6 @@ export function startedOf(block: Block): Started | null {
   }
   if (detail?.kind === "crew" && detail.verb === "start_sessions") return { kind: "sessions", targets: detail.targets };
   return null;
-}
-
-/** "Started 3 sessions", with how many did not start when some did not. */
-export function startedSessionsSentence(targets: readonly CrewTarget[]): string {
-  const failed = targets.filter((target) => target.note).length;
-  const made = targets.length - failed;
-  const sentence = `Started ${made} ${made === 1 ? "session" : "sessions"}`;
-  return failed > 0 ? `${sentence}, ${failed} failed` : sentence;
 }
 
 /** The name a native subagent goes by in a row: its type, else what it was for. */
@@ -111,15 +61,6 @@ export function nativeReportAt(block: Block): number | undefined {
 /** A letter's words without the daemon's "It exited (why)." lead: the model reads it, the transcript does not. */
 export function exitedless(block: Block): string {
   return block.letterKind === "report" ? block.text.replace(/^It exited \([^)\n]*\)\.\s*/, "") : block.text;
-}
-
-/**
- * A question letter's words without the options the daemon lists under each
- * question ("   Options: Red; Blue"): the model reads them to answer, while the
- * chat shows the child's options as buttons under the letter.
- */
-export function optionless(text: string): string {
-  return text.replace(/\n[ \t]+Options(?: \([^)\n]*\))?: [^\n]*/g, "");
 }
 
 /** A report letter: what a Crew subagent's last turn sent its parent. */
@@ -223,37 +164,3 @@ export function sentOf(block: Block): Sent | null {
   };
 }
 
-/** What a letter from another party says it is, by the kind its mailbox gave it. */
-export function envelopeOf(kind: string | undefined): { word: string; tag?: string } {
-  switch (kind) {
-    case "question":
-    case "approval":
-      return { word: "asks", tag: "waits on an answer" };
-    case "started":
-      return { word: "started this session" };
-    default:
-      return { word: "wrote" };
-  }
-}
-
-/**
- * The child's own card a question or approval letter is about: the newest one
- * of that kind whose words the letter carries (the letter is made from the
- * request's text, so an older letter never claims a newer request).
- */
-export function askOf(blocks: readonly Block[], kind: "question" | "approval", letterText: string): Block | null {
-  for (let at = blocks.length - 1; at >= 0; at--) {
-    const block = blocks[at]!;
-    if (block.role !== kind) continue;
-    const words = kind === "question" ? (block.question?.questions.map((one) => one.question) ?? []) : [block.text];
-    if (words.some((word) => word && letterText.includes(word))) return block;
-  }
-  return null;
-}
-
-/** A question the parent's chat answers with one click: one single-choice question with a few options. */
-export function isQuickQuestion(block: Block): boolean {
-  const questions = block.question?.questions ?? [];
-  const only = questions[0];
-  return questions.length === 1 && !!only && !only.multiSelect && only.options.length > 0 && only.options.length <= 4;
-}

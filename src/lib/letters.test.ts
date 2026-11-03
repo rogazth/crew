@@ -11,7 +11,7 @@ import {
   queuedLetters,
   refusalOf,
   resolveParty,
-  rightSide,
+  withLetters,
   senderId,
   unseen,
   USER,
@@ -156,10 +156,56 @@ describe("threads", () => {
     expect(merged.map((l) => l.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("puts the chat owner on the right, or the user when the owner is not in the pair", () => {
-    expect(rightSide({ a: LEAD, b: AUTH }, LEAD)).toBe("lead");
-    expect(rightSide({ a: YOU, b: AUTH }, LEAD)).toBe(USER);
+  it("knows the user by USER, whatever id a letter carries", () => {
     expect(senderId({ from: { id: "", name: "You", kind: "user" } })).toBe(USER);
+  });
+
+  describe("withLetters", () => {
+    const from = (id: string, kind: ThreadLetter["kind"], at: number, text: string, sender = "lead"): ThreadLetter => ({
+      ...letter(id, at),
+      kind,
+      text,
+      from: { id: sender, name: sender },
+    });
+
+    it("says when a letter was sent, and leaves it where it reached the agent", () => {
+      const blocks = [
+        { id: "u", role: "user" as const, text: "wait", at: 900, letterId: "L1", fromBot: { id: "lead", name: "lead" } },
+      ];
+      expect(withLetters(blocks, [from("L1", "message", 100, "wait")], "auth")[0]).toMatchObject({ at: 900, sentAt: 100 });
+    });
+
+    it("draws a report once, as the agent's last message, and lets a beat open at it", () => {
+      const blocks = [{ id: "a", role: "assistant" as const, text: "Done.\n", at: 500 }];
+      const out = withLetters(blocks, [from("R", "report", 501, "Done.", "auth")], "auth");
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ id: "a", letterId: "R" });
+    });
+
+    it("finds a question's letter on its request, by when it asked", () => {
+      const blocks = [{ id: "q", role: "question" as const, text: "Which?", at: 500 }];
+      const out = withLetters(blocks, [from("Q", "question", 500, "1. Which?", "auth")], "auth");
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ id: "q", letterId: "Q" });
+    });
+
+    it("adds what the transcript has no place for, by time", () => {
+      const blocks = [
+        { id: "q", role: "question" as const, text: "Which?", at: 500 },
+        { id: "a", role: "assistant" as const, text: "Done.", at: 900 },
+      ];
+      const out = withLetters(blocks, [from("D", "message", 600, "Decision: the first")], "auth");
+      expect(out.map((block) => block.id)).toEqual(["q", "letter-D", "a"]);
+      expect(out[1]).toMatchObject({ role: "user", letterId: "D", fromBot: { id: "lead" } });
+    });
+
+    it("skips what waits in the box, what was set aside, and what is older than the page held", () => {
+      const blocks = [{ id: "a", role: "assistant" as const, text: "Done.", at: 900 }];
+      const pending = { ...from("P", "message", 950, "soon"), state: "pending" as const };
+      const disposed = { ...from("X", "message", 950, "never"), state: "disposed" as const };
+      const old = from("O", "message", 100, "older");
+      expect(withLetters(blocks, [pending, disposed, old], "auth").map((block) => block.id)).toEqual(["a"]);
+    });
   });
 
   it("opens a pair from this chat's side, and the user's write to a child as that pair", () => {

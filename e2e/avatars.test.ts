@@ -22,7 +22,7 @@ async function faceOf(crew: Crew, name: string): Promise<string> {
 
 /** A crewd state key, parsed as JSON when it is JSON. */
 async function stored(crew: Crew, key: string): Promise<unknown> {
-  const raw = await crew.request<string | null>("state_get", { key });
+  const raw = await crew.request<string | null>(key === "bot:avatar" ? "settings_get" : "state_get", { key });
   if (raw === null) return null;
   try {
     return JSON.parse(raw);
@@ -42,8 +42,8 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
 
   // A bot, made in the sheet.
   await pressChord(crew, `${MOD}+Shift+a`);
-  const sheet = page.getByRole("dialog", { name: "New bot" });
-  await sheet.getByPlaceholder("e.g. Research").fill("Scout");
+  const sheet = page.getByRole("complementary", { name: "New bot" });
+  await sheet.getByLabel("Name", { exact: true }).fill("Scout");
   await sheet.getByRole("button", { name: "Create bot" }).click();
   await sheet.waitFor({ state: "detached" });
   const bot = await waitFor(
@@ -97,16 +97,18 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
     { message: "the bot's menu opens" },
   );
   await item.click();
-  const settings = page.getByRole("dialog", { name: "Bot settings" });
+  const settings = page.getByRole("complementary", { name: "Bot settings" });
   await settings.waitFor();
   const before = ((await stored(crew, "bot:faces")) ?? {}) as Faces;
+  await settings.getByRole("button", { name: "Change its face" }).click();
   await settings.getByRole("button", { name: "Deal new faces" }).click();
   const choice = settings.getByRole("radio", { name: "Use this face" }).nth(2);
   const chosen = await waitFor(() => choice.locator("[data-bot-face]").getAttribute("src", { timeout: 1000 }), {
     message: "the hand draws its faces",
   });
+  // A bot that exists keeps a change as it is made: there is no Save.
   await choice.click();
-  await settings.getByRole("button", { name: "Save" }).click();
+  await settings.getByRole("button", { name: "Close" }).click();
   await settings.waitFor({ state: "detached" });
   const faces = await waitFor(
     async () => {

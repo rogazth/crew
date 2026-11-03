@@ -139,6 +139,16 @@ const FAILED_STARTS: &str = "crewd.failed-starts";
 /// instead, and that child fails the same way where the app shows it. A
 /// transient one exits 1 for launchd to retry, a few times at most.
 fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
+    let code = start_daemon(args, served);
+    // main returns without dropping statics: what the trace still holds is written out here.
+    crewd::trace::flush();
+    code
+}
+
+// Before the trace is up (arguments, the data dir) and after `run` gave up, stderr is all
+// there is: the app and `journalctl` show these lines as they are.
+#[allow(clippy::disallowed_macros)]
+fn start_daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
     let supervisor = match served.map(Ok).unwrap_or_else(|| supervisor(args)) {
         Ok(supervisor) => supervisor,
         Err(error) => {
@@ -228,19 +238,36 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
     // cleanup as any stop, instead of killing crewd half started.
-    let (stop, stopped) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<&'static str>();
     watch_signals(stop.clone(), supervisor != Supervisor::Served).map_err(Failure::Transient)?;
     if let Some(pid) = owner {
         watch_owner(pid, stop.clone());
     }
     if supervisor == Supervisor::Launchd {
         tidy_log_every(dir.join(crew_cli::launch_agent::LOG));
-        eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
     }
     std::fs::create_dir_all(dir).map_err(|e| Failure::Permanent(format!("{}: {e}", dir.display())))?;
     // Before the socket, the database or anything else in the folder. Held
     // until `run` returns, after everything below has stopped.
-    let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
+    let _lock = DataLock::acquire(dir).map_err(|error| {
+        // Not through the subscriber, which would open the files of the daemon that holds the lock.
+        crewd::trace::note_refusal(dir, "daemon.lock_failed", &crew_core::trace::error_text(&error));
+        Failure::Permanent(error)
+    })?;
+    // After the lock: two daemons never append to, or rotate, the same files.
+    let traced = crewd::trace::init(dir);
+    tracing::info!(
+        target: "daemon",
+        version = env!("CARGO_PKG_VERSION"),
+        pid = std::process::id(),
+        data_dir = %dir.display(),
+        supervisor = ?supervisor,
+        exit_with_pid = owner,
+        "daemon.start"
+    );
+    if let Err(error) = traced {
+        tracing::warn!(target: "daemon", error = %crew_core::trace::error_text(&error), "trace.unavailable");
+    }
     // Before anything writes a file: where this environment keeps what is not
     // in the data dir itself.
     crew_core::paths::init(crew_core::paths::Layout::read(dir).map_err(Failure::Permanent)?);
@@ -250,23 +277,23 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
     // Before anything else is opened: a daemon already serving this data dir
     // owns its database too.
     let bridge = Bridge::start(dir.to_path_buf()).map_err(|error| match error {
-        StartError::Taken(_) => Failure::Permanent(error.to_string()),
-        StartError::Failed(message) => Failure::Transient(format!("bridge: {message}")),
+        StartError::Taken(_) => failed("daemon.already_running", Failure::Permanent(error.to_string())),
+        StartError::Failed(message) => failed("daemon.bridge_failed", Failure::Transient(format!("bridge: {message}"))),
     })?;
     let started = start(dir, &bridge, listen);
     let (pty, agents, processes, handle) = match started {
         Ok(started) => started,
         Err(failure) => {
             bridge.shutdown();
-            return Err(failure);
+            return Err(failed("daemon.start_failed", failure));
         }
     };
     let _ = std::fs::remove_file(dir.join(FAILED_STARTS));
 
     let info = DaemonInfo { url: handle.url().to_string(), token: handle.token().to_string() };
     // Asked to stop while it was starting: nobody is told it is up.
-    let early = stopped.try_recv().is_ok();
-    if !early {
+    let early = stopped.try_recv().ok();
+    if early.is_none() {
         // Before the handshake line, so whoever waits on that line can rely on
         // the file. A daemon that cannot write it still serves the window.
         if let Err(error) = write_daemon_file(
@@ -280,7 +307,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
                 pid: Some(std::process::id()),
             },
         ) {
-            eprintln!("[crewd] daemon.json: {error}");
+            tracing::warn!(target: "daemon", error = %crew_core::trace::error_text(&error.to_string()), "daemon.json_unwritten");
         }
         match supervisor {
             Supervisor::Parent => {
@@ -294,15 +321,17 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
                 // keeps serving.
                 let mut stdout = io::stdout();
                 let _ = writeln!(stdout, "{}", serde_json::json!({ "url": info.url })).and_then(|_| stdout.flush());
-                eprintln!("[crewd] {} serving {} from {}", env!("CARGO_PKG_VERSION"), info.url, dir.display());
             }
             Supervisor::Launchd => {}
         }
-        wait_for_exit(stop, stopped, supervisor == Supervisor::Parent, handle.exit_requests());
+        // Where it listens as host:port; a URL is never in a trace line.
+        tracing::info!(target: "daemon", addr = %info.url.trim_start_matches("ws://"), supervisor = ?supervisor, "daemon.ready");
     }
-    if supervisor == Supervisor::Launchd {
-        eprintln!("[crewd] stopping");
-    }
+    let reason = match early {
+        Some(reason) => reason,
+        None => wait_for_exit(stop, stopped, supervisor == Supervisor::Parent, handle.exit_requests()),
+    };
+    tracing::info!(target: "daemon", reason, "daemon.shutdown");
 
     // Before anything is stopped: a CLI that got the same signal (systemd
     // signals the whole unit) may be gone before `kill_all` reaches it.
@@ -339,8 +368,8 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     // has its history only in its CLI's files.
     match crew_core::history_import::import_all(&store, &crew_core::history_import::Sources::from_env()) {
         Ok(0) => {}
-        Ok(n) => eprintln!("[crewd] brought the history of {n} sessions into the chat"),
-        Err(e) => eprintln!("[crewd] history import: {e}"),
+        Ok(n) => tracing::info!(sessions = n, "history.imported"),
+        Err(e) => tracing::warn!(error = %crew_core::trace::error_text(&e.to_string()), "history.import_failed"),
     }
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
@@ -366,6 +395,14 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     // On every machine: its CLIs are the ones its sessions run.
     handle.read_provider_servers();
     Ok((pty, agents, processes, handle))
+}
+
+/// Records why a start failed. The line is not printed: `daemon` prints the
+/// failure itself, in the plain form the app and `journalctl` show.
+fn failed(name: &'static str, failure: Failure) -> Failure {
+    let permanent = matches!(failure, Failure::Permanent(_));
+    tracing::error!(target: "daemon.exit", permanent, error = %crew_core::trace::error_text(failure.message()), "{}", name);
+    failure
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -439,7 +476,7 @@ fn tidy_log(path: &Path, cap: u64, keep: u64) {
 /// SIGTERM, SIGINT and, when `hangup` holds, SIGHUP, each a request to stop. The handlers are
 /// registered here, on the caller's thread, so they are in place when this
 /// returns; the thread it leaves behind only waits for one to arrive.
-fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
+fn watch_signals(stop: mpsc::Sender<&'static str>, hangup: bool) -> Result<(), String> {
     use tokio::signal::unix::{signal, SignalKind};
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("signals: {e}"))?;
     let (mut term, mut int, mut hup) = {
@@ -459,7 +496,7 @@ fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
                     }
                 }
             });
-            let _ = stop.send(());
+            let _ = stop.send("signal");
         })
         .map(|_| ())
         .map_err(|e| format!("signals: {e}"))
@@ -469,15 +506,15 @@ fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
 /// `daemon_shutdown`, or, for the app's child, the end of stdin.
 /// Stops crewd, the way a signal does, once `pid` is gone: whatever started
 /// it ended without saying so, a test runner killed on a timeout among them.
-fn watch_owner(pid: i32, stop: mpsc::Sender<()>) {
+fn watch_owner(pid: i32, stop: mpsc::Sender<&'static str>) {
     let _ = thread::Builder::new().name("crewd-owner".into()).spawn(move || {
         while owner_alive(pid) {
             thread::sleep(Duration::from_millis(500));
         }
-        let _ = stop.send(());
-        // Best effort, after the stop: stderr is often a pipe to the very
-        // process that is gone, and `eprintln!` panics when the write fails.
-        let _ = writeln!(io::stderr(), "[crewd] pid {pid}, which this daemon was to outlive no longer, is gone; stopping");
+        let _ = stop.send("owner_gone");
+        // Through tracing, whose stderr writer ignores a closed pipe: the process
+        // that is gone is often the one stderr went to, and `eprintln!` would panic.
+        tracing::info!(target: "daemon", owner_pid = pid, "daemon.owner_gone");
     });
 }
 
@@ -487,7 +524,13 @@ fn owner_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
 }
 
-fn wait_for_exit(stop: mpsc::Sender<()>, stopped: mpsc::Receiver<()>, watch_stdin: bool, requests: Option<mpsc::Receiver<()>>) {
+/// Why it stopped: `signal`, `owner_gone`, `stdin_closed` or `daemon_shutdown`.
+fn wait_for_exit(
+    stop: mpsc::Sender<&'static str>,
+    stopped: mpsc::Receiver<&'static str>,
+    watch_stdin: bool,
+    requests: Option<mpsc::Receiver<()>>,
+) -> &'static str {
     if watch_stdin {
         thread::Builder::new()
             .name("crewd-stdin".into())
@@ -499,7 +542,7 @@ fn wait_for_exit(stop: mpsc::Sender<()>, stopped: mpsc::Receiver<()>, watch_stdi
                     loop {
                         match stdin.read(&mut buf) {
                             Ok(0) | Err(_) => {
-                                let _ = stop.send(());
+                                let _ = stop.send("stdin_closed");
                                 return;
                             }
                             Ok(_) => {}
@@ -515,13 +558,13 @@ fn wait_for_exit(stop: mpsc::Sender<()>, stopped: mpsc::Receiver<()>, watch_stdi
             .name("crewd-exit".into())
             .spawn(move || {
                 if requests.recv().is_ok() {
-                    let _ = stop.send(());
+                    let _ = stop.send("daemon_shutdown");
                 }
             })
             .expect("exit watcher");
     }
 
-    let _ = stopped.recv();
+    stopped.recv().unwrap_or("channel_closed")
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { ChevronRightIcon, CircleCheckIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayLabel } from "../../lib/time";
@@ -7,8 +7,8 @@ import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
-import { ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
-import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter, UserMessage } from "./Message";
+import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
+import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter } from "./Message";
 import { SIGNED_IN_NOTE } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
 
@@ -35,7 +35,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
     switch (row.kind) {
       case "activity":
         return (
-          <div key={row.id} className={className}>
+          <div key={row.id} className={className} {...(row.blocks.length === 1 && row.blocks[0]!.letterId ? { "data-letter": row.blocks[0]!.letterId } : {})}>
             <ActivityGroup
               blocks={row.blocks}
               live={working && index === rows.length - 1}
@@ -139,8 +139,10 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
             data-message={block.role}
             className={`${className}${block.id === focusId ? " crew-found" : ""}`}
           >
-            {block.role === "user" ? (
-              <UserMessage block={block} />
+            {row.answer ? (
+              <AgentAnswer block={block} report={row.answer === "report"} />
+            ) : block.role === "user" ? (
+              <AskedOrSaid block={block} />
             ) : block.role === "system" ? (
               <SystemLine block={block} signedIn={signedAfter(rows, index)} />
             ) : (
@@ -178,14 +180,9 @@ export function TurnFold({
   const label = row.durationMs !== undefined ? `Worked for ${duration(row.durationMs)}` : "Worked";
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
-        <span className="crew-node relative">
-          <CircleCheckIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
-          <ChevronRightIcon
-            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-          />
-        </span>
+      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-1.5 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="text-text-muted tabular-nums transition-colors group-hover:text-text">{label}</span>
+        <ChevronRightIcon className={`size-3 text-icon opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90 opacity-100" : ""}`} />
         {row.failed ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
         <span className="h-px flex-1 bg-hairline" />
       </Collapsible.Trigger>

@@ -128,13 +128,19 @@ impl BrowserRelay {
     pub fn register_host(&self, client: u64, hello: Hello) {
         let order = self.tick();
         let mut hosts = self.hosts();
-        match hosts.iter_mut().find(|host| host.client == client) {
+        let acks = hello.acks;
+        let again = match hosts.iter_mut().find(|host| host.client == client) {
             Some(host) => {
                 host.hello = hello;
                 host.registered = order;
+                true
             }
-            None => hosts.push(Host { client, hello, registered: order, focused: 0, pages: Vec::new() }),
-        }
+            None => {
+                hosts.push(Host { client, hello, registered: order, focused: 0, pages: Vec::new() });
+                false
+            }
+        };
+        tracing::info!(client_id = client, acks, again, hosts = hosts.len(), "browser.host_registered");
     }
 
     /// The pages `client` shows for this machine's workspaces, all of them.
@@ -170,6 +176,7 @@ impl BrowserRelay {
         };
         let now = crate::store::now_millis();
         let name = self.label(&host.hello);
+        tracing::info!(client_id = client, pages = host.pages.len(), "browser.host_gone");
         {
             let mut gone = self.gone();
             gone.retain(|_, (_, at)| now - *at < GONE_MS);

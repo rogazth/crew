@@ -56,11 +56,11 @@ async function idle(crew: Crew, session: Session): Promise<void> {
   await waitFor(async () => (await storedStatus(crew, session.id)) === "idle", { message: `${session.name} is idle again` });
 }
 
-/** Settings › General › Bypass permissions, through its confirmation when it turns on. */
+/** Settings › Providers › Bypass permissions, through its confirmation when it turns on. */
 async function setBypass(crew: Crew, on: boolean): Promise<void> {
   const page = crew.window;
   await pressChord(crew, `${MOD}+,`);
-  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
   const toggle = page.getByRole("switch", { name: /Bypass permissions/ });
   assert.equal(await toggle.getAttribute("aria-checked"), String(!on));
   await toggle.click();
@@ -70,7 +70,7 @@ async function setBypass(crew: Crew, on: boolean): Promise<void> {
     await confirm.waitFor({ state: "detached" });
   }
   await waitFor(
-    async () => ((await crew.request<string | null>("state_get", { key: "sessions:bypass-permissions" })) === "on") === on,
+    async () => ((await crew.request<string | null>("settings_get", { key: "sessions:bypass-permissions" })) === "on") === on,
     { message: `crewd keeps the setting ${on ? "on" : "off"}` },
   );
   await pressChord(crew, `${MOD}+,`);
@@ -102,8 +102,8 @@ test("a session that asks raises a card for its CLI's tool call, its row reads N
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   await crew.reload();
@@ -153,8 +153,8 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   await crew.reload();
@@ -207,8 +207,8 @@ test("Full access from the Access chip relaunches the CLI without asking, and As
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await crew.request("state_set", {
-    key: "providers:default",
+  await crew.request("settings_set", {
+    key: "providers:default", scope: "global",
     value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
   });
   await crew.reload();

@@ -34,6 +34,9 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
 
   const value = draft ?? displayUrl(url);
   const rows = open ? buildSuggestions(value, resolveAddress(value, searchTemplate), history, SUGGESTIONS) : [];
+  // The highlighted row previews in the bar; the list keeps following what was typed.
+  const highlighted = cursor >= 0 ? rows[cursor] : undefined;
+  const shown = highlighted ? (highlighted.kind === "search" ? highlighted.label : highlighted.url) : value;
 
   useImperativeHandle(ref, () => ({
     focus() {
@@ -51,6 +54,11 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
     },
     dismiss: () => setOpen(false),
   }));
+
+  // A navigation while the bar is unfocused replaces a left-behind draft, so it never sits over a new page.
+  useEffect(() => {
+    if (document.activeElement !== input.current) setDraft(null);
+  }, [url]);
 
   useEffect(() => {
     if (!open) return;
@@ -104,11 +112,23 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
     }
   }
 
+  // Rows appear (and shift while filtering) under a still pointer and the browser answers with
+  // mouse events. Only a pointer that actually travelled may steer the cursor.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  function hoverAt(index: number) {
+    return (event: React.MouseEvent) => {
+      const last = pointer.current;
+      pointer.current = { x: event.screenX, y: event.screenY };
+      if (!last || (last.x === event.screenX && last.y === event.screenY)) return;
+      setCursor(index);
+    };
+  }
+
   return (
     <div className="relative min-w-0 flex-1" data-tauri-drag-region="false">
       <input
         ref={input}
-        value={value}
+        value={shown}
         aria-label="Address"
         placeholder="Search or enter address"
         spellCheck={false}
@@ -128,10 +148,11 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
             suggest("");
           }
         }}
-        // Leaving the bar gives it back to the page's URL, so a navigation never lands behind stale text.
+        // Leaving the bar keeps what was typed; a blank bar goes back to the page's URL.
         onBlur={() => {
           setOpen(false);
-          setDraft(null);
+          setCursor(-1);
+          if (!draft?.trim()) setDraft(null);
         }}
         onChange={(event) => {
           const text = event.target.value;
@@ -147,6 +168,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
         <div
           role="listbox"
           aria-label="Suggestions"
+          onMouseLeave={() => setCursor(-1)}
           className="absolute top-full right-0 left-0 z-20 mt-1 rounded-lg bg-surface p-1 shadow-float"
         >
           {rows.map((row, at) => (
@@ -154,7 +176,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
               key={`${row.kind}:${row.url}`}
               row={row}
               active={at === cursor}
-              onHover={() => setCursor(at)}
+              onHover={hoverAt(at)}
               onPick={() => go(row.url)}
             />
           ))}
@@ -174,7 +196,7 @@ function Row({
 }: {
   row: Suggestion;
   active: boolean;
-  onHover: () => void;
+  onHover: (event: React.MouseEvent) => void;
   onPick: () => void;
 }) {
   const icon =
@@ -194,15 +216,15 @@ function Row({
       tabIndex={-1}
       // Keeps focus in the input, so the click lands before blur closes the list.
       onMouseDown={(event) => event.preventDefault()}
-      onMouseEnter={onHover}
+      onMouseMove={onHover}
       onClick={onPick}
       className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] ${
         active ? "bg-selected text-text" : "text-text-muted"
       }`}
     >
       {icon}
-      <span className="shrink-0 truncate text-text">{row.label}</span>
-      {detail && <span className="min-w-0 truncate text-[12px] opacity-60">{detail}</span>}
+      <span className="min-w-0 truncate text-text">{row.label}</span>
+      {detail && <span className="min-w-0 shrink-[3] truncate text-[12px] opacity-60">{detail}</span>}
     </button>
   );
 }

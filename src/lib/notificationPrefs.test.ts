@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("./client", () => ({
+  client: {
+    request: async (method: string, params: Record<string, unknown>) =>
+      method === "settings_list" ? [] : method === "settings_set" ? { ...params, revision: 1, origin: "test" } : null,
+    on: () => () => {},
+  },
+}));
 vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }));
 
 const { DEFAULT_NOTIFICATION_PREFS, isPaused, parseNotificationPrefs, pauseEnd } = await import("./notificationPrefs");

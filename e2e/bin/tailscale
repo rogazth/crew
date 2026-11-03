@@ -1,0 +1,6 @@
+#!/bin/sh
+# The e2e machine has no Tailscale: Crew's install then keeps crewd on the machine's loopback and
+# reaches it over ssh, which is what these specs are about. (The Mac that runs them may have it, and
+# a crewd must never listen on its tailnet address from a spec.)
+echo "tailscale: command not found" >&2
+exit 127

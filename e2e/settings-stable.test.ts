@@ -63,7 +63,7 @@ function shifts(frames: Frame[], label: string, name: string): string[] {
 test("S1: every settings page paints once, first visit and return", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
-  await crew.request("state_set", { key: "sessions:bypass-permissions", value: "on" });
+  await crew.request("settings_set", { key: "sessions:bypass-permissions", value: "on", scope: "global" });
   const found = shifts(await watch(crew, () => pressChord(crew, `${MOD}+,`)), "open", "General");
   for (const round of [1, 2]) {
     for (const label of [...PAGES.slice(1), PAGES[0]!]) {

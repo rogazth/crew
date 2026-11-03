@@ -1,17 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { publishWorkspaces } from "../lib/placeStore";
 import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
-import { parseReopen, REOPEN_KEY } from "../lib/startup";
+import { readSetting } from "../lib/settingsEngine/store";
+import { reopenSetting } from "../lib/startup";
 import { nameFromPath, resolveActive } from "../lib/workspaces";
+import { trace } from "../lib/trace";
 
 export function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The first workspace is the one the window starts on; every one after it is a switch.
+  const shown = useRef<string | null>(null);
+  useEffect(() => {
+    if (shown.current !== null && activeId !== shown.current) trace.info("workspace.switch", { workspace: activeId, from: shown.current });
+    shown.current = activeId ?? shown.current;
+  }, [activeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,14 +32,14 @@ export function useWorkspaces() {
         Promise.all([
           api.listWorkspaces(),
           api.getActiveWorkspace(),
-          api.stateGet(REOPEN_KEY).catch(() => null),
+          readSetting(reopenSetting).catch(() => true),
         ]),
       )
       .then(([list, active, reopen]) => {
         if (cancelled) return;
         setWorkspaces(list);
         // "Reopen where you left off" off: start at Home, not at the saved workspace. Its tabs restore as always.
-        const start = parseReopen(reopen) ? active : (list.find((w) => w.home)?.id ?? active);
+        const start = reopen ? active : (list.find((w) => w.home)?.id ?? active);
         setActiveId(resolveActive(list, start)?.id ?? null);
       })
       .catch((e) => !cancelled && setError(String(e)))
