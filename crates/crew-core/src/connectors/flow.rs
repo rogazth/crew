@@ -7,7 +7,6 @@
 //! rotating refresh token is never spent twice.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,8 +23,9 @@ use super::remote::{RemoteClient, RemoteError};
 use super::vault::{Grant, VaultStore};
 use crate::store::{now_millis, Store};
 
-/// Where every sign-in is sent back. Nothing listens there: Crew's browser
-/// catches the navigation and hands the URL to `callback`.
+/// Where every sign-in is sent back. Crew's browser catches the navigation,
+/// except Google's, which main's loopback listener receives. Either way the URL
+/// comes to `callback`.
 pub const REDIRECT_URI: &str = "http://127.0.0.1:17899/callback";
 
 /// How long a sign-in the user started may take to come back.
@@ -64,12 +64,6 @@ pub struct Connectors {
     gws: Mutex<Gws>,
     /// Set on a machine that is not the vault: its calls run there.
     link: Mutex<Option<Arc<dyn VaultLink>>>,
-    /// Until when no call starts here: a move is taking the grants away, and
-    /// a refresh now could spend a token already sealed for the new vault.
-    moving_until: AtomicI64,
-    /// Held for reading across a call that may refresh; a move takes it to
-    /// wait for the ones running.
-    in_flight: tokio::sync::RwLock<()>,
     on_change: Arc<dyn Fn() + Send + Sync>,
     /// Its own: the bridge's calls come in on plain threads, and the window's
     /// on the daemon's runtime; both wait here for the network.
@@ -103,8 +97,6 @@ impl Connectors {
             google: Mutex::new((google::Endpoints::default(), None)),
             gws: Mutex::new(Gws::default()),
             link: Mutex::new(None),
-            moving_until: AtomicI64::new(0),
-            in_flight: tokio::sync::RwLock::new(()),
             on_change,
             runtime: Some(runtime),
         }))
@@ -357,99 +349,50 @@ impl Connectors {
         Ok(client)
     }
 
-    /* ── Moving the vault ─────────────────────────────────────────────── */
-
-    /// A move begins: for `ttl` no new call starts here, and this waits up to
-    /// `drain` for the calls running. If they don't finish, calls start again
-    /// and the move is refused, with the old vault as it was.
-    pub async fn stop_calls(&self, ttl: Duration, drain: Duration) -> Result<(), String> {
-        let until = |ttl: Duration| now_millis() + ttl.as_millis() as i64;
-        self.moving_until.store(until(ttl), Ordering::SeqCst);
-        if tokio::time::timeout(drain, self.in_flight.write()).await.is_err() {
-            self.moving_until.store(0, Ordering::SeqCst);
-            return Err("Calls are still running on the vault; try the move again".into());
-        }
-        self.moving_until.store(until(ttl), Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn moving(&self) -> bool {
-        now_millis() < self.moving_until.load(Ordering::SeqCst)
-    }
-
-    /// Leave to start a call that may refresh. Asked again after the wait: a
-    /// call that got in behind a move's drain must not run during the move.
-    async fn enter(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, Unavailable> {
-        let refused = || Unavailable("The vault is moving; try again in a moment.".into());
-        if self.moving() {
-            return Err(refused());
-        }
-        let open = self.in_flight.read().await;
-        if self.moving() {
-            return Err(refused());
-        }
-        Ok(open)
-    }
-
-    /// Everything a vault move carries: every grant, and the config whole.
-    /// Only ever sealed (`seal.rs`) before it leaves the daemon.
-    pub fn move_bundle(&self) -> Result<Vec<u8>, String> {
-        let bundle = MoveBundle { grants: self.vault.all()?, config: super::machines::snapshot(&self.store)? };
-        serde_json::to_vec(&bundle).map_err(|e| e.to_string())
-    }
-
-    /// The new vault takes a move's bundle: the grants into its storage, the
-    /// config over its copy. Then it refreshes every grant at once, so a
-    /// service that rotates refresh tokens retires the copy that travelled.
-    pub async fn land_move(&self, bundle: &[u8]) -> Result<usize, String> {
-        let bundle: MoveBundle = serde_json::from_slice(bundle).map_err(|_| "The vault's grants didn't read".to_string())?;
-        let count = bundle.grants.len();
-        self.set_link(None);
-        self.moving_until.store(0, Ordering::SeqCst);
-        super::machines::import(&self.store, &bundle.config)?;
-        self.vault.replace(bundle.grants.clone())?;
-        self.remotes.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        for (key, grant) in bundle.grants {
-            let Some(refresh_token) = grant.refresh_token.clone() else { continue };
-            match oauth::refresh(&grant.token_endpoint, &grant.client(), &grant.resource, &refresh_token).await {
-                Ok(tokens) => {
-                    let next = Grant {
-                        access_token: tokens.access_token,
-                        refresh_token: tokens.refresh_token.or(grant.refresh_token.clone()),
-                        expires_at: tokens.expires_at,
-                        scope: tokens.scope.or(grant.scope.clone()),
-                        ..grant
-                    };
-                    self.vault.put(&key, &next)?;
-                }
-                // An account that can't refresh now shows it at its next call.
-                Err(e) => eprintln!("[crewd] vault move: {key} didn't refresh: {e}"),
-            }
-        }
-        self.changed();
-        Ok(count)
-    }
+    /* ── Changing the vault ───────────────────────────────────────────── */
 
     pub fn grant_count(&self) -> Result<usize, String> {
         Ok(self.vault.all()?.len())
     }
 
-    /// The old vault, once the new one has the grants: it keeps none.
-    pub fn forget_grants(&self) -> Result<(), String> {
-        self.vault.replace(HashMap::new())
-    }
-
-    /// The vault moved here without the old one: the config this machine had
-    /// stays, and every account asks for a sign-in.
-    pub fn start_empty(&self) -> Result<(), String> {
+    /// This machine becomes the vault. No grant comes with it: tokens never
+    /// cross between machines. `config` replaces its copy when the old vault
+    /// could give one, and every account asks for a sign-in here.
+    pub async fn start_empty(&self, config: Option<super::machines::Snapshot>) -> Result<(), String> {
         self.set_link(None);
-        self.moving_until.store(0, Ordering::SeqCst);
-        self.vault.replace(HashMap::new())?;
+        // Any it held of its own would be left behind by the config over them.
+        self.retire_grants(true).await?;
+        if let Some(config) = &config {
+            super::machines::import(&self.store, config)?;
+        }
         for account in super::list(&self.store)?.into_iter().flat_map(|c| c.accounts) {
-            super::set_state(&self.store, &account.id, AccountState::Expired, Some("The vault moved; sign in again"))?;
+            super::set_state(&self.store, &account.id, AccountState::Expired, Some("The vault changed; sign in again"))?;
         }
         self.changed();
         Ok(())
+    }
+
+    /// Deletes every grant here: this machine is no longer the vault, or was
+    /// replaced while it was off. With `revoke`, each is first given back to
+    /// its service. Not when an account may have signed in on the new vault by
+    /// now: Google revokes a whole account's access to a client, so it would
+    /// sign out the new vault too.
+    pub async fn retire_grants(&self, revoke: bool) -> Result<usize, String> {
+        let keys: Vec<String> = self.vault.all()?.into_keys().collect();
+        let mut retired = 0;
+        for key in keys {
+            // Waits for a refresh running, so it can't save a grant after this.
+            let lock = self.refresh_lock(&key);
+            let _held = lock.lock().await;
+            let Some(grant) = self.vault.get(&key)? else { continue };
+            if revoke {
+                revoke_at_service(&key, &grant).await;
+            }
+            self.vault.delete(&key)?;
+            retired += 1;
+        }
+        self.remotes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        Ok(retired)
     }
 
     /* ── Removing ─────────────────────────────────────────────────────── */
@@ -466,21 +409,7 @@ impl Connectors {
             Some(key) => self.vault.get(key)?.map(|grant| (key.clone(), grant)),
             None => None,
         } {
-            if let Some(endpoint) = &grant.revocation_endpoint {
-                let client = grant.client();
-                // Said in the log, since nothing else shows whether the
-                // service took it. The answer never carries the token.
-                let mut tokens = vec![(&grant.access_token, "access_token")];
-                if let Some(refresh) = &grant.refresh_token {
-                    tokens.insert(0, (refresh, "refresh_token"));
-                }
-                for (token, hint) in tokens {
-                    match oauth::revoke(endpoint, &client, token, hint).await {
-                        Ok(()) => eprintln!("[crewd] account {account_id}: the {hint} was revoked"),
-                        Err(error) => eprintln!("[crewd] account {account_id}: the {hint} was not revoked: {error}"),
-                    }
-                }
-            }
+            revoke_at_service(account_id, &grant).await;
             self.vault.delete(&key)?;
         }
         self.remotes.lock().unwrap_or_else(|e| e.into_inner()).remove(account_id);
@@ -662,7 +591,6 @@ impl Connectors {
             self.changed();
             return Ok(());
         }
-        let _open = self.enter().await.map_err(|Unavailable(line)| line)?;
         let listed = self
             .with_token(account_id, |remote, token| async move { remote.list_tools(&token).await })
             .await
@@ -699,10 +627,6 @@ impl Connectors {
         if let Some(link) = self.link() {
             return self.forward(link.as_ref(), account_id, name, arguments).await;
         }
-        let _open = match self.enter().await {
-            Ok(open) => open,
-            Err(Unavailable(line)) => return tool_error(&line),
-        };
         match super::tool_off(&self.store, account_id, name) {
             Ok(false) => {}
             Ok(true) => return tool_error(&format!("{name} is switched off for {} in Crew.", self.label(account_id))),
@@ -781,11 +705,21 @@ impl Connectors {
     }
 }
 
-/// What a vault move carries, before it is sealed.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct MoveBundle {
-    grants: HashMap<String, Grant>,
-    config: super::machines::Snapshot,
+/// Gives a grant back to its service. Said in the log, since nothing else shows
+/// whether the service took it. The answer never carries the token.
+async fn revoke_at_service(name: &str, grant: &Grant) {
+    let Some(endpoint) = &grant.revocation_endpoint else { return };
+    let client = grant.client();
+    let mut tokens = vec![(&grant.access_token, "access_token")];
+    if let Some(refresh) = &grant.refresh_token {
+        tokens.insert(0, (refresh, "refresh_token"));
+    }
+    for (token, hint) in tokens {
+        match oauth::revoke(endpoint, &client, token, hint).await {
+            Ok(()) => eprintln!("[crewd] {name}: the {hint} was revoked"),
+            Err(error) => eprintln!("[crewd] {name}: the {hint} was not revoked: {error}"),
+        }
+    }
 }
 
 fn tool_error(line: &str) -> Value {
@@ -1076,42 +1010,72 @@ mod tests {
         assert!(line_of(&answer).contains("answer of search is too large"), "{}", line_of(&answer).len());
     }
 
-    /// A move waits for the call running, refuses new ones while it lasts, and
-    /// a move that never finishes opens them again when its handoff runs out.
+    /// The old vault gives its grants back and keeps nothing.
     #[test]
-    fn a_move_waits_for_calls_and_refuses_new_ones_until_it_runs_out() {
-        let (c, _vault, _fake, id) = signed_in(Options::default());
-        c.block_on(async {
-            let running = c.call(&id, "search", json!({ "delayMs": 300 }));
-            let moving = async {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                c.stop_calls(Duration::from_millis(600), Duration::from_secs(5)).await
-            };
-            let (answer, stopped) = tokio::join!(running, moving);
-            assert!(answer["isError"] != true, "the call running finishes: {answer}");
-            stopped.unwrap();
-            let refused = c.call(&id, "search", json!({})).await;
-            assert!(refused["content"][0]["text"].as_str().unwrap().contains("The vault is moving"), "{refused}");
-            tokio::time::sleep(Duration::from_millis(700)).await;
-            let answer = c.call(&id, "search", json!({})).await;
-            assert!(answer["isError"] != true, "a handoff that ran out doesn't block calls: {answer}");
-        });
+    fn a_retired_vault_revokes_its_grants_and_keeps_none() {
+        let (c, vault, fake, id) = signed_in(Options::default());
+        let refresh = vault.get(&id).unwrap().unwrap().refresh_token.unwrap();
+        assert_eq!(c.block_on(c.retire_grants(true)).unwrap(), 1);
+        assert_eq!(c.grant_count().unwrap(), 0);
+        assert!(fake.is_revoked(&refresh));
+        let answer = c.block_on(c.call(&id, "search", json!({})));
+        assert!(line_of(&answer).contains("needs a sign-in again"), "{answer}");
+    }
+
+    /// One replaced while it was off: an account may have signed in on the new
+    /// vault by now, and giving the old grant back could sign that out too.
+    #[test]
+    fn a_vault_replaced_while_off_deletes_its_grants_without_revoking() {
+        let (c, vault, fake, id) = signed_in(Options::default());
+        let refresh = vault.get(&id).unwrap().unwrap().refresh_token.unwrap();
+        c.block_on(c.retire_grants(false)).unwrap();
+        assert_eq!(c.grant_count().unwrap(), 0);
+        assert!(!fake.is_revoked(&refresh));
     }
 
     #[test]
-    fn a_move_that_calls_outlast_is_refused_and_calls_start_again() {
-        let (c, _vault, _fake, id) = signed_in(Options::default());
+    fn a_refresh_running_as_a_vault_retires_doesnt_bring_its_grant_back() {
+        let (c, vault, _fake, id) = signed_in(Options::default());
+        let mut grant = vault.get(&id).unwrap().unwrap();
+        grant.expires_at = Some(now_millis());
+        vault.put(&id, &grant).unwrap();
         c.block_on(async {
-            let running = c.call(&id, "search", json!({ "delayMs": 400 }));
-            let moving = async {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                c.stop_calls(Duration::from_secs(60), Duration::from_millis(50)).await
-            };
-            let (_, stopped) = tokio::join!(running, moving);
-            assert!(stopped.unwrap_err().contains("still running"));
-            let answer = c.call(&id, "search", json!({})).await;
-            assert!(answer["isError"] != true, "{answer}");
+            let call = c.call(&id, "search", json!({}));
+            let retire = c.retire_grants(true);
+            let _ = tokio::join!(call, retire);
         });
+        assert_eq!(c.grant_count().unwrap(), 0);
+    }
+
+    /// The new vault takes the config, no grant, and every account asks for a sign-in.
+    #[test]
+    fn a_new_vault_starts_with_the_config_and_no_sign_in() {
+        let (old, _grants, fake, id) = signed_in(Options::default());
+        let config = crate::connectors::machines::snapshot(&old.store).unwrap();
+        let dir = std::env::temp_dir().join(format!("cf-{}", uuid::Uuid::new_v4()));
+        let store = Store::open(dir.join("crew.db")).unwrap();
+        let grants = Arc::new(MemoryVault::default());
+        let new = Connectors::new(store, grants.clone(), Arc::new(|| {})).unwrap();
+        new.block_on(new.start_empty(Some(config))).unwrap();
+        assert_eq!(grants.all().unwrap().len(), 0);
+        let account = new.account(&id).unwrap();
+        assert_eq!(account.state, AccountState::Expired);
+        assert!(account.error.unwrap().contains("sign in again"));
+        let before = tool_calls(&fake);
+        let answer = new.block_on(new.call(&id, "search", json!({})));
+        assert!(line_of(&answer).contains("needs a sign-in again"), "{answer}");
+        assert_eq!(tool_calls(&fake), before);
+    }
+
+    /// A machine holding its own grants when it becomes the vault gives them back too.
+    #[test]
+    fn a_machine_that_becomes_the_vault_gives_back_what_it_held() {
+        let (c, vault, fake, id) = signed_in(Options::default());
+        let refresh = vault.get(&id).unwrap().unwrap().refresh_token.unwrap();
+        c.block_on(c.start_empty(None)).unwrap();
+        assert_eq!(c.grant_count().unwrap(), 0);
+        assert!(fake.is_revoked(&refresh));
+        assert_eq!(c.account(&id).unwrap().state, AccountState::Expired, "its own config stays, asking for a sign-in");
     }
 
     fn token_requests(fake: &FakeServer) -> usize {

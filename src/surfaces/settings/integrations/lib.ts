@@ -17,7 +17,7 @@ export type Sheet =
   | { kind: "builtin-summary"; builtin: BuiltinConnector }
   /** What a built-in connector is, from its summary or page (builtin.tsx). */
   | { kind: "built-in" }
-  /** Where the sign-ins are kept, and moving them (vault-dialog.tsx). */
+  /** Where the sign-ins are kept, and changing it (vault-dialog.tsx). */
   | { kind: "vault" }
   /** A new account's workspaces, before its sign-in (workspaces.tsx). */
   | { kind: "add-account"; connectorId: string }

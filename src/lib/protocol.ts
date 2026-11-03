@@ -2021,11 +2021,6 @@ url: string, };
 export type VaultJoin = { address: string, token: string, vaultName: string, };
 
 /**
- * A vault move's step that carries the receiving vault's public key.
- */
-export type VaultKey = { publicKey: string, };
-
-/**
  * A machine using this vault, by the token the vault minted for it.
  */
 export type VaultMachine = { id: string, name: string, createdAt: number, 
@@ -2038,12 +2033,6 @@ lastCall: number | null, };
  * A machine's token, minted by the vault, shown once.
  */
 export type VaultMinted = { machine: VaultMachine, token: string, };
-
-/**
- * The new vault pulls the grants from the old one, at `address`, with the
- * handoff token the old one gave the window.
- */
-export type VaultPull = { address: string, token: string, };
 
 /**
  * Where this daemon's connectors' grants are: here, or on another machine

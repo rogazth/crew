@@ -10,8 +10,8 @@
 //!   replaced whole each time the vault's changes (`snapshot`, `import`), and
 //!   spawns from it. No grant is in it.
 //! - **A call** runs on the vault, with the vault's token. No connection
-//!   between machines carries an access or refresh token, except a move's
-//!   sealed grants (`seal.rs`).
+//!   between machines ever carries an access or refresh token, not even when
+//!   the vault changes: every account signs in again on the new one.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -68,7 +68,7 @@ pub fn revoke(store: &Store, id: &str) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM vault_machines WHERE id = ?1", [id]).map(drop))
 }
 
-/// Forgets every machine: a vault that moved serves none.
+/// Forgets every machine: a vault that was replaced serves none.
 pub fn revoke_all(store: &Store) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM vault_machines", []).map(drop))
 }

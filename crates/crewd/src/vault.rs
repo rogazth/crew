@@ -6,8 +6,8 @@
 //!
 //! - **The vault** takes machines' connections on its own socket (`crewd serve`
 //!   on a remote) or, when it is this Mac, on a listener of its own on the
-//!   tailnet address (`vault_listen`), which takes nothing but machine and
-//!   handoff tokens. A machine's connection can run a tool and read the
+//!   tailnet address (`vault_listen`), which takes nothing but machines'
+//!   tokens. A machine's connection can run a tool and read the
 //!   config, and hears when the config changes; nothing else of the daemon
 //!   reaches it.
 //! - **A member** keeps its link (`<data>/vault-link.json`, 0600: the vault's
@@ -15,14 +15,10 @@
 //!   the config each time the vault's changes, and sends its calls there
 //!   (`Connectors::set_link`). It reconnects on its own, and while it can't,
 //!   a call says the vault is offline.
-//! - **A move** goes new vault ← old vault, the window carrying only a public
-//!   key and a handoff token: the new vault makes a key pair for the move
-//!   (`vault_move_open`), the old one answers a handoff token for that key,
-//!   good once and for two minutes (`vault_handoff`), and the new one pulls
-//!   with it (`vault_move_pull`): the old vault seals the grants and the config
-//!   to the key, the new one opens them, stores them and says so, and only
-//!   then does the old one forget its grants and every machine's token. The
-//!   window then joins every machine to the new vault.
+//! - **A change of vault** moves no token. The window gives the new vault the
+//!   old one's config (`vault_config`, `vault_start`), which holds no grant;
+//!   the old one gives its grants back to their services and deletes them
+//!   (`vault_retire`), and every account signs in again on the new one.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,7 +28,6 @@ use std::time::Duration;
 
 use crew_core::connectors::flow::Connectors;
 use crew_core::connectors::machines::{self, InFlight, RateLimit, RelayError, VaultLink};
-use crew_core::connectors::seal::{self, Opener};
 use crew_core::store::{self as app_state, Store};
 use crew_protocol::{self as proto, Request, VaultMachine, VaultMinted, VaultStatus};
 use futures_util::stream::FuturesUnordered;
@@ -43,10 +38,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
 
-/// How long a handoff token and a move's key last.
-const MOVE_TTL_MS: i64 = 2 * 60 * 1000;
-/// How long a move waits for the calls running on the old vault.
-const MOVE_DRAIN: Duration = Duration::from_secs(30);
 /// Calls one machine may make in a minute: there for runaway loops.
 const CALLS_PER_MINUTE: usize = 600;
 /// Calls one machine may have running at once.
@@ -67,25 +58,12 @@ struct LinkConfig {
     vault_name: String,
 }
 
-struct Handoff {
-    public_key: String,
-    expires_at: i64,
-}
-
-/// Who a peer connection is, from the token it brought.
-pub enum PeerKind {
-    Machine(VaultMachine),
-    Handoff(String),
-}
-
 pub struct VaultHost {
     store: Store,
     connectors: Arc<Connectors>,
     data_dir: Option<PathBuf>,
     link: Mutex<Option<Arc<Link>>>,
     listener: Mutex<Option<(String, tokio::task::JoinHandle<()>)>>,
-    opener: Mutex<Option<(Opener, i64)>>,
-    handoffs: Mutex<HashMap<String, Handoff>>,
     limit: RateLimit,
     running: InFlight,
     /// Bumped on every change of the config: machines' connections tell theirs.
@@ -100,8 +78,6 @@ impl VaultHost {
             data_dir,
             link: Mutex::new(None),
             listener: Mutex::new(None),
-            opener: Mutex::new(None),
-            handoffs: Mutex::new(HashMap::new()),
             limit: RateLimit::new(CALLS_PER_MINUTE),
             running: InFlight::new(CALLS_IN_FLIGHT),
             changes,
@@ -246,79 +222,47 @@ impl VaultHost {
         Ok(())
     }
 
-    /// Uses no other vault: this machine holds its own grants again (none, until a move lands).
+    /// Uses no other vault: this machine holds its own grants again (none, until an account signs in).
     pub fn leave(&self) -> Result<(), String> {
         self.write_link(None)?;
         self.stop_link();
         Ok(())
     }
 
-    /// The new vault's key for a move.
-    pub fn move_open(&self) -> proto::VaultKey {
-        let opener = Opener::new();
-        let public_key = opener.public();
-        *self.opener.lock().unwrap_or_else(|e| e.into_inner()) = Some((opener, app_state::now_millis() + MOVE_TTL_MS));
-        proto::VaultKey { public_key }
-    }
-
-    /// The old vault answers a token the new one pulls with, once, within two minutes.
-    pub async fn handoff(&self, key: proto::VaultKey) -> Result<String, String> {
-        if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
-            return Err("This machine isn't the vault".into());
-        }
-        // No refresh from here on: one could spend a token already sealed.
-        self.connectors.stop_calls(Duration::from_millis(MOVE_TTL_MS as u64), MOVE_DRAIN).await?;
-        let token = format!("handoff-{}{}", crate::random_token(), crate::random_token());
-        let now = app_state::now_millis();
-        let mut handoffs = self.handoffs.lock().unwrap_or_else(|e| e.into_inner());
-        handoffs.retain(|_, h| h.expires_at > now);
-        handoffs.insert(token.clone(), Handoff { public_key: key.public_key, expires_at: now + MOVE_TTL_MS });
-        eprintln!("[crewd] vault: a handoff was opened");
-        Ok(token)
-    }
-
-    /// The new vault pulls the grants and the config from the old one.
-    pub async fn move_pull(self: &Arc<Self>, pull: proto::VaultPull) -> Result<usize, String> {
-        let opener = {
-            let mut slot = self.opener.lock().unwrap_or_else(|e| e.into_inner());
-            match slot.take() {
-                Some((opener, until)) if until > app_state::now_millis() => opener,
-                _ => return Err("The move ran out; start it again".into()),
-            }
-        };
-        let mut peer = Peer::connect(&pull.address, &pull.token).await?;
-        let taken = peer.call("vault_handoff_take", json!({ "publicKey": opener.public() })).await?;
-        let sealed = taken["sealed"].as_str().ok_or("The old vault answered no grants")?;
-        let bundle = opener.open(sealed)?;
+    /// This machine becomes the vault: no grant comes with it. `config` is the
+    /// old vault's, when it could give it.
+    pub async fn start(&self, config: Option<machines::Snapshot>) -> Result<(), String> {
         self.leave()?;
-        let count = self.connectors.land_move(&bundle).await?;
-        peer.call("vault_handoff_done", Value::Null).await?;
-        eprintln!("[crewd] vault: {count} grants moved here");
-        Ok(count)
+        self.connectors.run(move |c| async move { c.start_empty(config).await }).await
     }
 
-    /// The vault moves here without the old one's grants.
-    pub fn move_empty(&self) -> Result<(), String> {
-        self.leave()?;
-        self.connectors.start_empty()
+    /// The vault's config, for a new one to start from. It holds no grant.
+    pub fn config(&self) -> Result<machines::Snapshot, String> {
+        machines::snapshot(&self.store)
     }
 
-    /* ── Peers: machines calling, and a new vault pulling ────────────── */
+    /// This machine is no longer the vault: no machine reaches it for calls, and
+    /// its grants are deleted, given back to their services first with `revoke`.
+    pub async fn retire(&self, revoke: bool) -> Result<usize, String> {
+        machines::revoke_all(&self.store)?;
+        self.unlisten()?;
+        let retired = self.connectors.run(move |c| async move { c.retire_grants(revoke).await }).await?;
+        eprintln!("[crewd] vault: {retired} grants were deleted here ({})", if revoke { "revoked first" } else { "not revoked" });
+        Ok(retired)
+    }
 
-    /// Who a token is, other than the daemon's own.
-    pub fn peer_of(&self, token: &str) -> Option<PeerKind> {
-        if token.starts_with("handoff-") {
-            let handoffs = self.handoffs.lock().unwrap_or_else(|e| e.into_inner());
-            return handoffs.get(token).filter(|h| h.expires_at > app_state::now_millis()).map(|_| PeerKind::Handoff(token.to_string()));
-        }
+    /* ── Peers: machines calling ──────────────────────────────────────── */
+
+    /// The machine a token is, other than the daemon's own.
+    pub fn peer_of(&self, token: &str) -> Option<VaultMachine> {
         // A member holds no one's grants: its old tokens reach nothing.
         if self.link.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return None;
         }
-        machines::machine_of(&self.store, token).ok().flatten().map(PeerKind::Machine)
+        machines::machine_of(&self.store, token).ok().flatten()
     }
 
-    /// The tailnet listener: a WebSocket with a machine or handoff token, nothing else.
+    /// The tailnet listener: a WebSocket with a machine's token, nothing else.
     async fn serve_listener(self: Arc<Self>, stream: TcpStream) {
         let Some(ws) = crate::http::accept_socket_only(stream).await else { return };
         let (mut sink, mut source) = ws.split();
@@ -332,7 +276,7 @@ impl VaultHost {
     }
 
     /// A peer's connection, once its token said who it is.
-    pub async fn serve_peer<S, R>(self: Arc<Self>, peer: PeerKind, mut sink: S, mut source: R)
+    pub async fn serve_peer<S, R>(self: Arc<Self>, peer: VaultMachine, mut sink: S, mut source: R)
     where
         S: futures_util::Sink<Message> + Unpin,
         R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -351,7 +295,7 @@ impl VaultHost {
         let mut running = FuturesUnordered::new();
         loop {
             tokio::select! {
-                changed = changes.changed(), if matches!(peer, PeerKind::Machine(_)) => {
+                changed = changes.changed() => {
                     if changed.is_err() || !this.still_known(peer) {
                         break;
                     }
@@ -373,17 +317,15 @@ impl VaultHost {
                         break;
                     }
                     running.push(async move {
-                        let done = request.method == "vault_handoff_done";
-                        let answer = match this.peer_call(peer, &request.method, request.params).await {
+                        match this.peer_call(peer, &request.method, request.params).await {
                             Ok(value) => proto::ok(request.id, value),
                             Err(error) => proto::err(request.id, error),
-                        };
-                        (done, answer)
+                        }
                     });
                 }
-                Some((done, answer)) = running.next(), if !running.is_empty() => {
+                Some(answer) = running.next(), if !running.is_empty() => {
                     let Ok(text) = serde_json::to_string(&answer) else { break };
-                    if sink.send(Message::Text(text.into())).await.is_err() || done {
+                    if sink.send(Message::Text(text.into())).await.is_err() {
                         break;
                     }
                 }
@@ -392,24 +334,18 @@ impl VaultHost {
         let _ = sink.close().await;
     }
 
-    fn still_known(&self, peer: &PeerKind) -> bool {
-        match peer {
-            PeerKind::Machine(machine) => {
-                self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && machines::is_known(&self.store, &machine.id).unwrap_or(false)
-            }
-            PeerKind::Handoff(_) => true,
-        }
+    fn still_known(&self, machine: &VaultMachine) -> bool {
+        self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && machines::is_known(&self.store, &machine.id).unwrap_or(false)
     }
 
-    async fn peer_call(&self, peer: &PeerKind, method: &str, params: Value) -> Result<Value, String> {
-        match (peer, method) {
-            (PeerKind::Machine(machine), "vault_config") => {
+    async fn peer_call(&self, machine: &VaultMachine, method: &str, params: Value) -> Result<Value, String> {
+        match method {
+            "vault_config" => {
                 let store = self.store.clone();
                 let snap = tokio::task::spawn_blocking(move || machines::snapshot(&store)).await.map_err(|e| e.to_string())??;
-                let _ = &machine.id;
                 serde_json::to_value(snap).map_err(|e| e.to_string())
             }
-            (PeerKind::Machine(machine), "vault_call") => {
+            "vault_call" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Ask {
@@ -442,7 +378,7 @@ impl VaultHost {
                 let _ = machines::called(&self.store, &machine.id);
                 Ok(answer)
             }
-            (PeerKind::Machine(machine), "vault_tools_refresh") => {
+            "vault_tools_refresh" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct Ask {
@@ -459,26 +395,7 @@ impl VaultHost {
                 });
                 Ok(Value::Null)
             }
-            (PeerKind::Handoff(token), "vault_handoff_take") => {
-                let now = app_state::now_millis();
-                let key = self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).get(token).filter(|h| h.expires_at > now).map(|h| h.public_key.clone());
-                let key = key.ok_or("The handoff ran out")?;
-                if params["publicKey"].as_str() != Some(key.as_str()) {
-                    return Err("The handoff is for another key".into());
-                }
-                let bundle = self.connectors.move_bundle()?;
-                eprintln!("[crewd] vault: the grants were sealed for the new vault");
-                Ok(json!({ "sealed": seal::seal(&key, &bundle)? }))
-            }
-            (PeerKind::Handoff(token), "vault_handoff_done") => {
-                self.handoffs.lock().unwrap_or_else(|e| e.into_inner()).remove(token);
-                self.connectors.forget_grants()?;
-                machines::revoke_all(&self.store)?;
-                self.unlisten()?;
-                eprintln!("[crewd] vault: the grants moved away and were deleted here");
-                Ok(Value::Null)
-            }
-            (_, other) => Err(format!("{other} is not for this connection")),
+            other => Err(format!("{other} is not for this connection")),
         }
     }
 }
@@ -487,11 +404,10 @@ impl VaultHost {
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 
-/// One connection to another daemon, for calls one at a time.
+/// An authenticated connection to the vault.
 struct Peer {
     sink: futures_util::stream::SplitSink<Ws, Message>,
     source: futures_util::stream::SplitStream<Ws>,
-    next: u32,
 }
 
 impl Peer {
@@ -505,29 +421,11 @@ impl Peer {
         sink.send(Message::Text(json!({ "auth": token }).to_string().into())).await.map_err(|e| e.to_string())?;
         // The hello; a refused token closes instead.
         match tokio::time::timeout(CALL_TIMEOUT, source.next()).await {
-            Ok(Some(Ok(Message::Text(_)))) => Ok(Peer { sink, source, next: 0 }),
+            Ok(Some(Ok(Message::Text(_)))) => Ok(Peer { sink, source }),
             _ => Err(format!("{address} refused the token")),
         }
     }
 
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.next += 1;
-        let id = self.next;
-        let request = json!({ "id": id, "method": method, "params": params });
-        self.sink.send(Message::Text(request.to_string().into())).await.map_err(|e| e.to_string())?;
-        loop {
-            let msg = tokio::time::timeout(CALL_TIMEOUT, self.source.next()).await.map_err(|_| "The other vault went quiet".to_string())?;
-            let Some(Ok(Message::Text(text))) = msg else { return Err("The other vault closed the connection".into()) };
-            let answer: Value = serde_json::from_str(text.as_ref()).map_err(|e| e.to_string())?;
-            if answer["id"].as_u64() != Some(u64::from(id)) {
-                continue;
-            }
-            return match answer["ok"].as_bool() {
-                Some(true) => Ok(answer["result"].clone()),
-                _ => Err(answer["error"].as_str().unwrap_or("The other vault refused").to_string()),
-            };
-        }
-    }
 }
 
 /// A member's link to its vault: one connection kept open, the config copied

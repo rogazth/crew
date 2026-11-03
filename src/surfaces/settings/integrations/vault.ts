@@ -1,24 +1,23 @@
 // The vault between machines, as the window runs it (plan
 // docs/plans/2026-10-23-integrations.md, phase 3). One machine holds the
 // sign-ins; the window, which reaches every machine, joins the others to it:
-// it asks the vault for a token for each and hands it over. Moving the
-// vault is three calls, new ← old: the new vault's key, the old vault's handoff
-// token for that key, the new vault pulling with it; the window carries the
-// key and the token, never a grant. Then every other machine joins the new one.
+// it asks the vault for a token for each and hands it over. Changing the vault
+// moves no token (plan docs/plans/2026-11-02-vault-calls.md): the new one starts
+// from the old one's config, the old one gives its grants back and deletes them,
+// and every account signs in again. Then every other machine joins the new one.
 import { useSyncExternalStore } from "react";
 import {
   getVaultEnv,
   setVaultEnv,
   stateGet,
   stateSet,
-  vaultHandoff,
+  vaultConfig,
   vaultJoin,
   vaultListen,
   vaultMint,
-  vaultMoveEmpty,
-  vaultMoveOpen,
-  vaultMovePull,
+  vaultRetire,
   vaultRevoke,
+  vaultStart,
   vaultStatus,
 } from "../../../lib/api";
 import { getLinks, subscribeLinks, type EnvLink } from "../../../lib/client/registry";
@@ -29,6 +28,20 @@ import { DEFAULT_PORT, isLoopback } from "../../../lib/remotes";
 
 /** This Mac's preference: the machine that is the vault. */
 export const VAULT_STATE = "integrations:vault";
+/** This Mac's list of old vaults that were off when they were replaced: each deletes its grants when it comes back. */
+const RETIRE_STATE = "integrations:vault-retire";
+
+async function toRetire(): Promise<string[]> {
+  const kept = await stateGet(RETIRE_STATE).catch(() => null);
+  try {
+    const list: unknown = kept ? JSON.parse(kept) : [];
+    return Array.isArray(list) ? list.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+const setToRetire = (ids: string[]) => stateSet(RETIRE_STATE, JSON.stringify([...new Set(ids)]));
 
 export type Machine = {
   envId: string;
@@ -142,7 +155,15 @@ export function ensureMembers(): Promise<void> {
       const address = await addressOf(vault);
       if (!address) return;
       if (vault.id === LOCAL) await vaultListen(LOCAL, address);
+      const retiring = await toRetire();
       for (const member of others) {
+        // Replaced while it was off. Not revoked: an account may have signed in
+        // on the new vault by now, and Google would sign that out too.
+        if (retiring.includes(member.id)) {
+          await vaultRetire(member.id, false)
+            .then(() => setToRetire(retiring.filter((id) => id !== member.id)))
+            .catch((e) => console.warn(`vault: ${nameOf(member)} didn't delete its sign-ins: ${message(e)}`));
+        }
         const status = await vaultStatus(member.id).catch(() => null);
         if (!status) continue;
         const stray = status.holds ? status.grants === 0 : status.vaultAddress !== address;
@@ -178,12 +199,14 @@ export function watchMembers() {
 }
 
 /**
- * Makes `to` the vault. With the old vault online the sign-ins move, sealed
- * to `to`'s key; offline, `to` starts empty and every account asks for a
- * sign-in. Then every other machine joins `to`. `onMoved` is told the vault's
- * new place, so the connectors are read from there.
+ * Makes `to` the vault. No token moves: `to` starts from the old vault's config,
+ * when it can be read, and every account signs in again there. The old vault
+ * gives its grants back to their services and deletes them, now if it is online
+ * and, without giving them back, when it next comes online if not. Then every
+ * other machine joins `to`. `onMoved` is told the vault's new place, so the
+ * connectors are read from there.
  */
-export async function moveVault(to: string, onMoved: () => void): Promise<void> {
+export async function changeVault(to: string, onMoved: () => void): Promise<void> {
   const links = getLinks();
   const target = links.find((l) => l.id === to);
   const from = links.find((l) => l.id === getVaultEnv());
@@ -195,16 +218,19 @@ export async function moveVault(to: string, onMoved: () => void): Promise<void> 
     const others = links.filter((l) => l.id !== to && direct(l));
     if (!address && others.length > 0) throw new Error(`The other machines can’t reach ${nameOf(target)}: it has no Tailscale address.`);
     const fromOnline = !!from && (from.id === LOCAL || from.status === "online");
+    const config = fromOnline ? await vaultConfig(from.id).catch(() => null) : null;
+    // The new vault first: if this fails, the old one has lost nothing.
+    await vaultStart(to, config);
+    const retiring = (await toRetire()).filter((id) => id !== to);
     if (from && fromOnline) {
-      const fromAddress = await addressOf(from);
-      if (!fromAddress) throw new Error(`${nameOf(target)} can’t reach ${nameOf(from)} to take the sign-ins.`);
-      if (from.id === LOCAL) await vaultListen(LOCAL, fromAddress);
-      const key = await vaultMoveOpen(to);
-      const { token } = await vaultHandoff(from.id, key);
-      await vaultMovePull(to, { address: fromAddress, token });
-    } else {
-      await vaultMoveEmpty(to);
+      await vaultRetire(from.id, true).catch(async (e) => {
+        console.warn(`vault: ${nameOf(from)} didn't delete its sign-ins: ${message(e)}`);
+        retiring.push(from.id);
+      });
+    } else if (from) {
+      retiring.push(from.id);
     }
+    await setToRetire(retiring);
     await stateSet(VAULT_STATE, to);
     setVaultEnv(to);
     set({ vaultEnv: to });

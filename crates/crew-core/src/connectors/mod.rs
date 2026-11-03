@@ -22,7 +22,6 @@ pub mod machines;
 pub mod net;
 pub mod oauth;
 pub mod remote;
-pub mod seal;
 pub mod vault;
 
 use crew_protocol::{AccountState, Connector, ConnectorAccount, ConnectorTool};

@@ -6,9 +6,7 @@ import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
   BuiltinConnector,
   VaultJoin,
-  VaultKey,
   VaultMinted,
-  VaultPull,
   VaultStatus,
   BackgroundList,
   BackgroundOutput,
@@ -537,16 +535,17 @@ export const vaultStatus = (envId: string): Promise<VaultStatus> => client.reque
 /** A lease token for a machine, from the vault; shown once. */
 export const vaultMint = (envId: string, name: string): Promise<VaultMinted> => client.request("vault_mint", { name }, envId);
 export const vaultRevoke = (envId: string, machineId: string): Promise<null> => client.request("vault_revoke", { machineId }, envId);
-/** This Mac as the vault takes leases on its tailnet address too. */
+/** This Mac as the vault takes machines on its tailnet address too. */
 export const vaultListen = (envId: string, address: string): Promise<null> => client.request("vault_listen", { address }, envId);
 export const vaultJoin = (envId: string, join: VaultJoin): Promise<null> => client.request("vault_join", join, envId);
 export const vaultLeave = (envId: string): Promise<null> => client.request("vault_leave", {}, envId);
 /** A move: the new vault's key, the old vault's handoff for it, the new one pulls. */
-export const vaultMoveOpen = (envId: string): Promise<VaultKey> => client.request("vault_move_open", {}, envId);
-export const vaultHandoff = (envId: string, key: VaultKey): Promise<{ token: string }> => client.request("vault_handoff", key, envId);
-export const vaultMovePull = (envId: string, pull: VaultPull): Promise<{ grants: number }> => client.request("vault_move_pull", pull, envId);
-/** The vault moves to `envId` without the old one's grants: every account asks for a sign-in. */
-export const vaultMoveEmpty = (envId: string): Promise<null> => client.request("vault_move_empty", {}, envId);
+/** The vault's config, for a new vault to start from. It holds no grant. */
+export const vaultConfig = (envId: string): Promise<unknown> => client.request("vault_config", {}, envId);
+/** `envId` becomes the vault. No token comes with it: every account signs in again there. */
+export const vaultStart = (envId: string, config: unknown): Promise<null> => client.request("vault_start", { config }, envId);
+/** `envId` is no longer the vault: it deletes its grants, given back to their services first with `revoke`. */
+export const vaultRetire = (envId: string, revoke: boolean): Promise<{ grants: number }> => client.request("vault_retire", { revoke }, envId);
 
 /*
  * The servers each provider CLI already has, on one machine: every call goes

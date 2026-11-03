@@ -1,15 +1,15 @@
-// Where the sign-ins are kept: the machines, which one is the vault, and
-// moving it. Choosing another machine says first what it costs: who can read
-// the sign-ins there, and what stops working when this Mac is off.
+// Where the sign-ins are kept: one machine, picked from the others. Change stays
+// off until another is picked, and asks first: no sign-in leaves its machine, so
+// every account signs in again on the new one.
 import { LaptopIcon, LockIcon, ServerIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import { Button } from "../../../chrome/kit";
 import { LOCAL } from "../../../lib/client/route";
-import { RowAction } from "./bits";
-import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./dialog";
+import { Dialog, DialogFooter, DialogGroup, DialogHeader } from "./dialog";
 import { plural, ui } from "./lib";
 import { reload } from "./store";
-import { machineName, moveVault, needsTailscale, refreshVault, useVault, type Machine } from "./vault";
+import { changeVault, needsTailscale, refreshVault, useVault, type Machine } from "./vault";
 
 function Glyph({ envId }: { envId: string }) {
   const Icon = envId === LOCAL ? LaptopIcon : ServerIcon;
@@ -36,62 +36,59 @@ function standing(machine: Machine, vaultEnv: string): string {
   return status.online ? `Uses ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
 }
 
-/** What making `to` the vault costs, said before it happens. */
-function costOf(to: Machine, from: Machine | undefined): string[] {
-  const lines =
-    to.envId === LOCAL
-      ? [
-          "Kept in this Mac’s keychain.",
-          "Other machines’ connectors work only while this Mac is awake.",
-        ]
-      : [
-          `Sealed to ${to.name}, in a file its user and root can read.`,
-          "Connectors work with this Mac off.",
-        ];
-  if (from && !from.online)
-    lines.push(`${from.name} is offline: every account signs in again.`);
-  return lines;
+const capitalized = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+
+/** The confirmation's one line: what changing the vault to `to` signs out. */
+function costOf(to: Machine, from: Machine | undefined): string {
+  const own = to.status?.holds && to.status.grants > 0 ? ` ${capitalized(to.name)}’s own sign-ins are removed.` : "";
+  if (!from) return `Every account signs in again on ${to.name}.${own}`;
+  if (!from.online) return `Every account signs in again on ${to.name}. ${capitalized(from.name)} deletes its sign-ins when it’s back.${own}`;
+  return `Signs out every account on ${from.name}. Each signs in again on ${to.name}.${own}`;
+}
+
+/** Who else this choice reaches, under the choice. */
+function noteOf(machine: Machine): string {
+  return machine.envId === LOCAL ? "Other machines need this Mac awake" : "Readable by its user and root";
+}
+
+function MachineOption({ machine, checked, enabled, subtitle, onPick }: { machine: Machine; checked: boolean; enabled: boolean; subtitle: string; onPick: () => void }) {
+  return (
+    <label
+      className={`flex min-h-14 items-center gap-3 border-t border-hairline py-2 first:border-t-0 has-[:focus-visible]:bg-hover ${enabled ? "cursor-pointer" : "opacity-50"}`}
+    >
+      <Glyph envId={machine.envId} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">{machine.envId === LOCAL ? "This Mac" : machine.name}</span>
+        <span className="truncate text-[12px] text-text-muted">{subtitle}</span>
+      </span>
+      <input type="radio" name="vault-machine" className="sr-only" checked={checked} disabled={!enabled} onChange={onPick} />
+      <span aria-hidden className={`grid size-[18px] shrink-0 place-items-center rounded-full transition-colors ${checked ? "bg-accent" : "ring-1 ring-border ring-inset"}`}>
+        {checked && <span className="size-1.5 rounded-full bg-inverse" />}
+      </span>
+    </label>
+  );
 }
 
 export function VaultDialog() {
   const v = useVault();
   const [picked, setPicked] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
   useEffect(() => void refreshVault(), []);
   const vault = v.machines.find((m) => m.envId === v.vaultEnv);
-  const target = v.machines.find((m) => m.envId === picked);
-  const move = async () => {
+  const selected = picked ?? v.vaultEnv;
+  const target = selected === v.vaultEnv ? undefined : v.machines.find((m) => m.envId === selected);
+  const change = () => {
     if (!target) return;
-    setError(null);
-    try {
-      await moveVault(target.envId, () => void reload());
-      setPicked(null);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    }
+    setConfirm({
+      title: `Make ${target.envId === LOCAL ? "this Mac" : target.name} the vault?`,
+      description: costOf(target, vault),
+      action: "Change",
+      onConfirm: async () => {
+        await changeVault(target.envId, () => void reload());
+        ui.close();
+      },
+    });
   };
-  if (target) {
-    const title = `Keep sign-ins on ${target.name}?`;
-    return (
-      <Dialog label={title}>
-        <DialogHeader mark={<Glyph envId={target.envId} />} title={title} subtitle={`Now on ${vault?.name ?? machineName(v.vaultEnv)}`} />
-        <div className="flex flex-col gap-2 px-5 pb-4 text-[13px] text-pretty text-text-muted">
-          {costOf(target, vault).map((line) => (
-            <p key={line}>{line}</p>
-          ))}
-          {(error ?? v.error) && <p className="text-danger">{error ?? v.error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" disabled={!!v.busy} onClick={() => setPicked(null)}>
-            Back
-          </Button>
-          <Button variant="primary" loading={!!v.busy} onClick={() => void move()}>
-            Move sign-ins
-          </Button>
-        </DialogFooter>
-      </Dialog>
-    );
-  }
   return (
     <Dialog label="Where sign-ins are kept">
       <DialogHeader
@@ -103,29 +100,29 @@ export function VaultDialog() {
         title="Where sign-ins are kept"
         subtitle="One machine keeps them for the others."
       />
-      <DialogGroup>
-        {v.machines.map((m) => (
-          <DialogRow
-            key={m.envId}
-            icon={<Glyph envId={m.envId} />}
-            title={m.envId === LOCAL ? "This Mac" : m.name}
-            subtitle={standing(m, v.vaultEnv)}
-          >
-            {m.envId === v.vaultEnv ? (
-              <span className="shrink-0 text-[12.5px] font-medium text-text-muted">Vault</span>
-            ) : needsTailscale(m.envId) ? (
-              <span className="shrink-0 text-[12.5px] text-text-muted">Needs Tailscale</span>
-            ) : (
-              m.online && !v.busy && (m.envId === LOCAL || m.address) && <RowAction label="Keep here" onClick={() => setPicked(m.envId)} />
-            )}
-          </DialogRow>
-        ))}
-      </DialogGroup>
-      <DialogFooter>
-        <Button variant="primary" onClick={ui.close}>
-          Done
+      <div role="radiogroup" aria-label="Where sign-ins are kept">
+        <DialogGroup>
+          {v.machines.map((m) => (
+            <MachineOption
+              key={m.envId}
+              machine={m}
+              checked={m.envId === selected}
+              enabled={m.envId === v.vaultEnv || (m.online && !needsTailscale(m.envId) && (m.envId === LOCAL || !!m.address))}
+              subtitle={needsTailscale(m.envId) ? "Needs Tailscale" : standing(m, v.vaultEnv)}
+              onPick={() => setPicked(m.envId)}
+            />
+          ))}
+        </DialogGroup>
+      </div>
+      <DialogFooter start={target && <span className="min-w-0 truncate text-[12px] text-text-muted">{noteOf(target)}</span>}>
+        <Button variant="ghost" onClick={ui.close}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!target || !!v.busy} onClick={change}>
+          Change
         </Button>
       </DialogFooter>
+      <ConfirmDialog confirm={confirm} onAsk={setConfirm} onClose={() => setConfirm(null)} />
     </Dialog>
   );
 }

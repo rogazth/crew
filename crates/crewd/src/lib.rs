@@ -991,7 +991,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         return;
     };
     if auth != token {
-        // Another machine leasing from this vault, or a new vault pulling from it.
+        // Another machine using this vault.
         match hosts.vault.peer_of(&auth) {
             Some(peer) => hosts.vault.clone().serve_peer(peer, sink, source).await,
             None => {
@@ -2189,12 +2189,24 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             hosts.vault.leave()?;
             Ok(Value::Null)
         }
-        "vault_move_open" => json(hosts.vault.move_open()),
-        "vault_handoff" => json(serde_json::json!({ "token": hosts.vault.handoff(parse(params)?).await? })),
-        "vault_move_pull" => json(serde_json::json!({ "grants": hosts.vault.move_pull(parse(params)?).await? })),
-        "vault_move_empty" => {
-            hosts.vault.move_empty()?;
+        "vault_config" => json(hosts.vault.config()?),
+        "vault_start" => {
+            #[derive(Deserialize)]
+            struct Start {
+                #[serde(default)]
+                config: Option<connectors::machines::Snapshot>,
+            }
+            let Start { config } = parse(params)?;
+            hosts.vault.start(config).await?;
             Ok(Value::Null)
+        }
+        "vault_retire" => {
+            #[derive(Deserialize)]
+            struct Retire {
+                revoke: bool,
+            }
+            let Retire { revoke } = parse(params)?;
+            json(serde_json::json!({ "grants": hosts.vault.retire(revoke).await? }))
         }
         "builtin_list" => json(connectors::builtin::Builtin::all().map(|b| b.listing()).collect::<Vec<_>>()),
         "connector_add" => {
@@ -3066,9 +3078,10 @@ mod tests {
 
     /// Two daemons, the way two machines would be: the second sends its calls
     /// to the first, its sessions calling a connector the first signed in; then
-    /// the vault moves to the second, sealed, and the first keeps nothing.
+    /// the second becomes the vault, no token crosses, and the first gives its
+    /// grants back and keeps nothing.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_machine_calls_through_the_vault_and_the_vault_moves_to_it() {
+    async fn a_machine_calls_through_the_vault_and_then_becomes_it_without_a_token() {
         use crew_core::connectors::{fake_server, net};
         net::allow_insecure_for_tests();
         let fake = fake_server::start(fake_server::Options::default()).await;
@@ -3176,17 +3189,35 @@ mod tests {
         }
         assert!(!answered, "a revoked machine's connection answers nothing more");
 
-        // The vault moves to B: B's key, A's handoff for it, B pulls.
-        let key = rpc(&mut wb, 10, "vault_move_open", Value::Null).await.result.unwrap();
-        let handoff = rpc(&mut wa, 11, "vault_handoff", key).await.result.unwrap();
-        let pull = serde_json::json!({ "address": addr(&a), "token": handoff["token"] });
-        let pulled = rpc(&mut wb, 12, "vault_move_pull", pull.clone()).await;
-        assert_eq!(pulled.result.expect("pulled")["grants"], 1);
+        // No method hands a grant to another machine.
+        for gone in ["vault_handoff", "vault_move_open", "vault_move_pull", "vault_move_empty"] {
+            let refused = rpc(&mut wa, 100, gone, serde_json::json!({ "publicKey": "x" })).await;
+            assert!(refused.error.is_some(), "{gone} is gone");
+        }
+
+        // B becomes the vault from A's config, with no grant; A gives its back.
+        let config = rpc(&mut wa, 10, "vault_config", Value::Null).await.result.expect("config");
+        assert!(!config.to_string().contains(&access_token), "the config holds no token");
+        assert!(rpc(&mut wb, 11, "vault_start", serde_json::json!({ "config": config })).await.error.is_none());
+        let retired = rpc(&mut wa, 12, "vault_retire", serde_json::json!({ "revoke": true })).await;
+        assert_eq!(retired.result.expect("retired")["grants"], 1);
         let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 13, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(status.grants == 0 && status.machines.is_empty(), "A keeps nothing: {status:?}");
         let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 14, "vault_status", Value::Null).await.result.unwrap()).unwrap();
-        assert!(status.holds && status.grants == 1, "{status:?}");
-        assert!(rpc(&mut wb, 15, "vault_move_pull", pull).await.error.is_some(), "a handoff works once");
+        assert!(status.holds && status.grants == 0, "B holds nothing yet: {status:?}");
+        assert!(fake.requests().iter().any(|r| r.path == "/revoke" && r.body.contains("refresh_token")), "A gave its grant back");
+        let list: Vec<proto::Connector> = serde_json::from_value(rpc(&mut wb, 15, "connectors_list", Value::Null).await.result.unwrap()).unwrap();
+        assert_eq!(list[0].accounts[0].state, proto::AccountState::Expired, "{list:?}");
+        let refused = call("before");
+        assert!(refused["result"]["content"][0]["text"].as_str().unwrap_or_default().contains("needs a sign-in again"), "{refused}");
+
+        // The account signs in again on B, and B calls with its own grant.
+        let again = serde_json::json!({ "connectorId": connector.id, "accountId": account.id });
+        let started = rpc(&mut wb, 16, "connector_connect", again).await;
+        let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
+        let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
+        let caught = answer.headers()["location"].to_str().unwrap().to_string();
+        assert!(rpc(&mut wb, 17, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await.error.is_none());
         let called = call("after");
         assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "after", "B calls with its own grant: {called}");
         let _ = account;

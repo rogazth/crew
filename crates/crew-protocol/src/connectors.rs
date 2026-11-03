@@ -166,24 +166,6 @@ pub struct VaultJoin {
     pub vault_name: String,
 }
 
-/// A vault move's step that carries the receiving vault's public key.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct VaultKey {
-    pub public_key: String,
-}
-
-/// The new vault pulls the grants from the old one, at `address`, with the
-/// handoff token the old one gave the window.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct VaultPull {
-    pub address: String,
-    pub token: String,
-}
-
 /* ── RPCs ─────────────────────────────────────────────────────────────── */
 
 /// Install a connector: a registry server by name, or a URL.
