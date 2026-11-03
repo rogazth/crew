@@ -218,7 +218,7 @@ function signIn(connectorId: string, accountId: string | null, loginHint: string
       running.delete(id);
       if (url === null) {
         await signInCancel(started.state).catch(() => {});
-        stage(id, { stage: "failed", error: inBrowser ? "The sign-in was cancelled." : "The sign-in window was closed." });
+        stage(id, { stage: "failed", error: "Sign-in cancelled." });
         return;
       }
       stage(id, { stage: "redeeming" });
@@ -257,7 +257,7 @@ export function cancelFlow(id: number) {
 export const waitsInBrowser = (flow: Flow | undefined): boolean => flow?.stage === "waiting" && flow.inBrowser === true;
 
 /** What a row says about a running sign-in. */
-export const flowLine = (flow: Flow | undefined) => (waitsInBrowser(flow) ? "Continue in your browser…" : "Authenticating…");
+export const flowLine = (flow: Flow | undefined) => (waitsInBrowser(flow) ? "Continue in your browser" : "Signing in…");
 
 /* ── Actions ──────────────────────────────────────────────────────────── */
 

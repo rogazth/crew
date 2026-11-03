@@ -283,7 +283,7 @@ function Trust({ server }: { server: RegistryServer }) {
       <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" />
       <p className="text-text-muted">
         <span className="block font-medium text-text">Not from {server.publisher}’s own domain.</span>
-        Unreviewed, so install it only if you trust the author.
+        Not reviewed. Install only if you trust the author.
       </p>
     </div>
   );

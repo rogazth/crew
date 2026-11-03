@@ -55,7 +55,7 @@ function Picker({ connectorId, accountId, value, onChange }: { connectorId: stri
   const flip = (id: string) => onChange(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   return (
     <DialogGroup>
-      <CheckRow checked={value === null} onClick={() => onChange(value === null ? [] : null)} title="All workspaces" subtitle="And the ones you add later" />
+      <CheckRow checked={value === null} onClick={() => onChange(value === null ? [] : null)} title="All workspaces" subtitle="Including new ones" />
       {s.workspaces.map((w) => {
         const also = others.filter((a) => a.workspaces === null || a.workspaces.includes(w.id)).map((a) => a.label);
         // On a machine reached over ssh its sessions get no connectors, picked or not.
@@ -112,7 +112,7 @@ export function InstallWorkspacesDialog({ source, brand }: { source: Source; bra
     <WorkspacesSheet
       brand={brand}
       title={`Install ${brand.name}`}
-      subtitle="Which workspaces is it for?"
+      subtitle="Choose workspaces"
       connectorId={null}
       action="Sign in"
       onDone={(workspaces) => ui.open({ kind: "connect", source: { ...source, workspaces } })}
@@ -129,7 +129,7 @@ export function AddAccountDialog({ connectorId }: { connectorId: string }) {
     <WorkspacesSheet
       brand={brandOf(connector)}
       title={connector.accounts.length === 0 ? `Add an account to ${connector.name}` : `Add another ${connector.name} account`}
-      subtitle="Which workspaces is it for?"
+      subtitle="Choose workspaces"
       connectorId={connectorId}
       action="Sign in"
       onDone={(workspaces) => startAddAccount(s, connectorId, workspaces)}

@@ -213,7 +213,7 @@ export async function changeVault(to: string, onMoved: () => void): Promise<void
   if (!target) throw new Error("That machine is gone.");
   set({ busy: to, error: null });
   try {
-    if (!direct(target)) throw new Error(`${nameOf(target)} needs Tailscale to keep the sign-ins.`);
+    if (!direct(target)) throw new Error(`${nameOf(target)} needs Tailscale to be your vault.`);
     const address = await addressOf(target);
     const others = links.filter((l) => l.id !== to && direct(l));
     if (!address && others.length > 0) throw new Error(`The other machines can’t reach ${nameOf(target)}: it has no Tailscale address.`);

@@ -1,71 +1,88 @@
 // Where the sign-ins are kept: one machine, picked from the others. Change stays
 // off until another is picked, and asks first: no sign-in leaves its machine, so
 // every account signs in again on the new one.
-import { LaptopIcon, LockIcon, ServerIcon } from "lucide-react";
+import { Select as BaseSelect } from "@base-ui/react/select";
+import { CheckIcon, ChevronDownIcon, LaptopIcon, LockIcon, ServerIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
-import { Button } from "../../../chrome/kit";
+import { Button, PANEL, ROW } from "../../../chrome/kit";
 import { LOCAL } from "../../../lib/client/route";
-import { Dialog, DialogFooter, DialogGroup, DialogHeader } from "./dialog";
+import { Dialog, DialogFooter, DialogHeader } from "./dialog";
 import { plural, ui } from "./lib";
 import { reload } from "./store";
 import { changeVault, needsTailscale, refreshVault, useVault, type Machine } from "./vault";
 
-function Glyph({ envId }: { envId: string }) {
-  const Icon = envId === LOCAL ? LaptopIcon : ServerIcon;
-  return (
-    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface shadow-[0_0_0_1px_var(--color-hairline)]">
-      <Icon className="size-4 text-icon" />
-    </span>
-  );
-}
-
 /** One line on where a machine stands with the vault. */
 function standing(machine: Machine, vaultEnv: string): string {
   if (!machine.online) return "Offline";
-  if (needsTailscale(machine.envId)) return "Reached over SSH";
   const status = machine.status;
   if (machine.envId === vaultEnv) {
     const using = status?.machines.length ?? 0;
-    return [`Keeps ${plural(status?.grants ?? 0, "sign-in")}`, using > 0 ? `${plural(using, "machine")} ${using === 1 ? "uses" : "use"} it` : null]
-      .filter(Boolean)
-      .join(" · ");
+    const grants = status?.grants ?? 0;
+    return [grants > 0 ? plural(grants, "account") : "No accounts", using > 0 ? `${plural(using, "machine")} connected` : null].filter(Boolean).join(" · ");
   }
   if (!status) return "Can’t be reached";
-  if (status.holds) return status.grants > 0 ? `Keeps ${plural(status.grants, "sign-in")} of its own` : "Not joined yet";
-  return status.online ? `Uses ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
+  if (status.holds) return status.grants > 0 ? `Has ${plural(status.grants, "other account")}` : "Not connected";
+  return status.online ? `Connected to ${status.vaultName ?? "the vault"}` : `Can’t reach ${status.vaultName ?? "the vault"}`;
 }
-
-const capitalized = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 /** The confirmation's one line: what changing the vault to `to` signs out. */
 function costOf(to: Machine, from: Machine | undefined): string {
-  const own = to.status?.holds && to.status.grants > 0 ? ` ${capitalized(to.name)}’s own sign-ins are removed.` : "";
-  if (!from) return `Every account signs in again on ${to.name}.${own}`;
-  if (!from.online) return `Every account signs in again on ${to.name}. ${capitalized(from.name)} deletes its sign-ins when it’s back.${own}`;
-  return `Signs out every account on ${from.name}. Each signs in again on ${to.name}.${own}`;
+  const own = to.status?.holds && to.status.grants > 0 ? ` Accounts already on ${to.name} will be removed.` : "";
+  if (!from) return `You’ll need to sign in to all accounts again.${own}`;
+  if (!from.online) return `You’ll need to sign in to all accounts again. ${from.name} removes its accounts when it’s back online.${own}`;
+  return `All accounts will be signed out. You’ll need to sign in to them again.${own}`;
 }
 
-/** Who else this choice reaches, under the choice. */
-function noteOf(machine: Machine): string {
-  return machine.envId === LOCAL ? "Other machines need this Mac awake" : "Readable by its user and root";
-}
 
-function MachineOption({ machine, checked, enabled, subtitle, onPick }: { machine: Machine; checked: boolean; enabled: boolean; subtitle: string; onPick: () => void }) {
+/** A machine as the box and its list show it: its mark, its name, where it stands. */
+function MachineLine({ machine, vaultEnv }: { machine: Machine; vaultEnv: string }) {
+  const Icon = machine.envId === LOCAL ? LaptopIcon : ServerIcon;
   return (
-    <label
-      className={`flex min-h-14 items-center gap-3 border-t border-hairline py-2 first:border-t-0 has-[:focus-visible]:bg-hover ${enabled ? "cursor-pointer" : "opacity-50"}`}
-    >
-      <Glyph envId={machine.envId} />
+    <>
+      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface shadow-[0_0_0_1px_var(--color-hairline)]">
+        <Icon className="size-4 text-icon" />
+      </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="font-medium">{machine.envId === LOCAL ? "This Mac" : machine.name}</span>
-        <span className="truncate text-[12px] text-text-muted">{subtitle}</span>
+        <span className="truncate font-medium">{machine.envId === LOCAL ? "This Mac" : machine.name}</span>
+        <span className="truncate text-[12px] text-text-muted">{needsTailscale(machine.envId) ? "Needs Tailscale" : standing(machine, vaultEnv)}</span>
       </span>
-      <input type="radio" name="vault-machine" className="sr-only" checked={checked} disabled={!enabled} onChange={onPick} />
-      <span aria-hidden className={`grid size-[18px] shrink-0 place-items-center rounded-full transition-colors ${checked ? "bg-accent" : "ring-1 ring-border ring-inset"}`}>
-        {checked && <span className="size-1.5 rounded-full bg-inverse" />}
-      </span>
-    </label>
+    </>
+  );
+}
+
+/** The dialog's box, the picked machine in it: a click drops the others below it. */
+function MachinePicker({ machines, vaultEnv, value, onChange }: { machines: Machine[]; vaultEnv: string; value: string; onChange: (envId: string) => void }) {
+  const current = machines.find((m) => m.envId === value);
+  return (
+    <BaseSelect.Root value={value} onValueChange={(next) => next !== null && onChange(next)}>
+      <BaseSelect.Trigger
+        aria-label="Vault"
+        className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-card px-3 py-2 text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover"
+      >
+        {current && <MachineLine machine={current} vaultEnv={vaultEnv} />}
+        <ChevronDownIcon className="size-4 shrink-0 text-icon" />
+      </BaseSelect.Trigger>
+      <BaseSelect.Portal>
+        <BaseSelect.Positioner sideOffset={4} alignItemWithTrigger={false} className="z-50">
+          <BaseSelect.Popup className={`${PANEL} w-(--anchor-width) max-w-none!`}>
+            {machines.map((m) => (
+              <BaseSelect.Item
+                key={m.envId}
+                value={m.envId}
+                disabled={!(m.envId === vaultEnv || (m.online && !needsTailscale(m.envId) && (m.envId === LOCAL || !!m.address)))}
+                className={`${ROW} h-auto! gap-3! py-1.5 data-disabled:opacity-50`}
+              >
+                <MachineLine machine={m} vaultEnv={vaultEnv} />
+                <BaseSelect.ItemIndicator>
+                  <CheckIcon className="size-4 shrink-0" />
+                </BaseSelect.ItemIndicator>
+              </BaseSelect.Item>
+            ))}
+          </BaseSelect.Popup>
+        </BaseSelect.Positioner>
+      </BaseSelect.Portal>
+    </BaseSelect.Root>
   );
 }
 
@@ -79,10 +96,11 @@ export function VaultDialog() {
   const target = selected === v.vaultEnv ? undefined : v.machines.find((m) => m.envId === selected);
   const change = () => {
     if (!target) return;
+    const name = target.envId === LOCAL ? "this Mac" : target.name;
     setConfirm({
-      title: `Make ${target.envId === LOCAL ? "this Mac" : target.name} the vault?`,
+      title: `Use ${name} as your vault?`,
       description: costOf(target, vault),
-      action: "Change",
+      action: `Use ${name}`,
       onConfirm: async () => {
         await changeVault(target.envId, () => void reload());
         ui.close();
@@ -90,31 +108,20 @@ export function VaultDialog() {
     });
   };
   return (
-    <Dialog label="Where sign-ins are kept">
+    <Dialog label="Vault">
       <DialogHeader
         mark={
           <span className="grid size-10 place-items-center rounded-[26%] bg-card">
             <LockIcon className="size-5 text-icon" />
           </span>
         }
-        title="Where sign-ins are kept"
-        subtitle="One machine keeps them for the others."
+        title="Vault"
+        subtitle="Stores your accounts. Your other machines use it."
       />
-      <div role="radiogroup" aria-label="Where sign-ins are kept">
-        <DialogGroup>
-          {v.machines.map((m) => (
-            <MachineOption
-              key={m.envId}
-              machine={m}
-              checked={m.envId === selected}
-              enabled={m.envId === v.vaultEnv || (m.online && !needsTailscale(m.envId) && (m.envId === LOCAL || !!m.address))}
-              subtitle={needsTailscale(m.envId) ? "Needs Tailscale" : standing(m, v.vaultEnv)}
-              onPick={() => setPicked(m.envId)}
-            />
-          ))}
-        </DialogGroup>
+      <div className="px-4 pb-5">
+        <MachinePicker machines={v.machines} vaultEnv={v.vaultEnv} value={selected} onChange={setPicked} />
       </div>
-      <DialogFooter start={target && <span className="min-w-0 truncate text-[12px] text-text-muted">{noteOf(target)}</span>}>
+      <DialogFooter start={target?.envId === LOCAL && <span className="min-w-0 truncate text-[12px] text-text-muted">Other machines need this Mac awake</span>}>
         <Button variant="ghost" onClick={ui.close}>
           Cancel
         </Button>

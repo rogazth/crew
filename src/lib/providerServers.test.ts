@@ -90,11 +90,11 @@ describe("groupStatus", () => {
   const [context7] = groupsOf(MAC);
 
   it("speaks for the worst copy that is on", () => {
-    expect(groupStatus(context7!, idle)).toEqual({ tone: "warning", text: "Needs authentication · Codex" });
+    expect(groupStatus(context7!, idle)).toEqual({ tone: "warning", text: "Sign in required · Codex" });
   });
 
   it("says a sign-in first, then a start", () => {
-    expect(groupStatus(context7!, (x) => (x.provider === "codex" ? "signing-in" : null)).text).toBe("Authenticating…");
+    expect(groupStatus(context7!, (x) => (x.provider === "codex" ? "signing-in" : null)).text).toBe("Signing in…");
     expect(groupStatus(context7!, (x) => (x.provider === "codex" ? "starting" : null)).tone).toBe("info");
   });
 
@@ -106,16 +106,16 @@ describe("groupStatus", () => {
 
 describe("rowStatus", () => {
   it("offers a sign-in where Crew can start one", () => {
-    expect(rowStatus(server("codex", "context7", "needs_auth"), null)).toMatchObject({ text: "Needs authentication", fix: "sign-in", problem: true });
+    expect(rowStatus(server("codex", "context7", "needs_auth"), null)).toMatchObject({ text: "Sign in required", fix: "sign-in", problem: true });
   });
 
   it("sends a claude.ai connector to claude.ai", () => {
     const notion = server("claude", "claude.ai Notion", "needs_auth", { scope: "claude.ai", transport: "claude.ai", canSignIn: false });
-    expect(rowStatus(notion, null)).toMatchObject({ text: "Needs authentication · Managed at claude.ai", fix: "claude.ai" });
+    expect(rowStatus(notion, null)).toMatchObject({ text: "Sign in required · Managed at claude.ai", fix: "claude.ai" });
   });
 
   it("says what failed and offers a new try", () => {
-    expect(rowStatus(server("cursor", "pw", "failed", { error: "npx exited 1" }), null)).toMatchObject({ text: "Didn’t start last time · npx exited 1", fix: "retry" });
+    expect(rowStatus(server("cursor", "pw", "failed", { error: "npx exited 1" }), null)).toMatchObject({ text: "Failed to start · npx exited 1", fix: "retry" });
   });
 
   it("says where Cursor's and Grok's off reaches", () => {
@@ -126,7 +126,7 @@ describe("rowStatus", () => {
 
   it("goes from authenticating to starting to where it's set up", () => {
     const figma = server("claude", "plugin:figma:figma", "needs_auth", { scope: "plugin" });
-    expect(rowStatus(figma, "signing-in")).toMatchObject({ text: "Authenticating…", working: true, fix: null });
+    expect(rowStatus(figma, "signing-in")).toMatchObject({ text: "Signing in…", working: true, fix: null });
     expect(rowStatus(figma, "starting")).toMatchObject({ text: "Starting…", working: true });
     expect(rowStatus({ ...figma, state: "pending" }, null)).toMatchObject({ text: "Starting…", working: true });
     expect(rowStatus({ ...figma, state: "connected", tools: 11 }, null)).toMatchObject({ text: "From a plugin · 11 tools", working: false, fix: null });

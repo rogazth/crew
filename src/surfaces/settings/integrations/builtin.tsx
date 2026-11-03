@@ -134,19 +134,18 @@ export function BuiltInDialog() {
     <Dialog label="Built-in connectors">
       <DialogHeader mark={null} title="Built-in connectors" />
       <div className="flex flex-col gap-3 px-5 pb-5 text-[13px] text-pretty text-text-muted">
-        <p>Crew builds some connectors in, for services that have no MCP server of their own.</p>
+        <p>For services without their own MCP server.</p>
         <p>
-          They call the APIs each provider publishes, or run open source tools, straight from your machine. Nothing
-          passes through our servers, and your sign-in stays in your vault.
+          They run on your machine. Nothing goes through our servers.
         </p>
         <p>
-          Curious how they’re built? Crew is open source, so every one of them is in{' '}
+          Crew is open source, so you can read the code on{' '}
           <button
             type="button"
             onClick={(e) => openLink(REPO_URL, e)}
             className="underline underline-offset-2 outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
           >
-            its repository
+            GitHub
           </button>
           .
         </p>

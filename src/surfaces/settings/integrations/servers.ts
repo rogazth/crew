@@ -101,13 +101,13 @@ function whereOf(servers: Server[]): string {
  */
 export function groupStatus(group: Group, busy: (server: Server) => Busy): { tone: Tone | undefined; text: string } {
   const on = group.servers.filter((x) => !isOff(x));
-  if (group.servers.some((x) => busy(x) === "signing-in")) return { tone: "info", text: "Authenticating…" };
+  if (group.servers.some((x) => busy(x) === "signing-in")) return { tone: "info", text: "Signing in…" };
   if (on.some((x) => x.state === "pending" || busy(x) === "starting")) return { tone: "info", text: `Starting… · ${whereOf(group.servers)}` };
   if (on.length === 0) return { tone: undefined, text: `Off · ${whereOf(group.servers)}` };
   const failed = on.find((x) => x.state === "failed");
-  if (failed) return { tone: "warning", text: `Didn’t start last time · ${providerName(failed.provider)}` };
+  if (failed) return { tone: "warning", text: `Failed to start · ${providerName(failed.provider)}` };
   const auth = on.find((x) => x.state === "needs_auth");
-  if (auth) return { tone: "warning", text: `Needs authentication · ${providerName(auth.provider)}` };
+  if (auth) return { tone: "warning", text: `Sign in required · ${providerName(auth.provider)}` };
   return { tone: "success", text: whereOf(group.servers) };
 }
 
@@ -137,19 +137,19 @@ export type Fix = "sign-in" | "claude.ai" | "retry" | null;
  */
 export function rowStatus(server: Server, busy: Busy): { text: string; working: boolean; problem: boolean; fix: Fix } {
   const cli = providerName(server.provider);
-  if (busy === "signing-in") return { text: "Authenticating…", working: true, problem: false, fix: null };
+  if (busy === "signing-in") return { text: "Signing in…", working: true, problem: false, fix: null };
   if (busy === "checking") return { text: "Checking…", working: true, problem: false, fix: null };
   if (busy === "removing") return { text: "Removing…", working: true, problem: false, fix: null };
   if (server.offInCrew) return { text: perSpawn(server.provider) ? "Off" : "Off, also outside the app", working: false, problem: false, fix: null };
   if (server.state === "disabled") return { text: `Disabled in ${cli}`, working: false, problem: false, fix: null };
   if (busy === "starting" || server.state === "pending") return { text: "Starting…", working: true, problem: false, fix: null };
   if (server.state === "needs_auth") {
-    if (server.canSignIn) return { text: "Needs authentication", working: false, problem: true, fix: "sign-in" };
-    if (managedAtClaudeAi(server)) return { text: "Needs authentication · Managed at claude.ai", working: false, problem: true, fix: "claude.ai" };
-    return { text: `Needs authentication · Sign in from ${cli}`, working: false, problem: true, fix: null };
+    if (server.canSignIn) return { text: "Sign in required", working: false, problem: true, fix: "sign-in" };
+    if (managedAtClaudeAi(server)) return { text: "Sign in required · Managed at claude.ai", working: false, problem: true, fix: "claude.ai" };
+    return { text: `Sign in required · Sign in from ${cli}`, working: false, problem: true, fix: null };
   }
   if (server.state === "failed")
-    return { text: server.error ? `Didn’t start last time · ${server.error}` : "Didn’t start last time", working: false, problem: true, fix: "retry" };
+    return { text: server.error ? `Failed to start · ${server.error}` : "Failed to start", working: false, problem: true, fix: "retry" };
   return { text: scopeLine(server), working: false, problem: false, fix: null };
 }
 

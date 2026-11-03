@@ -108,7 +108,7 @@ export function CliRow({ envId, server, m }: { envId: string; server: Server; m:
   const outside = !perSpawn(server.provider);
   const fix =
     status.fix === "sign-in"
-      ? { label: "Authenticate", run: () => serverActions.signIn(envId, server) }
+      ? { label: "Sign in", run: () => serverActions.signIn(envId, server) }
       : status.fix === "claude.ai"
         ? { label: "Open claude.ai", run: serverActions.openClaudeAi }
         : status.fix === "retry"
@@ -124,7 +124,7 @@ export function CliRow({ envId, server, m }: { envId: string; server: Server; m:
     if (id === "remove")
       return setConfirm({
         title: `Remove ${displayName(server)}?`,
-        description: `This deletes it from ${cli}’s config on ${here}.`,
+        description: `Removes it from ${cli} on ${here}.`,
         action: "Remove",
         onConfirm: () => serverActions.remove(envId, server),
       });
@@ -132,7 +132,7 @@ export function CliRow({ envId, server, m }: { envId: string; server: Server; m:
     if (off && outside)
       return setConfirm({
         title: `Disable ${displayName(server)}?`,
-        description: `This turns it off in ${cli}’s config on ${here}.`,
+        description: `Turns it off in ${cli} on ${here}.`,
         action: "Disable",
         onConfirm: () => serverActions.setOff(envId, server, true),
       });

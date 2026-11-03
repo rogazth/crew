@@ -17,11 +17,11 @@ import { CONFIG, canTurnOffInCrew, conflictsOf, removeCopy, signInCopy, turnOffI
 
 const STATE_LINE: Record<CopyState, string> = {
   adding: "Starting…",
-  "needs-auth": "Needs sign-in",
-  "signing-in": "Waiting for the browser…",
+  "needs-auth": "Sign in required",
+  "signing-in": "Signing in…",
   connected: "Signed in",
-  failed: "Didn’t start last time",
-  off: "Off in Crew",
+  failed: "Failed to start",
+  off: "Off",
   added: "In its config",
   removing: "Removing…",
 };
@@ -64,8 +64,8 @@ function CopyRow({ copy, machine, name, conflict }: { copy: Copy; machine: strin
   // A clash says so in place of the state: it is what the person has to act on.
   const line = conflict
     ? canTurnOffInCrew(copy)
-      ? "Crew sessions load this copy too, so its tools show up twice"
-      : `Crew sessions load this copy too, and ${cli} can’t skip it only in Crew`
+      ? "Also loaded in Crew, so its tools appear twice"
+      : `Also loaded in Crew. ${cli} can’t turn it off for Crew only.`
     : STATE_LINE[copy.state];
   return (
     <div className="flex h-14 items-center gap-2.5 border-t border-hairline first:border-t-0">
@@ -87,7 +87,7 @@ function CopyRow({ copy, machine, name, conflict }: { copy: Copy; machine: strin
       {conflict && canTurnOffInCrew(copy) ? (
         <RowAction label="Turn off in Crew" onClick={() => turnOffInCrew(copy)} />
       ) : (
-        copy.state === "needs-auth" && copy.server.canSignIn && <RowAction label="Authenticate" onClick={() => signInCopy(copy)} />
+        copy.state === "needs-auth" && copy.server.canSignIn && <RowAction label="Sign in" onClick={() => signInCopy(copy)} />
       )}
       {!working && copy.server.canRemove && (
         <RowMenu
@@ -96,7 +96,7 @@ function CopyRow({ copy, machine, name, conflict }: { copy: Copy; machine: strin
           onPick={() =>
             setConfirm({
               title: `Remove ${name} from ${cli}?`,
-              description: `This deletes it from ${cli}’s config on ${machine}. Crew’s sessions keep it.`,
+              description: `Removes it from ${cli} on ${machine}. Crew’s sessions keep it.`,
               action: "Remove",
               onConfirm: () => removeCopy(copy),
             })

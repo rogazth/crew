@@ -98,8 +98,8 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
             confirm={{
               title: `Remove ${connector.name}?`,
               description: builtin
-                ? `Signs out every account here, except at ${vendorOf(builtin.family)} for its other apps. Can’t be undone.`
-                : "Signs out every account at the service. Can’t be undone.",
+                ? `Signs out all accounts. Your other ${vendorOf(builtin.family)} apps stay connected.`
+                : "Signs out all accounts.",
               action: "Remove",
               onConfirm: () => actions.removeConnector(connector.id),
             }}
@@ -161,7 +161,7 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
           </Row>
         )}
         {connector.registryName === FIGMA && (
-          <Row label="Signs in as" description="Figma lets only approved clients sign in; Crew registers as one">
+          <Row label="Signs in as" description="Figma only allows approved apps, so Crew signs in as Claude Code.">
             <span className="text-text-muted">Claude Code</span>
           </Row>
         )}
@@ -238,7 +238,7 @@ function ToolsGroup({ account }: { account: Account }) {
   if (account.tools.length === 0) {
     return (
       <Group title="Tools">
-        <Row label={<span className="text-text-muted">{account.state === "connected" ? "The server lists no tools." : "Its tools show once it’s signed in."}</span>} />
+        <Row label={<span className="text-text-muted">{account.state === "connected" ? "No tools available." : "Sign in to see its tools."}</span>} />
       </Group>
     );
   }

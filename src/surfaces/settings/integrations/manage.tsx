@@ -7,6 +7,7 @@ import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import type { MenuAction } from "../../../lib/menu";
 import { AccountName, Dot, RowAction, RowMenu } from "./bits";
 import { ACCOUNT_PROBLEM, ACCOUNT_TONE, ui, workspacesLine } from "./lib";
+import { listJoin } from "./servers";
 import { actions, cancelFlow, flowLine, siblingsOf, signingIn, useIntegrations, waitsInBrowser, type Account } from "./store";
 
 export function AccountRow({ account }: { account: Account }) {
@@ -19,24 +20,23 @@ export function AccountRow({ account }: { account: Account }) {
   // A grant that ran out, or one short of scope, signs in again; a server that couldn't be reached is tried again.
   const fix =
     account.state === "expired" || account.state === "needs-scope" || account.state === "pending"
-      ? { label: "Authenticate", run: () => void actions.reconnect(account.id) }
+      ? { label: "Sign in", run: () => void actions.reconnect(account.id) }
       : account.state === "failed"
         ? { label: "Try now", run: () => void actions.refresh(account.id) }
         : null;
   const problem = account.state === "failed" ? (account.error ?? ACCOUNT_PROBLEM.failed) : ACCOUNT_PROBLEM[account.state];
-  // A Google account other apps share stays signed in for them.
+  // A Google account other apps share stays signed in for them, which removing it says.
   const siblings = siblingsOf(s, account);
-  const shared = siblings.length > 0 ? `Also signed in for ${siblings.join(", ")}` : null;
   // Named after who signed in, the account doesn't say it twice.
   const line = busy
     ? flowLine(flow)
-    : [problem, account.identity === account.label ? null : account.identity, problem || s.workspaces.length < 2 ? null : workspacesLine(account, s.workspaces), problem ? null : shared]
+    : [problem, account.identity === account.label ? null : account.identity, problem || s.workspaces.length < 2 ? null : workspacesLine(account, s.workspaces)]
         .filter(Boolean)
         .join(" · ");
   const remove = () =>
     setConfirm({
       title: `Remove ${account.label}?`,
-      description: shared ? `${siblings.join(", ")} stay signed in as ${account.identity}.` : "Signs out at the service. Can’t be undone.",
+      description: siblings.length > 0 ? `${listJoin(siblings)} ${siblings.length === 1 ? "stays" : "stay"} connected.` : "Signs out this account.",
       action: "Remove",
       onConfirm: () => actions.removeAccount(account.id),
     });

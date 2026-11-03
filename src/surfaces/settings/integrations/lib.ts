@@ -1,6 +1,6 @@
 // The Connectors page's own state and helpers: which page and sheet are on
-// screen, the connector that just landed, the tones the states read in, and
-// the small motion helpers. No components.
+// screen, the tones the states read in, and the small motion helpers. No
+// components.
 import { useEffect, useSyncExternalStore } from "react";
 import type { BuiltinConnector, RegistryServer } from "../../../lib/protocol";
 import { actions, builtinOf, connectorOf, useIntegrations, type Account, type AccountState, type Place, type Source, type State } from "./store";
@@ -37,15 +37,13 @@ type Ui = {
   sheet: Sheet | null;
   /** Connectors a connect sheet is still making: the shelf shows them when it closes. */
   hidden: string[];
-  /** The connector whose tile just popped into the shelf. */
-  landed: string | null;
   /** The sheet is playing its way out; it unmounts when that ends. */
   leaving: boolean;
   /** The sheet replaced another one: the backdrop is already up, so only the panel changes. */
   swapped: boolean;
 };
 
-const EMPTY: Ui = { view: "home", detail: null, sheet: null, hidden: [], landed: null, leaving: false, swapped: false };
+const EMPTY: Ui = { view: "home", detail: null, sheet: null, hidden: [], leaving: false, swapped: false };
 let current: Ui = EMPTY;
 const listeners = new Set<() => void>();
 const put = (next: Partial<Ui>) => {
@@ -66,7 +64,6 @@ export function useUi(): Ui {
 /** How long a sheet takes to leave: its backdrop fades and the panel drops away. */
 export const LEAVE_MS = 140;
 
-let landTimer = 0;
 let leaveTimer = 0;
 /** Plays the sheet out, then unmounts it and applies `then`. */
 function leave(then: Partial<Ui> = {}) {
@@ -90,13 +87,8 @@ export const ui = {
   hide: (id: string) => put({ hidden: [...current.hidden, id] }),
   /** The connect sheet closed on a failure: nothing lands, and the page stays as it was. */
   drop: (id: string) => leave({ hidden: current.hidden.filter((x) => x !== id) }),
-  /** The connect sheet closed: its connector joins the shelf with a pop. */
-  land(id: string | null) {
-    // Back on the connectors, where the new tile lands.
-    leave({ view: "home", hidden: current.hidden.filter((x) => x !== id), landed: id });
-    window.clearTimeout(landTimer);
-    landTimer = window.setTimeout(() => put({ landed: null }), 1900 + LEAVE_MS);
-  },
+  /** The connect sheet closed: on to its connector's page, where the sign-in shows if it's still going. */
+  land: (id: string) => leave({ view: "detail", detail: { kind: "connector", id }, hidden: current.hidden.filter((x) => x !== id) }),
 };
 
 /** The page strip's trail: empty on the connectors (the page heads itself), Connectors › Browse on the directory. */
@@ -140,10 +132,10 @@ export const ACCOUNT_TONE: Record<AccountState, Tone> = {
 
 /** What's off, in a word; all well says nothing but who it is. */
 export const ACCOUNT_PROBLEM: Partial<Record<AccountState, string>> = {
-  expired: "Needs authentication",
-  "needs-scope": "Missing permissions",
+  expired: "Sign in required",
+  "needs-scope": "Needs more access",
   failed: "Can’t connect",
-  pending: "Not signed in",
+  pending: "Sign in required",
 };
 
 export const TONE_TEXT: Record<Tone, string> = {
@@ -212,6 +204,5 @@ export function useEscape(close: () => void) {
 export const KEYFRAMES = `
 @keyframes c-orbit { to { transform: rotate(360deg); } }
 @keyframes c-unorbit { to { transform: rotate(-360deg); } }
-@keyframes c-glow { 0% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes c-ping { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(2.6); opacity: 0; } }
 `;

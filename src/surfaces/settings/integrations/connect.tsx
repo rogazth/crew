@@ -1,25 +1,24 @@
 // The connect dialog, the same small frame as a connector's: opened by Install,
 // it starts the sign-in at once, one row that moves through its stages, then
-// the new account with its name. A server that refuses Crew's sign-in says so
+// goes to the connector's page. A server that refuses Crew's sign-in says so
 // here, in the daemon's words. A built-in whose siblings have an account
 // signed in first offers it ("Continue as …"), so a second Google app asks
 // Google only for its own access. With more than one workspace, which ones
 // it's for is asked first (workspaces.tsx).
-import { AlertCircleIcon, GlobeIcon, UserPlusIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
+import { AlertCircleIcon, GlobeIcon, PlusIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../../chrome/kit";
-import { AccountName } from "./bits";
 import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./dialog";
 import { hostOf, ui } from "./lib";
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
-import { accountOfFlow, actions, cancelFlow, connectorOf, familyIdentities, useIntegrations, waitsInBrowser, type Account, type FlowStage, type Source } from "./store";
+import { accountOfFlow, actions, cancelFlow, connectorOf, familyIdentities, useIntegrations, waitsInBrowser, type FlowStage, type Source } from "./store";
 import { InstallWorkspacesDialog } from "./workspaces";
 
 const STAGE: Record<Exclude<FlowStage, "done" | "failed">, string> = {
-  opening: "Starting the sign-in…",
-  waiting: "Waiting for the browser…",
-  redeeming: "Saving to the vault…",
+  opening: "Opening sign-in…",
+  waiting: "Signing in…",
+  redeeming: "Finishing sign-in…",
 };
 
 function Glyph({ icon: Icon, tone = "text-icon" }: { icon: LucideIcon; tone?: string }) {
@@ -57,14 +56,24 @@ function ChooseAccount({ source, identities }: { source: Source & { kind: "built
   return (
     <Dialog label={title}>
       <DialogHeader mark={<ServiceMark brand={brand} size={40} />} title={title} subtitle="Built in" />
-      <DialogGroup title="Sign in as">
+      <DialogGroup title="Choose an account">
         {identities.map((identity) => (
-          <button key={identity} type="button" onClick={() => go(identity)} className="w-full text-left outline-none focus-visible:bg-hover hover:bg-hover">
-            <DialogRow icon={<Glyph icon={UserRoundIcon} />} title={`Continue as ${identity}`} subtitle={`Asks only for ${brand.name}’s access`} />
+          <button
+            key={identity}
+            type="button"
+            onClick={() => go(identity)}
+            className="-mx-3 block w-[calc(100%+1.5rem)] px-3 text-left outline-none transition-colors first:rounded-t-xl hover:bg-hover focus-visible:bg-hover"
+          >
+            <DialogRow icon={<Glyph icon={UserRoundIcon} />} title={`Continue as ${identity}`} subtitle={`Allow access to ${brand.name}`} />
           </button>
         ))}
-        <button type="button" onClick={() => go(null)} className="w-full text-left outline-none focus-visible:bg-hover hover:bg-hover">
-          <DialogRow icon={<Glyph icon={UserPlusIcon} />} title="Use another account" />
+        <button
+          type="button"
+          onClick={() => go(null)}
+          className="flex h-12 w-full items-center gap-1.5 border-t border-hairline text-left text-text-muted outline-none transition-colors hover:text-text focus-visible:text-text"
+        >
+          <PlusIcon className="size-4" />
+          Use another account
         </button>
       </DialogGroup>
       <DialogFooter>
@@ -114,32 +123,26 @@ function Connecting({ source }: { source: Source }) {
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const title = stage === "done" ? `${brand.name} is installed` : `Install ${brand.name}`;
+  // Signed in, the sheet has nothing left to say: on to the connector's page.
+  useEffect(() => {
+    if (stage === "done" && made) ui.land(made.connectorId);
+  }, [stage, made]);
+  const title = `Install ${brand.name}`;
   return (
     <Dialog label={title}>
-      <DialogHeader mark={<ServiceMark brand={brand} size={40} />} title={title} subtitle={connected?.identity ?? brand.publisher} />
+      <DialogHeader mark={<ServiceMark brand={brand} size={40} />} title={title} subtitle={brand.publisher} />
 
       {(stage === "opening" || stage === "waiting" || stage === "redeeming") && (
         <DialogGroup>
-          {inBrowser ? (
-            <DialogRow
-              icon={<Glyph icon={GlobeIcon} tone="text-info" />}
-              title={<span className="crew-shimmer">Continue in your browser</span>}
-              subtitle="Finish signing in on the page that just opened there, then come back here."
-            />
-          ) : (
-            <DialogRow icon={<Glyph icon={GlobeIcon} tone="text-info" />} title={<span className="crew-shimmer">{STAGE[stage]}</span>} />
-          )}
+          <DialogRow icon={<Glyph icon={GlobeIcon} tone="text-info" />} title={<span className="crew-shimmer">{inBrowser ? "Continue in your browser" : STAGE[stage]}</span>} />
         </DialogGroup>
       )}
 
       {stage === "failed" && (
         <DialogGroup>
-          <DialogRow icon={<Glyph icon={AlertCircleIcon} tone="text-danger" />} title="Sign-in didn’t finish" subtitle={why} />
+          <DialogRow icon={<Glyph icon={AlertCircleIcon} tone="text-danger" />} title="Couldn’t sign in" subtitle={why} />
         </DialogGroup>
       )}
-
-      {stage === "done" && connected && <Landed account={connected} />}
 
       <DialogFooter>
         {inBrowser && (
@@ -162,21 +165,7 @@ function Connecting({ source }: { source: Source }) {
             </Button>
           </>
         )}
-        {stage === "done" && (
-          <Button variant="primary" onClick={close}>
-            Done
-          </Button>
-        )}
       </DialogFooter>
     </Dialog>
-  );
-}
-
-/** The new account and its name. */
-function Landed({ account }: { account: Account }) {
-  return (
-    <DialogGroup title="Account">
-      <DialogRow title={<AccountName account={account} />} subtitle={account.identity ?? undefined} />
-    </DialogGroup>
   );
 }

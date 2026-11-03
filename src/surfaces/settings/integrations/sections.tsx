@@ -35,7 +35,6 @@ export function Tile({
   action,
   trailing,
   onOpen,
-  glow = false,
 }: {
   variant?: "tile" | "row";
   marks: (Brand | undefined)[];
@@ -51,7 +50,6 @@ export function Tile({
   /** Controls at the right end, after the action: a switch, a remove button. */
   trailing?: ReactNode;
   onOpen?: (() => void) | undefined;
-  glow?: boolean;
 }) {
   const row = variant === "row";
   const size = row ? 24 : 36;
@@ -71,7 +69,6 @@ export function Tile({
         row ? "h-14 gap-3 rounded-xl pr-1.5 pl-3 ring-1 ring-hairline ring-inset" : "h-14 gap-2.5 rounded-xl bg-card pr-1.5 pl-2.5"
       } ${onOpen ? "cursor-default transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50" : ""} ${dim ? "[&>span:not(:last-child)]:opacity-55" : ""}`}
     >
-      {glow && <span className="pointer-events-none absolute inset-0 rounded-xl bg-success/10 opacity-0 ring-2 ring-success/45 motion-safe:animate-[c-glow_1.9s_var(--ease-out)]" />}
       <span className="relative shrink-0">
         {/* Several marks overlap into the width of one, so the text lines up with the rows around it. */}
         <span className={`flex ${row ? "-space-x-3" : "-space-x-2"}`}>
@@ -255,7 +252,6 @@ export function Installed() {
             title={connector.name}
             subtitle={busy ? flowLine(running) : (problem ?? accountsLine(mine))}
             subtitleTone={busy ? "info" : undefined}
-            glow={connector.id === u.landed}
             onOpen={() => openConnector(connector.id)}
           />
         );
@@ -270,16 +266,15 @@ export function Installed() {
  */
 function VaultLine() {
   const { vaultEnv } = useVault();
-  const where = vaultEnv === LOCAL ? "this Mac" : machineName(vaultEnv);
+  const where = vaultEnv === LOCAL ? "This Mac" : machineName(vaultEnv);
   return (
     <button
       type="button"
-      title="Where the sign-ins are kept"
       onClick={() => ui.open({ kind: "vault" })}
       className="-mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[12.5px] font-medium text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
     >
       <LockIcon className="size-3.5" />
-      Stored on {where}
+      Vault: {where}
     </button>
   );
 }
@@ -291,7 +286,7 @@ function Empty() {
       <MiniOrbit />
       <div className="flex min-w-0 flex-col items-start gap-1">
         <p className="text-[14px] font-medium">No connectors installed</p>
-        <p className="max-w-[440px] text-text-muted">Sign in once, use from every CLI.</p>
+        <p className="max-w-[440px] text-text-muted">Sign in once. Use it in every CLI.</p>
         <Button variant="primary" className="mt-2.5" onClick={() => ui.go("directory")}>
           Browse connectors
         </Button>
