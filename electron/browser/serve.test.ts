@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { servedPath, urlFor, within } from "./serve";
+import { byteRange, servedPath, urlFor, within } from "./serve";
 
 const ROOT = "/Users/me/repo";
 
@@ -54,5 +54,25 @@ describe("urlFor", () => {
     const file = `${ROOT}/out/My Report#1.html`;
     const url = new URL(urlFor("h1", ROOT, file)!);
     expect(servedPath(ROOT, url.pathname)).toBe(file);
+  });
+});
+
+describe("byteRange", () => {
+  it.each([
+    ["bytes=2-5", { start: 2, end: 5 }],
+    ["bytes=0-", { start: 0, end: 9 }],
+    ["bytes=4-99", { start: 4, end: 9 }],
+    ["bytes=-3", { start: 7, end: 9 }],
+    ["bytes=-99", { start: 0, end: 9 }],
+  ])("reads %s of ten bytes", (header, expected) => {
+    expect(byteRange(header, 10)).toEqual(expected);
+  });
+
+  it.each([["bytes=10-"], ["bytes=5-2"], ["bytes=-0"], ["bytes=-"], ["bytes=0-1,3-4"], ["items=0-1"]])("refuses %s", (header) => {
+    expect(byteRange(header, 10)).toBeNull();
+  });
+
+  it("refuses any range of an empty file", () => {
+    expect(byteRange("bytes=0-", 0)).toBeNull();
   });
 });

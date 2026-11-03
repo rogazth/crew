@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, ipcMain, net, protocol, shell, type CustomScheme, type Session, type WebContents } from "electron";
 import { FILE_CHANNELS, FILE_SCHEME } from "../../src/lib/browser/files";
-import { servedPath, urlFor, within } from "./serve";
+import { byteRange, servedPath, urlFor, within } from "./serve";
 
 /** A folder whose files live on another machine's `GET /fs`. */
 type RemoteRoot = { origin: string; token: string };
@@ -87,12 +87,36 @@ async function serve(request: Request): Promise<Response> {
     if ((await stat(target)).isDirectory()) target = path.join(target, "index.html");
     // A symlink inside the worktree must not lead a page out of it.
     const [realRoot, real] = await Promise.all([realpath(root), realpath(target)]);
-    if (!within(realRoot, real) || !(await stat(real)).isFile()) return notFound();
-    const range = request.headers.get("range");
-    return await net.fetch(pathToFileURL(real).href, range ? { headers: { range } } : {});
+    if (!within(realRoot, real)) return notFound();
+    const info = await stat(real);
+    if (!info.isFile()) return notFound();
+    return await serveLocal(pathToFileURL(real).href, info.size, request.headers.get("range"));
   } catch {
     return notFound();
   }
+}
+
+/**
+ * Chromium's file loader cuts a range but still calls it a plain 200, and a
+ * video takes that for a stream it cannot seek: the headers are said here.
+ */
+async function serveLocal(file: string, size: number, range: string | null): Promise<Response> {
+  if (!range) return withHeaders(await net.fetch(file), 200, { "accept-ranges": "bytes" });
+  const bytes = byteRange(range, size);
+  if (!bytes) return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+  const { start, end } = bytes;
+  const part = await net.fetch(file, { headers: { range: `bytes=${start}-${end}` } });
+  return withHeaders(part, 206, {
+    "accept-ranges": "bytes",
+    "content-length": String(end - start + 1),
+    "content-range": `bytes ${start}-${end}/${size}`,
+  });
+}
+
+function withHeaders(response: Response, status: number, extra: Record<string, string>): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(extra)) headers.set(name, value);
+  return new Response(response.body, { status, headers });
 }
 
 async function proxyRemote(remote: RemoteRoot, root: string, pathname: string, request: Request): Promise<Response> {

@@ -37,3 +37,20 @@ export function urlFor(host: string, root: string, file: string): string | null 
   const encoded = relative.split(path.sep).map(encodeURIComponent).join("/");
   return `${FILE_SCHEME}://${host}/${encoded}`;
 }
+
+/**
+ * The inclusive offsets a `Range` header asks of a file of `size` bytes, or
+ * null when it cannot be met. One range only, as crewd's `GET /fs` answers.
+ */
+export function byteRange(header: string, size: number): { start: number; end: number } | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match || size === 0) return null;
+  const [, first, last] = match;
+  if (!first) {
+    const suffix = Number(last);
+    return last && suffix > 0 ? { start: Math.max(size - suffix, 0), end: size - 1 } : null;
+  }
+  const start = Number(first);
+  const end = last ? Math.min(Number(last), size - 1) : size - 1;
+  return start <= end ? { start, end } : null;
+}
