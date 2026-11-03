@@ -186,8 +186,8 @@ async function applyMachines(machines: ReadonlyMap<string, Upstream | null>): Pr
 
 /**
  * Asked first about every request a page makes, before a remote workspace's
- * loopback is moved to its machine; true cancels the request. A connector
- * sign-in's redirect is caught here as well as on navigation, so its code
+ * loopback is moved to its machine; true cancels the request. The redirect of
+ * a sign-in in a window is caught here as well as on navigation, so its code
  * never reaches a socket (sign-in-window.ts).
  */
 let interceptRequest: (webContentsId: number | undefined, url: string) => boolean = () => false;

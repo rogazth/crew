@@ -44,7 +44,10 @@ it doesn't make anyone safer, since the data path is the same. What earns
 trust is that the data never reaches Crew:
 
 - Client type "Desktop app", PKCE, loopback redirect, as `gws auth login`
-  does. Its secret isn't secret (Google says so for installed apps); the
+  does: Google's sign-in opens in the person's default browser, since Google
+  refuses a window Crew controls, and comes back to a listener Crew keeps open
+  on `127.0.0.1:17899` only while it waits (see "Signing in" in
+  `2026-10-23-integrations.md`). Its secret isn't secret (Google says so for installed apps); the
   tokens are what matter, and they stay in the vault.
 - Crew has no server. The refresh token is in the vault (the keychain on
   macOS); a session gets an access token for an hour; mail and files go

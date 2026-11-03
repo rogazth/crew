@@ -13,11 +13,11 @@ import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from "./di
 import { hostOf, ui } from "./lib";
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
-import { accountOfFlow, actions, connectorOf, familyIdentities, useIntegrations, type Account, type FlowStage, type Source } from "./store";
+import { accountOfFlow, actions, cancelFlow, connectorOf, familyIdentities, useIntegrations, waitsInBrowser, type Account, type FlowStage, type Source } from "./store";
 import { InstallWorkspacesDialog } from "./workspaces";
 
 const STAGE: Record<Exclude<FlowStage, "done" | "failed">, string> = {
-  opening: "Opening the sign-in window…",
+  opening: "Starting the sign-in…",
   waiting: "Waiting for the browser…",
   redeeming: "Saving to the vault…",
 };
@@ -89,6 +89,13 @@ function Connecting({ source }: { source: Source }) {
   const why = error ?? flow?.error;
   // Closed mid-way, the sign-in goes on, and its tile shows it. Failed, nothing lands: stay where the install began.
   const close = () => (!made ? ui.close() : stage === "failed" ? ui.drop(made.connectorId) : ui.land(made.connectorId));
+  const inBrowser = stage === "waiting" && waitsInBrowser(flow);
+  // Given up on, nothing lands: the store takes back a connector installed for it.
+  const cancel = () => {
+    if (!made) return;
+    cancelFlow(made.flowId);
+    ui.drop(made.connectorId);
+  };
   const start = async () => {
     setError(null);
     try {
@@ -114,7 +121,15 @@ function Connecting({ source }: { source: Source }) {
 
       {(stage === "opening" || stage === "waiting" || stage === "redeeming") && (
         <DialogGroup>
-          <DialogRow icon={<Glyph icon={GlobeIcon} tone="text-info" />} title={<span className="crew-shimmer">{STAGE[stage]}</span>} />
+          {inBrowser ? (
+            <DialogRow
+              icon={<Glyph icon={GlobeIcon} tone="text-info" />}
+              title={<span className="crew-shimmer">Continue in your browser</span>}
+              subtitle="Finish signing in on the page that just opened there, then come back here."
+            />
+          ) : (
+            <DialogRow icon={<Glyph icon={GlobeIcon} tone="text-info" />} title={<span className="crew-shimmer">{STAGE[stage]}</span>} />
+          )}
         </DialogGroup>
       )}
 
@@ -127,6 +142,11 @@ function Connecting({ source }: { source: Source }) {
       {stage === "done" && connected && <Landed account={connected} />}
 
       <DialogFooter>
+        {inBrowser && (
+          <Button variant="ghost" onClick={cancel}>
+            Cancel sign-in
+          </Button>
+        )}
         {(stage === "opening" || stage === "waiting" || stage === "redeeming") && (
           <Button variant="ghost" onClick={close}>
             Close

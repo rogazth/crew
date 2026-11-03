@@ -86,11 +86,11 @@ export const CHANNELS = {
   mount: "browser:mount",
   /**
    * window → main: open a sign-in (a connector's, a provider server's) in
-   * a window of its own and resolve once it ends: the redirect caught, or
-   * the window closed.
+   * a window of its own, or the person's browser for Google's, and resolve
+   * once it ends: the redirect caught, or the flow given up.
    */
   signIn: "browser:sign-in",
-  /** window → main: give up on a sign-in, closing its window. */
+  /** window → main: give up on a sign-in, closing its window or its listener. */
   signInAbort: "browser:sign-in-abort",
 } as const;
 
@@ -98,15 +98,38 @@ export const CHANNELS = {
  * A sign-in the window started (the daemon's `SignIn`, or a provider
  * server's `ProviderSignIn`). Main opens `authUrl` and catches the navigation
  * to `redirectUri` whose `state` is this one; nothing on this Mac is asked
- * for the redirect URI, Crew's own or a CLI's loopback port.
+ * for the redirect URI, Crew's own or a CLI's loopback port. A request
+ * `opensInSystemBrowser` holds true for is the exception.
  */
 export type SignInRequest = { state: string; authUrl: string; redirectUri: string; incognito: boolean };
 
+/** Where the vault's sign-ins come back: `REDIRECT_URI` in crates/crew-core/src/connectors/flow.rs. */
+export const CREW_REDIRECT_URI = "http://127.0.0.1:17899/callback";
+
 /**
- * How a sign-in window ended: the redirect it caught, whole; closed before
- * one came; or refused, a redirect to the URI with another `state`.
+ * Whether a sign-in runs in the person's default browser rather than a window
+ * of Crew's: Google's on Crew's redirect URI. Google refuses an embedded user
+ * agent (https://developers.google.com/identity/protocols/oauth2/native-app).
+ * A CLI's sign-in on its own port stays in the window, since a listener of
+ * Crew's couldn't take that port. Main decides by it on the request it
+ * validated; the window only reads it to say where the person has to look.
  */
-export type SignInOutcome = { kind: "caught"; url: string } | { kind: "closed" } | { kind: "refused" };
+export function opensInSystemBrowser(page: { authUrl: string; redirectUri: string }): boolean {
+  if (page.redirectUri !== CREW_REDIRECT_URI) return false;
+  try {
+    const url = new URL(page.authUrl);
+    return url.protocol === "https:" && url.hostname === "accounts.google.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How a sign-in ended: the redirect caught, whole; closed before one came;
+ * refused, a redirect to the URI with another `state` in its window; or
+ * failed, with why in the person's words (the browser path's listener).
+ */
+export type SignInOutcome = { kind: "caught"; url: string } | { kind: "closed" } | { kind: "refused" } | { kind: "failed"; message: string };
 
 /**
  * `open`: a tab an agent just made, to add to its strip in the background.

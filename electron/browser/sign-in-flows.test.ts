@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { FlowRegistry, landsOn, redirectDecision, signInRequest } from "./sign-in-flows";
+import { CREW_REDIRECT_URI, opensInSystemBrowser } from "../../src/lib/browser/bridge";
+import { isGoogleSignIn } from "./identity";
+import { FlowRegistry, landsOn, loopbackDecision, redirectDecision, signInRequest } from "./sign-in-flows";
 
 const STATE = "s7Hq2-xYz_0123456789";
 const REDIRECT = "http://127.0.0.1:53682/callback";
@@ -104,6 +106,54 @@ describe("a provider server's redirect", () => {
     const flow = { state, redirectUri: "http://127.0.0.1:60694/callback" };
     const url = `${flow.redirectUri}?code=abc&state=${encodeURIComponent(state)}`;
     expect(redirectDecision(url, flow)).toEqual({ action: "catch", state, url });
+  });
+});
+
+describe("opensInSystemBrowser", () => {
+  const GOOGLE = "https://accounts.google.com/o/oauth2/v2/auth?client_id=x";
+
+  it("takes Google's sign-in on Crew's redirect URI", () => {
+    expect(opensInSystemBrowser({ authUrl: GOOGLE, redirectUri: CREW_REDIRECT_URI })).toBe(true);
+  });
+
+  it("leaves every other sign-in in the window", () => {
+    expect(opensInSystemBrowser({ authUrl: "https://mcp.notion.com/authorize", redirectUri: CREW_REDIRECT_URI })).toBe(false);
+    expect(opensInSystemBrowser({ authUrl: "http://127.0.0.1:9000/authorize", redirectUri: CREW_REDIRECT_URI })).toBe(false);
+    // A CLI's own listener holds its port: Crew's can't.
+    expect(opensInSystemBrowser({ authUrl: GOOGLE, redirectUri: "http://127.0.0.1:60694/callback" })).toBe(false);
+  });
+
+  it.each([
+    ["https://accounts.google.com/x", true],
+    ["http://accounts.google.com/x", false],
+    ["https://accounts.google.com.evil.com/x", false],
+    ["https://evil.com/accounts.google.com", false],
+    ["https://mail.google.com/", false],
+    ["not a url", false],
+  ])("agrees with the pages' own idea of Google's sign-in: %s", (authUrl, google) => {
+    expect(isGoogleSignIn(authUrl)).toBe(google);
+    expect(opensInSystemBrowser({ authUrl, redirectUri: CREW_REDIRECT_URI })).toBe(google);
+  });
+});
+
+describe("loopbackDecision", () => {
+  const second = { state: "second-state-456", redirectUri: REDIRECT };
+  const waiting = new Map([
+    [flow.state, flow],
+    [second.state, second],
+  ]);
+
+  it("catches a pending flow's redirect, by its state", () => {
+    const url = `${REDIRECT}?code=abc&state=${second.state}`;
+    expect(loopbackDecision(url, waiting)).toEqual({ action: "catch", state: second.state, url });
+  });
+
+  it("fails nothing for another state, none, another path, or no flow", () => {
+    expect(loopbackDecision(`${REDIRECT}?code=abc&state=other-state-123`, waiting).action).toBe("pass");
+    expect(loopbackDecision(`${REDIRECT}?code=abc`, waiting).action).toBe("pass");
+    expect(loopbackDecision(`http://127.0.0.1:53682/other?state=${STATE}`, waiting).action).toBe("pass");
+    expect(loopbackDecision("", waiting).action).toBe("pass");
+    expect(loopbackDecision(`${REDIRECT}?code=abc&state=${STATE}`, new Map()).action).toBe("pass");
   });
 });
 

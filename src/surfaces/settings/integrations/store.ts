@@ -20,6 +20,7 @@ import {
   toolSet,
   vaultCallback,
 } from "../../../lib/api";
+import { opensInSystemBrowser } from "../../../lib/browser/bridge";
 import { abortSignIn, catchRedirect } from "../../../lib/signInWindow";
 import { ensureMembers, loadVault, watchMembers } from "./vault";
 import type { BuiltinConnector, Connector, ConnectorAccount, RegistryServer, SignIn } from "../../../lib/protocol";
@@ -39,6 +40,8 @@ export type Flow = {
   /** Known once the daemon has made (or picked) the account. */
   accountId: string | null;
   stage: FlowStage;
+  /** It runs in the person's browser (Google's), so nothing of Crew's shows it and they may want out. */
+  inBrowser?: boolean | undefined;
   /** Why it failed, in one line. */
   error?: string | undefined;
 };
@@ -193,7 +196,7 @@ const landed = new Map<number, string>();
  * A sign-in, start to end: a new account of the connector, or `accountId`
  * again. Resolves the flow's id at once; the flow itself moves on in the store.
  */
-function signIn(connectorId: string, accountId: string | null, loginHint: string | null = null, workspaces: string[] | null = null): number {
+function signIn(connectorId: string, accountId: string | null, loginHint: string | null = null, workspaces: string[] | null = null, announceFailure = false): number {
   const id = ++flowSeq;
   set((s) => ({
     ...s,
@@ -208,13 +211,14 @@ function signIn(connectorId: string, accountId: string | null, loginHint: string
     try {
       started = await connectorConnect({ connectorId, accountId, label: null, loginHint, workspaces });
       running.set(id, started.state);
-      stage(id, { accountId: started.accountId, stage: "waiting" });
-      // The window catches the redirect itself; this Mac's vault redeems it.
+      const inBrowser = opensInSystemBrowser({ authUrl: started.authUrl, redirectUri: started.redirectUri });
+      stage(id, { accountId: started.accountId, stage: "waiting", inBrowser });
+      // Main catches the redirect, in its window or on its listener; this Mac's vault redeems it.
       const url = await catchRedirect(started);
       running.delete(id);
       if (url === null) {
         await signInCancel(started.state).catch(() => {});
-        stage(id, { stage: "failed", error: "The sign-in window was closed." });
+        stage(id, { stage: "failed", error: inBrowser ? "The sign-in was cancelled." : "The sign-in window was closed." });
         return;
       }
       stage(id, { stage: "redeeming" });
@@ -227,6 +231,7 @@ function signIn(connectorId: string, accountId: string | null, loginHint: string
       running.delete(id);
       if (started) void signInCancel(started.state).catch(() => {});
       stage(id, { stage: "failed", error: message(error) });
+      if (announceFailure) toast(`Couldn’t sign in: ${message(error)}`, "danger");
     }
   })();
   return id;
@@ -237,6 +242,22 @@ export function dismissFlow(id: number) {
   if (pending) abortSignIn(pending);
   set((s) => ({ ...s, flows: s.flows.filter((f) => f.id !== id) }));
 }
+
+/**
+ * Gives up on a sign-in that's waiting in the person's browser. The flow then
+ * ends as any closed one does: the daemon lets it go, and a connector just
+ * installed for it is taken back out.
+ */
+export function cancelFlow(id: number) {
+  const pending = running.get(id);
+  if (pending) abortSignIn(pending);
+}
+
+/** A sign-in the person has to finish in their browser, and can cancel from here. */
+export const waitsInBrowser = (flow: Flow | undefined): boolean => flow?.stage === "waiting" && flow.inBrowser === true;
+
+/** What a row says about a running sign-in. */
+export const flowLine = (flow: Flow | undefined) => (waitsInBrowser(flow) ? "Continue in your browser…" : "Authenticating…");
 
 /* ── Actions ──────────────────────────────────────────────────────────── */
 
@@ -324,7 +345,8 @@ export const actions = {
   /** Signs an account in again: expired, short of scope, or never finished. */
   reconnect(accountId: string): number | null {
     const account = accountOf(state, accountId);
-    return account ? signIn(account.connectorId, accountId) : null;
+    // No sheet shows this one, so a failure has to say itself.
+    return account ? signIn(account.connectorId, accountId, null, null, true) : null;
   },
 
   /** Lists the account's tools again; for a server that could not be reached, tries it now. */
@@ -425,7 +447,7 @@ export const accountOfFlow = (s: State, flowId: number | undefined) =>
 
 /** A sign-in of this window still running on the account. */
 export const signingIn = (s: State, accountId: string) =>
-  s.flows.some((f) => f.accountId === accountId && f.stage !== "done" && f.stage !== "failed");
+  s.flows.find((f) => f.accountId === accountId && f.stage !== "done" && f.stage !== "failed");
 
 export function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);

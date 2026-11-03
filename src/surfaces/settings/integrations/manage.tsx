@@ -7,13 +7,14 @@ import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import type { MenuAction } from "../../../lib/menu";
 import { AccountName, Dot, RowAction, RowMenu } from "./bits";
 import { ACCOUNT_PROBLEM, ACCOUNT_TONE, ui, workspacesLine } from "./lib";
-import { actions, siblingsOf, signingIn, useIntegrations, type Account } from "./store";
+import { actions, cancelFlow, flowLine, siblingsOf, signingIn, useIntegrations, waitsInBrowser, type Account } from "./store";
 
 export function AccountRow({ account }: { account: Account }) {
   const s = useIntegrations();
   const [rename, setRename] = useState(0);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
-  const busy = signingIn(s, account.id);
+  const flow = signingIn(s, account.id);
+  const busy = !!flow;
   const tone = ACCOUNT_TONE[account.state];
   // A grant that ran out, or one short of scope, signs in again; a server that couldn't be reached is tried again.
   const fix =
@@ -28,7 +29,7 @@ export function AccountRow({ account }: { account: Account }) {
   const shared = siblings.length > 0 ? `Also signed in for ${siblings.join(", ")}` : null;
   // Named after who signed in, the account doesn't say it twice.
   const line = busy
-    ? "Authenticating…"
+    ? flowLine(flow)
     : [problem, account.identity === account.label ? null : account.identity, problem || s.workspaces.length < 2 ? null : workspacesLine(account, s.workspaces), problem ? null : shared]
         .filter(Boolean)
         .join(" · ");
@@ -61,6 +62,7 @@ export function AccountRow({ account }: { account: Account }) {
         )}
       </div>
       {fix && !busy && <RowAction label={fix.label} onClick={fix.run} />}
+      {flow && waitsInBrowser(flow) && <RowAction label="Cancel" onClick={() => cancelFlow(flow.id)} />}
       <RowMenu label={`More for ${account.label}`} actions={menu} onPick={pick} />
       <ConfirmDialog confirm={confirm} onAsk={setConfirm} onClose={() => setConfirm(null)} />
     </div>

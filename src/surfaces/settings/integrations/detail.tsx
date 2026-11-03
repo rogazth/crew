@@ -15,7 +15,7 @@ import { useEnvLinks } from "../../../hooks/useEnvLinks";
 import { LOCAL } from "../../../lib/client/registry";
 import type { ConnectorTool } from "../../../lib/protocol";
 import { Group, Row, SettingsPage } from "../ui";
-import { Pills, SwitchRow } from "./bits";
+import { Pills, RowAction, SwitchRow } from "./bits";
 import { CliRow, ServerMark } from "./clis";
 import { hostOf, startAddAccount, ui, useEscape, useUi, type Detail } from "./lib";
 import { AccountRow } from "./manage";
@@ -25,7 +25,7 @@ import { OutsideGroup } from "./outside";
 import { UnofficialNote, vendorOf } from "./builtin";
 import { useProviderServers } from "./providers";
 import { groupsOf, providerName, serverLine } from "./servers";
-import { actions, builtinOf, connectorOf, formatTokens, useIntegrations, type Account } from "./store";
+import { actions, builtinOf, cancelFlow, connectorOf, flowLine, formatTokens, useIntegrations, waitsInBrowser, type Account } from "./store";
 
 const home = () => ui.go("home");
 /** Figma's registry name: it signs Crew in under an approved client's name (`oauth::client_name`). */
@@ -111,9 +111,12 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
           <AccountRow key={a.id} account={a} />
         ))}
         {adding.map((flow) => (
-          <div key={flow.id} className="flex h-14 flex-col justify-center">
-            <span className="font-medium">New account</span>
-            <span className="crew-shimmer self-start text-[12px]">Authenticating…</span>
+          <div key={flow.id} className="flex h-14 items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="font-medium">New account</span>
+              <span className="crew-shimmer self-start text-[12px]">{flowLine(flow)}</span>
+            </div>
+            {waitsInBrowser(flow) && <RowAction label="Cancel" onClick={() => cancelFlow(flow.id)} />}
           </div>
         ))}
         {/* Its workspaces, then the sign-in, private so the account already signed in doesn't answer. */}

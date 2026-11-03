@@ -5,11 +5,15 @@
  * its URL handed back to the renderer, which gives it to the daemon that
  * holds the flow: this Mac's vault for a connector, or the machine whose CLI
  * started a provider server's sign-in. The URI may be Crew's own or a CLI's
- * loopback listener on any port; either way nothing on this Mac is asked for
+ * loopback listener on any port; in a window nothing on this Mac is asked for
  * it, so the code never reaches a socket. Only a window opened for a flow,
  * and the popups it opens, belong to one: a tab, an agent's included, that
  * lands on the same URI is left alone, so no page can finish a sign-in the
  * person did not start.
+ *
+ * Google's sign-in is the exception: it refuses a window Crew controls, so it
+ * runs in the person's browser and comes back to a real listener on Crew's
+ * URI (sign-in-loopback.ts), which `loopbackDecision` answers for.
  */
 
 import type { SignInRequest } from "../../src/lib/browser/bridge";
@@ -82,6 +86,17 @@ export function redirectDecision(url: string, flow: PendingFlow | null): Redirec
   if (!flow || !landsOn(url, flow.redirectUri)) return { action: "pass" };
   const state = parse(url)?.searchParams.get("state");
   return state === flow.state ? { action: "catch", state: flow.state, url } : { action: "refuse", state: flow.state };
+}
+
+/**
+ * What a request to the loopback listener means, among the flows waiting on
+ * it. Anyone on this Mac can reach the port, so unlike in a flow's own window a
+ * wrong state fails nothing: only a pending flow's own redirect is caught.
+ */
+export function loopbackDecision(url: string, flows: ReadonlyMap<string, PendingFlow>): RedirectDecision {
+  const state = parse(url)?.searchParams.get("state");
+  const decision = redirectDecision(url, (state && flows.get(state)) || null);
+  return decision.action === "catch" ? decision : { action: "pass" };
 }
 
 /**

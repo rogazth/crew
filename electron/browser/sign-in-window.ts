@@ -8,14 +8,18 @@
  * it, closes itself and resolves the window's call with the URL. The caller
  * decides where the URL goes (`src/lib/signInWindow.ts`): `vault_callback`
  * on this Mac, or `provider_server_callback` on the machine that started it.
+ *
+ * Google's sign-in opens no window: it goes to the person's browser instead
+ * and resolves the same way (sign-in-loopback.ts).
  */
 
 import { BrowserWindow, ipcMain, type WebContents, type WebPreferences } from "electron";
-import { CHANNELS, isIncognitoPartition, partitionFor, type SignInOutcome } from "../../src/lib/browser/bridge";
+import { CHANNELS, CREW_REDIRECT_URI, isIncognitoPartition, opensInSystemBrowser, partitionFor, type SignInOutcome, type SignInRequest } from "../../src/lib/browser/bridge";
 import { openExternal } from "../external";
 import { followSignIn, guardNavigation, pageSession, POPUP_PRELOAD, setRequestInterceptor, trackIncognito } from "./guests";
 import { popupVerdict } from "./policy";
 import { FlowRegistry, signInRequest, type PendingFlow } from "./sign-in-flows";
+import { LoopbackSignIns } from "./sign-in-loopback";
 
 type Flow = PendingFlow & {
   window: BrowserWindow;
@@ -96,10 +100,36 @@ function watch(contents: WebContents, state: string, partition: string): void {
   });
 }
 
+const inBrowser = new LoopbackSignIns({ port: Number(new URL(CREW_REDIRECT_URI).port), open: openExternal });
+/** The window that started each sign-in in the person's browser. */
+const inBrowserHosts = new Map<string, WebContents>();
+
+function openInBrowser(host: WebContents, request: SignInRequest): Promise<SignInOutcome> {
+  const { state } = request;
+  const outcome = inBrowser.start(request);
+  // A second start: that ended the first too, and the first's own wiring lets go.
+  if (inBrowserHosts.has(state)) return outcome;
+  inBrowserHosts.set(state, host);
+  // Crew's window reloading or closing takes the sign-in with it, as with a window of its own.
+  const drop = () => inBrowser.abort(state);
+  const reload = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) drop();
+  };
+  host.on("destroyed", drop);
+  host.on("did-start-navigation", reload);
+  return outcome.finally(() => {
+    inBrowserHosts.delete(state);
+    if (host.isDestroyed()) return;
+    host.off("destroyed", drop);
+    host.off("did-start-navigation", reload);
+  });
+}
+
 function open(host: WebContents, raw: unknown): Promise<SignInOutcome> {
   const request = signInRequest(raw);
   // Only Crew's window starts a flow: never a page, never a flow's own window.
   if (!request || host.getType() !== "window" || flows.flowOf(host.id)) return Promise.resolve({ kind: "closed" });
+  if (opensInSystemBrowser(request)) return openInBrowser(host, request);
   // A second start of the same flow brings its window forward.
   const existing = flows.get(request.state);
   if (existing) {
@@ -156,6 +186,7 @@ export function registerSignInIpc(): void {
   ipcMain.handle(CHANNELS.signIn, (event, request: unknown) => open(event.sender, request));
   ipcMain.handle(CHANNELS.signInAbort, (event, state: unknown) => {
     if (typeof state !== "string") return;
+    if (inBrowserHosts.get(state) === event.sender) return inBrowser.abort(state);
     const flow = flows.get(state);
     if (flow && flow.host === event.sender) finish(state, { kind: "closed" });
   });

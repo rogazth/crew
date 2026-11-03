@@ -35,6 +35,11 @@ describe("catchRedirect", () => {
     await expect(catchRedirect(PAGE)).rejects.toThrow(/another request/);
   });
 
+  it("throws why when the sign-in couldn't go on", async () => {
+    signIn.mockResolvedValueOnce({ kind: "failed", message: "Port 17899 on this Mac is in use." });
+    await expect(catchRedirect(PAGE)).rejects.toThrow("Port 17899 on this Mac is in use.");
+  });
+
   it("comes back at once where there is no sign-in window", async () => {
     host = null;
     await expect(catchRedirect(PAGE)).resolves.toBe(mockRedirect(PAGE.redirectUri, PAGE.state));

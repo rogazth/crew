@@ -212,7 +212,7 @@ export type BrowserHost = {
    * ends: with the redirect it caught, or closed before one came.
    */
   signIn?(request: SignInRequest): Promise<SignInOutcome>;
-  /** Closes a sign-in's window; its `signIn` resolves closed. */
+  /** Closes a sign-in's window or its listener; its `signIn` resolves closed. */
   abortSignIn?(state: string): Promise<void>;
 };
 

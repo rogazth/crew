@@ -11,7 +11,7 @@ import { ServiceMark } from "./mark";
 import { useRegistry } from "./registry";
 import { conflictsOf, useCopies, useWatchMachines } from "./copies";
 import { listJoin, providerName } from "./servers";
-import { refusalOf, useIntegrations, type Account } from "./store";
+import { flowLine, refusalOf, useIntegrations, type Account } from "./store";
 import { machineName, useVault } from "./vault";
 import { LOCAL } from "../../../lib/client/route";
 
@@ -236,7 +236,8 @@ export function Installed() {
     <TileSection title="Installed" count={connectors.length} action={<VaultLine />}>
       {connectors.map((connector) => {
         const mine = connector.accounts;
-        const busy = s.flows.some((f) => f.connectorId === connector.id && f.stage !== "done" && f.stage !== "failed");
+        const running = s.flows.find((f) => f.connectorId === connector.id && f.stage !== "done" && f.stage !== "failed");
+        const busy = !!running;
         const worst = mine.length === 0 ? "pending" : worstOf(mine);
         const bad = mine.filter((a) => a.state === worst);
         const word = ACCOUNT_PROBLEM[worst];
@@ -252,7 +253,7 @@ export function Installed() {
             marks={[brandOf(connector)]}
             tone={busy ? "info" : !account && conflict ? "warning" : ACCOUNT_TONE[worst]}
             title={connector.name}
-            subtitle={busy ? "Authenticating…" : (problem ?? accountsLine(mine))}
+            subtitle={busy ? flowLine(running) : (problem ?? accountsLine(mine))}
             subtitleTone={busy ? "info" : undefined}
             glow={connector.id === u.landed}
             onOpen={() => openConnector(connector.id)}
