@@ -46,6 +46,9 @@ jobs:
 
       # crew rides in the bundle beside crewd; Settings › General › Command line links to it.
       - run: cargo build --release -p crewd -p crew-cli
+        env:
+          CREW_GOOGLE_CLIENT_ID: ${{ secrets.CREW_GOOGLE_CLIENT_ID }}
+          CREW_GOOGLE_CLIENT_SECRET: ${{ secrets.CREW_GOOGLE_CLIENT_SECRET }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
