@@ -10122,6 +10122,24 @@ time.sleep(600)
     /// session; letters keep landing without waking it, and the user writing
     /// resumes it.
     #[test]
+    fn resuming_a_paused_session_starts_what_waited_in_its_box() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        let kid = w.kid_of(&mine.id, "kid");
+        session::set_auto_turns(w.turns.store(), &mine.id, session::PAUSE_AFTER);
+        assert!(w.row(&mine.id).paused);
+        let launches = w.launches().len();
+        w.report_to(&mine.id, &kid, "one more", 2);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(w.launches().len(), launches, "a paused session is not woken");
+        w.turns.resume(&mine.id);
+        w.settle(&mine.id);
+        assert!(!w.row(&mine.id).paused);
+        assert!(w.launches().len() > launches, "what waited starts a turn");
+        assert!(prompts(&w).last().unwrap().contains("one more"));
+    }
+
+    #[test]
     fn a_session_pauses_after_twenty_automatic_turns_and_the_user_resumes_it() {
         let w = world();
         let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");

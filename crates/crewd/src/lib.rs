@@ -48,11 +48,11 @@ use tracing::Instrument;
 
 mod http;
 pub mod lock;
-mod vault;
 pub mod machine;
 mod socks;
 mod stall;
 pub mod trace;
+mod vault;
 
 pub struct Config {
     pub pty: PtyHost,
@@ -2230,6 +2230,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let SessionId { session_id } = parse(params)?;
             json(hosts.turns.context(&session_id))
         }
+        // Paused after too many automatic turns: it listens to its letters again.
+        "session_resume" => {
+            let SessionId { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || {
+                turns.resume(&session_id);
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
         "turn_stop" => {
             let SessionId { session_id } = parse(params)?;
             let turns = hosts.turns.clone();
@@ -3283,7 +3294,8 @@ mod tests {
             std::thread::spawn(move || unix_call(&socket, &payload)).join().unwrap()
         };
         let listed = shim("tools/list", serde_json::json!({ "_crewConnector": "fake" }));
-        let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> =
+            listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["search", "create_page"], "{listed}");
         let called =
             shim("tools/call", serde_json::json!({ "_crewConnector": "fake", "name": "search", "arguments": { "text": "hi" } }));
@@ -3351,7 +3363,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(copied, "B copied A's connectors");
-        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 7, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        let status: proto::VaultStatus =
+            serde_json::from_value(rpc(&mut wb, 7, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(!status.holds && status.online && status.grants == 0, "{status:?}");
 
         // A session on B calls the connector: the call runs on A.
@@ -3366,7 +3379,8 @@ mod tests {
         };
         let called = call("hi");
         assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "hi", "{called}");
-        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 8, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        let status: proto::VaultStatus =
+            serde_json::from_value(rpc(&mut wa, 8, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(status.holds && status.machines[0].last_call.is_some(), "{status:?}");
 
         // A machine's token runs tools; it reads nothing else of the daemon,
@@ -3380,14 +3394,20 @@ mod tests {
         assert!(lease.error.unwrap().contains("not for this connection"));
 
         // A slow call holds up nothing else on the connection.
-        let ask = |id: u32, method: &str, params: Value| serde_json::json!({ "id": id, "method": method, "params": params }).to_string();
+        let ask = |id: u32, method: &str, params: Value| {
+            serde_json::json!({ "id": id, "method": method, "params": params }).to_string()
+        };
         let slow = serde_json::json!({ "accountId": account.id, "tool": "search", "arguments": { "delayMs": 1500 } });
         peer.send(Message::Text(ask(81, "vault_call", slow).into())).await.unwrap();
         peer.send(Message::Text(ask(82, "vault_config", Value::Null).into())).await.unwrap();
         let mut order = Vec::new();
         let mut frames = String::new();
         while order.len() < 2 {
-            let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), peer.next()).await.expect("an answer") else { panic!("closed") };
+            let Some(Ok(Message::Text(text))) =
+                tokio::time::timeout(Duration::from_secs(10), peer.next()).await.expect("an answer")
+            else {
+                panic!("closed")
+            };
             frames.push_str(text.as_ref());
             let answer: Value = serde_json::from_str(text.as_ref()).unwrap();
             if let Some(id) = answer["id"].as_u64() {
@@ -3397,7 +3417,12 @@ mod tests {
         assert_eq!(order, [82, 81], "the config came first");
 
         // The grant's tokens never crossed: not in a frame, not on B's disk.
-        let bearer = fake.requests().iter().rev().find_map(|r| r.header("authorization").map(str::to_string)).expect("the fake was called");
+        let bearer = fake
+            .requests()
+            .iter()
+            .rev()
+            .find_map(|r| r.header("authorization").map(str::to_string))
+            .expect("the fake was called");
         let access_token = bearer.trim_start_matches("Bearer ").to_string();
         assert!(!frames.contains(&access_token), "a frame held the access token");
         let mut files = vec![dir_b.clone()];
@@ -3405,7 +3430,10 @@ mod tests {
             if path.is_dir() {
                 files.extend(std::fs::read_dir(&path).unwrap().flatten().map(|e| e.path()));
             } else if let Ok(bytes) = std::fs::read(&path) {
-                assert!(!bytes.windows(access_token.len()).any(|w| w == access_token.as_bytes()), "{path:?} held the access token");
+                assert!(
+                    !bytes.windows(access_token.len()).any(|w| w == access_token.as_bytes()),
+                    "{path:?} held the access token"
+                );
             }
         }
 
@@ -3417,7 +3445,9 @@ mod tests {
         let _hello = open.next().await;
         assert!(rpc(&mut open, 91, "vault_config", Value::Null).await.error.is_none(), "known, it answers");
         assert!(rpc(&mut wa, 92, "vault_revoke", serde_json::json!({ "machineId": spare.machine.id })).await.error.is_none());
-        open.send(Message::Text(serde_json::json!({ "id": 93, "method": "vault_config", "params": null }).to_string().into())).await.unwrap();
+        open.send(Message::Text(serde_json::json!({ "id": 93, "method": "vault_config", "params": null }).to_string().into()))
+            .await
+            .unwrap();
         let mut answered = false;
         while let Ok(Some(Ok(msg))) = tokio::time::timeout(Duration::from_secs(5), open.next()).await {
             answered |= matches!(&msg, Message::Text(text) if text.contains("\"id\":93"));
@@ -3436,15 +3466,21 @@ mod tests {
         assert!(rpc(&mut wb, 11, "vault_start", serde_json::json!({ "config": config })).await.error.is_none());
         let retired = rpc(&mut wa, 12, "vault_retire", serde_json::json!({ "revoke": true })).await;
         assert_eq!(retired.result.expect("retired")["grants"], 1);
-        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wa, 13, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        let status: proto::VaultStatus =
+            serde_json::from_value(rpc(&mut wa, 13, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(status.grants == 0 && status.machines.is_empty(), "A keeps nothing: {status:?}");
-        let status: proto::VaultStatus = serde_json::from_value(rpc(&mut wb, 14, "vault_status", Value::Null).await.result.unwrap()).unwrap();
+        let status: proto::VaultStatus =
+            serde_json::from_value(rpc(&mut wb, 14, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(status.holds && status.grants == 0, "B holds nothing yet: {status:?}");
         assert!(fake.requests().iter().any(|r| r.path == "/revoke" && r.body.contains("refresh_token")), "A gave its grant back");
-        let list: Vec<proto::Connector> = serde_json::from_value(rpc(&mut wb, 15, "connectors_list", Value::Null).await.result.unwrap()).unwrap();
+        let list: Vec<proto::Connector> =
+            serde_json::from_value(rpc(&mut wb, 15, "connectors_list", Value::Null).await.result.unwrap()).unwrap();
         assert_eq!(list[0].accounts[0].state, proto::AccountState::Expired, "{list:?}");
         let refused = call("before");
-        assert!(refused["result"]["content"][0]["text"].as_str().unwrap_or_default().contains("needs a sign-in again"), "{refused}");
+        assert!(
+            refused["result"]["content"][0]["text"].as_str().unwrap_or_default().contains("needs a sign-in again"),
+            "{refused}"
+        );
 
         // The account signs in again on B, and B calls with its own grant.
         let again = serde_json::json!({ "connectorId": connector.id, "accountId": account.id });
@@ -3452,7 +3488,10 @@ mod tests {
         let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
         let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
         let caught = answer.headers()["location"].to_str().unwrap().to_string();
-        assert!(rpc(&mut wb, 17, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await.error.is_none());
+        assert!(rpc(&mut wb, 17, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught }))
+            .await
+            .error
+            .is_none());
         let called = call("after");
         assert_eq!(called["result"]["structuredContent"]["arguments"]["text"], "after", "B calls with its own grant: {called}");
         let _ = account;
@@ -3478,7 +3517,10 @@ mod tests {
         let sign_in: proto::SignIn = serde_json::from_value(started.result.expect("sign in")).unwrap();
         let answer = net::client().get(&sign_in.auth_url).send().await.expect("authorize");
         let caught = answer.headers()["location"].to_str().unwrap().to_string();
-        assert!(rpc(&mut wa, 3, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught })).await.error.is_none());
+        assert!(rpc(&mut wa, 3, "vault_callback", serde_json::json!({ "state": sign_in.state, "url": caught }))
+            .await
+            .error
+            .is_none());
         let minted = rpc(&mut wa, 4, "vault_mint", serde_json::json!({ "name": "devbox" })).await;
         let minted: proto::VaultMinted = serde_json::from_value(minted.result.expect("minted")).unwrap();
         let address = a.url().trim_start_matches("ws://").trim_end_matches('/').to_string();

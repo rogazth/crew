@@ -2744,6 +2744,13 @@ impl TurnHost {
         }
     }
 
+    /// The user resumes a paused session without writing to it: the count
+    /// starts over and what waited in its box wakes it.
+    pub fn resume(&self, session_id: &str) {
+        self.user_wrote(session_id);
+        self.wake(session_id);
+    }
+
     /// The provider read the letters its turn was handed (Claude replayed the
     /// message, Codex started the turn, opencode and Cursor took the prompt):
     /// they are delivered now, not when the turn ends (plan decision 18).
