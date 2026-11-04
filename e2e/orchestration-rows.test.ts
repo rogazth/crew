@@ -12,7 +12,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf, turnOver } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -43,9 +43,10 @@ const composer = () => composerOf(crew, chat);
 const flat = (text: string) => text.replace(/\s+/g, " ").replace(/ 's\b/g, "'s").trim();
 
 async function send(text: string): Promise<void> {
+  await turnOver(crew);
   const field = composer();
   await field.fill(text);
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
 }
 
@@ -194,7 +195,7 @@ test("a child's question waits as a beat in the parent's chat and is answered in
   // Over the prompt, only now that it wants something; waved away, it stays gone until the next time.
   const notice = crew.window.locator("[data-notice]");
   await notice.waitFor();
-  assert.match(flat(await notice.innerText()), /refunds-api asks you/);
+  assert.match(flat(await notice.innerText()), /refunds-api.*Answer/);
   await notice.getByRole("button", { name: "Dismiss" }).click();
   await notice.waitFor({ state: "detached" });
   assert.match(flat(await letter.innerText()), /waiting for an answer/, "the beat still says so");
@@ -237,7 +238,7 @@ test("a child's approval waits as a beat in the parent's chat and is decided in 
   // The notice opens the agent that wants something, and goes while it is open.
   const notice = crew.window.locator("[data-notice]");
   await notice.waitFor();
-  assert.match(flat(await notice.innerText()), /billing-ui needs approval/);
+  assert.match(flat(await notice.innerText()), /billing-ui.*Review/);
   await notice.locator("[data-agent-notice]").click();
   const thread = crew.window.locator("[data-agent-view]");
   await thread.waitFor();

@@ -3,11 +3,12 @@
 // `--input-format stream-json`), one process for every turn, and draws the
 // conversation in its own transcript with no terminal.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, type Crew } from "./harness.ts";
+import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, type Crew, turnOver } from "./harness.ts";
 
 let crew: Crew;
 
@@ -47,9 +48,10 @@ function said(text: string | RegExp) {
 
 /** Types `text` in the chat on screen and sends it. */
 async function send(text: string): Promise<void> {
+  await turnOver(crew);
   const field = composer();
   await field.fill(text);
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
 }
 
@@ -175,7 +177,7 @@ test("the access and effort chips reach the running CLI as control requests, wit
   assert.equal((await launchesOf(session)).length, 1, "the new settings restarted the CLI");
 });
 
-test("Esc stops a running turn in the chat, and the next message gets its answer", async () => {
+test("Esc leaves a running turn alone: the Stop button stops it, and the next message gets its answer", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const session = await newChat(workspace.id);
@@ -183,11 +185,13 @@ test("Esc stops a running turn in the chat, and the next message gets its answer
   await send("work 30");
   const stop = crew.window.getByRole("button", { name: "Stop" });
   await stop.waitFor();
-  // Esc before the CLI has the message would cancel the launch instead of interrupting a turn.
+  // Stopping before the CLI has the message would cancel the launch instead of interrupting a turn.
   await waitFor(async () => (await heard(workspace.path, session)).includes("work 30"), {
     message: "the CLI took the message in",
   });
   await composer().press("Escape");
+  await holdsFor(500, () => stop.isVisible(), "Esc stopped the turn");
+  await stop.click();
   await stop.waitFor({ state: "detached" });
   // The turn is interrupted, sparing what runs in the background; nothing is told to stop.
   await waitFor(async () => (await controls()).includes("interrupt cancel_queued"), {
@@ -264,7 +268,7 @@ test("a / in the chat lists the CLI's commands and skills with Crew's actions, a
   await field.fill("tighten the intro with /writ");
   await entry("writing-for-agents").waitFor();
   await field.press("Tab");
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
   await waitFor(async () => (await heard(workspace.path, session)).length === 1, { message: "the CLI took the message in" });
   const [told] = await heard(workspace.path, session);
@@ -347,21 +351,20 @@ async function sendWhileWorking(text: string, how: "steer" | "queue"): Promise<v
   await crew.window.getByRole("button", { name: "Stop" }).waitFor();
   await field.fill(text);
   assert.equal(await crew.window.getByRole("button", { name: "Stop" }).count(), 0, "with text the button sends");
-  // The send button is labelled for what ↵ does, which is to steer where the CLI takes a steer.
-  await waitFor(() => crew.window.getByRole("button", { name: "Add to the running turn" }).isEnabled(), {
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), {
     message: `the composer can ${how}`,
   });
   await field.press(how === "steer" ? "Enter" : `${MOD}+Enter`);
 }
 
-/** A user's bubble in the transcript (not the chips above the message box). */
+/** A user's bubble in the transcript. */
 function bubble(text: string) {
   return crew.window.locator("[data-bubble]:visible", { hasText: text });
 }
 
-/** The chips above the message box. */
-function chips() {
-  return crew.window.locator("[data-composer]:visible [data-queue-chip]");
+/** What waits for the next turn, at the transcript's foot. A steer is not among them: the running turn has it. */
+function queuedBubbles() {
+  return crew.window.locator("[data-queued-bubble]:visible");
 }
 
 /** The chat on screen's reply paragraphs that start with `prefix` (earlier chats stay mounted, hidden). */
@@ -369,27 +372,19 @@ function replies(prefix: RegExp) {
   return chatLine(crew, prefix);
 }
 
-/** The status line's "N waiting", which opens the queue's sheet. */
-function waiting(count: number) {
-  return crew.window.getByRole("button", { name: `${count} waiting`, exact: true });
+/** What waits, first to go first, by its message. */
+async function queued(): Promise<string[]> {
+  return (await crew.window.locator("[data-queued-bubble]:visible [data-queued-text]").allInnerTexts()).map((text) => text.trim());
 }
 
-/** The queue's sheet, opened from the status line. */
-async function openQueue(count: number) {
-  await waiting(count).click();
-  const sheet = crew.window.locator("[data-queue-sheet]");
-  await sheet.waitFor();
-  return sheet;
+/** The waiting message with these words; its buttons show under the pointer. */
+function row(text: string) {
+  return queuedBubbles().filter({ hasText: text }).first();
 }
 
-/** The sheet's rows, first to go first, by their message. */
-async function queued(sheet: Rows): Promise<string[]> {
-  return (await sheet.locator("[data-queued-text]").allInnerTexts()).map((text) => text.trim());
-}
-
-/** The row of the sheet with this message, whose buttons show on hover. */
-function row(sheet: Rows, text: string) {
-  return sheet.locator("[data-queued]").filter({ hasText: text }).first();
+/** There are `count` messages waiting. */
+async function waiting(count: number) {
+  await waitFor(async () => (await queuedBubbles().count()) === count, { message: `${count} wait` });
 }
 
 async function idle(session: Session): Promise<void> {
@@ -405,8 +400,7 @@ test("a message sent while a turn works is steered into it: its bubble shows at 
   await bubble("also mind the tests").waitFor();
   assert.equal(await crew.window.getByRole("button", { name: "Stop" }).count(), 1, "the turn ended before the bubble showed");
   assert.deepEqual(await heard(cwd, session), ["work 4", "also mind the tests"]);
-  await waitFor(async () => (await chips().count()) === 0, { message: "the steer's chip is gone once it is in the transcript" });
-  assert.equal(await waiting(1).count(), 0);
+  await waiting(0);
 
   // The turn that was running is the one that answers it.
   await said("Also: also mind the tests").waitFor();
@@ -421,12 +415,11 @@ test("a steer the turn has not read yet waits at the transcript's foot, and beco
   const { session, cwd } = await workingChat(8);
   // The fake reads a message that starts with "late " three seconds after it came.
   await sendWhileWorking("late check the logs", "steer");
-  const pinned = crew.window.getByText("At its next step", { exact: true }).filter({ visible: true });
+  const pinned = crew.window.getByText("Queued", { exact: true }).filter({ visible: true });
   await pinned.waitFor();
   await bubble("late check the logs").waitFor();
-  // Taken into the turn: no chip above the box, and the status line counts none.
-  assert.equal(await chips().count(), 0);
-  assert.equal(await waiting(1).count(), 0);
+  // Taken into the turn: it does not wait.
+  assert.equal(await queuedBubbles().count(), 0);
   assert.deepEqual(await heard(cwd, session), ["work 8"]);
   await pinned.waitFor({ state: "detached" });
   await bubble("late check the logs").waitFor();
@@ -435,111 +428,49 @@ test("a steer the turn has not read yet waits at the transcript's foot, and beco
   await idle(session);
 });
 
-test("⌘↵ while a turn works queues the message: a chip and a count wait, and it goes as the next turn", async () => {
+test("⌘↵ while a turn works queues the message: its bubble waits, and it goes as the next turn", async () => {
   const { session, cwd } = await workingChat(4);
   await sendWhileWorking("for the next turn", "queue");
-  await chips().filter({ hasText: "next turn" }).filter({ hasText: "for the next turn" }).waitFor();
-  await waiting(1).waitFor();
+  await queuedBubbles().filter({ hasText: "for the next turn" }).waitFor();
   // Not in the turn running: the CLI has not heard it.
   assert.deepEqual(await heard(cwd, session), ["work 4"]);
 
   await said("Reply 2: for the next turn").waitFor();
   assert.deepEqual(await heard(cwd, session), ["work 4", "for the next turn"]);
-  assert.equal(await chips().count(), 0, "the chip stayed after its message went");
-  assert.equal(await waiting(1).count(), 0);
+  assert.equal(await queuedBubbles().count(), 0, "the bubble stayed queued after its message went");
   assert.equal((await launchesOf(session)).length, 1);
   await idle(session);
 });
 
-test("what waits can be moved in the sheet, and goes as one turn in the new order", async () => {
+test("a queued message can be dropped before it goes", async () => {
   const { session, cwd } = await workingChat(5);
-  await sendWhileWorking("alpha note", "queue");
-  await sendWhileWorking("bravo note", "queue");
-  await waiting(2).waitFor();
-  const sheet = await openQueue(2);
-  assert.deepEqual(await queued(sheet), ["alpha note", "bravo note"]);
-
-  await row(sheet, "bravo note").getByRole("button", { name: "Move up" }).click();
-  await waitFor(async () => (await queued(sheet)).join("|") === "bravo note|alpha note", { message: "the sheet lists bravo first" });
-  await composer().click();
-  await sheet.waitFor({ state: "detached" });
-
-  // One turn for both: the reply says them in the order they went.
-  const reply = replies(/^Reply 2:/);
-  await reply.filter({ hasText: "alpha note" }).waitFor();
-  const text = (await reply.textContent()) ?? "";
-  assert.ok(text.indexOf("bravo note") >= 0 && text.indexOf("bravo note") < text.indexOf("alpha note"), `bravo goes before alpha: ${text}`);
-  const turns = await heard(cwd, session);
-  assert.equal(turns.length, 2, `the queue went as more than one turn: ${JSON.stringify(turns)}`);
-  assert.ok(turns[1]!.indexOf("bravo note") < turns[1]!.indexOf("alpha note"), turns[1]);
-  assert.equal(await chips().count(), 0);
-  await idle(session);
-});
-
-test("a queued message can be edited before it goes, and another dropped", async () => {
-  const { session, cwd } = await workingChat(5);
-  await sendWhileWorking("fix the typpo", "queue");
+  await sendWhileWorking("keep this", "queue");
   await sendWhileWorking("never mind this", "queue");
-  await waiting(2).waitFor();
-  const sheet = await openQueue(2);
+  await waiting(2);
 
-  await row(sheet, "fix the typpo").getByRole("button", { name: "Edit" }).click();
-  const field = sheet.getByRole("textbox", { name: "Queued message" });
-  await field.fill("fix the typo");
-  await field.press("Enter");
-  await waitFor(async () => (await queued(sheet)).includes("fix the typo"), { message: "the sheet shows the edit" });
-  await chips().filter({ hasText: "fix the typo" }).waitFor();
+  await row("never mind this").getByRole("button", { name: "Delete" }).click();
+  await waitFor(async () => (await queued()).join("|") === "keep this", { message: "the message is dropped" });
+  assert.equal(await row("keep this").getByRole("button").count(), 1, "deleting is all a queued message offers");
 
-  await row(sheet, "never mind this").getByRole("button", { name: "Delete" }).click();
-  await waitFor(async () => (await queued(sheet)).join("|") === "fix the typo", { message: "the sheet drops the message" });
-  await waiting(1).waitFor();
-  assert.equal(await chips().count(), 1);
-  await composer().click();
-
-  await said("Reply 2: fix the typo").waitFor();
+  await said("Reply 2: keep this").waitFor();
   const all = (await heard(cwd, session)).join("\n");
-  assert.ok(!all.includes("typpo") && !all.includes("never mind this"), `what was edited or dropped went anyway: ${all}`);
+  assert.ok(!all.includes("never mind this"), `what was dropped went anyway: ${all}`);
   assert.equal((await heard(cwd, session)).length, 2);
   await idle(session);
 });
 
-test("Send now stops the turn running and the next turn starts with that message", async () => {
-  const { session, cwd } = await workingChat(30);
-  await sendWhileWorking("do this first", "queue");
-  await sendWhileWorking("and this later", "queue");
-  const sheet = await openQueue(2);
-  await row(sheet, "and this later").getByRole("button", { name: "Send now" }).click();
-
-  // The turn running was interrupted, and the queue went over as one turn headed by the one sent now,
-  // on the same process: its second turn.
-  await waitFor(async () => (await controls()).includes("interrupt cancel_queued"), {
-    message: "the CLI was told to interrupt",
-  });
-  const reply = replies(/^Reply 2:/).filter({ hasText: "do this first" });
-  await reply.waitFor();
-  const text = (await reply.textContent()) ?? "";
-  assert.ok(text.indexOf("and this later") >= 0 && text.indexOf("and this later") < text.indexOf("do this first"), text);
-  assert.equal(await replies(/^Reply \d+: work 30$/).count(), 0, "the stopped turn answered anyway");
-  const turns = await heard(cwd, session);
-  assert.equal(turns.length, 2, JSON.stringify(turns));
-  assert.ok(turns[1]!.indexOf("and this later") < turns[1]!.indexOf("do this first"), turns[1]);
-  assert.equal(await chips().count(), 0);
-  assert.equal((await launchesOf(session)).length, 1, "the stop let the CLI go");
-  await idle(session);
-});
-
-test("Esc holds what waits: its chip stays, and the next message sends both", async () => {
+test("Stop holds what waits: its bubble stays, and the next message sends both", async () => {
   const { session, cwd } = await workingChat(30);
   await sendWhileWorking("held for later", "queue");
-  await chips().filter({ hasText: "held for later" }).waitFor();
-  await composer().press("Escape");
+  await queuedBubbles().filter({ hasText: "held for later" }).waitFor();
+  await crew.window.getByRole("button", { name: "Stop" }).click();
   await crew.window.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
   await idle(session);
   // Stopping leaves the queue to the user: nothing goes by itself.
   await holdsFor(
     1500,
-    async () => (await chips().count()) === 1 && (await waiting(1).count()) === 1 && (await heard(cwd, session)).length === 1,
-    "the held message went or its chip left",
+    async () => (await queuedBubbles().count()) === 1 && (await heard(cwd, session)).length === 1,
+    "the held message went or its bubble left",
   );
 
   await send("go on then");
@@ -549,8 +480,112 @@ test("Esc holds what waits: its chip stays, and the next message sends both", as
   const turns = await heard(cwd, session);
   assert.equal(turns.length, 2, JSON.stringify(turns));
   assert.ok(turns[1]!.indexOf("held for later") >= 0 && turns[1]!.indexOf("held for later") < turns[1]!.indexOf("go on then"), turns[1]);
-  await waitFor(async () => (await chips().count()) === 0, { message: "the chip is gone once it went" });
+  await waitFor(async () => (await queuedBubbles().count()) === 0, { message: "it no longer waits once it went" });
   await idle(session);
+});
+
+test("Tab shows the focus on the access chip and the context ring", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newChat(workspace.id);
+  await send("focus");
+  await said("Reply 1: focus").waitFor();
+  await idle(session);
+  const access = crew.window.locator("[data-composer]:visible").getByRole("button", { name: "Access" });
+  await crew.window.locator("[data-composer]:visible").getByRole("button", { name: "Effort" }).focus();
+  await crew.window.keyboard.press("Tab");
+  assert.equal(await access.evaluate((el) => el === document.activeElement), true, "Tab reaches the access chip");
+  assert.equal(await access.evaluate((el) => getComputedStyle(el).outlineStyle), "solid", "the access chip shows it has the keyboard");
+});
+
+test("a session paused after 20 automatic turns says so at the transcript's foot, and Resume wakes it", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newChat(workspace.id);
+  await send("before the pause");
+  await said("Reply 1: before the pause").waitFor();
+  await idle(session);
+  const database = new DatabaseSync(path.join(crew.userData, "crew.sqlite3"));
+  try {
+    database.prepare(`INSERT OR REPLACE INTO app_state(key, value) VALUES (?, '20')`).run(`auto_turns:${session.id}`);
+  } finally {
+    database.close();
+  }
+  await crew.reload();
+  const row = crew.window.locator("[data-paused-row]:visible");
+  await row.waitFor();
+  assert.match(await row.innerText(), /Paused after 20 turns/);
+  assert.equal(await crew.window.locator("[data-status-line]:visible").getByText(/Paused/).count(), 0, "the line under the prompt does not repeat it");
+  await row.getByRole("button", { name: "Resume" }).click();
+  await row.waitFor({ state: "detached" });
+  assert.equal((await crew.request<{ paused?: boolean }>("session_get", { id: session.id })).paused, false);
+});
+
+test("a session's connectors show under the prompt, a dot says one needs the user, and the sheet opens its sign-in in a terminal", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const servers = path.join(crew.home, "fake-claude-mcp.json");
+  await writeFile(
+    servers,
+    JSON.stringify([
+      { name: "docs", status: "connected" },
+      { name: "sentry", status: "needs-auth" },
+      { name: "broken", status: "failed", error: "ENOENT: no such file or directory" },
+    ]),
+  );
+  try {
+    const session = await newChat(workspace.id);
+    const chip = crew.window.locator("[data-status-line]:visible [data-connectors-trigger]");
+    // The CLI is not up before the first message: nothing to say yet.
+    assert.equal(await chip.count(), 0);
+    await send("which servers");
+    await said("Reply 1: which servers").waitFor();
+    await chip.waitFor();
+    assert.equal((await chip.innerText()).trim(), "Connectors");
+    await chip.locator('[data-status-dot="warning"]').waitFor({ state: "attached" });
+    assert.equal(await chip.getAttribute("title"), "1 needs sign-in · 1 failed");
+
+    await chip.click();
+    const sheet = crew.window.locator("[data-connectors-sheet]:visible");
+    const row = (name: string) => sheet.locator(`[data-server="${name}"]`);
+    // A summary: one fix where one is needed, and no switch.
+    await row("docs").waitFor();
+    assert.equal(await row("docs").getByRole("button").count(), 0, "a connected server asks for nothing");
+    assert.equal(await sheet.getByRole("switch").count(), 0, "switching one off is the page's");
+    assert.equal(await row("broken").getAttribute("title"), "ENOENT: no such file or directory");
+    await row("broken").getByRole("button", { name: "Retry" }).waitFor();
+
+    // Esc hands the keyboard back to the segment that opened it from the keyboard.
+    await crew.window.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    await chip.focus();
+    await crew.window.keyboard.press("Enter");
+    await sheet.waitFor();
+    await crew.window.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    assert.equal(await chip.evaluate((el) => el === document.activeElement), true, "the keyboard is back on the segment");
+
+    // Manage goes to the page.
+    await chip.click();
+    await sheet.getByRole("button", { name: "Manage" }).click();
+    await chip.waitFor({ state: "hidden" });
+    assert.equal(await sheet.count(), 0, "the sheet closed");
+    await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
+    await chip.waitFor();
+    await chip.click();
+    await sheet.waitFor();
+
+    // Claude's login is its own command, in a terminal tab of Crew's.
+    await row("sentry").getByRole("button", { name: "Sign in" }).click();
+    await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "Sign in to sentry" }).waitFor();
+    await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.argv.join(" ") === "mcp login sentry"), {
+      message: "the login runs as `claude mcp login sentry`",
+    });
+    assert.equal(await sheet.count(), 0, "the sheet stayed over the chat");
+    await idle(session);
+  } finally {
+    await rm(servers, { force: true });
+  }
 });
 
 test("the first prompt from home is the chat session's first turn", async () => {

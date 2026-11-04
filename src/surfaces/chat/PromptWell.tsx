@@ -60,10 +60,6 @@ type Props = {
   canSend: boolean;
   /** ↵ or the button with something to send; `wait` is ⌘↵. */
   onSend: (wait: boolean) => void;
-  /** Esc with no menu open; true when the caller took it. */
-  onEscape?: () => boolean;
-  /** Between the menus and the attachments: the queue's chips. */
-  above?: ReactNode;
   /** The chips as they are, shown and not offered: a sub-agent runs what it was started with. */
   lockedChoice?: AgentChoice | undefined;
   /** The right end of the toolbar, after the access chip: the send button and what goes with it. */
@@ -98,8 +94,6 @@ export function PromptWell({
   roomy = false,
   canSend,
   onSend,
-  onEscape,
-  above,
   lockedChoice,
   trailing,
   session,
@@ -341,10 +335,6 @@ export function PromptWell({
       event.preventDefault();
       return;
     }
-    if (event.key === "Escape" && onEscape?.()) {
-      event.preventDefault();
-      return;
-    }
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     if (canSend) onSend(event.metaKey || event.ctrlKey);
@@ -405,7 +395,6 @@ export function PromptWell({
           left={pickerLeft}
         />
       )}
-      {above}
       {(files.length > 0 || uploads.length > 0) && (
         <div className="px-1.5">
           <AttachmentStrip files={files} onRemove={onRemoveFile} uploads={uploads} onDismissUpload={onDismissUpload} />

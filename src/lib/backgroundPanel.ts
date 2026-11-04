@@ -67,14 +67,9 @@ export type PanelEntry = {
 };
 
 export type PanelSummary = {
-  running: { agents: number; sessions: number; shells: number; processes: number };
   /** Entries that have ended, whatever ended them. */
   finished: number;
-  /** How many entries wait on the user's answer. */
-  attention: number;
-  /** What the status line says first: "scout asks", "2 waiting on you", "" when nothing waits. */
-  attentionText: string;
-  /** The folded line: "2 agents · 1 session · 1 shell", what runs or, when nothing does, what ran; "" when empty. */
+  /** The status line: how many processes run or, when none does, how many ran; "" when empty. */
   text: string;
 };
 
@@ -251,35 +246,11 @@ export function panelEntries(
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count > 1 ? many : one}`;
 
-/** The panel's folded line, what waits on the user, and how many of each kind still run. */
+/** What the status line says of the processes a chat left running. */
 export function panelSummary(entries: readonly PanelEntry[]): PanelSummary {
-  const running = entries.filter((entry) => entry.state === "running");
-  const count = (kind: PanelKind) => running.filter((entry) => entry.kind === kind).length;
-  const agents = count("subagent");
-  const sessions = count("session");
-  const shells = count("shell");
-  const processes = count("process");
-  const finished = entries.length - running.length;
-
-  const waiting = running.filter((entry) => entry.attention);
-  const attentionText =
-    waiting.length === 0
-      ? ""
-      : waiting.length > 1
-        ? `${waiting.length} waiting on you`
-        : `${waiting[0]!.title} ${waiting[0]!.attention === "approval" ? "needs approval" : "asks"}`;
-
-  // What runs, by kind; when nothing does, what there was, the same way.
-  const shown = running.length > 0 ? running : entries;
-  const all = (kind: PanelKind) => shown.filter((entry) => entry.kind === kind).length;
-  const work: string[] = [];
-  if (all("subagent") > 0) work.push(plural(all("subagent"), "agent"));
-  if (all("session") > 0) work.push(plural(all("session"), "session"));
-  if (all("shell") > 0) work.push(plural(all("shell"), "shell"));
-  if (all("process") > 0) work.push(plural(all("process"), "process", "processes"));
-
-  const text = work.join(" · ");
-  return { running: { agents, sessions, shells, processes }, finished, attention: waiting.length, attentionText, text };
+  const running = entries.filter((entry) => entry.state === "running").length;
+  const shown = running > 0 ? running : entries.length;
+  return { finished: entries.length - running, text: shown > 0 ? plural(shown, "process", "processes") : "" };
 }
 
 /**
@@ -334,6 +305,12 @@ export function entryDetail(entry: PanelEntry, now: number): string {
   if (entry.state === "running") return `${kind} · ${duration(now - entry.startedAt)}`;
   const ended = entry.endedAt === undefined ? entry.state : `${entry.state} after ${duration(entry.endedAt - entry.startedAt)}`;
   return `${kind} · ${ended}${entry.stopNote ? ` · ${entry.stopNote}` : ""}`;
+}
+
+/** How long it has run, or ran. */
+export function entryAge(entry: PanelEntry, now: number): string {
+  if (entry.state === "running") return duration(now - entry.startedAt);
+  return entry.endedAt === undefined ? entry.state : duration(entry.endedAt - entry.startedAt);
 }
 
 /**

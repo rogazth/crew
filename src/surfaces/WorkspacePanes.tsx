@@ -51,6 +51,8 @@ type Props = {
   processes: readonly Process[];
   onOpenProcessRun: (process: Process, worktree: string | null) => void;
   /** A session's MCP server login, run in a terminal tab. */
+  onOpenConnectors: () => void;
+  onOpenUsage: () => void;
   onOpenSignIn: (sessionId: string, server: string, command: string[]) => void;
   /** The provider's own login, run in a terminal tab. */
   onOpenLogin: (sessionId: string, provider: string, command: string[]) => void;
@@ -82,6 +84,8 @@ export function WorkspacePanes({
   renderCommands,
   processes,
   onOpenProcessRun,
+  onOpenConnectors,
+  onOpenUsage,
   onOpenSignIn,
   onOpenLogin,
 }: Props) {
@@ -137,11 +141,13 @@ export function WorkspacePanes({
       files,
       processes,
       openProcessRun: onOpenProcessRun,
+      openConnectors: onOpenConnectors,
+      openUsage: onOpenUsage,
       openSignIn: onOpenSignIn,
       openLogin: onOpenLogin,
       confirm: onConfirm,
     }),
-    [cwd, onOpenFile, onOpenFileInBrowser, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenSignIn, onOpenLogin, onConfirm],
+    [cwd, onOpenFile, onOpenFileInBrowser, onOpenFolder, onOpenSession, files, processes, onOpenProcessRun, onOpenConnectors, onOpenUsage, onOpenSignIn, onOpenLogin, onConfirm],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

@@ -194,6 +194,8 @@ export function App() {
   } = usePages();
   useUpdateWiring(openSettings);
   const connectorsAlert = useConnectorsAlert();
+  const openConnectors = useCallback(() => togglePage({ kind: "integrations" }), [togglePage]);
+  const openUsage = useCallback(() => openSettings("usage"), [openSettings]);
   // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
   // Adjusted while rendering, on the page opening or closing, not on a toggle while it is open.
   const settingsOpen = settings !== null;
@@ -623,6 +625,8 @@ export function App() {
               }}
               processes={processes.processes ?? NO_PROCESSES}
               onOpenProcessRun={nav.openProcessRun}
+              onOpenConnectors={openConnectors}
+              onOpenUsage={openUsage}
               onOpenSignIn={nav.openSignIn}
               onOpenLogin={nav.openLogin}
             />

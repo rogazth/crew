@@ -4,10 +4,10 @@ import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { botLabel } from "../../lib/botNames";
 import type { Block } from "../../lib/blocks";
-import { isSteering, refusalOf, USER, type Party } from "../../lib/letters";
+import { refusalOf, USER, type Party } from "../../lib/letters";
 import type { Session } from "../../lib/types";
-import { AttachmentStrip } from "./Attachments";
 import { useLetterScope } from "./context";
+import { QueuedBubble } from "./Queue";
 
 /** A bot is its face; a session is its CLI's mark; the user is the person glyph. */
 export function Face({ party, sessions, className = "size-4" }: { party: Party; sessions: readonly Session[]; className?: string }) {
@@ -45,41 +45,22 @@ export const RefusedRow = memo(function RefusedRow({ block }: { block: Block }) 
  * What waits for the next turn: the user's own messages as their bubbles,
  * dimmed, and letters from others as one line each, under one label for all.
  */
-/** A steer goes in at the turn's next step; anything else waits for the turn to end. */
-function queuedLabel(blocks: Block[]) {
-  const steers = blocks.filter(isSteering).length;
-  if (steers === blocks.length) return "At its next step";
-  if (steers === 0) return blocks.length > 1 ? `${blocks.length} queued` : "Queued";
-  return `${steers} at its next step · ${blocks.length - steers} queued`;
-}
-
 export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block[] }) {
   const { sessions } = useLetterScope();
   return (
-    <div className="flex flex-col items-end gap-1.5 opacity-60">
+    <div className="flex flex-col items-end gap-1.5">
       {blocks.map((block) =>
         block.fromBot ? (
-          <div key={block.id} className="flex max-w-[78%] items-center gap-1.5 text-[13px] leading-[18px]">
+          <div key={block.id} className="flex max-w-[78%] items-center gap-1.5 text-[13px] leading-[18px] opacity-60">
             <Face party={{ id: block.fromBot.id, name: block.fromBot.name, ...(block.fromBot.kind ? { kind: block.fromBot.kind } : {}) }} sessions={sessions} className="size-4" />
             <span className="min-w-0 truncate font-medium">{block.fromBot.name}</span>
             <span className="shrink-0 text-text-muted">wrote</span>
           </div>
         ) : (
-          // Stretched to the row, as a sent bubble's is: shrunk to its content,
-          // the bubble's 78% would be of its own width and wrap short.
-          <div key={block.id} className="flex flex-col items-end gap-1.5 self-stretch">
-            {block.text ? (
-              <div className="crew-md-row is-user">
-                <div className="crew-bubble" data-bubble>
-                  <p className="whitespace-pre-wrap">{block.text}</p>
-                </div>
-              </div>
-            ) : null}
-            {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
-          </div>
+          <QueuedBubble key={block.id} block={block} />
         ),
       )}
-      <span className="text-[11px] text-text-muted">{queuedLabel(blocks)}</span>
+      <span className="text-[11px] text-text-muted opacity-60">Queued</span>
     </div>
   );
 });

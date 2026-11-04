@@ -207,6 +207,12 @@
   text-overflow: ellipsis;
 }
 
+/* Whatever takes the keyboard around the prompt shows it, whichever control it is. */
+:is(.ds-composer-wrap, [data-file-chip]) :is(button, a, [role="button"], [tabindex="0"]):not(.ds-icon-btn, .ds-send, .ds-model-group > button):focus-visible {
+  outline: 1.5px solid color-mix(in oklab, var(--color-focus) 60%, transparent);
+  outline-offset: -1.5px;
+}
+
 /* The toolbar's round icon button: the attach menu. */
 .ds-icon-btn {
   display: grid;
@@ -346,7 +352,8 @@
   color: var(--color-text-muted);
   cursor: default;
 }
-.ds-ring[data-full] {
+/* Near the limit only the ring says so; the number stays quiet. */
+.ds-ring[data-full] > svg {
   color: var(--color-warning);
 }
 .ds-ring:hover {
@@ -369,7 +376,8 @@
   transform: translateY(4px);
   transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out), visibility 140ms;
 }
-.ds-ring:hover .ds-ring-card {
+.ds-ring:hover .ds-ring-card,
+.ds-ring:focus-visible .ds-ring-card {
   visibility: visible;
   opacity: 1;
   transform: none;
@@ -384,11 +392,14 @@
   gap: 6px;
   margin-top: 4px;
   padding: 0 6px;
-  font-size: 11.5px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .ds-hints {
   display: flex;
   min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   gap: 10px;
   overflow: hidden;
@@ -414,16 +425,22 @@
   font-family: inherit; font-size: 10.5px; font-weight: 500; line-height: 1;
 }
 
-/* ── The agent clip ───────────────────────────────────────────────────────
-   A slim tab tucked behind the composer's top edge, there only while the chat
-   has agents. Amber when one waits on you. A click slides the same tab's
-   panel up out of it: the panel is the tab's own child, wearing its ground,
-   and it rests behind the tab until called, its rows already laid out, so
-   what rises is the whole thing, not a window opening on it. Only transform
-   moves (compositor, never layout), fast and without bounce; folding back is
-   quicker still. */
+/* What a waiting message at the transcript's foot offers: beside its bubble, under the pointer. */
+.ds-queued-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 100ms var(--ease-out);
+}
+.crew-md-row:hover .ds-queued-actions,
+.ds-queued-actions:focus-within {
+  opacity: 1;
+}
 
-.ds-strip {
+/* The clip: on the prompt's top edge, tucked behind the well. Only agents. */
+.ds-clip {
   position: relative;
   z-index: 0;
   height: 44px;
@@ -432,60 +449,12 @@
   background: var(--color-fill);
   color: var(--color-text-muted);
   font-size: 12px;
-  line-height: 24px;
-  animation: ds-strip-in 220ms var(--ease-out);
-  transition: border-radius 140ms var(--ease-out);
-  /* The panel waits inside the tab's own box: nothing of it shows below the tab, and every other side is open. */
-  clip-path: inset(-100vh -100vw 0 -100vw);
+  animation: ds-clip-in 220ms var(--ease-out);
 }
-.ds-strip b {
-  font-weight: 600;
+.ds-clip-on {
   color: var(--color-text);
 }
-.ds-strip-head {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  width: 100%;
-  height: 30px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px 0 12px;
-  border-radius: 14px 14px 0 0;
-  /* Opaque: it is what the resting panel slides out from behind. */
-  background: var(--color-fill);
-  color: inherit;
-  cursor: pointer;
-  outline: none;
-  transition: background-color 120ms var(--ease-out);
-}
-.ds-strip-head:hover {
-  background: color-mix(in oklab, var(--color-fill) 95%, var(--color-text));
-}
-.ds-strip-head:focus-visible {
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-focus) 60%, transparent);
-}
-.ds-strip-glyph {
-  display: grid;
-  width: 16px;
-  height: 24px;
-  flex-shrink: 0;
-  place-items: center;
-}
-/* Nothing runs: only ended agents are left to look at. */
-.ds-strip-rest {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-placeholder);
-}
-.ds-strip-halo {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--color-warning);
-}
-@keyframes ds-strip-in {
+@keyframes ds-clip-in {
   from { transform: translateY(14px); opacity: 0; }
   to { transform: none; opacity: 1; }
 }
@@ -592,12 +561,49 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ds-strip,
+  .ds-clip,
   .ds-send[data-swapped] > svg {
     animation: none;
   }
-  .ds-strip {
-    transition: none;
+}
+
+/* Attachments never take a second row: the height is the transcript's. Past the
+   well the strip scrolls, and fades at the ends with more behind them. */
+[data-composer-strip] {
+  --fade-start: 0px;
+  --fade-end: 0px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+}
+[data-composer-strip] > * {
+  flex-shrink: 0;
+}
+[data-composer-strip][data-fade-start] {
+  --fade-start: 28px;
+}
+[data-composer-strip][data-fade-end] {
+  --fade-end: 28px;
+}
+
+/* Nothing around the prompt collapses or wraps: labels leave first. */
+.ds-composer-wrap .ds-model-group {
+  flex-shrink: 0;
+}
+@container (max-width: 576px) {
+  .ds-hints {
+    display: none;
+  }
+}
+@container (max-width: 520px) {
+  .ds-composer .ds-access > button,
+  .ds-composer .ds-model-group > button + button {
+    gap: 0;
+    font-size: 0;
+  }
+  .ds-composer .ds-ring > span:not(.ds-ring-card) {
+    display: none;
   }
 }
 
@@ -610,7 +616,8 @@
   box-shadow: none;
 }
 .crew-file-ref:hover,
-.crew-bubble .crew-file-ref:hover {
+.crew-bubble .crew-file-ref:hover,
+[data-file-chip]:hover {
   background: var(--color-hover);
 }
 

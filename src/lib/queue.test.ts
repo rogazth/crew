@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ThreadLetter } from "./protocol";
-import { moved, transcriptPending, userQueue, whileWorkingOf } from "./queue";
+import { transcriptPending, userQueue, whileWorkingOf } from "./queue";
 
 const YOU = { id: "", name: "You", kind: "user" };
 const LEAD = { id: "lead", name: "Lead", kind: "bot" };
@@ -40,17 +40,6 @@ describe("the user's queue", () => {
       { id: "now", text: "now", files: [], steering: true },
       { id: "later", text: "later", files: ["/a.png"], steering: false },
     ]);
-    expect(transcriptPending(pending).map((l) => l.id)).toEqual(["turn", "report", "now"]);
-  });
-
-  it("moves a waiting message among the waiting ones only", () => {
-    const queue = [
-      { id: "s", text: "", files: [], steering: true },
-      { id: "a", text: "", files: [], steering: false },
-      { id: "b", text: "", files: [], steering: false },
-    ];
-    expect(moved(queue, "b", -1)).toEqual(["b", "a"]);
-    expect(moved(queue, "a", -1)).toEqual(["a", "b"]);
-    expect(moved(queue, "b", 1)).toEqual(["a", "b"]);
+    expect(transcriptPending(pending).map((l) => l.id)).toEqual(["turn", "now", "later", "report"]);
   });
 });

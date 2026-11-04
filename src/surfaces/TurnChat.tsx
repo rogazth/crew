@@ -11,7 +11,7 @@ import { useThread } from "../hooks/useThread";
 import { useUploads } from "../hooks/useUploads";
 import { onAgentRequest, peekAgentRequest, takeAgentRequest } from "../lib/agentRoute";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
-import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, updateSession, writeTempFile } from "../lib/api";
+import { mailboxDispose, pickFiles, setSessionOptions, switchSessionProvider, updateSession, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { focusEnv } from "../lib/client/registry";
 import { LOCAL } from "../lib/client/route";
@@ -24,7 +24,7 @@ import { clearFirstPrompt, forgetUnsent, noteUnsent, peekFirstFiles, peekFirstPr
 import { agentNote, mentionedAgents, mentionedTrees, treeMentions } from "../lib/agentMentions";
 import { mentionedFiles, mentionTokens, wasPicked } from "../lib/mentions";
 import { dispatchOf } from "../lib/slashCommands";
-import { moved, transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
+import { transcriptPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
 import { BackgroundContext, WorkContext, ChatContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
@@ -33,8 +33,7 @@ import type { Session } from "../lib/types";
 import type { PanelScope } from "./chat/Panel";
 import type { QueueScope } from "./chat/Queue";
 import { AgentList } from "./chat/AgentList";
-import type { AgentNoticeItem } from "./chat/ComposerParts";
-import type { AgentsLine } from "./chat/Composer";
+import type { AgentNoticeItem, AgentsLine } from "./chat/ComposerParts";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 import { SidePanel } from "./chat/SidePanel";
 import { AgentView, type Crumb } from "./chat/AgentView";
@@ -86,8 +85,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const actions = useChatActions();
   const { files: projectFiles, openSession, processes, openProcessRun } = actions;
   const letters = useChatLetters(session, sessions, held);
-  // What waits in its box: others' letters and the user's steers under the
-  // turn that is running, the user's messages for the next turn above the composer.
+  // What waits in its box, all of it under the turn that is running: others' letters, the user's steers and their messages for the next turn.
   const pending = usePending(session.id, true);
   // An agent's thread also has what was said to it that its transcript has no place for.
   const told = useAgentLetters(embedded ? session.id : null, trail?.at(-1)?.id);
@@ -306,19 +304,16 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   );
 
   const conversations = useMemo(() => conversationsOf(letters.pairs, letters.owner), [letters.pairs, letters.owner]);
-  // A chat's agents live in the right panel; the sheet keeps what they left running. In a thread there is no panel to open, so the sheet keeps the agent's own agents too.
+  // Agents are the clip's and the right panel's; the sheet keeps what they left running.
   const work = useMemo<PanelScope>(
     () => ({
-      entries: embedded ? panel.entries : panel.entries.filter((entry) => !isAgentEntry(entry)),
+      entries: panel.entries.filter((entry) => !isAgentEntry(entry)),
       failed: panel.failed,
       onOpen: openEntry,
       onStop: panel.stop,
       onClear: panel.clear,
-      conversations: embedded ? conversations : [],
-      sessions,
-      onOpenConversation: openThread,
     }),
-    [conversations, embedded, openEntry, openThread, panel.clear, panel.entries, panel.failed, panel.stop, sessions],
+    [openEntry, panel.clear, panel.entries, panel.failed, panel.stop],
   );
 
   const agentEntries = useMemo(() => panel.all.filter(isAgentEntry), [panel.all]);
@@ -349,27 +344,27 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const agentsLine = useMemo<AgentsLine>(
     () => ({
       notices,
+      agents: agentEntries,
+      conversations: conversations.length,
+      open: listOpen && !output,
       working: agentEntries.filter((entry) => entry.state === "running" && !entry.attention).length,
       any: agentEntries.length + conversations.length > 0,
       onOpenNotice: () => {
         const [only] = notices;
-        if (only && notices.length === 1) openEntry(only.entry);
+        // In a thread there is no list to open: the first that wants the user.
+        if (only && (notices.length === 1 || embedded)) openEntry(only.entry);
         else showList();
       },
       onDismiss: () => setDismissed((was) => [...was, ...notices.map((one) => one.key)]),
       onToggleList: () => (listOpen && !output ? closePanel() : showList()),
     }),
-    [agentEntries, closePanel, conversations.length, listOpen, notices, openEntry, output, showList],
+    [agentEntries, closePanel, conversations.length, embedded, listOpen, notices, openEntry, output, showList],
   );
 
   const queue = useMemo<QueueScope>(
     () => ({
       items: waiting,
-      onEdit: (letterId, text) => void mailboxEdit({ sessionId: session.id, letterId, text }).catch(() => {}),
       onDispose: (letterId) => void mailboxDispose({ sessionId: session.id, letterId }).catch(() => {}),
-      onMove: (letterId, step) =>
-        void mailboxReorder({ sessionId: session.id, letterIds: moved(waiting, letterId, step) }).catch(() => {}),
-      onSendNow: (letterId) => void turnSendNow({ sessionId: session.id, letterId }).catch(() => {}),
     }),
     [session.id, waiting],
   );
@@ -539,7 +534,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               onAnswer={reply}
               onOptions={changeOptions}
               switchProvider={fresh || botSwitch}
-              {...(embedded ? { inThread: true } : { agents: agentsLine, panelOpen })}
+              {...(embedded ? { inThread: true, agents: { ...agentsLine, any: false } } : { agents: agentsLine })}
               readOnly={readOnly}
               finding={finding}
               onCloseFind={closeFind}

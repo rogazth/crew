@@ -4,7 +4,7 @@ import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { AgentChoice } from "../../lib/providers";
 import type { Session } from "../../lib/types";
-import type { AgentsLine } from "./Composer";
+import type { AgentsLine } from "./ComposerParts";
 import type { PanelScope } from "./Panel";
 import type { QueueScope } from "./Queue";
 
@@ -40,7 +40,7 @@ export type ChatSurfaceProps = {
   onAnswer: (requestId: number, answers: Answers | null) => void;
   /** What Enter does with a message while a turn runs; absent, it waits for the turn to end. */
   whileWorking?: "steer" | "queue";
-  /** The user's messages still in the box, above the composer. */
+  /** The user's messages still in the box: what their bubbles at the transcript's foot offer. */
   queue?: QueueScope;
   /** The session's background work, in the composer's status line. */
   work?: PanelScope;
@@ -50,14 +50,10 @@ export type ChatSurfaceProps = {
   onOptions?: (next: AgentChoice) => void;
   /** The model chip offers other providers: a session nobody has talked to yet. */
   switchProvider?: boolean;
-  /** A chip changed that only a relaunch reaches; the next message does it. */
-  optionsPending?: boolean;
   /** In a thread, the chat of an agent the user may write to: Esc goes back instead of stopping its turn. */
   inThread?: boolean;
   /** The chat's agents, around the composer. */
   agents?: AgentsLine;
-  /** The right panel is open: Esc is its. */
-  panelOpen?: boolean;
   /** No composer: the thread says why in its own footer. */
   readOnly?: boolean;
   /** Drawn over the transcript and the composer: a pair's thread, a background entry. */

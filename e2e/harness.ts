@@ -981,11 +981,17 @@ export function chatLine(crew: Crew, text: string | RegExp): Locator {
   return crew.window.locator("[data-message]:visible").getByText(whole);
 }
 
-/** Types `text` in the chat on screen and sends it. */
+/** The chat on screen has no turn running: with an empty field, its round button is not Stop. */
+export async function turnOver(crew: Crew): Promise<void> {
+  await waitFor(async () => (await crew.window.locator("[data-composer]:visible [data-stop]").count()) === 0, { message: "the turn is over" });
+}
+
+/** Types `text` in the chat on screen, once its turn is over, and sends it. */
 export async function sendInChat(crew: Crew, text: string): Promise<void> {
+  await turnOver(crew);
   const field = composerOf(crew);
   await field.fill(text);
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
 }
 

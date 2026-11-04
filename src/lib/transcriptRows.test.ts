@@ -569,4 +569,11 @@ describe("underway", () => {
     expect(underway(blocks, true)).toBeUndefined();
     expect(turnStart(blocks)).toBe(5_000);
   });
+
+  it("never takes a letter still in the box for the turn's prompt: it waits for the next turn", () => {
+    const letter = at("user", "for later", 8_000, { id: "queued-l1", streaming: true });
+    const blocks = [at("user", "done", 0), ended(5_000), letter];
+    expect(underway(blocks, true)).toBeUndefined();
+    expect(turnStart(blocks)).toBe(5_000);
+  });
 });

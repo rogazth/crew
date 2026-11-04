@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { mcpReconnect, mcpToggle, providerServersList } from "./api";
+import { mcpReconnect, providerServersList } from "./api";
 import { client } from "./client";
 import type { McpChanged, McpServer, McpState, McpStatus } from "./protocol";
 
@@ -77,9 +77,9 @@ const count = (status: McpStatus | null | undefined, state: McpState) =>
   status?.servers.filter((server) => server.state === state).length ?? 0;
 
 /**
- * What the chip says, or null when there is nothing to say: a server that
- * waits for a sign-in, one that failed. Connecting and disabled servers are
- * not news.
+ * What needs the user among a session's servers, for the dot and its hover, or
+ * null: one that waits for a sign-in, one that failed. Connecting and disabled
+ * servers are not news.
  */
 export function chipLabel(status: McpStatus | null | undefined): string | null {
   const parts: string[] = [];
@@ -163,20 +163,4 @@ export async function refreshAfterServerSignIn(tabId: string, envId: string): Pr
 }
 
 /** Claude only: switches one of a live session's servers on or off; the row shows the answer at once. */
-export async function toggleServer(sessionId: string, server: string, enabled: boolean): Promise<void> {
-  set(sessionId, await mcpToggle(sessionId, server, enabled));
-}
 
-/** Whether a session's provider can switch its servers at runtime: Claude's `mcp_toggle`. */
-export const canToggle = (provider: string) => provider === "claude";
-
-/**
- * What the chip says when nothing is wrong, for a session whose servers can
- * be switched (so the sheet with the switches can be opened): how many are on.
- */
-export function quietLabel(status: McpStatus | null | undefined): string | null {
-  const servers = status?.servers ?? [];
-  if (servers.length === 0) return null;
-  const on = servers.filter((server) => server.state !== "disabled").length;
-  return on === servers.length ? `${on} MCP` : `${on} of ${servers.length} MCP`;
-}

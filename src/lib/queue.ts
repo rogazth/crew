@@ -10,7 +10,7 @@ export type QueuedMessage = {
   id: string;
   text: string;
   files: string[];
-  /** Taken into the running turn, not read yet; it can no longer be edited. */
+  /** Taken into the running turn, not read yet; it can no longer be dropped. */
   steering: boolean;
 };
 
@@ -36,20 +36,9 @@ export function userQueue(pending: readonly ThreadLetter[], blocks: readonly Blo
 }
 
 /**
- * The letters the transcript draws as queued bubbles at its foot: everyone
- * else's, and the user's steers, which the running turn has taken and reads
- * at its next step. The user's waiting messages sit above the composer.
+ * The letters the transcript draws as queued bubbles at its foot: all of them,
+ * steers first, since the running turn has already taken those.
  */
 export function transcriptPending(pending: readonly ThreadLetter[]): ThreadLetter[] {
-  return pending.filter((letter) => letter.from.kind !== "user" || letter.queue === "steering");
-}
-
-/** The waiting ids after moving `id` one place up (-1) or down (1); steers keep their place. */
-export function moved(queue: readonly QueuedMessage[], id: string, step: -1 | 1): string[] {
-  const waiting = queue.filter((message) => !message.steering).map((message) => message.id);
-  const at = waiting.indexOf(id);
-  const to = at + step;
-  if (at < 0 || to < 0 || to >= waiting.length) return waiting;
-  [waiting[at], waiting[to]] = [waiting[to]!, waiting[at]!];
-  return waiting;
+  return [...pending.filter((letter) => letter.queue === "steering"), ...pending.filter((letter) => letter.queue !== "steering")];
 }

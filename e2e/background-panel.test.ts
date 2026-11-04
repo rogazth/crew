@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf, turnOver } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -59,9 +59,10 @@ const workTrigger = () => crew.window.locator("[data-work-trigger]").first();
 const rows = () => sheet().getByRole("option");
 
 async function send(text: string): Promise<void> {
+  await turnOver(crew);
   const field = composer();
   await field.fill(text);
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
 }
 
@@ -99,7 +100,7 @@ test("what the session started is one line under the composer, and its sheet lis
   // Nothing wants the user, so nothing sits over the composer.
   assert.equal(await crew.window.locator("[data-notice]").count(), 0);
   await agentsSegment().waitFor();
-  assert.match(await agentsSegment().innerText(), /View sub-agents/, "a child that reported is not working");
+  assert.match(await agentsSegment().innerText(), /^1 agent$/, "a child that reported is not working");
 
   // The agent is in the panel, what it left running in the sheet.
   await agentsSegment().click();
@@ -114,21 +115,19 @@ test("what the session started is one line under the composer, and its sheet lis
   await sheet().waitFor();
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 1, texts.join("\n"));
-  assert.match(texts[0]!, /web.*Process · \d+s/);
+  assert.match(texts[0]!, /web.*\d+s/);
   await work.click();
   await sheet().waitFor({ state: "hidden" });
 });
 
-test("Esc closes the sheet and does not also stop the turn", async () => {
+test("Esc closes the sheet and the panel and never stops the turn; only the Stop button does", async () => {
   await send("work 20");
   const stop = crew.window.getByRole("button", { name: "Stop" });
   await stop.waitFor();
   const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
   const before = await interrupts();
-  // The key hints show only while the turn runs.
-  // Idle, ⇧Tab's effort stepping is always named: wait for the turn's own hint.
-  const hints = visible("[data-status-line] [data-key-hints]");
-  await waitFor(async () => /esc\s*stop/.test(await hints.innerText().catch(() => "")), { message: "the hints name Esc while the turn runs" });
+  // Sending is sending and no key stops the turn, so the hints have nothing to add while it runs.
+  assert.doesNotMatch(await visible("[data-status-line] [data-key-hints]").innerText(), /esc|↵/);
   await shoot("composer-working");
 
   await workTrigger().click();
@@ -145,11 +144,15 @@ test("Esc closes the sheet and does not also stop the turn", async () => {
   assert.equal(await stop.isVisible(), true, "the turn was stopped by the Esc that closed the panel");
   assert.equal(await interrupts(), before, "the CLI was told to interrupt");
 
-  // With the sheet closed, Esc is the turn's again.
+  // With nothing open to close, Esc still leaves the turn alone.
   await composer().press("Escape");
+  await new Promise((done) => setTimeout(done, 300));
+  assert.equal(await stop.isVisible(), true, "Esc stopped the turn");
+  assert.equal(await interrupts(), before, "Esc told the CLI to interrupt");
+
+  await stop.click();
   await stop.waitFor({ state: "detached" });
   await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
-  await waitFor(async () => !/esc/.test(await hints.innerText().catch(() => "")), { message: "the hints drop Esc once the turn is over" });
   assert.doesNotMatch(await visible("[data-status-line]").innerText(), /send|new line/, "an idle composer shows no key hints");
   await shoot("composer-idle");
 });
@@ -227,7 +230,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
     message: "crewd stops the run",
   });
   const finished = workTrigger();
-  await rows().filter({ hasText: "Process · stopped" }).waitFor();
+  await sheet().locator('[data-entry][data-state="stopped"]').waitFor();
 
   // Enter on it leaves the chat for the command's own tab and closes the sheet.
   await crew.window.keyboard.press("Enter");
@@ -239,7 +242,7 @@ test("x stops a command, and opening a command opens its tab", async () => {
 
 test("Clear finished empties the sheet and leaves the agents in the list", async () => {
   await workTrigger().click();
-  await sheet().getByRole("button", { name: "Clear finished" }).click();
+  await sheet().getByRole("button", { name: "Clear" }).click();
   await sheet().waitFor({ state: "hidden" });
   await crew.window.locator("[data-work-trigger]").waitFor({ state: "detached" });
   await agentsSegment().click();
@@ -270,14 +273,14 @@ test("what Clear finished hid stays hidden after a reload, and a process that st
   await sheet().waitFor();
   const texts = await rows().allTextContents();
   assert.equal(texts.length, 1, texts.join("\n"));
-  assert.match(texts[0]!, /web.*Process · \d+s/);
+  assert.match(texts[0]!, /web.*\d+s/);
 
   // Stopped and cleared again, it goes the same way.
   await crew.window.keyboard.press("x");
   await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
     message: "crewd stops the run",
   });
-  await sheet().getByRole("button", { name: "Clear finished" }).click();
+  await sheet().getByRole("button", { name: "Clear" }).click();
   await sheet().waitFor({ state: "hidden" });
   await crew.window.locator("[data-work-trigger]").waitFor({ state: "detached" });
 });
@@ -289,7 +292,7 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
 
   // The turn is over and the subagent is not: the line under the composer says so.
-  await waitFor(async () => /1 sub-agent working/.test(await agentsSegment().innerText()), { message: "the line counts it" });
+  await waitFor(async () => /^1 working$/.test(await agentsSegment().innerText()), { message: "the line counts it" });
   await agentsSegment().click();
   const row = agentRow("Explore the repo");
   await row.waitFor();
@@ -374,7 +377,7 @@ test("the list holds a native subagent, a Crew subagent and a session alike, and
   await workTrigger().click();
   await sheet().waitFor();
   const texts = (await rows().allTextContents()).join("\n");
-  assert.match(texts, /Shell.*Shell · \d+s/, texts);
+  assert.match(texts, /Shell.*\d+s/, texts);
   assert.doesNotMatch(texts, /Explore the repo|billing-ui/, "agents are the list's");
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "work-sheet.png") });
 });
@@ -415,7 +418,7 @@ test("a native subagent opens with no composer and a read-only footer, and x sto
 
 test("a shell opens in place under the same header, with its output and no composer", async () => {
   await openWorkSheet();
-  await rows().filter({ hasText: /Shell.*Shell/ }).first().click();
+  await rows().filter({ hasText: /Shell/ }).first().click();
   await sheet().waitFor({ state: "hidden" });
 
   const page = crew.window.locator("[data-agent-view]");

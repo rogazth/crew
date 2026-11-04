@@ -110,6 +110,11 @@ describe("queuedLetters", () => {
     expect(out[0]).toMatchObject({ role: "user", streaming: true, fromBot: AUTH });
     expect(out[1]!.fromBot).toBeUndefined();
   });
+
+  it("carries the files of a letter still in the box", () => {
+    const [block] = queuedLetters([{ ...letter("mine", { id: "", name: "You", kind: "user" }), files: ["/tmp/a.png"] }], []);
+    expect(block!.files).toEqual([expect.objectContaining({ name: "a.png", path: "/tmp/a.png" })]);
+  });
 });
 
 describe("children", () => {

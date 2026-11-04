@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   awaitsUser,
   type Answers,
@@ -36,6 +36,8 @@ type Props = {
   placeFocus?: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** What closes the transcript, after the queue. */
+  foot?: ReactNode;
   /** When the running turn began, for blocks that carry no time (a subagent's thread). */
   since?: number | undefined;
 };
@@ -80,6 +82,7 @@ export function Transcript({
   placeFocus = true,
   onApprove,
   onAnswer,
+  foot,
   since,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -288,6 +291,7 @@ export function Transcript({
             <QueuedGroup blocks={queued} />
           </div>
         )}
+        {foot && <div className="mt-7">{foot}</div>}
       </div>
     </div>
   );

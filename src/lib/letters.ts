@@ -3,6 +3,7 @@
  * point it happened, and a way into that pair's thread. The words live in the
  * thread; the transcript keeps only the checkpoint.
  */
+import { attachedFrom } from "./attachments";
 import type { Block, BotRef, ThreadLetter, ThreadPair } from "./protocol";
 import type { Session } from "./types";
 
@@ -134,10 +135,16 @@ export function resolveParty(party: Party, sessions: readonly Session[], parentI
 }
 
 const STEERING = "steering-";
+const WAITING = "queued-";
 
 /** A queued block a running turn has taken and not read yet: it goes in at the turn's next step. */
 export function isSteering(block: Block): boolean {
   return block.id.startsWith(STEERING);
+}
+
+/** A queued block still in the box: no turn has taken it, so it cannot be what one is working on. */
+export function isWaiting(block: Block): boolean {
+  return block.id.startsWith(WAITING);
 }
 
 /**
@@ -150,12 +157,13 @@ export function queuedLetters(letters: readonly ThreadLetter[], blocks: readonly
   return letters
     .filter((letter) => !shown.has(letter.id))
     .map((letter) => ({
-      id: `${letter.queue === "steering" ? STEERING : "queued-"}${letter.id}`,
+      id: `${letter.queue === "steering" ? STEERING : WAITING}${letter.id}`,
       role: "user",
       text: letter.text,
       at: letter.at,
       streaming: true,
       letterId: letter.id,
+      ...(letter.files?.length ? { files: letter.files.map((path) => attachedFrom(path)) } : {}),
       // The person's own letter is their bubble; anyone else's is a letter from them.
       ...(letter.from.kind === "user" ? {} : { fromBot: letter.from }),
     }));

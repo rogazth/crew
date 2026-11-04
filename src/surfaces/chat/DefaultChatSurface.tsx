@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { awaitsUser } from "../../lib/blocks";
 import { ChatFind } from "./ChatFind";
-import { ChatSessionContext } from "./context";
+import { ChatSessionContext, QueueContext } from "./context";
 import { Composer } from "./Composer";
+import { PausedRow } from "./ComposerParts";
 import { IntroHead, IntroWays } from "./SessionIntro";
 import { Transcript } from "./Transcript";
 import type { ChatSurfaceProps } from "./surface";
@@ -36,12 +37,10 @@ export function DefaultChatSurface({
   onAnswer,
   loading = false,
   onOptions,
-  optionsPending = false,
   switchProvider = false,
   overlay,
   inThread = false,
   agents,
-  panelOpen = false,
   readOnly = false,
   finding = null,
   onCloseFind,
@@ -66,6 +65,7 @@ export function DefaultChatSurface({
   );
   return (
     <ChatSessionContext value={chatSession}>
+      <QueueContext value={queue ?? null}>
       <div ref={surface} data-quiet-found={quiet || undefined} className="relative flex min-h-0 flex-1 flex-col">
         {over && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
@@ -90,6 +90,7 @@ export function DefaultChatSurface({
             placeFocus={finding === null}
             onApprove={onApprove}
             onAnswer={onAnswer}
+            foot={session.paused ? <PausedRow sessionId={session.id} /> : null}
           />
         )}
         {!readOnly && (
@@ -112,12 +113,9 @@ export function DefaultChatSurface({
             onSend={onSend}
             onStop={onStop}
             {...(whileWorking ? { whileWorking } : {})}
-            {...(queue ? { queue } : {})}
             {...(work ? { work } : {})}
             {...(agents ? { agentsLine: agents } : {})}
-            panelOpen={panelOpen}
             {...(onOptions ? { onOptions } : {})}
-            optionsPending={optionsPending}
             switchProvider={switchProvider}
           />
         )}
@@ -138,6 +136,7 @@ export function DefaultChatSurface({
         )}
         {overlay}
       </div>
+      </QueueContext>
     </ChatSessionContext>
   );
 }

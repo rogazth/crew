@@ -28,8 +28,6 @@ import type {
   ListedModel,
   LogChunk,
   MailboxDispose,
-  MailboxEdit,
-  MailboxReorder,
   MachineInfo,
   MachineSample,
   McpSignIn,
@@ -61,7 +59,6 @@ import type {
   ThreadPage,
   ThreadPair,
   ToolSet,
-  TurnSendNow,
   TurnStarted,
   UsageSnapshot,
 } from "./protocol";
@@ -256,8 +253,6 @@ export const mcpReconnect = (sessionId: string, name: string): Promise<McpStatus
   client.request("mcp_reconnect", { sessionId, name });
 
 /** Claude only: switches one of a live session's servers on or off, now. Answers the servers as they stand after. */
-export const mcpToggle = (sessionId: string, name: string, enabled: boolean): Promise<McpStatus> =>
-  client.request("mcp_toggle", { sessionId, name, enabled });
 
 /**
  * Asks the provider to read a session's commands, skills and servers again,
@@ -291,17 +286,8 @@ export const turnStart = (params: {
   mode?: "auto" | "steer" | "queue";
 }): Promise<TurnStarted> => client.request("turn_start", params);
 
-/** Rewrites a message of the user's still waiting in the queue; refused once a turn took it. */
-export const mailboxEdit = (params: MailboxEdit): Promise<void> => client.request("mailbox_edit", params);
-
-/** Puts the user's waiting messages in this order, first to go first. */
-export const mailboxReorder = (params: MailboxReorder): Promise<void> => client.request("mailbox_reorder", params);
-
 /** Drops a message of the user's that still waits, unread. */
 export const mailboxDispose = (params: MailboxDispose): Promise<void> => client.request("mailbox_dispose", params);
-
-/** Stops the running turn and starts one headed by this waiting message. */
-export const turnSendNow = (params: TurnSendNow): Promise<TurnStarted> => client.request("turn_send_now", params);
 
 /** The last blocks of a transcript. `beforePos` pages towards the start. */
 export const transcriptTail = (params: {
@@ -312,6 +298,9 @@ export const transcriptTail = (params: {
 
 export const turnStop = (sessionId: string): Promise<void> =>
   client.request("turn_stop", { sessionId });
+
+/** A session paused after too many automatic turns listens to its letters again. */
+export const sessionResume = (sessionId: string): Promise<void> => client.request("session_resume", { sessionId });
 
 export const turnRespond = (
   sessionId: string,

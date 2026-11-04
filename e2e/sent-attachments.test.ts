@@ -32,6 +32,28 @@ async function pasteImage(): Promise<void> {
   }, PNG);
 }
 
+test("a file in the composer opens in a tab, and an image in the viewer", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await newSession(crew, workspace.id);
+  await composerOf(crew).evaluate((field) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    field.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+  });
+  await pasteImage();
+  const image = crew.window.getByRole("button", { name: /^Open .*\.png$/ });
+  await image.click();
+  const viewer = crew.window.locator(".crew-lightbox");
+  await viewer.waitFor();
+  await crew.window.keyboard.press("Escape");
+  await viewer.waitFor({ state: "detached" });
+  const file = crew.window.getByRole("button", { name: /^Open .*\.plain$/ });
+  const name = (await file.getAttribute("aria-label"))!.replace(/^Open /, "");
+  await file.click();
+  await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: name }).waitFor();
+});
+
 for (const provider of ["claude", "codex", "opencode"]) {
   test(`a message sent to ${provider} with a picture shows it as an attachment, not a path`, async () => {
     const [workspace] = crew.workspaces;

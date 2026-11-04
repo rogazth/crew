@@ -360,45 +360,15 @@ describe("conversationsOf", () => {
 
 describe("panelSummary", () => {
   it("is empty when there is nothing to list", () => {
-    expect(panelSummary([])).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 0, attention: 0, attentionText: "", text: "" });
+    expect(panelSummary([])).toEqual({ finished: 0, text: "" });
   });
 
-  it("says what ran, by kind, when nothing runs", () => {
-    const summary = panelSummary([entry("subagent", "done"), entry("shell", "failed"), entry("process", "stopped")]);
-
-    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 0, processes: 0 }, finished: 3, attention: 0, attentionText: "", text: "1 agent · 1 shell · 1 process" });
+  it("calls a shell a process too, and counts what ran when nothing runs", () => {
+    expect(panelSummary([entry("shell", "failed"), entry("process", "stopped")])).toEqual({ finished: 2, text: "2 processes" });
   });
 
-  it("counts running work in the text, plural and singular", () => {
-    const summary = panelSummary([entry("subagent", "running"), entry("shell", "running"), entry("process", "running"), entry("process", "running")]);
-
-    expect(summary.running).toEqual({ agents: 1, sessions: 0, shells: 1, processes: 2 });
-    expect(summary.text).toBe("1 agent · 1 shell · 2 processes");
-    expect(panelSummary([entry("subagent", "running"), entry("subagent", "running"), entry("shell", "running")]).text).toBe("2 agents · 1 shell");
-    expect(panelSummary([entry("process", "running")]).text).toBe("1 process");
-  });
-
-  it("counts native and Crew subagents as agents, and sessions apart", () => {
-    const summary = panelSummary([entry("subagent", "running"), { ...entry("subagent", "running"), origin: "crew" }, entry("session", "running"), entry("shell", "running")]);
-
-    expect(summary.running).toEqual({ agents: 2, sessions: 1, shells: 1, processes: 0 });
-    expect(summary.text).toBe("2 agents · 1 session · 1 shell");
-    expect(panelSummary([entry("session", "running"), entry("session", "running")]).text).toBe("2 sessions");
-  });
-
-  it("says what waits on the user ahead of the rest, one by name and many by count", () => {
-    const asks = (title: string, attention: "question" | "approval"): PanelEntry => ({ ...entry("subagent", "running"), title, attention });
-
-    expect(panelSummary([asks("scout", "question"), entry("shell", "running")])).toMatchObject({ attention: 1, attentionText: "scout asks", text: "1 agent · 1 shell" });
-    expect(panelSummary([asks("scout", "approval")]).attentionText).toBe("scout needs approval");
-    expect(panelSummary([asks("scout", "question"), asks("docs", "approval")])).toMatchObject({ attention: 2, attentionText: "2 waiting on you" });
-    expect(panelSummary([{ ...entry("subagent", "done"), attention: "question" }]).attentionText).toBe("");
-  });
-
-  it("shows only the running work in the text, and counts what finished apart", () => {
-    const summary = panelSummary([entry("shell", "running"), entry("subagent", "done"), entry("subagent", "failed")]);
-
-    expect(summary).toEqual({ running: { agents: 0, sessions: 0, shells: 1, processes: 0 }, finished: 2, attention: 0, attentionText: "", text: "1 shell" });
+  it("counts only what runs while something does", () => {
+    expect(panelSummary([entry("shell", "running"), entry("process", "done")])).toEqual({ finished: 1, text: "1 process" });
   });
 });
 

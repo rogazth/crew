@@ -6,6 +6,7 @@ import type { BackgroundCommand } from "../../lib/protocol";
 import type { Ask } from "../../lib/turnRuntime";
 import type { TreeMention } from "../../lib/agentMentions";
 import type { ProjectFile, Session } from "../../lib/types";
+import type { QueueScope } from "./Queue";
 
 /** What a chat surface can ask of the shell without a prop for every level. */
 export type ChatActions = {
@@ -33,6 +34,10 @@ export type ChatActions = {
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */
   openProcessRun: (process: Process, worktree: string | null) => void;
+  /** The Connectors page: what is installed, and switching it. */
+  openConnectors: () => void;
+  /** Settings' Usage page: the plan's limits. */
+  openUsage: () => void;
   /** Runs an MCP server's login for a session in a terminal tab; its end has the session connect the server. */
   openSignIn: (sessionId: string, server: string, command: string[]) => void;
   /** Runs the provider's own login in a terminal tab; a clean exit restarts the session's CLI. */
@@ -50,6 +55,8 @@ export const ChatContext = createContext<ChatActions>({
   files: [],
   processes: [],
   openProcessRun: () => undefined,
+  openConnectors: () => undefined,
+  openUsage: () => undefined,
   openSignIn: () => undefined,
   openLogin: () => undefined,
   confirm: () => undefined,
@@ -104,6 +111,9 @@ export function useLetterScope(): LetterScope {
  * the transcript for a subagent or a session started say what the sheet says.
  */
 export const WorkContext = createContext<readonly PanelEntry[]>([]);
+
+/** The user's queue, for what the transcript's foot offers on each waiting message. Null: it offers nothing. */
+export const QueueContext = createContext<QueueScope | null>(null);
 
 /**
  * The background commands a chat's transcript marks, by the tool call that

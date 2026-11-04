@@ -48,7 +48,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
       ) : null}
       {block.files && block.files.length > 0 ? (
         <div className="flex justify-end">
-          <AttachmentStrip files={block.files} />
+          <AttachmentStrip tiles files={block.files} />
         </div>
       ) : null}
     </div>

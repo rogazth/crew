@@ -1,4 +1,3 @@
-import { UsageWarning } from "./UsageWarning";
 import { useCallback, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
@@ -6,25 +5,19 @@ import { composerHints } from "../../lib/composerHints";
 import { effortsOf, fitChoice, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import type { TreeMention } from "../../lib/agentMentions";
 import type { CommandEntry } from "../../lib/protocol";
+import { sortedServers, useMcp } from "../../lib/mcp";
 import { refreshCommands } from "../../lib/slashCommands";
 import type { Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
 import type { Upload } from "../../hooks/useUploads";
 import { usePanePlace } from "./panePlace";
-import { PausedSegment, WorkSegment, type PanelScope } from "./Panel";
-import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
+import { ConnectorsSegment } from "./Connectors";
+import { WorkSegment, type PanelScope } from "./Panel";
 import { useChatActions } from "./context";
 import type { PromptHandle } from "./PromptEditor";
 import { PromptWell } from "./PromptWell";
-import {
-  AgentNotice,
-  AgentsSegment,
-  type AgentNoticeItem,
-  ContextRing,
-  SendButton,
-  SessionRemoteSegment,
-  WorktreeSegment,
-} from "./ComposerParts";
+import { AgentsClip, type AgentsLine, ContextRing, QuotaSegment, SendButton, SessionRemoteSegment, useQuota, WorktreeSegment } from "./ComposerParts";
+import { useWhere } from "./where";
 
 type Props = {
   ref?: Ref<PromptHandle>;
@@ -53,25 +46,17 @@ type Props = {
    * the turn ends.
    */
   whileWorking?: "steer" | "queue";
-  /** What the user sent while a turn ran and the transcript does not show yet. */
-  queue?: QueueScope;
   /** What the session left running in the background: an agent, a shell, a process. Absent: no segment. */
   work?: PanelScope;
   /** The chips changed; absent, the composer has none. */
   onOptions?: (next: AgentChoice) => void;
-  /** A change the next message carries to the CLI by relaunching it. */
-  optionsPending?: boolean;
   /** Other providers are offered, not only the session's own. */
   switchProvider?: boolean;
   /** In a thread: Esc goes back one level and never stops the turn; the Stop button does. */
   escBack?: boolean;
-  /** The chat's agents: what wants the user over the prompt, and the way to all of them under it. */
+  /** The chat's agents: the clip on the prompt's top edge, and the way to all of them. */
   agentsLine?: AgentsLine;
-  /** The right panel is open: Esc is its, and never stops this chat's turn. */
-  panelOpen?: boolean;
 };
-
-export type AgentsLine = { notices: readonly AgentNoticeItem[]; working: number; any: boolean; onOpenNotice: () => void; onDismiss: () => void; onToggleList: () => void };
 
 /** What the session's row says it runs, as the chips show it. */
 const choiceOf = (session: Session): AgentChoice => ({
@@ -106,14 +91,11 @@ export function Composer({
   onSend,
   onStop,
   whileWorking,
-  queue,
   work,
   onOptions,
-  optionsPending = false,
   switchProvider = false,
   escBack = false,
   agentsLine,
-  panelOpen = false,
 }: Props) {
   const field = useRef<PromptHandle>(null);
   useImperativeHandle(ref, () => ({
@@ -131,49 +113,43 @@ export function Composer({
   // The daemon answers from its cache and reads again once that is stale: a menu opened late is current.
   const readCommands = useCallback(() => void refreshCommands(session.id), [session.id]);
 
-  // One sheet over the composer at a time: the queue's or the background work's.
-  const [sheet, setSheet] = useState<"queue" | "work" | null>(null);
-  const openQueue = useCallback((open: boolean) => setSheet(open ? "queue" : null), []);
+  // One sheet over the composer at a time: the background work's or the connectors'.
+  const [sheet, setSheet] = useState<"work" | "connectors" | null>(null);
   const openWork = useCallback((open: boolean) => setSheet(open ? "work" : null), []);
+  const openConnectors = useCallback((open: boolean) => setSheet(open ? "connectors" : null), []);
   const focusField = useCallback(() => field.current?.focus(), []);
 
   const movable = usePanePlace(session.id) !== null;
   const runAction = (name: string) => {
     if (name === "restart" || name === "reload") void crewAction(session.id, name, confirm);
   };
-  // ⌘↵ while it works: wait for the turn instead of joining it.
+  // Stopping is its own act: only the Stop button, never a key. How a message goes while a turn runs is the
+  // provider's to decide and nobody's to read: sending is sending. ⌘↵ waits for the turn, for whoever knows it.
   const sendAs = (wait: boolean) => onSend(working ? (wait ? "queue" : whileWorking) : undefined);
-  // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
-  const escape = () => {
-    if (!working || sheet === "work" || escBack || panelOpen) return false;
-    onStop();
-    return true;
-  };
-
-  const sendLabel = !working ? "Send" : whileWorking === "steer" ? "Add to the running turn" : "Queue for the next turn";
   // The one round button: Stop while a turn runs and there is nothing to send, Send as soon as there is.
   const stopping = working && draft.trim().length === 0 && files.length === 0;
-  const sendTitle = working && whileWorking === "steer" ? `${sendLabel} (↵) · ⌘↵ queues for the next turn` : sendLabel;
   const current = fitChoice(choiceOf(session));
   const stepsEffort = !!onOptions && effortsOf(current.provider, current.model).length > 1;
-  const hints = composerHints({ working, escBack, whileWorking, stepsEffort });
+  const hints = composerHints({ working, escBack, stepsEffort });
+  // The keys are the first to go: with every indicator on, the line has no room for them.
+  const quota = useQuota(session.provider);
+  const servers = sortedServers(useMcp(session.id));
+  const remote = useWhere(session).remote;
+  const crowded = [(work?.entries.length ?? 0) > 0, servers.length > 0, !!quota, remote].filter(Boolean).length >= 3;
+  // A long name leaves the placeholder rather than crowd it.
+  const shortName = session.name.length > 24 ? "" : ` ${session.name}`;
 
-  const queued = queue && queue.items.some((message) => !message.steering);
   const placeholder = waiting
     ? `Answer ${session.name} above, or write here`
-    : working
-      ? whileWorking === "steer"
-        ? "Add to the running turn…"
-        : whileWorking === "queue"
-          ? "Queue a message for the next turn…"
-          : `${session.name} is working…`
+    : working && !whileWorking
+      ? `${session.name} is working…`
       : centered
         ? "Ask anything…"
-        : `Message ${session.name}…`;
+        : `Message${shortName}…`;
   return (
-    <div className={`ds-composer-wrap relative mx-auto w-full max-w-chat shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
-      {agentsLine && <AgentNotice notices={agentsLine.notices} onOpen={agentsLine.onOpenNotice} onDismiss={agentsLine.onDismiss} />}
-      <UsageWarning provider={session.provider} />
+    <div className={`ds-composer-wrap @container relative mx-auto w-full max-w-chat shrink-0 px-6 ${centered ? "py-1" : "pb-2"}`}>
+      {/* It tucks behind the well's top edge. */}
+      {agentsLine && !centered && <AgentsClip line={agentsLine} />}
       <PromptWell
         ref={field}
         session={session.id}
@@ -202,14 +178,6 @@ export function Composer({
         roomy={centered}
         canSend={canSend}
         onSend={sendAs}
-        onEscape={escape}
-        above={
-          queued && (
-            <div className="px-1.5">
-              <QueueChips queue={queue} />
-            </div>
-          )
-        }
         trailing={
           <>
             {/* A bot starts every message blank, so its context never fills. */}
@@ -217,9 +185,9 @@ export function Composer({
             <SendButton
               stopping={stopping}
               canSend={canSend}
-              label={sendLabel}
-              title={sendTitle}
-              stopTitle={escBack ? "Stop the turn" : "Stop the turn (esc)"}
+              label="Send"
+              title="Send"
+              stopTitle="Stop the turn"
               onStop={onStop}
             />
           </>
@@ -228,28 +196,20 @@ export function Composer({
       <div data-status-line data-session={session.id} className="ds-status">
         <SessionRemoteSegment session={session} hidePlace={centered} />
         {!centered && <WorktreeSegment session={session} />}
-        {queued && <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />}
-        {session.paused && <PausedSegment />}
-        {agentsLine?.any && <AgentsSegment working={agentsLine.working} onToggle={agentsLine.onToggleList} />}
         {/* Shells and processes the chat left running: this opens their sheet. */}
         {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
+        <ConnectorsSegment session={session} open={sheet === "connectors"} onOpenChange={openConnectors} onEscape={focusField} />
         <span className="flex-1" />
-        {optionsPending ? (
-          <span className="truncate text-info">
-            The new settings apply with your next message, which restarts {session.name} where it left off
+        <QuotaSegment provider={session.provider} />
+        {!centered && !crowded && (
+          <span className="ds-hints" data-key-hints data-shown>
+            {hints.map(({ key, does }) => (
+              <span key={key}>
+                <kbd>{key}</kbd>
+                {does}
+              </span>
+            ))}
           </span>
-        ) : (
-          !centered && (
-            // While a turn runs the keys do something other than they seem to; idle, only ⇧Tab's effort stepping is named.
-            <span className="ds-hints" data-key-hints data-shown>
-              {hints.map(({ key, does }) => (
-                <span key={key}>
-                  <kbd>{key}</kbd>
-                  {does}
-                </span>
-              ))}
-            </span>
-          )
         )}
       </div>
     </div>

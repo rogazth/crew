@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew, composerOf } from "./harness.ts";
+import { installFakeOpencode, launchCrew, MOD, newSession, waitFor, type Crew, composerOf, turnOver } from "./harness.ts";
 
 let crew: Crew;
 let chat: Session;
@@ -38,9 +38,10 @@ const page = () => crew.window.locator("[data-agent-view]");
 const card = () => crew.window.locator("[data-agent-start]").last();
 
 async function send(text: string): Promise<void> {
+  await turnOver(crew);
   const field = composer();
   await field.fill(text);
-  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await waitFor(() => crew.window.getByRole("button", { name: "Send", exact: true }).isEnabled(), { message: "the composer can send" });
   await field.press("Enter");
 }
 
