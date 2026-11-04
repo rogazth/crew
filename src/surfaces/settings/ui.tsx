@@ -1,7 +1,7 @@
 // The pieces every settings page is built from: the page frame (title + one line), cards of rows, the Careful card,
 // soft status chips, a progress bar, a copy button, toasts, and the jump that
 // lands the nav's search on a single row.
-import { CheckIcon, CopyIcon, type LucideIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, CircleCheckIcon, CopyIcon, InfoIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, Button, Card, IconButton, PageFrame, Toggle } from "../../chrome/kit";
 
@@ -63,7 +63,7 @@ export function Group({
   return (
     <section className="flex flex-col gap-2" data-setting={id} aria-labelledby={title ? heading : undefined}>
       {(title || action) && (
-        <div className="flex min-h-6 items-end gap-3 px-2.5">
+        <div className={`flex min-h-6 gap-3 px-2.5 ${action ? "items-center" : "items-end"}`}>
           <div className="flex min-w-0 flex-1 flex-col">
             {title && (
               <h2 id={heading} className="text-[12px] font-medium text-text-muted">
@@ -83,7 +83,7 @@ export function Group({
 /** A heading over things that are not rows: provider cards, theme cards. */
 export function Heading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
   return (
-    <div className="flex min-h-6 items-end gap-3 px-2.5">
+    <div className={`flex min-h-6 gap-3 px-2.5 ${action ? "items-center" : "items-end"}`}>
       <div className="flex min-w-0 flex-1 flex-col">
         <h2 className="text-[12px] font-medium text-text-muted">{title}</h2>
         {description && <p className="text-[12px] text-text-muted">{description}</p>}
@@ -278,6 +278,14 @@ type ToastItem = { id: number; text: string; tone: Tone };
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
 const toastListeners = new Set<() => void>();
+const TOAST_GLYPHS: Record<Tone, { icon: LucideIcon; ink: string }> = {
+  success: { icon: CircleCheckIcon, ink: "text-success" },
+  info: { icon: InfoIcon, ink: "text-info" },
+  warning: { icon: TriangleAlertIcon, ink: "text-warning" },
+  danger: { icon: CircleAlertIcon, ink: "text-danger" },
+  neutral: { icon: InfoIcon, ink: "text-text-muted" },
+  accent: { icon: InfoIcon, ink: "text-accent" },
+};
 const emitToasts = () => toastListeners.forEach((listener) => listener());
 
 export function toast(text: string, tone: Tone = "success") {
@@ -298,17 +306,32 @@ export function Toasts() {
     },
     () => toasts,
   );
+  const front = items.at(-1);
+  if (!front) return null;
+  const { icon: Glyph, ink } = TOAST_GLYPHS[front.tone];
+  const behind = items.slice(0, -1);
   return (
-    <div className="pointer-events-none fixed top-4 left-1/2 z-[90] flex -translate-x-1/2 flex-col items-center gap-2">
-      {items.map((item) => (
+    <div className="pointer-events-none absolute inset-x-0 top-4 z-[90] flex justify-center">
+      <div className="relative">
+        {behind.map((item, index) => {
+          const depth = behind.length - index;
+          return (
+            <span
+              key={item.id}
+              aria-hidden
+              className="absolute inset-0 origin-bottom rounded-xl bg-surface shadow-float"
+              style={{ transform: `translateY(${depth * 6}px) scale(${1 - depth * 0.05})` }}
+            />
+          );
+        })}
         <div
-          key={item.id}
-          className="flex h-10 items-center gap-2.5 rounded-xl bg-surface px-3.5 shadow-float motion-safe:animate-[settings-toast_180ms_var(--ease-out,ease-out)]"
+          key={front.id}
+          className="relative flex h-10 items-center gap-2.5 rounded-xl bg-surface px-3.5 shadow-float motion-safe:animate-[settings-toast_180ms_var(--ease-out,ease-out)]"
         >
-          <span className={`size-2 rounded-full ${DOTS[item.tone]}`} />
-          <span>{item.text}</span>
+          <Glyph className={`size-4 shrink-0 ${ink}`} aria-hidden />
+          <span>{front.text}</span>
         </div>
-      ))}
+      </div>
       <style>{`@keyframes settings-toast { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }`}</style>
     </div>
   );

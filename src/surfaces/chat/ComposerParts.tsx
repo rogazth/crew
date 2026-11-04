@@ -29,7 +29,7 @@ import type { PanelEntry } from "../../lib/backgroundPanel";
 import { tokenCount, useContextMeter } from "../../lib/contextMeter";
 import { providerOf } from "../../lib/providers";
 import type { Session } from "../../lib/types";
-import { span, useAlerts, useReadings, warningFor } from "../../lib/usage";
+import { span, useReadings, warningFor } from "../../lib/usage";
 import { RAISED } from "../settings/ui";
 import { useChatActions } from "./context";
 import { branchOf, useWhere, type Where } from "./where";
@@ -219,8 +219,7 @@ export function StatusSheet({ ref, title, action, children, ...rest }: { ref: Re
 /** The plan limit the session's provider is close to, if any. */
 export function useQuota(provider: string) {
   const readings = useReadings();
-  const alerts = useAlerts();
-  const hit = warningFor(readings, provider, alerts.composer);
+  const hit = warningFor(readings, provider);
   if (!hit) return null;
   const { window } = hit;
   return { name: `${window.label} limit`, used: window.used, resets: window.resetsIn !== null ? span(window.resetsIn) : null, danger: window.used >= 95 };

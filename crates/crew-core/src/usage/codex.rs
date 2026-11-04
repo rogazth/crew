@@ -161,6 +161,7 @@ pub fn reading(limits: &Value, account: Option<&Value>, now: i64) -> Option<Plan
         plan: plan.or(account_plan),
         windows,
         tokens: None,
+        daily_tokens: None,
         cost: None,
         updated_at: now,
         source: "app-server".into(),

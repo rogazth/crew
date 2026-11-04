@@ -1,11 +1,10 @@
-import { readSetting } from "../lib/settingsEngine/store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { LOCAL, envOf, linkOf, reconnect, refreshRemotes, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
 import { dispatchNotification } from "../lib/notifications";
 import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, remotesHost } from "../lib/host";
-import { requestAddRemote, setOpenWorkspaceOn, setServerSignInOpener, setSettingsOpener, wakeSetting } from "../lib/remoteUi";
+import { requestAddRemote, setOpenWorkspaceOn, setServerSignInOpener, setSettingsOpener } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
 import { newSignInTab, newTerminalTab } from "../lib/tabs";
 import type { Tab, Workspace } from "../lib/types";
@@ -111,11 +110,7 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
   useEffect(() => {
     const host = remotesHost();
     if (!host) return;
-    return host.onWake(() => {
-      void readSetting(wakeSetting).then((on) => {
-        if (on) wakeAll();
-      });
-    });
+    return host.onWake(wakeAll);
   }, []);
 
   // An update main ran on its own (or that waited for the sessions): the link
@@ -131,8 +126,8 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, o
         source: "connection",
         title: result.name,
         body: result.ok
-          ? `Updated crewd to ${result.version}${result.message ? `. ${result.message}` : ""}`
-          : `Could not update crewd to ${result.version}: ${result.message ?? "unknown error"}`,
+          ? `Updated to ${result.version}${result.message ? `. ${result.message}` : ""}`
+          : `Could not update to ${result.version}: ${result.message ?? "unknown error"}`,
         key: `${result.id}:update`,
       });
     });

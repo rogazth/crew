@@ -2,6 +2,7 @@
 // is left, when it resets, a bar with a tick where an even pace would stand,
 // and a line saying whether the spend is in reserve, on pace, or ahead of it.
 import { paceOf, span, tone, type Pace, type Window } from "../lib/usage";
+import { Tooltip } from "./kit";
 
 /** Points either side of the even pace that still count as on it. */
 const ON_PACE = 2;
@@ -45,15 +46,23 @@ function resetAt(minutes: number): string {
 function PaceBar({ left, pace, fill }: { left: number; pace: Pace | null; fill: string }) {
   const mark = pace && 100 - pace.expected;
   return (
-    <div aria-hidden className="relative h-3">
+    <div className="relative h-3">
       <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-hairline">
         <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${left}%`, background: fill }} />
       </div>
       {mark !== null && (
-        <span
-          className={`absolute inset-y-0 w-[3px] -translate-x-1/2 rounded-full ring-2 ring-surface transition-[left] duration-500 ${pace!.reserve > -ON_PACE ? "bg-text" : "bg-warning"}`}
-          style={{ left: `clamp(1.5px, ${mark}%, calc(100% - 1.5px))` }}
-        />
+        // The tick is 3px; the tooltip answers on a wider strip around it.
+        <Tooltip
+          content={`Even pace: ${Math.round(mark)}% left`}
+          render={
+            <span
+              className="absolute inset-y-0 grid w-3 -translate-x-1/2 place-items-center transition-[left] duration-500"
+              style={{ left: `clamp(1.5px, ${mark}%, calc(100% - 1.5px))` }}
+            />
+          }
+        >
+          <span className={`h-full w-[3px] rounded-full ring-2 ring-surface ${pace!.reserve > -ON_PACE ? "bg-text" : "bg-warning"}`} />
+        </Tooltip>
       )}
     </div>
   );

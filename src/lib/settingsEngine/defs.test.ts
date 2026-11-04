@@ -43,7 +43,7 @@ describe("the settings catalog", () => {
   test("names only settings that follow the user or stay on this computer", () => {
     for (const def of ALL_SETTINGS) expect(["global", "device"]).toContain(def.scope);
     expect(GLOBAL_KEYS).toContain("sessions:retention");
-    expect(GLOBAL_KEYS).toContain("sessions:bypass-permissions");
+    expect(GLOBAL_KEYS).toContain("sessions:access");
   });
 
   test("every setting reads what it writes, and the default from nothing", () => {

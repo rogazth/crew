@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appName, channelOf, cliLinkName } from "./channel";
+import { appName, channelOf } from "./channel";
 import { remoteLayout } from "./remote-ssh";
 
 describe("what each build keeps apart", () => {
@@ -9,12 +9,10 @@ describe("what each build keeps apart", () => {
     expect(channelOf(false, true)).toBe("dev");
   });
 
-  it("gives each its own keychain item and its own command, the release keeping its own", () => {
+  it("gives each its own keychain item, the release keeping its own", () => {
     expect(appName("release")).toBe("Crew");
-    expect(cliLinkName("release")).toBe("crew");
     const channels = ["release", "local", "dev"] as const;
     expect(new Set(channels.map(appName)).size).toBe(3);
-    expect(new Set(channels.map(cliLinkName)).size).toBe(3);
   });
 
   it("gives each a remote port pair no other build's daemon or SOCKS listener takes", () => {

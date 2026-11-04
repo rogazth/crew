@@ -1,7 +1,8 @@
 // A provider with no plan windows (opencode) reports what the last week cost.
 import type { Reading } from "../lib/usageData";
 
-function count(tokens: number): string {
+export function count(tokens: number): string {
+  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(1)}B`;
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
   return String(tokens);

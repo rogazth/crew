@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, SearchIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useInstalledProviders } from "../hooks/useInstalledProviders";
 import { useListedModels } from "../hooks/useListedModels";
@@ -167,12 +167,12 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
           <span className="min-w-0 max-w-[140px] truncate">{modelLabel(provider, model)}</span>
         </Popover.Trigger>
       ) : (
-        <Popover.Trigger className="flex h-8 w-full items-center gap-2 rounded-lg bg-canvas px-2.5 text-text ring ring-border outline-none transition-[box-shadow] hover:ring-border-strong focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-focus/50">
+        <Popover.Trigger className="flex h-8 w-full items-center gap-2 rounded-md bg-canvas px-2.5 text-text ring ring-border outline-none transition-[box-shadow] hover:ring-border-strong focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-focus/50">
           <ProviderIcon provider={provider} className="size-4" />
           <span className="min-w-0 flex-1 truncate text-left">
             {providerOf(provider)?.label} {modelLabel(provider, model)}
           </span>
-          <ChevronDownIcon className="size-3.5 shrink-0 text-icon" />
+          <ChevronsUpDownIcon className="size-3.5 shrink-0 text-icon" />
         </Popover.Trigger>
       )}
 

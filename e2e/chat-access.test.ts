@@ -1,7 +1,7 @@
 // What a chat session may do without asking reaches its CLI: a fresh install
 // runs with full access, a session that asks raises a card for each tool
-// call, and Settings › General › Bypass permissions or the Access chip's Full
-// access start the next turn's CLI with `--dangerously-skip-permissions`, a
+// call, and Full access, from Settings › Providers › Permissions or the Access
+// chip, starts the next turn's CLI with `--dangerously-skip-permissions`, a
 // flag only a launch can set. The fake claude's launch log and the questions
 // it put to Crew ($HOME/fake-claude-asks.log) are the witnesses.
 import assert from "node:assert/strict";
@@ -56,22 +56,21 @@ async function idle(crew: Crew, session: Session): Promise<void> {
   await waitFor(async () => (await storedStatus(crew, session.id)) === "idle", { message: `${session.name} is idle again` });
 }
 
-/** Settings › Providers › Bypass permissions, through its confirmation when it turns on. */
-async function setBypass(crew: Crew, on: boolean): Promise<void> {
+/** Settings › Providers › Permissions: a tile, through its confirmation when it is Full access. */
+async function setAccess(crew: Crew, tile: "Ask permission" | "Full access"): Promise<void> {
   const page = crew.window;
   await pressChord(crew, `${MOD}+,`);
   await page.getByRole("button", { name: "Providers", exact: true }).click();
-  const toggle = page.getByRole("switch", { name: /Bypass permissions/ });
-  assert.equal(await toggle.getAttribute("aria-checked"), String(!on));
-  await toggle.click();
-  if (on) {
-    const confirm = page.getByRole("alertdialog", { name: "Bypass permissions for every session?" });
-    await confirm.getByRole("button", { name: /^Bypass/ }).click();
+  await page.getByRole("radio", { name: new RegExp(`^${tile}`) }).click();
+  if (tile === "Full access") {
+    const confirm = page.getByRole("alertdialog", { name: "Give every session full access?" });
+    await confirm.getByRole("button", { name: "Give full access" }).click();
     await confirm.waitFor({ state: "detached" });
   }
+  const level = tile === "Full access" ? "full" : "ask";
   await waitFor(
-    async () => ((await crew.request<string | null>("settings_get", { key: "sessions:bypass-permissions" })) === "on") === on,
-    { message: `crewd keeps the setting ${on ? "on" : "off"}` },
+    async () => (await crew.request<string | null>("settings_get", { key: "sessions:access" })) === level,
+    { message: `crewd keeps ${level}` },
   );
   await pressChord(crew, `${MOD}+,`);
 }
@@ -148,7 +147,7 @@ test("a session that asks raises a card for its CLI's tool call, its row reads N
   assert.equal((await launchesOf(crew, session)).length, 1, "answering a card launched the CLI again");
 });
 
-test("Bypass permissions relaunches the next turn's CLI without asking, in every session, and turning it off asks again", async (t) => {
+test("Full access in Settings relaunches the next turn's CLI without asking, in every session, and Ask permission asks again", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -166,30 +165,30 @@ test("Bypass permissions relaunches the next turn's CLI without asking, in every
   const first = await launchNo(crew, session, 1);
   assert.ok(!first.argv.includes(SKIP), first.argv.join(" "));
 
-  await setBypass(crew, true);
+  await setAccess(crew, "Full access");
   await composerOf(crew, session).waitFor();
-  // The session's own access is untouched: the setting overrides it.
-  assert.equal((await crew.request<Session>("session_get", { id: session.id })).autonomy, "ask");
+  // It reaches the session that already exists.
+  assert.equal((await crew.request<Session>("session_get", { id: session.id })).autonomy, "full");
 
   // The kept CLI cannot take the flag: the next turn launches another, on the same conversation.
   await sendInChat(crew, "ask");
   await chatLine(crew, "Reply 1: ask allowed").waitFor();
   const second = await launchNo(crew, session, 2);
-  assert.ok(second.argv.includes(SKIP), `the CLI asks under Bypass permissions: ${second.argv.join(" ")}`);
+  assert.ok(second.argv.includes(SKIP), `the CLI asks under Full access: ${second.argv.join(" ")}`);
   assert.equal(after(second.argv, "--resume"), session.id, second.argv.join(" "));
-  assert.equal(await card(crew).count(), 0, "a card was raised under Bypass permissions");
-  assert.deepEqual(await asks(crew), [], "the CLI asked under Bypass permissions");
+  assert.equal(await card(crew).count(), 0, "a card was raised under Full access");
+  assert.deepEqual(await asks(crew), [], "the CLI asked under Full access");
   await idle(crew, session);
 
   // A new session starts that way.
   const fresh = await newSession(crew, workspace.id);
   await sendInChat(crew, "hello");
   await chatLine(crew, "Reply 1: hello").waitFor();
-  assert.ok((await launchNo(crew, fresh, 1)).argv.includes(SKIP), "a new session asks under Bypass permissions");
+  assert.ok((await launchNo(crew, fresh, 1)).argv.includes(SKIP), "a new session asks under Full access");
   await idle(crew, fresh);
 
-  // Off again: the session goes back to asking, on a CLI launched without the flag.
-  await setBypass(crew, false);
+  // Ask permission: the session goes back to asking, on a CLI launched without the flag.
+  await setAccess(crew, "Ask permission");
   await sessionTab(crew, session).click();
   await composerOf(crew, session).waitFor();
   await sendInChat(crew, "ask");

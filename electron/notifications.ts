@@ -1,10 +1,7 @@
-import { readFile, stat } from "node:fs/promises";
 import { app, BrowserWindow, ipcMain, Notification, shell } from "electron";
 import {
   BODY_LIMIT,
-  isSoundFile,
   NOTIFY_CHANNELS,
-  SOUND_LIMIT,
   type Banner,
   type BannerResult,
   type BannerState,
@@ -49,7 +46,6 @@ export function registerNotifyIpc(window: () => BrowserWindow | null, reopen: ()
   ipcMain.on(NOTIFY_CHANNELS.beep, () => {
     if (!MUTED) shell.beep();
   });
-  ipcMain.handle(NOTIFY_CHANNELS.sound, (_event, path: string) => readSound(path));
   ipcMain.handle(NOTIFY_CHANNELS.status, () => (Notification.isSupported() ? state : "unsupported"));
   ipcMain.on(NOTIFY_CHANNELS.badge, (_event, badge: DockBadge) => setBadge(badge));
   ipcMain.on(NOTIFY_CHANNELS.dismiss, (_event, sessionId: unknown) => {
@@ -72,18 +68,6 @@ function setBadge(badge: DockBadge): void {
   app.setBadgeCount(focused ? 0 : count);
   // Informational: once, and only while Crew is not the active app.
   if (badge.bounce && !focused && count > 0) app.dock?.bounce("informational");
-}
-
-/** Only an audio file, and only a short one: the renderer asks by path. */
-async function readSound(path: unknown): Promise<Uint8Array | null> {
-  if (typeof path !== "string" || !isSoundFile(path)) return null;
-  try {
-    const info = await stat(path);
-    if (!info.isFile() || info.size > SOUND_LIMIT) return null;
-    return new Uint8Array(await readFile(path));
-  } catch {
-    return null;
-  }
 }
 
 function show(banner: Banner, onClick: () => void): Promise<BannerResult> {

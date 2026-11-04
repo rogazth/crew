@@ -1,7 +1,7 @@
 import { defineSetting } from "./settingsEngine/define";
 import { peekSetting, readSetting, saveSetting, watchSetting } from "./settingsEngine/store";
 
-/** The kinds of news, each with its own banner switch and sound. */
+/** The kinds of news, each with its own switch and sound. */
 export type NotificationKind =
   | "done"
   | "needs-input"
@@ -13,18 +13,18 @@ export type NotificationKind =
   | "connection";
 
 export const NOTIFICATION_KINDS: { id: NotificationKind; label: string; description: string }[] = [
-  { id: "needs-input", label: "Needs input", description: "A session asks you something." },
-  { id: "approval", label: "Needs approval", description: "A session needs permission to act." },
-  { id: "done", label: "Turn finished", description: "A turn finished while you were away." },
-  { id: "error", label: "Error", description: "A turn or its CLI failed." },
-  { id: "process", label: "Command crashed", description: "A command failed or kept crashing." },
-  { id: "mailbox", label: "Bot message", description: "A bot got a message." },
-  { id: "bell", label: "Terminal bell", description: "A terminal rang its bell." },
-  { id: "connection", label: "Connection", description: "A machine disconnected or reconnected." },
+  { id: "needs-input", label: "Needs input", description: "A session has a question." },
+  { id: "approval", label: "Needs approval", description: "A session wants permission to act." },
+  { id: "done", label: "Turn finished", description: "A session finished its turn." },
+  { id: "error", label: "Error", description: "A session's turn failed." },
+  { id: "process", label: "Command crashed", description: "A process failed or kept crashing." },
+  { id: "mailbox", label: "Bot message", description: "A bot received a message." },
+  { id: "bell", label: "Terminal bell", description: "A terminal asked for attention." },
+  { id: "connection", label: "Connection", description: "A machine connected or disconnected." },
 ];
 
-/** `system` is the OS's own banner sound; `custom` is the file the user picked. */
-export type SoundId = "none" | "system" | "pop-up" | "pop-down" | "thud" | "bubble" | "custom";
+/** `system` is the OS's own banner sound. */
+export type SoundId = "none" | "system" | "pop-up" | "pop-down" | "thud" | "bubble";
 
 export const SOUNDS: { id: SoundId; label: string }[] = [
   { id: "none", label: "None" },
@@ -33,17 +33,15 @@ export const SOUNDS: { id: SoundId; label: string }[] = [
   { id: "thud", label: "Thud" },
   { id: "bubble", label: "Bubble" },
   { id: "system", label: "System" },
-  { id: "custom", label: "Custom" },
 ];
 
-export type KindPrefs = { banner: boolean; sound: SoundId };
+/** Off, the kind is neither shown nor heard. */
+export type KindPrefs = { enabled: boolean; sound: SoundId };
 
 export type NotificationPrefs = {
   /** The master switch: off, nothing is shown or played. */
   enabled: boolean;
   kinds: Record<NotificationKind, KindPrefs>;
-  /** Banners only while Crew is in the background; in front, a sound and a toast are enough. */
-  onlyWhenUnfocused: boolean;
   /** In front, news of another session shows in the window, with a way to open it. */
   toasts: boolean;
   /** The Dock icon counts sessions waiting on the user. */
@@ -52,8 +50,6 @@ export type NotificationPrefs = {
   bounce: boolean;
   /** 0 to 100, for the sounds Crew plays itself. */
   volume: number;
-  /** The file the `custom` sound plays. */
-  customSound: string | null;
   /** Do not disturb until this time (ms since the epoch). */
   pausedUntil: number | null;
 };
@@ -63,22 +59,20 @@ export const NOTIFICATION_PREFS_KEY = "notifications:prefs";
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   enabled: true,
   kinds: {
-    "needs-input": { banner: true, sound: "pop-up" },
-    approval: { banner: true, sound: "pop-up" },
-    done: { banner: true, sound: "pop-down" },
-    error: { banner: true, sound: "thud" },
-    process: { banner: true, sound: "thud" },
+    "needs-input": { enabled: true, sound: "pop-up" },
+    approval: { enabled: true, sound: "pop-up" },
+    done: { enabled: true, sound: "pop-down" },
+    error: { enabled: true, sound: "thud" },
+    process: { enabled: true, sound: "thud" },
     // Bots that work together write to each other often; each turn still ends with its own news.
-    mailbox: { banner: false, sound: "none" },
-    bell: { banner: true, sound: "bubble" },
-    connection: { banner: true, sound: "none" },
+    mailbox: { enabled: false, sound: "none" },
+    bell: { enabled: true, sound: "bubble" },
+    connection: { enabled: true, sound: "none" },
   },
-  onlyWhenUnfocused: true,
   toasts: true,
   badge: true,
   bounce: false,
   volume: 70,
-  customSound: null,
   pausedUntil: null,
 };
 
@@ -89,9 +83,11 @@ const RENAMED: Record<string, SoundId> = { ping: "pop-up", chime: "pop-down", al
 
 function kindPrefs(raw: unknown, fallback: KindPrefs): KindPrefs {
   if (!raw || typeof raw !== "object") return fallback;
-  const value = raw as Partial<KindPrefs>;
+  // `banner` is what the switch was saved as when it only ruled the banner.
+  const value = raw as Partial<KindPrefs> & { banner?: unknown };
+  const enabled = value.enabled ?? value.banner;
   return {
-    banner: typeof value.banner === "boolean" ? value.banner : fallback.banner,
+    enabled: typeof enabled === "boolean" ? enabled : fallback.enabled,
     sound:
       typeof value.sound !== "string"
         ? fallback.sound
@@ -117,8 +113,6 @@ export function parseNotificationPrefs(raw: string | null): NotificationPrefs {
   return {
     enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
     kinds,
-    onlyWhenUnfocused:
-      typeof parsed.onlyWhenUnfocused === "boolean" ? parsed.onlyWhenUnfocused : defaults.onlyWhenUnfocused,
     toasts: typeof parsed.toasts === "boolean" ? parsed.toasts : defaults.toasts,
     badge: typeof parsed.badge === "boolean" ? parsed.badge : defaults.badge,
     bounce: typeof parsed.bounce === "boolean" ? parsed.bounce : defaults.bounce,
@@ -126,7 +120,6 @@ export function parseNotificationPrefs(raw: string | null): NotificationPrefs {
       typeof parsed.volume === "number" && Number.isFinite(parsed.volume)
         ? Math.round(Math.min(100, Math.max(0, parsed.volume)))
         : defaults.volume,
-    customSound: typeof parsed.customSound === "string" && parsed.customSound ? parsed.customSound : null,
     pausedUntil: typeof parsed.pausedUntil === "number" && Number.isFinite(parsed.pausedUntil) ? parsed.pausedUntil : null,
   };
 }

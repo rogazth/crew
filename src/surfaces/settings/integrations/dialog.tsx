@@ -45,7 +45,20 @@ export function Dialog({ label, width = "w-[460px]", children }: { label: string
 }
 
 /** `wrap` lets a long subtitle (a server's description) run to three lines instead of one. */
-export function DialogHeader({ mark, title, subtitle, wrap = false }: { mark: ReactNode; title: ReactNode; subtitle?: ReactNode; wrap?: boolean }) {
+export function DialogHeader({
+  mark,
+  title,
+  subtitle,
+  wrap = false,
+  onClose = ui.close,
+}: {
+  mark: ReactNode;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  wrap?: boolean;
+  /** A sheet that is not this page's says how it closes. */
+  onClose?: () => void;
+}) {
   return (
     <div className="flex items-start gap-3.5 px-5 pt-5 pb-4">
       {mark}
@@ -53,7 +66,7 @@ export function DialogHeader({ mark, title, subtitle, wrap = false }: { mark: Re
         <h2 className="truncate text-[16px] leading-6 font-semibold">{title}</h2>
         {subtitle && <p className={`text-[13px] text-text-muted ${wrap ? "line-clamp-3" : "truncate"}`}>{subtitle}</p>}
       </div>
-      <IconButton icon={XIcon} label="Close" className="-mt-1 -mr-1 size-7" onClick={ui.close} />
+      <IconButton icon={XIcon} label="Close" className="-mt-1 -mr-1 size-7" onClick={onClose} />
     </div>
   );
 }

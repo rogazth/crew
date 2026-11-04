@@ -41,6 +41,10 @@ pub struct PlanUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub tokens: Option<u64>,
+    /// Those tokens day by day, the machine's own calendar, oldest first, today last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<number>")]
+    pub daily_tokens: Option<Vec<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<f64>,

@@ -1,18 +1,16 @@
 // Keybindings you can change: click a shortcut and press a new one in its place
 // (one per command, never a second), see a clash before it happens, reset one or
-// all, import and export the set as JSON. Edits are saved and bind at once, in
-// the window and in the keys main forwards from pages.
-import { DownloadIcon, PlusIcon, RotateCcwIcon, SearchIcon, TriangleAlertIcon, UploadIcon, XIcon } from "lucide-react";
+// all. Edits are saved and bind at once, in the window and in the keys main
+// forwards from pages.
+import { PlusIcon, RotateCcwIcon, SearchIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Button, Tooltip } from "../../chrome/kit";
+import { Button, Select, Tooltip } from "../../chrome/kit";
 import { saveKeyOverrides, useKeyOverrides } from "../../hooks/useKeybindings";
 import { chordFromPress } from "../../lib/chords";
 import { COMMANDS, isCommandId, storedChordLabel, type CommandId } from "../../lib/commands";
 import { bindingGroups } from "../../lib/commandGroups";
 import { IS_MAC } from "../../lib/hotkey";
-import { keybindingsHost } from "../../lib/host";
-import { exportOverrides, findClash, isEditable, parseImport, replaceClash, resetOverride, setOverride } from "../../lib/keybindings";
-import { PAGES } from "./pages";
+import { findClash, isEditable, replaceClash, resetOverride, setOverride } from "../../lib/keybindings";
 import { Group, SettingsPage, toast } from "./ui";
 
 const MODS = ["⌃", "⌥", "⇧", "⌘"] as const;
@@ -35,7 +33,6 @@ export function KeybindingsPage() {
   const [held, setHeld] = useState("");
   const [hint, setHint] = useState<string | null>(null);
   const [clash, setClash] = useState<Clash | null>(null);
-  const [importErrors, setImportErrors] = useState<string[] | null>(null);
 
   const modified = Object.keys(o).length;
   const text = query.trim().toLowerCase();
@@ -111,61 +108,25 @@ export function KeybindingsPage() {
     if (clash?.id === id) setClash(null);
   };
 
-  const importFile = async () => {
-    const host = keybindingsHost();
-    if (!host) return setImportErrors(["Importing needs the desktop app."]);
-    try {
-      const file = await host.importFile();
-      if (file === null) return;
-      const result = parseImport(file, IS_MAC);
-      if (!result.ok) return setImportErrors(result.errors);
-      saveKeyOverrides(result.overrides);
-      setImportErrors(null);
-      setClash(null);
-      toast(`Imported ${Object.keys(result.overrides).length} changed shortcut${Object.keys(result.overrides).length === 1 ? "" : "s"}`);
-    } catch (error) {
-      setImportErrors([error instanceof Error ? error.message : "Could not read the file."]);
-    }
-  };
-
-  const exportFile = async () => {
-    const host = keybindingsHost();
-    if (!host) return toast("Exporting needs the desktop app", "danger");
-    try {
-      if ((await host.exportFile(exportOverrides(o))) !== null) toast("Keybindings exported");
-    } catch (error) {
-      toast(error instanceof Error ? error.message : "Could not save the file", "danger");
-    }
-  };
-
   return (
     <SettingsPage
       title="Keybindings"
-      description={PAGES.keybindings.description}
       actions={
-        <>
-          <Button variant="ghost" icon={UploadIcon} onClick={() => void importFile()}>
-            Import
-          </Button>
-          <Button variant="ghost" icon={DownloadIcon} onClick={() => void exportFile()}>
-            Export
-          </Button>
-          <Button
-            icon={RotateCcwIcon}
-            disabled={modified === 0}
-            onClick={() => {
-              saveKeyOverrides({});
-              setClash(null);
-              toast(`Reset ${modified} shortcut${modified === 1 ? "" : "s"}`);
-            }}
-          >
-            Reset all
-          </Button>
-        </>
+        <Button
+          icon={RotateCcwIcon}
+          disabled={modified === 0}
+          onClick={() => {
+            saveKeyOverrides({});
+            setClash(null);
+            toast(`Reset ${modified} shortcut${modified === 1 ? "" : "s"}`);
+          }}
+        >
+          Reset all
+        </Button>
       }
     >
       <div className="sticky top-0 z-10 -mx-3 -my-3 flex items-center gap-2 bg-canvas px-3 py-3">
-        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[10px] bg-card px-3 transition-shadow focus-within:shadow-[0_0_0_1.5px_color-mix(in_oklab,var(--color-focus)_45%,transparent)]">
+        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-canvas px-2.5 ring ring-border focus-within:ring-[1.5px] focus-within:ring-focus/50">
           <SearchIcon className="size-4 shrink-0 text-icon" />
           <input
             value={query}
@@ -176,37 +137,17 @@ export function KeybindingsPage() {
             className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
           />
         </label>
-        <button
-          type="button"
-          aria-pressed={onlyModified}
-          onClick={() => setOnlyModified((v) => !v)}
-          className={`flex h-9 shrink-0 items-center gap-2 rounded-full px-3 text-[12px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
-            onlyModified ? "bg-accent/12 text-accent" : "bg-card text-text-muted hover:bg-hover hover:text-text"
-          }`}
-        >
-          <span className={`size-1.5 rounded-full ${modified ? "bg-accent" : "bg-text-muted/50"}`} />
-          Modified
-          <span className="tabular-nums opacity-70">{modified}</span>
-        </button>
+        <Select<"all" | "modified">
+          label="Filter keybindings"
+          className="w-36 shrink-0"
+          value={onlyModified ? "modified" : "all"}
+          onChange={(next) => setOnlyModified(next === "modified")}
+          options={[
+            { value: "all", label: "All" },
+            { value: "modified", label: modified ? `Modified (${modified})` : "Modified" },
+          ]}
+        />
       </div>
-
-      {importErrors && (
-        <div role="alert" className="flex items-start gap-3 rounded-lg bg-danger/10 py-2 pr-1.5 pl-3">
-          <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-danger" />
-          <div className="min-w-0 flex-1 text-[12px]">
-            <p className="font-medium">Nothing was imported</p>
-            <ul className="mt-0.5 text-text-muted">
-              {importErrors.slice(0, 6).map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-              {importErrors.length > 6 && <li>and {importErrors.length - 6} more</li>}
-            </ul>
-          </div>
-          <Button variant="ghost" className="h-7 text-[12px]" onClick={() => setImportErrors(null)}>
-            Dismiss
-          </Button>
-        </div>
-      )}
 
       {groups.map((group) => (
         <Group key={group.title} title={group.title}>

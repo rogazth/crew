@@ -2,8 +2,7 @@
 // and read ahead as Settings opens: a page paints with the values it keeps,
 // not with defaults that flip a frame later and push the rows under them.
 import { useEffect, useSyncExternalStore } from "react";
-import type { CliStatus } from "./cli";
-import { appInfo, cliHost, homeDir, loginItemHost, notificationStatus, remotesHost, updateHost } from "./host";
+import { appInfo, loginItemHost, notificationStatus, remotesHost, updateHost } from "./host";
 import type { LoginItemState } from "./loginItem";
 import type { BannerState } from "./notify";
 import type { Tailnet } from "./remotes";
@@ -64,8 +63,6 @@ const none = () => Promise.resolve(null);
 
 export const READS = {
   login: { key: "login", load: (): Promise<LoginItemState | null> => loginItemHost()?.get() ?? none() },
-  cli: { key: "cli", load: (): Promise<CliStatus | null> => cliHost()?.status() ?? none() },
-  home: { key: "home", load: homeDir },
   appInfo: { key: "app-info", load: appInfo },
   update: { key: "update", load: (): Promise<UpdateState | null> => updateHost()?.current() ?? none() },
   // A feed that cannot be reached answers from main's cache; with none, an empty stale list.

@@ -26,7 +26,7 @@ export function MachineBanner({ workspaceId }: { workspaceId: string | null }) {
       <span className="min-w-0 flex-1 truncate">
         {link.mismatch ? (
           <>
-            <b className="font-medium">{link.name} runs an incompatible crewd.</b>{" "}
+            <b className="font-medium">{link.name} needs an update.</b>{" "}
             <span className="text-text-muted">Update it in Settings.</span>
           </>
         ) : connecting ? (

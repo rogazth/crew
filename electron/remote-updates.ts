@@ -1,7 +1,7 @@
 // Brings each machine's crewd up to this Mac's once nothing works there: on
-// its own when "Update machines automatically" is on, or when the user asked
-// for an update to wait for the sessions to finish. The decisions are in
-// remote-updates-plan.ts; this does the looking and the updating.
+// its own, or when the user asked for an update to wait for the sessions to
+// finish. The decisions are in remote-updates-plan.ts; this does the looking
+// and the updating.
 
 import type { RemoteEnv } from "../src/lib/protocol";
 import type { RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
@@ -19,7 +19,6 @@ type Deps = {
   peek(row: RemoteEnv): Promise<{ version: string; agentsRunning: number }>;
   /** This Mac's crewd version; null when it does not answer. */
   target(): Promise<string | null>;
-  auto(): Promise<boolean>;
   /** Another job holds the machine: an update, restart or removal from the window. */
   busy(id: string): boolean;
   update(row: RemoteEnv): Promise<{ warning: string | null }>;
@@ -57,22 +56,22 @@ export function remoteUpdater(deps: Deps): RemoteUpdater {
   }
 
   async function lookAll() {
-    const [rows, target, auto] = await Promise.all([deps.machines(), deps.target(), deps.auto()]).catch(() => [null, null, false] as const);
+    const [rows, target] = await Promise.all([deps.machines(), deps.target()]).catch(() => [null, null] as const);
     if (!rows || !target) return;
     const ids = new Set(rows.map((row) => row.id));
     for (const id of [...memory.keys()]) if (!ids.has(id)) memory.delete(id);
     for (const id of [...states.keys()]) if (!ids.has(id)) set(id, null);
-    await Promise.all(rows.map((row) => lookAt(row, target, auto)));
+    await Promise.all(rows.map((row) => lookAt(row, target)));
   }
 
-  async function lookAt(row: RemoteEnv, target: string, auto: boolean) {
+  async function lookAt(row: RemoteEnv, target: string) {
     if (deps.busy(row.id) || states.get(row.id)?.state === "updating") return skipBusy(row.id);
     // One that does not answer keeps what was known: it is looked at again next time.
     const seen = await deps.peek(row).catch(() => null);
     if (!seen) return;
     if (deps.busy(row.id)) return skipBusy(row.id);
     skipping.delete(row.id);
-    const { action, memory: next } = decide({ ...seen, target, auto, now: Date.now() }, memory.get(row.id) ?? FRESH);
+    const { action, memory: next } = decide({ ...seen, target, now: Date.now() }, memory.get(row.id) ?? FRESH);
     memory.set(row.id, next);
     if (action === "none") return set(row.id, null);
     const state = { version: target, queued: next.queued, agentsRunning: seen.agentsRunning };

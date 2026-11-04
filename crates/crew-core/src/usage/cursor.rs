@@ -44,6 +44,7 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         overage_status: None,
         windows,
         tokens: None,
+        daily_tokens: None,
         cost: None,
         updated_at: now,
     })

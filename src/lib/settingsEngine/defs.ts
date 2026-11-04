@@ -8,11 +8,9 @@ import { sitePermissionsSetting } from "../browser/permissions";
 import { chatTextSetting } from "../chatText";
 import { keybindingsSetting } from "../keybindings";
 import { notificationPrefsSetting } from "../notificationPrefs";
-import { bypassPermissions } from "../permissions";
+import { sessionAccess } from "../permissions";
 import { defaultAgentSetting, lastAgentsSetting } from "../providers";
-import { autoUpdateSetting, warnRelaySetting, wakeSetting } from "../remoteUi";
 import { retention } from "../retention";
-import { reopenSetting } from "../startup";
 import { terminalPrefsSetting } from "../terminalPrefs";
 import { autoDownloadSetting } from "../updatePrefs";
 import { alertsSetting, ringsSetting } from "../usage";
@@ -21,7 +19,7 @@ import type { SettingDef } from "./define";
 export const ALL_SETTINGS: SettingDef<never>[] = [
   // Yours wherever you work.
   retention,
-  bypassPermissions,
+  sessionAccess,
   defaultAgentSetting,
   lastAgentsSetting,
   accentSetting,
@@ -32,10 +30,6 @@ export const ALL_SETTINGS: SettingDef<never>[] = [
   alertsSetting,
   ringsSetting,
   // This computer's.
-  reopenSetting,
-  wakeSetting,
-  warnRelaySetting,
-  autoUpdateSetting,
   autoDownloadSetting,
   keybindingsSetting,
   notificationPrefsSetting,

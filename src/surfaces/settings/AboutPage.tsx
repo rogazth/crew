@@ -24,14 +24,14 @@ import { useNow } from "../../hooks/useNow";
 import type { AppInfo } from "../../lib/appInfo";
 import { openLicenses, openUrl } from "../../lib/host";
 import { dateLabel, sizeLabel, type ReleaseNote } from "../../lib/update";
-import { Chip, CopyButton, Heading, ProgressBar, RAISED, SettingsPage, toast, type Tone } from "./ui";
+import { CopyButton, Heading, ProgressBar, RAISED, SettingsPage, toast } from "./ui";
 
 const REPO_URL = "https://github.com/rogazth/crew";
 
-const KIND: Record<ReleaseNote["kind"], { label: string; tone: Tone }> = {
-  new: { label: "New", tone: "info" },
-  improved: { label: "Improved", tone: "neutral" },
-  fixed: { label: "Fixed", tone: "neutral" },
+const KIND: Record<ReleaseNote["kind"], string> = {
+  new: "New",
+  improved: "Improved",
+  fixed: "Fixed",
 };
 
 const UNKNOWN = "Unknown";
@@ -49,8 +49,8 @@ export function AboutPage() {
       <p className="flex flex-col items-center gap-0.5 pt-2 text-center text-[12px] text-text-muted">
         <span>Made by Gabriel Rodriguez, with a crew of agents.</span>
         <span className="text-placeholder">
-          © 2026 Crew ·{" "}
-          <button type="button" onClick={() => setCredits(true)} className="text-text-muted hover:text-text hover:underline">
+          © 2026 Crew{" "}
+          <button type="button" onClick={() => setCredits(true)} className="ml-1.5 text-text-muted hover:text-text hover:underline">
             Acknowledgements
           </button>
         </span>
@@ -73,22 +73,12 @@ function Hero({ info }: { info: AppInfo | null }) {
       <div className="relative flex flex-col items-center gap-1">
         <h1 className="text-[30px] leading-9 font-semibold tracking-[-0.03em]">Crew</h1>
         <p className="text-[14px] text-text-muted">Coding agents in your worktrees.</p>
+        {info && (
+          <p className="text-[12px] text-text-muted tabular-nums">
+            Version {info.version} ({shortCommit(info.commit)}){info.release ? "" : ", local build"}
+          </p>
+        )}
       </div>
-      {info && (
-        <div className="relative flex items-center gap-2 text-[12px] text-text-muted">
-          <span className="tabular-nums">Version {info.version}</span>
-          {!info.release && (
-            <>
-              <span className="size-0.5 rounded-full bg-text-muted" />
-              <Chip tone="warning" dot={false}>
-                Local build
-              </Chip>
-            </>
-          )}
-          <span className="size-0.5 rounded-full bg-text-muted" />
-          <span className="font-mono">{shortCommit(info.commit)}</span>
-        </div>
-      )}
     </header>
   );
 }
@@ -123,7 +113,7 @@ function UpdateCard() {
   const [auto, setAuto] = useAutoDownload();
   const info = useAppInfo();
   const now = useNow(30_000);
-  const checked = state.checkedAt === null ? "not yet" : ago(state.checkedAt, now);
+  const checked = state.checkedAt === null ? null : `checked ${ago(state.checkedAt, now)}`;
   const current = info?.version ?? "";
 
   let tile: ReactNode;
@@ -138,7 +128,7 @@ function UpdateCard() {
       title = `Crew ${state.offer.version} available`;
       line = [state.offer.date && dateLabel(state.offer.date), state.offer.size && sizeLabel(state.offer.size)]
         .filter(Boolean)
-        .join(" · ") || `You have ${state.offer.current}`;
+        .join(", ") || `You have ${state.offer.current}`;
       notes = state.offer.notes;
       action = (
         <>
@@ -217,7 +207,7 @@ function UpdateCard() {
     default:
       tile = <Tile tone="success" icon={CheckIcon} />;
       title = "Up to date";
-      line = `${current ? `${current} · ` : ""}checked ${checked}`;
+      line = [current, checked].filter(Boolean).join(", ");
       action = (
         <Button icon={RotateCwIcon} onClick={check}>
           Check now
@@ -226,33 +216,34 @@ function UpdateCard() {
   }
 
   return (
-    <section data-setting="updates" className="flex flex-col gap-1 rounded-[14px] bg-card p-2">
-      <div className="flex items-center gap-3 px-2.5 pt-2.5 pb-2">
-        {tile}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <h2 className="text-[15px] leading-5 font-semibold tracking-[-0.01em]">{title}</h2>
-          <p className={`text-[12px] tabular-nums ${state.phase === "error" ? "line-clamp-2 text-danger" : "text-text-muted"}`}>
-            {line}
-          </p>
+    <div className="flex flex-col gap-2">
+      <section data-setting="updates" className="flex flex-col gap-1 rounded-[14px] bg-card p-2">
+        <div className="flex items-center gap-3 px-2.5 pt-2.5 pb-2">
+          {tile}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <h2 className="text-[15px] leading-5 font-semibold tracking-[-0.01em]">{title}</h2>
+            <p className={`text-[12px] tabular-nums ${state.phase === "error" ? "line-clamp-2 text-danger" : "text-text-muted"}`}>
+              {line}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">{action}</div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">{action}</div>
-      </div>
-      {state.phase === "downloading" && (
-        <div className="px-2.5 pb-2">
-          <ProgressBar value={progress ?? 0} />
-        </div>
-      )}
-      {notes.length > 0 && <Notes notes={notes} />}
-      <div className="rounded-xl bg-card px-3.5">
+        {state.phase === "downloading" && (
+          <div className="px-2.5 pb-2">
+            <ProgressBar value={progress ?? 0} />
+          </div>
+        )}
+        {notes.length > 0 && <Notes notes={notes} />}
+      </section>
+      <div className="rounded-[14px] bg-card px-4">
         <label data-setting="auto-download" className="flex min-h-11 cursor-pointer items-center gap-6 py-2">
           <div className="min-w-0 flex-1">
             <p>Download updates automatically</p>
-            <p className="text-[12px] text-text-muted">Crew still asks before it restarts.</p>
-          </div>
+            </div>
           <Switch checked={auto} onChange={setAuto} label="Download updates automatically" />
         </label>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -262,9 +253,7 @@ function Notes({ notes }: { notes: readonly ReleaseNote[] }) {
       {notes.map((note) => (
         <li key={note.text} className="flex items-start gap-2.5">
           <span className="w-[68px] shrink-0 pt-px">
-            <Chip tone={KIND[note.kind].tone} dot={false}>
-              {KIND[note.kind].label}
-            </Chip>
+            <span className="text-[12px] text-text-muted">{KIND[note.kind]}</span>
           </span>
           <span>{note.text}</span>
         </li>
@@ -299,7 +288,7 @@ function buildRows(info: AppInfo | null): [string, string][] {
     ["Electron", info.electron || UNKNOWN],
     ["Chromium", info.chrome || UNKNOWN],
     ["Node", info.node],
-    ["Daemon", info.crewd ? `crewd ${info.crewd}` : UNKNOWN],
+    ["Daemon", info.crewd || UNKNOWN],
     ["OS", info.os],
   ];
 }
@@ -311,7 +300,6 @@ function Build({ info }: { info: AppInfo | null }) {
     <section data-setting="build" className="flex flex-col gap-2">
       <Heading
         title="Build"
-        description="Include in bug reports."
         action={
           <span className="flex items-center gap-1 text-[12px] text-text-muted">
             Copy all
@@ -383,11 +371,7 @@ function Changelog({ current }: { current: string | null }) {
               <Collapsible.Trigger className="group flex h-10 w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none hover:bg-hover focus-visible:bg-hover">
                 <ChevronRightIcon className="size-3.5 shrink-0 text-icon transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none" />
                 <span className="font-medium tabular-nums">{release.version}</span>
-                {release.version === current && (
-                  <Chip tone="success" dot={false}>
-                    Installed
-                  </Chip>
-                )}
+                {release.version === current && <span className="text-[12px] text-text-muted">Installed</span>}
                 <span className="ml-auto text-[12px] text-text-muted">{dateLabel(release.date)}</span>
               </Collapsible.Trigger>
               <Collapsible.Panel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 ease-out data-ending-style:h-0 data-starting-style:h-0 motion-reduce:transition-none">
@@ -403,9 +387,7 @@ function Changelog({ current }: { current: string | null }) {
                   {release.notes.map((note) => (
                     <li key={note.text} className="flex items-start gap-2.5">
                       <span className="w-[68px] shrink-0 pt-px">
-                        <Chip tone={KIND[note.kind].tone} dot={false}>
-                          {KIND[note.kind].label}
-                        </Chip>
+                        <span className="text-[12px] text-text-muted">{KIND[note.kind]}</span>
                       </span>
                       <span className="text-text">{note.text}</span>
                     </li>

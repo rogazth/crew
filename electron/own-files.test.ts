@@ -11,7 +11,6 @@ const PATTERN = /\b(homedir|tmpdir)\(\)|getPath\("(home|temp)"\)/;
 
 const ALLOWED: Record<string, string> = {
   "external.ts": "an e2e run's link log, in the sandbox's HOME",
-  "install-cli.ts": "~/.local/bin, where the user's shell finds commands",
   "main.ts": "the layout's folders beside the home, and the home the window shows",
   "ssh-config.ts": "the user's ~/.ssh/config",
   "update.ts": "the downloaded update, before it replaces the app",

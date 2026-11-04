@@ -16,7 +16,6 @@ import {
   Notification,
   session,
   type OpenDialogOptions,
-  type SaveDialogOptions,
 } from "electron";
 import {
   installBrowser,
@@ -33,7 +32,6 @@ import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from ".
 import { LAYOUT_FILE, layoutFor, refusal } from "./layout-plan";
 import { watchOwner } from "./owner";
 import { appName, channelOf } from "./channel";
-import { registerCliIpc } from "./install-cli";
 import { registerLoginItemIpc } from "./login-item";
 import { beginLaunch, SETTLED_MS } from "./launch-guard";
 import { buildMenu } from "./menu";
@@ -184,8 +182,7 @@ function csp(): string {
     // crew-icon: is a connector's logo, from the app's cache (icons.ts).
     "img-src 'self' data: blob: crew-file: crew-icon: https://www.google.com https://*.gstatic.com",
     "font-src 'self' data:",
-    // blob: is a custom notification sound, read by main and played by the window.
-    "media-src 'self' blob:",
+    "media-src 'self'",
     `connect-src ${connect}`,
     "object-src 'none'",
     "base-uri 'self'",
@@ -533,29 +530,6 @@ function registerIpc(): void {
     if (opts.multiple && !opts.directory) return filePaths;
     return filePaths[0] ?? null;
   });
-  // Keybindings travel as a JSON file the user picks: the same native dialogs, filtered to .json.
-  ipcMain.handle("keybindings-import", async (event) => {
-    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
-    if (target && !target.isVisible()) target.show();
-    const options: OpenDialogOptions = { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] };
-    const { canceled, filePaths } = target ? await dialog.showOpenDialog(target, options) : await dialog.showOpenDialog(options);
-    const file = filePaths[0];
-    if (canceled || !file) return null;
-    if (statSync(file).size > 1_000_000) throw new Error("That file is too large to be a keybindings file.");
-    return readFileSync(file, "utf8");
-  });
-  ipcMain.handle("keybindings-export", async (event, text: string) => {
-    const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
-    if (target && !target.isVisible()) target.show();
-    const options: SaveDialogOptions = {
-      defaultPath: "crew-keybindings.json",
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    };
-    const { canceled, filePath } = target ? await dialog.showSaveDialog(target, options) : await dialog.showSaveDialog(options);
-    if (canceled || !filePath) return null;
-    writeFileSync(filePath, String(text));
-    return filePath;
-  });
   ipcMain.handle("home-dir", () => homedir());
   // The window's events: over IPC and not the WebSocket, which may be what is failing.
   // Only the app's own window: a page in a webview has no say in the trace.
@@ -582,7 +556,6 @@ function registerIpc(): void {
   registerBrowserIpc();
   registerFileIpc();
   registerRemoteIpc(daemonInfo, { restart: restartLocalDaemon, logs: localDaemonLogs });
-  registerCliIpc();
   registerLoginItemIpc();
   registerAppInfoIpc();
 }

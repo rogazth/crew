@@ -1,6 +1,6 @@
 // What the Providers page says about each CLI that the machine does not:
-// its name, its maker, and the command each install method runs (the daemon
-// runs the real one; this is the preview shown before it starts).
+// its name, its maker, and the tools it installs with (the daemon runs the
+// real command).
 import type { ProviderJobMethod } from "../../lib/protocol";
 import type { ProviderId } from "../../lib/providers";
 
@@ -50,11 +50,4 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
     blurb: "xAI's coding agent, Grok models",
     install: { script: "curl -fsSL https://x.ai/cli/install.sh | bash" },
   },
-};
-
-export const METHOD_LABELS: Record<ProviderJobMethod, string> = {
-  npm: "npm",
-  brew: "Homebrew",
-  script: "Install script",
-  native: "Built-in",
 };

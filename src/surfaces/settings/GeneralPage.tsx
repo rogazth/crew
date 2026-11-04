@@ -1,17 +1,14 @@
 // General: cards of rows, all on real state. Retention is a setting every machine
-// holds (lib/settingsEngine), Open at login in the app's login item, Reopen in a preference
-// the workspace list reads at launch, and the `crew` command in the app's link.
+// holds (lib/settingsEngine), and Open at login lives in the app's login item.
 import { useState } from "react";
-import { Button, Select } from "../../chrome/kit";
+import { Select } from "../../chrome/kit";
 import * as api from "../../lib/api";
-import { describeCli, type CliResult } from "../../lib/cli";
-import { cliHost, loginItemHost } from "../../lib/host";
+import { loginItemHost } from "../../lib/host";
 import { RETENTION_CHOICES, retention as retentionSetting, type Retention } from "../../lib/retention";
 import { setSetting, useSetting, useSettingsSync } from "../../lib/settingsEngine/store";
 import { syncLine } from "../../lib/settingsEngine/syncLine";
 import { READS, keep, useRead } from "../../lib/settingsReads";
-import { reopenSetting } from "../../lib/startup";
-import { Chip, ConfirmDialog, CopyButton, Group, Row, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
+import { ConfirmDialog, Group, Row, SettingsPage, ToggleRow, toast, type ConfirmAsk } from "./ui";
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -29,16 +26,10 @@ const saveRetention = async (next: Retention) => {
   }
 };
 
-const saveReopen = (next: boolean) =>
-  setSetting(reopenSetting, next).catch(
-    (error: unknown) => toast(`Could not save: ${reason(error)}`, "danger"),
-  );
-
 export function GeneralPage() {
   // Read ahead as Settings opened (lib/settingsReads), so the page paints with what is saved.
   const retention = useSetting(retentionSetting);
   const sync = syncLine(useSettingsSync());
-  const reopen = useSetting(reopenSetting);
   const login = useRead(READS.login) ?? null;
   const [ask, setAsk] = useState<ConfirmAsk | null>(null);
 
@@ -51,7 +42,7 @@ export function GeneralPage() {
     const sessions = stale === 1 ? "1 session" : `${stale} sessions`;
     setAsk({
       title: `Delete ${sessions}?`,
-      description: `Deletes ${sessions} idle over ${days} days, and others as they age. Provider history is kept.`,
+      description: `Deletes ${sessions} idle over ${days} days, and others as they age.`,
       action: "Delete",
       onConfirm: () => void saveRetention(next),
     });
@@ -60,11 +51,7 @@ export function GeneralPage() {
   return (
     <SettingsPage title="General">
       <Group title="Sessions" {...(sync ? { description: sync } : {})}>
-        <Row
-          id="retention"
-          label="Delete inactive sessions"
-          description="Bots, and working, unread, open and scheduled sessions, are kept."
-        >
+        <Row id="retention" label="Delete inactive sessions">
           <Select<Retention>
             label="Delete inactive sessions"
             className="w-40"
@@ -75,8 +62,8 @@ export function GeneralPage() {
         </Row>
       </Group>
 
-      <Group title="Startup">
-        {login?.supported && (
+      {login?.supported && (
+        <Group title="Startup">
           <ToggleRow
             id="login"
             label="Open at login"
@@ -84,86 +71,10 @@ export function GeneralPage() {
             checked={login.enabled}
             onChange={(next) => void saveLogin(next)}
           />
-        )}
-        <ToggleRow
-          id="reopen"
-          label="Reopen where you left off"
-          description="Restore your last workspace and tabs. Off starts at Home."
-          checked={reopen}
-          onChange={(next) => void saveReopen(next)}
-        />
-      </Group>
-
-      <CommandLine />
+        </Group>
+      )}
 
       <ConfirmDialog ask={ask} onClose={() => setAsk(null)} />
     </SettingsPage>
-  );
-}
-
-/** The `crew` command for the user's own terminal. Only in the app: a browser has no PATH to link into. */
-function CommandLine() {
-  const host = cliHost();
-  const status = useRead(READS.cli) ?? null;
-  const home = useRead(READS.home) ?? "";
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!host || !status) return null;
-  const act = (run: () => Promise<CliResult>) => {
-    setBusy(true);
-    setError(null);
-    run()
-      .then((result) => {
-        keep(READS.cli, result.status);
-        setError(result.error ?? null);
-      })
-      .catch((failure: unknown) => setError(reason(failure)))
-      .finally(() => setBusy(false));
-  };
-
-  const installed = status.state === "installed";
-  const shown = installed && home && status.link.startsWith(`${home}/`) ? `~${status.link.slice(home.length)}` : null;
-  return (
-    <Group title="Command line">
-      <Row
-        id="crew-command"
-        label={
-          <span className="flex items-center gap-2">
-            <span className="font-mono text-[12px]">crew</span> command
-            {installed && <Chip tone={status.onPath ? "success" : "warning"}>{status.onPath ? "Installed" : "Not on your PATH"}</Chip>}
-            {status.state === "unavailable" && <Chip tone="neutral">Unavailable</Chip>}
-          </span>
-        }
-        description={
-          error ? (
-            <span className="text-danger">{error}</span>
-          ) : installed ? (
-            <span className="flex flex-wrap items-center gap-x-1">
-              Linked at <span className="font-mono">{shown ?? status.link}</span>
-              <CopyButton text={status.link} label="Copy path" className="size-5" />
-              {!status.onPath && <span className="basis-full">Not on your PATH yet. Add it to run crew by name.</span>}
-            </span>
-          ) : (
-            describeCli(status)
-          )
-        }
-      >
-        {installed ? (
-          <Button variant="ghost" loading={busy} onClick={() => act(() => host.uninstall())}>
-            Uninstall
-          </Button>
-        ) : (
-          <Button
-            variant="secondary"
-            loading={busy}
-            disabled={status.state === "unavailable"}
-            onClick={() => act(() => host.install())}
-          >
-            Install
-          </Button>
-        )}
-      </Row>
-    </Group>
   );
 }

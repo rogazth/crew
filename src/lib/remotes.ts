@@ -30,6 +30,8 @@ export type InstallInput = {
   name: string;
   /** What `ssh` is given: a Host from ~/.ssh/config, a tailnet IP, or a name. */
   ssh: string;
+  /** The device's address on the tailnet, where crewd will listen. */
+  tailnetIp?: string;
   /** Empty to let ~/.ssh/config (or the Mac's login) pick it. */
   user: string;
   /** The port crewd listens on (the proxy takes the next one). */
@@ -67,8 +69,8 @@ export const INSTALL_JOB = "install";
 export const INSTALL_STEPS: { id: InstallStepId; label: string }[] = [
   { id: "reach", label: "Reach the machine" },
   { id: "ssh", label: "Sign in over SSH" },
-  { id: "existing", label: "Look for an existing crewd" },
-  { id: "upload", label: "Upload crewd" },
+  { id: "existing", label: "Look for an existing install" },
+  { id: "upload", label: "Install" },
   { id: "service", label: "Start the service" },
   { id: "pair", label: "Pair" },
   { id: "clis", label: "Look for agent CLIs" },
@@ -95,9 +97,6 @@ export const DEFAULT_PORT = 17877;
 export function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 }
-
-/** The state key of "Update machines automatically": on unless it says "off". */
-export const AUTO_UPDATE = "remote:auto-update";
 
 /**
  * A machine whose crewd is behind this Mac's, as main's updater holds it:

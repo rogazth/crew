@@ -178,12 +178,14 @@ export function Select<T extends string>({
   label,
   className = "w-44",
   variant = "field",
+  disabled = false,
 }: {
   value: T;
   options: Option<T>[];
   onChange: (value: T) => void;
   label: string;
   className?: string;
+  disabled?: boolean;
   /** "row": the value at a row's right end (ROW_VALUE), its list as wide as it needs. "token": a word in a sentence (TOKEN). */
   variant?: "field" | "row" | "token";
 }) {
@@ -191,10 +193,10 @@ export function Select<T extends string>({
   const row = variant === "row";
   const token = variant === "token";
   return (
-    <BaseSelect.Root value={value} onValueChange={(next) => next !== null && onChange(next as T)}>
+    <BaseSelect.Root value={value} disabled={disabled} onValueChange={(next) => next !== null && onChange(next as T)}>
       <BaseSelect.Trigger
         aria-label={label}
-        className={token ? TOKEN : row ? ROW_VALUE : `${TRIGGER} ${className}`}
+        className={`${token ? TOKEN : row ? ROW_VALUE : `${TRIGGER} ${className}`} data-[disabled]:opacity-50`}
       >
         {current?.icon}
         <span className={row || token ? "truncate" : "min-w-0 flex-1 truncate"}>{current?.label ?? ""}</span>

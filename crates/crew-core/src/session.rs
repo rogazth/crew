@@ -884,12 +884,69 @@ pub fn retention_to_act_on(store: &Store) -> Result<Option<u32>, String> {
     }
 }
 
-/// Where Settings keeps whether every session runs without asking, whatever
-/// its own autonomy says. Only "on" turns it on.
-pub const BYPASS_KEY: &str = "sessions:bypass-permissions";
+/// Where Settings keeps the access every session and bot runs with. Setting it
+/// applies it to all of them; a session changed afterwards keeps its own until
+/// the next time it is set.
+pub const ACCESS_KEY: &str = "sessions:access";
 
-pub fn bypass_permissions(store: &Store) -> bool {
-    crate::settings::get(store, BYPASS_KEY).ok().flatten().is_some_and(|raw| raw.trim() == "on")
+/// The old switch that overrode every session's access. `bypass_to_access` retires it.
+const BYPASS_KEY: &str = "sessions:bypass-permissions";
+
+/// `level` where this CLI has it, else ask. The same table as `access` in src/lib/providers.ts.
+fn fitted_access<'a>(provider: &str, level: &'a str) -> &'a str {
+    let has = match provider {
+        "claude" | "grok" => AUTONOMIES.contains(&level),
+        "codex" | "cursor" => matches!(level, "ask" | "auto" | "full"),
+        "opencode" => matches!(level, "ask" | "full"),
+        _ => false,
+    };
+    if has {
+        level
+    } else {
+        "ask"
+    }
+}
+
+/// Gives every session and bot `level`, as far as its CLI has it, and returns
+/// the ones that changed. Being given access is not activity: `updated_at` stays,
+/// or an idle session would outlive what Delete inactive sessions promises.
+pub fn set_access_everywhere(store: &Store, level: &str) -> Result<Vec<Session>, String> {
+    let level = autonomy_or_default(level.to_string());
+    let moved: Vec<(String, String)> = list_all(store)?
+        .into_iter()
+        .filter_map(|session| {
+            let fitted = fitted_access(&session.provider, &level);
+            (session.autonomy != fitted).then(|| (session.id, fitted.to_string()))
+        })
+        .collect();
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        for (id, autonomy) in &moved {
+            tx.execute(
+                "UPDATE bots SET autonomy = ?2 WHERE id = (SELECT bot_id FROM sessions WHERE id = ?1)",
+                params![id, autonomy],
+            )?;
+            tx.execute("UPDATE sessions SET autonomy = ?2 WHERE id = ?1", params![id, autonomy])?;
+        }
+        tx.commit()
+    })?;
+    let mut changed = Vec::with_capacity(moved.len());
+    for (id, _) in moved {
+        changed.extend(get(store, id)?);
+    }
+    Ok(changed)
+}
+
+/// Whoever had the old switch on keeps running without asking: it becomes full
+/// access for everything that exists, and the choice in Settings.
+pub fn bypass_to_access(store: &Store) -> Result<(), String> {
+    if crate::settings::get(store, BYPASS_KEY)?.is_none_or(|raw| raw.trim() != "on") {
+        return Ok(());
+    }
+    crate::settings::set(store, ACCESS_KEY, Some("full"), crate::settings::GLOBAL)?;
+    set_access_everywhere(store, "full")?;
+    crate::settings::set(store, BYPASS_KEY, None, crate::settings::GLOBAL)?;
+    Ok(())
 }
 
 /// The sessions last touched before `before`, less the ones deleting would
@@ -1300,13 +1357,43 @@ mod tests {
     }
 
     #[test]
-    fn bypass_is_on_only_when_it_says_on() {
-        let (store, _) = world();
-        assert!(!bypass_permissions(&store));
-        for (raw, on) in [("on", true), (" on ", true), ("off", false), ("true", false), ("", false)] {
-            crate::settings::set(&store, BYPASS_KEY, Some(raw), crate::settings::GLOBAL).expect("set");
-            assert_eq!(bypass_permissions(&store), on, "{raw}");
-        }
+    fn access_reaches_every_session_as_far_as_its_cli_has_it_and_is_not_activity() {
+        let (store, ws) = world();
+        let make = |kind: &str, provider: &str| {
+            create(&store, ws.clone(), kind.into(), provider.into(), provider.into(), "m".into(), "".into(), "ask".into())
+                .expect("session")
+        };
+        let claude = make("terminal", "claude");
+        let opencode = make("terminal", "opencode");
+        let bot = make("bot", "cursor");
+        age(&store, &claude.id, 1000);
+
+        let changed = set_access_everywhere(&store, "auto").expect("set");
+        let ids: Vec<&str> = changed.iter().map(|row| row.id.as_str()).collect();
+        assert!(ids.contains(&claude.id.as_str()) && ids.contains(&bot.id.as_str()), "{ids:?}");
+        assert!(!ids.contains(&opencode.id.as_str()), "opencode has no auto: it stays on ask");
+        let read = |id: &str| get(&store, id.to_string()).unwrap().unwrap();
+        assert_eq!(read(&claude.id).autonomy, "auto");
+        assert_eq!(read(&opencode.id).autonomy, "ask");
+        assert_eq!(read(&bot.id).autonomy, "auto", "a bot's own access moves too");
+        assert_eq!(read(&claude.id).updated_at, 1000);
+
+        assert!(set_access_everywhere(&store, "auto").expect("again").is_empty(), "nothing left to change");
+    }
+
+    #[test]
+    fn the_old_bypass_switch_becomes_full_access_once() {
+        let (store, ws) = world();
+        let asker = create(&store, ws, "terminal".into(), "A".into(), "claude".into(), "m".into(), "".into(), "ask".into())
+            .expect("session");
+        bypass_to_access(&store).expect("off: nothing to do");
+        assert_eq!(get(&store, asker.id.clone()).unwrap().unwrap().autonomy, "ask");
+
+        crate::settings::set(&store, BYPASS_KEY, Some("on"), crate::settings::GLOBAL).expect("set");
+        bypass_to_access(&store).expect("migrate");
+        assert_eq!(get(&store, asker.id.clone()).unwrap().unwrap().autonomy, "full");
+        assert_eq!(crate::settings::get(&store, ACCESS_KEY).unwrap().as_deref(), Some("full"));
+        assert_eq!(crate::settings::get(&store, BYPASS_KEY).unwrap(), None);
     }
 
     #[test]

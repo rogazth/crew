@@ -1,11 +1,11 @@
 import { Slider } from "@base-ui/react/slider";
-import { PlayIcon, XIcon } from "lucide-react";
+import { BellOffIcon } from "lucide-react";
 import { useState } from "react";
-import { Button, IconButton, Select, Switch, Toggle } from "../chrome/kit";
+import { Button, Select, Switch, Toggle } from "../chrome/kit";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useNow } from "../hooks/useNow";
 import { useNotificationPrefs } from "../hooks/useNotificationPrefs";
-import { notificationsHost, open } from "../lib/host";
+import { notificationsHost } from "../lib/host";
 import {
   isPaused,
   NOTIFICATION_KINDS,
@@ -16,13 +16,13 @@ import {
   type SoundId,
 } from "../lib/notificationPrefs";
 import { dispatchNotification, type SkipReason } from "../lib/notifications";
-import { forgetCustomSound, playSound } from "../lib/notificationSound";
-import { isSoundFile } from "../lib/notify";
+import { playSound } from "../lib/notificationSound";
 import { READS, refresh, useRead } from "../lib/settingsReads";
 import { clock, dayName } from "../lib/time";
+import { Callout, toast } from "./settings/ui";
 
 const TEST_REASONS: Partial<Record<SkipReason, string>> = {
-  blocked: "Not shown: notifications are off for Crew.",
+  blocked: "Notifications are blocked.",
   unsupported: "This system shows no notifications.",
 };
 
@@ -31,31 +31,37 @@ const rereadBanners = () => void refresh(READS.banners);
 export function NotificationSettings() {
   const { prefs, update } = useNotificationPrefs();
   const status = useRead(READS.banners) ?? "unknown";
-  const [tested, setTested] = useState<string | null>(null);
   const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => update({ ...prefs, [key]: value });
   const setKind = (kind: NotificationKind, change: Partial<NotificationPrefs["kinds"][NotificationKind]>) =>
     set("kinds", { ...prefs.kinds, [kind]: { ...prefs.kinds[kind], ...change } });
 
   const test = () => {
-    setTested(null);
     void dispatchNotification({ source: "test", title: "Crew", body: "Notifications are working." }).then((result) => {
-      setTested(result.delivered ? "Sent. No banner? Check Focus and System Settings." : (TEST_REASONS[result.reason] ?? null));
+      const failed = result.delivered ? undefined : TEST_REASONS[result.reason];
+      if (result.delivered) toast("Sent. No banner? Check Focus and system settings.");
+      else if (failed) toast(failed, "danger");
       rereadBanners();
     });
   };
 
   return (
     <>
+      {status === "blocked" && <Blocked />}
       <SettingsSection>
         <Toggle
           label="Notifications"
-          description="When a session finishes, asks or fails."
+          description="Turn all app notifications on or off."
           checked={prefs.enabled}
           onChange={(checked) => set("enabled", checked)}
         />
+        <Toggle
+          label="Show toasts"
+          description="Alerts inside the app, for other sessions."
+          checked={prefs.toasts}
+          onChange={(checked) => set("toasts", checked)}
+        />
         <DoNotDisturb prefs={prefs} onChange={(until) => set("pausedUntil", until)} />
-        {status === "blocked" && <Blocked />}
-        <SettingsRow label="Test" description={tested ?? "Sends a banner with the Needs input sound."}>
+        <SettingsRow label="Test" description="Send a sample notification.">
           <Button className="h-7 text-[12px]" onClick={test}>
             Send test
           </Button>
@@ -71,60 +77,40 @@ export function NotificationSettings() {
                 <SoundPicker
                   label={`${kind.label} sound`}
                   value={own.sound}
-                  prefs={prefs}
+                  volume={prefs.volume}
+                  disabled={!own.enabled}
                   onChange={(sound) => setKind(kind.id, { sound })}
                 />
-                <span className="ml-2 text-[12px] text-text-muted" aria-hidden>
-                  Banner
-                </span>
-                <Switch
-                  label={`${kind.label} banner`}
-                  checked={own.banner}
-                  onChange={(banner) => setKind(kind.id, { banner })}
-                />
+                <div className="ml-4 flex">
+                  <Switch
+                    label={kind.label}
+                    checked={own.enabled}
+                    onChange={(enabled) => setKind(kind.id, { enabled })}
+                  />
+                </div>
               </SettingsRow>
             );
           })}
         </SettingsSection>
 
         <SettingsSection title="Sound">
-          <SettingsRow id="notif-sound" label="Volume" description="Crew's sounds. System uses the Mac's alert volume.">
-            <Volume value={prefs.volume} onCommit={(volume) => set("volume", volume)} preview={prefs.kinds["needs-input"].sound} prefs={prefs} />
+          <SettingsRow id="notif-sound" label="Volume" description="Doesn't affect the System sound.">
+            <Volume value={prefs.volume} onCommit={(volume) => set("volume", volume)} preview={prefs.kinds["needs-input"].sound} />
           </SettingsRow>
-          <CustomSound path={prefs.customSound} onChange={(path) => set("customSound", path)} volume={prefs.volume} />
-        </SettingsSection>
-
-        <SettingsSection title="While Crew is in front">
-          <Toggle
-            label="Banners only when Crew is in the background"
-            description={
-              prefs.onlyWhenUnfocused
-                ? "With Crew in front, updates show in the window."
-                : "Banners for any session but the one on screen."
-            }
-            checked={prefs.onlyWhenUnfocused}
-            onChange={(checked) => set("onlyWhenUnfocused", checked)}
-          />
-          <Toggle
-            label="Show toasts"
-            description="News of other sessions, in the corner."
-            checked={prefs.toasts}
-            onChange={(checked) => set("toasts", checked)}
-          />
         </SettingsSection>
 
         <SettingsSection title="Dock">
           <div data-setting="notify-needs-you">
             <Toggle
               label="Badge"
-              description="Sessions that finished or asked while you were away."
+              description="Count waiting sessions on the Dock icon."
               checked={prefs.badge}
               onChange={(checked) => set("badge", checked)}
             />
           </div>
           <Toggle
             label="Bounce"
-            description="Bounce once when the badge goes up."
+            description="Bounce the Dock icon when a session needs you."
             checked={prefs.bounce}
             onChange={(checked) => set("bounce", checked)}
           />
@@ -142,7 +128,7 @@ function DoNotDisturb({ prefs, onChange }: { prefs: NotificationPrefs; onChange:
   return (
     <SettingsRow
       label="Do not disturb"
-      description={paused ? `Paused until ${when}.` : "No banners or sounds for a while."}
+      description={paused ? `Paused until ${when}.` : "Pause notifications for a while."}
     >
       {paused ? (
         <Button className="h-7 text-[12px]" onClick={() => onChange(null)}>
@@ -166,53 +152,47 @@ function DoNotDisturb({ prefs, onChange }: { prefs: NotificationPrefs; onChange:
 function Blocked() {
   const host = notificationsHost();
   return (
-    <SettingsRow
-      label="Banners are blocked"
-      description={
-        host
-          ? "Off for Crew in macOS. Sounds still play."
-          : "Blocked by this browser. Sounds still play."
+    <Callout
+      tone="warning"
+      icon={BellOffIcon}
+      title="Allow notifications"
+      description={host ? undefined : "In your browser's site settings."}
+      action={
+        host && (
+          <Button className="h-7 text-[12px]" onClick={() => void host.openSettings()}>
+            Open system settings
+          </Button>
+        )
       }
-    >
-      {host && (
-        <Button className="h-7 text-[12px]" onClick={() => void host.openSettings()}>
-          Open System Settings
-        </Button>
-      )}
-    </SettingsRow>
+    />
   );
 }
 
 function SoundPicker({
   label,
   value,
-  prefs,
+  volume,
+  disabled,
   onChange,
 }: {
   label: string;
   value: SoundId;
-  prefs: NotificationPrefs;
+  volume: number;
+  disabled: boolean;
   onChange: (sound: SoundId) => void;
 }) {
-  const options = SOUNDS.filter((sound) => sound.id !== "custom" || prefs.customSound || value === "custom");
-  const silent = value === "none" || (value === "custom" && !prefs.customSound);
   return (
-    <>
-      <Select
-        label={label}
-        className="w-28"
-        value={value}
-        onChange={onChange}
-        options={options.map((sound) => ({ value: sound.id, label: sound.label }))}
-      />
-      <IconButton
-        icon={PlayIcon}
-        label={`Preview ${label.toLowerCase()}`}
-        className="size-7"
-        disabled={silent}
-        onClick={() => void playSound(value, Math.max(prefs.volume, 1), prefs.customSound)}
-      />
-    </>
+    <Select
+      label={label}
+      className="w-28"
+      value={value}
+      disabled={disabled}
+      onChange={(sound) => {
+        onChange(sound);
+        void playSound(sound, Math.max(volume, 1));
+      }}
+      options={SOUNDS.map((sound) => ({ value: sound.id, label: sound.label }))}
+    />
   );
 }
 
@@ -221,12 +201,10 @@ function Volume({
   value,
   onCommit,
   preview,
-  prefs,
 }: {
   value: number;
   onCommit: (value: number) => void;
   preview: SoundId;
-  prefs: NotificationPrefs;
 }) {
   const [dragging, setDragging] = useState<number | null>(null);
   const shown = dragging ?? value;
@@ -241,7 +219,7 @@ function Volume({
         onValueCommitted={(next) => {
           setDragging(null);
           onCommit(next);
-          if (preview !== "system") void playSound(preview, next, prefs.customSound);
+          if (preview !== "system") void playSound(preview, next);
         }}
         className="w-40"
       >
@@ -257,55 +235,5 @@ function Volume({
       </Slider.Root>
       <span className="w-9 text-right text-[12px] text-text-muted tabular-nums">{shown}%</span>
     </div>
-  );
-}
-
-function CustomSound({
-  path,
-  onChange,
-  volume,
-}: {
-  path: string | null;
-  onChange: (path: string | null) => void;
-  volume: number;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const choose = () => {
-    void open({}).then((picked) => {
-      if (typeof picked !== "string") return;
-      if (!isSoundFile(picked)) {
-        setError("Unsupported file. Use WAV, MP3, M4A, AIFF, OGG or FLAC.");
-        return;
-      }
-      setError(null);
-      if (path) forgetCustomSound(path);
-      forgetCustomSound(picked);
-      onChange(picked);
-    });
-  };
-  const name = path?.split("/").pop();
-  return (
-    <SettingsRow
-      label="Custom sound"
-      description={error ?? (name ? `${name}, for any event set to Custom.` : "Your own audio file, for events set to Custom.")}
-    >
-      {path && (
-        <>
-          <IconButton icon={PlayIcon} label="Preview custom sound" className="size-7" onClick={() => void playSound("custom", Math.max(volume, 1), path)} />
-          <IconButton
-            icon={XIcon}
-            label="Remove custom sound"
-            className="size-7"
-            onClick={() => {
-              forgetCustomSound(path);
-              onChange(null);
-            }}
-          />
-        </>
-      )}
-      <Button className="h-7 text-[12px]" onClick={choose}>
-        Choose…
-      </Button>
-    </SettingsRow>
   );
 }

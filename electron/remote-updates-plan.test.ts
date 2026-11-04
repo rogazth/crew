@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decide, FRESH, IDLE_FOR_MS, RETRY_AFTER_MS, type Look } from "./remote-updates-plan";
 
-const look = (over: Partial<Look> = {}): Look => ({ version: "0.3.12", agentsRunning: 0, target: "0.3.29", auto: true, now: 1_000_000, ...over });
+const look = (over: Partial<Look> = {}): Look => ({ version: "0.3.12", agentsRunning: 0, target: "0.3.29", now: 1_000_000, ...over });
 
 describe("remote updates", () => {
   it("leaves a machine that is up to date, or newer, alone", () => {
@@ -16,14 +16,10 @@ describe("remote updates", () => {
     expect(memory.queued).toBe(false);
   });
 
-  it("does nothing on its own with the setting off", () => {
-    expect(decide(look({ auto: false }), FRESH).action).toBe("none");
-  });
-
   // Updating stops crewd, and every turn running there with it.
   it("waits while a session works there", () => {
     expect(decide(look({ agentsRunning: 2 }), FRESH).action).toBe("wait");
-    expect(decide(look({ agentsRunning: 1, auto: false }), { ...FRESH, queued: true }).action).toBe("wait");
+    expect(decide(look({ agentsRunning: 1 }), { ...FRESH, queued: true }).action).toBe("wait");
   });
 
   it("updates on its own only once the machine stayed idle a while", () => {
@@ -41,7 +37,7 @@ describe("remote updates", () => {
   });
 
   it("updates as soon as the last session is done when the user asked for it", () => {
-    expect(decide(look({ auto: false }), { ...FRESH, queued: true }).action).toBe("update");
+    expect(decide(look(), { ...FRESH, queued: true }).action).toBe("update");
   });
 
   it("holds back a version that failed or was cancelled, then tries it again", () => {

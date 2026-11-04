@@ -272,14 +272,14 @@ export async function connectAgent(options: Options, sys: System = system): Prom
       const next = await fresh(old);
       if (!next) {
         trace.error("daemon.did_not_come_up", { waited_s: ms.start / 1000 });
-        throw new Error(`crewd did not come up within ${ms.start / 1000} s.\nLog: ${log}`);
+        throw new Error(`Crew's background service did not start within ${ms.start / 1000} s.\nLog: ${log}`);
       }
       found = next;
     }
     if (found.kind === "ready") return found.file;
     const running = "file" in found ? found.file.version : "?";
     trace.error("daemon.version_mismatch", { running, wanted: version });
-    throw new Error(`crewd ${running} is running, but this Crew is ${version}.\nLog: ${log}`);
+    throw new Error(`Crew's background service is on ${running}, but this Crew is ${version}.\nLog: ${log}`);
   };
 
   // While the app is open it wants a daemon: one that crashed is back as soon
@@ -339,7 +339,7 @@ export async function connectAgent(options: Options, sys: System = system): Prom
       // A tick in flight may be in launchctl too; let it finish first.
       await tick;
       await start(true);
-      if (!(await fresh(current))) throw new Error(`crewd did not come up within ${ms.start / 1000} s.\nLog: ${log}`);
+      if (!(await fresh(current))) throw new Error(`Crew's background service did not start within ${ms.start / 1000} s.\nLog: ${log}`);
     },
     logs: (lines) => tailLog(log, lines),
     shutdown: async () => {

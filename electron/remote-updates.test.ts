@@ -8,7 +8,7 @@ vi.mock("./trace", async () => (await import("./trace-recorder")).mockedTrace())
 
 const devbox = { id: "m1", name: "devbox", host: "100.102.48.125", port: 17877, user: "agent", ssh: "" } as RemoteEnv;
 
-function harness(seen: { version: string; agentsRunning: number }, auto = true) {
+function harness(seen: { version: string; agentsRunning: number }) {
   const published: Record<string, RemoteUpdateState>[] = [];
   const finished: RemoteUpdateResult[] = [];
   const update = vi.fn(async () => ({ warning: null }));
@@ -16,7 +16,6 @@ function harness(seen: { version: string; agentsRunning: number }, auto = true) 
     machines: async () => [devbox],
     peek: async () => seen,
     target: async () => "0.3.29",
-    auto: async () => auto,
     busy: () => false,
     update,
     publish: (states) => published.push(states),
@@ -27,7 +26,7 @@ function harness(seen: { version: string; agentsRunning: number }, auto = true) 
 
 describe("remote updater", () => {
   it("waits for the sessions, then runs the update the user queued", async () => {
-    const run = harness({ version: "0.3.12", agentsRunning: 2 }, false);
+    const run = harness({ version: "0.3.12", agentsRunning: 2 });
     await run.updater.queue("m1");
     expect(run.update).not.toHaveBeenCalled();
     expect(run.updater.states().m1).toEqual({ state: "waiting", version: "0.3.29", queued: true, agentsRunning: 2 });
@@ -35,13 +34,6 @@ describe("remote updater", () => {
     await run.updater.look();
     expect(run.update).toHaveBeenCalledOnce();
     expect(run.finished).toEqual([{ id: "m1", name: "devbox", version: "0.3.29", ok: true, message: null }]);
-    expect(run.updater.states()).toEqual({});
-  });
-
-  it("does not update on its own with the setting off", async () => {
-    const run = harness({ version: "0.3.12", agentsRunning: 0 }, false);
-    await run.updater.look();
-    expect(run.update).not.toHaveBeenCalled();
     expect(run.updater.states()).toEqual({});
   });
 
@@ -56,7 +48,7 @@ describe("remote updater", () => {
   });
 
   it("says a failed update failed and does not retry it at once", async () => {
-    const run = harness({ version: "0.3.12", agentsRunning: 0 }, false);
+    const run = harness({ version: "0.3.12", agentsRunning: 0 });
     run.update.mockRejectedValueOnce(new Error("Could not reach 100.102.48.125"));
     await run.updater.queue("m1");
     expect(run.finished[0]).toMatchObject({ ok: false, message: "Could not reach 100.102.48.125" });
@@ -67,7 +59,7 @@ describe("remote updater", () => {
   describe("its trace", () => {
     it("says each decision once with the machine's id and never its name or address", async () => {
       lines.length = 0;
-      const run = harness({ version: "0.3.12", agentsRunning: 2 }, false);
+      const run = harness({ version: "0.3.12", agentsRunning: 2 });
       await run.updater.queue("m1");
       await run.updater.look();
       expect(named("update.queued")).toHaveLength(1);
@@ -87,7 +79,7 @@ describe("remote updater", () => {
       await run.updater.look();
       run.updater.cancel("m1");
       expect(named("update.cancelled")).toHaveLength(1);
-      const failing = harness({ version: "0.3.12", agentsRunning: 0 }, false);
+      const failing = harness({ version: "0.3.12", agentsRunning: 0 });
       failing.update.mockRejectedValueOnce(new Error('invalid type: string "hunter2", expected u32\nmore'));
       await failing.updater.queue("m1");
       const failed = named("update.failed")[0];
@@ -100,7 +92,6 @@ describe("remote updater", () => {
         machines: async () => [devbox],
         peek: async () => ({ version: "0.3.12", agentsRunning: 0 }),
         target: async () => "0.3.29",
-        auto: async () => true,
         busy: () => busy,
         update: async () => ({ warning: null }),
         publish: () => {},

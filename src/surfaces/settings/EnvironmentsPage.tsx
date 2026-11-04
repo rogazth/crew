@@ -5,15 +5,13 @@
 // daemon's own samples.
 import { Menu } from "@base-ui/react/menu";
 import {
-  ArrowRightIcon,
   ArrowUpCircleIcon,
   BotIcon,
-  ChevronRightIcon,
   CircleAlertIcon,
   CopyIcon,
   EllipsisIcon,
   FolderOpenIcon,
-  HourglassIcon,
+  LoaderCircleIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -26,24 +24,22 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { EnvGlyph } from "../../chrome/EnvBits";
-import { Alert, Button, Field, Footer, IconButton, Overlay, PANEL, ROW, Switch, TextInput } from "../../chrome/kit";
-import { ProviderIcon } from "../../chrome/ProviderIcon";
+import { Alert, Button, Field, Footer, IconButton, Overlay, PANEL, ROW, Switch, TextInput, Tooltip } from "../../chrome/kit";
 import { useEnvLinks } from "../../hooks/useEnvLinks";
 import { useMachineMetrics } from "../../hooks/useMachineMetrics";
 import * as api from "../../lib/api";
 import { LOCAL, envOf, reconnect, refreshRemotes, type EnvLink } from "../../lib/client/registry";
 import { whereOf } from "../../lib/envText";
-import { remotesHost } from "../../lib/host";
-import { PROVIDERS } from "../../lib/providers";
+import { openUrl, remotesHost } from "../../lib/host";
 import type { MachineSample } from "../../lib/protocol";
-import { INSTALL_STEPS, compareVersions, errorText as message, type RemoteUpdateState, type Tailnet } from "../../lib/remotes";
-import { openWorkspaceOn, subscribeAdd, takeAddRequest, autoUpdateSetting, wakeSetting, warnRelaySetting } from "../../lib/remoteUi";
-import { saveSetting, useSetting } from "../../lib/settingsEngine/store";
+import { compareVersions, errorText as message, type RemoteUpdateState, type Tailnet } from "../../lib/remotes";
+import { openWorkspaceOn, subscribeAdd, takeAddRequest } from "../../lib/remoteUi";
 import { READS, keep, useKept } from "../../lib/settingsReads";
 import type { Workspace } from "../../lib/types";
-import { AddMachineFlow } from "./AddMachineFlow";
+import { AddMachineFlow, TAILSCALE_DOWNLOAD } from "./AddMachineFlow";
 import { manageProviders } from "./route";
-import { Callout, Chip, Group, Row, SettingsPage, ToggleRow, toast, type Tone } from "./ui";
+import { RowAction } from "./integrations/bits";
+import { Chip, Group, Row, SettingsPage, toast, type Tone } from "./ui";
 
 type Props = {
   workspaces: Workspace[];
@@ -51,8 +47,7 @@ type Props = {
 };
 
 /** A daemon job running from a card's menu, shown on the card until it ends. */
-type Busy = { label: string; step: string | null };
-type Notice = { tone: "error" | "info"; text: string };
+type Busy = { label: string };
 
 export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   const links = useEnvLinks();
@@ -63,15 +58,10 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   const kept = useKept(READS.tailnet) ?? null;
   const [failed, setFailed] = useState<Tailnet | null>(null);
   const tailnet = failed ?? kept;
-  const warnRelay = useSetting(warnRelaySetting);
-  const wake = useSetting(wakeSetting);
-  const autoUpdate = useSetting(autoUpdateSetting);
   const [busy, setBusy] = useState<Record<string, Busy>>({});
-  /** Updates main's updater waits on or runs, and the step each running one is on. */
+  /** Updates main's updater waits on or runs. */
   const [pending, setPending] = useState<Record<string, RemoteUpdateState>>({});
-  const [autoSteps, setAutoSteps] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState<{ link: EnvLink; working: number } | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [editing, setEditing] = useState<EnvLink | null>(null);
   const [removing, setRemoving] = useState<EnvLink | null>(null);
   const [logs, setLogs] = useState<EnvLink | null>(null);
@@ -87,28 +77,16 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
     );
   }, [host]);
   useEffect(readTailnet, [readTailnet]);
-
-  // An update's progress comes in step by step; the card says which one it is on.
+  // Back from installing or signing in to Tailscale, the page already knows.
   useEffect(() => {
-    if (!host) return;
-    return host.onProgress((step) => {
-      const label = INSTALL_STEPS.find((item) => item.id === step.id)?.label ?? null;
-      setBusy((current) => {
-        const job = current[step.job];
-        if (!job) return current;
-        return { ...current, [step.job]: { ...job, step: step.state === "running" ? label : job.step } };
-      });
-      // One main started on its own has no job here: its steps are kept beside it.
-      if (step.state === "running" && label) setAutoSteps((current) => ({ ...current, [step.job]: label }));
-    });
-  }, [host]);
+    window.addEventListener("focus", readTailnet);
+    return () => window.removeEventListener("focus", readTailnet);
+  }, [readTailnet]);
 
   useEffect(() => {
     if (!host) return;
     const take = (states: Record<string, RemoteUpdateState>) => {
       setPending(states);
-      // The next update starts with no step shown, not the last one's.
-      setAutoSteps((current) => Object.fromEntries(Object.entries(current).filter(([id]) => states[id]?.state === "updating")));
     };
     void host.updateStates().then(take, () => {});
     return host.onUpdateStates(take);
@@ -118,15 +96,14 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
   const remotes = links.filter((link) => link.id !== LOCAL);
   const count = (envId: string) => workspaces.filter((workspace) => envOf(workspace.id) === envId).length;
   const relayed = (link: EnvLink) =>
-    warnRelay && tailnet?.devices.some((device) => device.ip === link.host && device.relay) === true;
+    tailnet?.devices.some((device) => device.ip === link.host && device.relay) === true;
 
   async function run(link: EnvLink, label: string, work: () => Promise<unknown>) {
-    setNotice(null);
-    setBusy((current) => ({ ...current, [link.id]: { label, step: null } }));
+    setBusy((current) => ({ ...current, [link.id]: { label } }));
     try {
       await work();
     } catch (reason) {
-      setNotice({ tone: "error", text: `${link.name}: ${message(reason)}` });
+      toast(`${link.name}: ${message(reason)}`, "danger");
     } finally {
       setBusy((current) => {
         const next = { ...current };
@@ -138,21 +115,22 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
 
   /** Asks first when sessions are working there: the update breaks off their turns. */
   async function update(link: EnvLink) {
-    setNotice(null);
     const working = (await host?.busySessions(link.id).catch(() => 0)) ?? 0;
     if (working > 0) setConfirming({ link, working });
     else void updateNow(link);
   }
   const queue = (link: EnvLink) =>
-    host?.queueUpdate(link.id).catch((reason: unknown) => setNotice({ tone: "error", text: `${link.name}: ${message(reason)}` }));
-  const cancelQueued = (link: EnvLink) => void host?.cancelUpdate(link.id).catch(() => {});
+    host
+      ?.queueUpdate(link.id)
+      .then(() => toast(`${link.name} updates when idle`))
+      .catch((reason: unknown) => toast(`${link.name}: ${message(reason)}`, "danger"));
   const updateNow = (link: EnvLink) =>
     run(link, "Updating", async () => {
       const warning = (await host?.update(link.id))?.warning ?? null;
       await refreshRemotes();
       reconnect(link.id);
       // Updated and running either way; lingering off is said in place of the usual.
-      setNotice(warning ? { tone: "error", text: `${link.name}: ${warning}` } : { tone: "info", text: `${link.name} runs the new crewd.` });
+      toast(warning ? `${link.name}: ${warning}` : `${link.name} is up to date`, warning ? "danger" : "success");
     });
   const restart = (link: EnvLink) =>
     run(link, "Restarting", async () => {
@@ -160,14 +138,16 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
       reconnect(link.id);
     });
   const terminal = (link: EnvLink) =>
-    onOpenTerminal(link.id).catch((reason: unknown) => setNotice({ tone: "error", text: message(reason) }));
+    onOpenTerminal(link.id).catch((reason: unknown) => toast(message(reason), "danger"));
+
+  const noTailscale = tailnet?.state === "missing";
 
   function cardFor(link: EnvLink) {
     const isLocal = link.id === LOCAL;
     const newer = isLocal ? null : updateFor(link, local);
     const waiting = pending[link.id] ?? null;
     const job =
-      busy[link.id] ?? (waiting?.state === "updating" ? { label: "Updating", step: autoSteps[link.id] ?? null } : null);
+      busy[link.id] ?? (waiting?.state === "updating" ? { label: "Updating" } : null);
     const up = link.status === "online" && !link.mismatch && !job;
     const manage = { label: "Manage providers", icon: BotIcon, run: () => manageProviders(link.id) };
     const actions: Action[] = isLocal
@@ -175,7 +155,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           { label: "Open terminal", icon: SquareTerminalIcon, run: () => void terminal(link), disabled: !up },
           { label: "Open workspace…", icon: FolderOpenIcon, run: () => openWorkspaceOn(link.id), disabled: !up },
           manage,
-          { label: "Restart crewd", icon: RotateCwIcon, run: () => void restart(link), disabled: !host || job !== null },
+          { label: "Restart", icon: RotateCwIcon, run: () => void restart(link), disabled: !host || job !== null },
           { label: "View logs", icon: ScrollTextIcon, run: () => setLogs(link), disabled: !host },
         ]
       : [
@@ -183,12 +163,12 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
           { label: "Open terminal", icon: SquareTerminalIcon, run: () => void terminal(link), disabled: !up },
           { label: "Open workspace…", icon: FolderOpenIcon, run: () => openWorkspaceOn(link.id), disabled: !up },
           {
-            label: newer ? `Update crewd to ${newer}` : "Reinstall crewd",
+            label: newer ? `Update to ${newer}` : "Reinstall",
             icon: ArrowUpCircleIcon,
             run: () => void update(link),
             disabled: !host || job !== null,
           },
-          { label: "Restart crewd", icon: RotateCwIcon, run: () => void restart(link), disabled: !host || job !== null },
+          { label: "Restart", icon: RotateCwIcon, run: () => void restart(link), disabled: !host || job !== null },
           { label: "View logs", icon: ScrollTextIcon, run: () => setLogs(link), disabled: !host },
           { label: "Edit…", icon: PencilIcon, run: () => setEditing(link) },
           { label: "Remove…", icon: Trash2Icon, run: () => setRemoving(link), danger: true, disabled: !host },
@@ -197,15 +177,10 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
       <MachineCard
         key={link.id}
         link={link}
-        workspaces={count(link.id)}
         newer={newer}
         relay={isLocal ? false : relayed(link)}
         busy={job}
-        pending={waiting?.state === "waiting" ? waiting : null}
-        onCancelUpdate={() => cancelQueued(link)}
         actions={actions}
-        up={up}
-        onTerminal={() => void terminal(link)}
         onUpdate={host ? () => void update(link) : undefined}
         onReconnect={() => reconnect(link.id)}
       />
@@ -216,55 +191,37 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
     <SettingsPage
       title="Environments"
       actions={
-        host && (
-          <Button variant="primary" icon={PlusIcon} onClick={() => setAdding(true)}>
+        host && !noTailscale && (
+          <Button data-setting="add-machine" variant="primary" icon={PlusIcon} onClick={() => setAdding(true)}>
             Add machine
           </Button>
         )
       }
     >
-      <section className="flex flex-col gap-3" data-setting="machines">
+      {!noTailscale && <section className="flex flex-col gap-3" data-setting="machines">
         <div className="flex flex-col gap-3">
           {local ? cardFor(local) : <StartingCard />}
           {remotes.map(cardFor)}
-          {host && !adding && <AddTile onAdd={() => setAdding(true)} />}
         </div>
-        {notice && (
-          <p className={`px-2.5 text-[12px] ${notice.tone === "error" ? "text-danger" : "text-text-muted"}`}>{notice.text}</p>
-        )}
-      </section>
+      </section>}
 
-      {host && adding && <AddMachineFlow onClose={() => { setAdding(false); readTailnet(); }} />}
+      {host && adding && <AddMachineFlow known={tailnet} onClose={() => { setAdding(false); readTailnet(); }} />}
 
-      <Group title="Network">
-        <Row id="tailscale" label="Tailscale" description="Peer-to-peer over your tailnet, with no Crew server.">
+      {noTailscale && (
+        <div className="flex flex-col items-center gap-1 py-24 text-center">
+          <p className="text-[14px] font-medium">Install Tailscale</p>
+          <p className="text-text-muted">Needed to connect your other machines.</p>
+          <Button variant="primary" className="mt-2.5" onClick={() => void openUrl(TAILSCALE_DOWNLOAD)}>
+            Get Tailscale
+          </Button>
+        </div>
+      )}
+
+      {!noTailscale && <Group title="Network">
+        <Row id="tailscale" label="Tailscale" description="Peer-to-peer over your tailnet.">
           <TailnetState tailnet={tailnet} available={host !== null} />
         </Row>
-        <ToggleRow
-          id="warn-relay"
-          label="Relay warnings"
-          description="Flag machines reached only by relay."
-          checked={warnRelay}
-          onChange={(checked) => saveSetting(warnRelaySetting, checked)}
-        />
-        <ToggleRow
-          id="wake"
-          label="Reconnect on wake"
-          description="Reconnect to machines when this Mac wakes."
-          checked={wake}
-          onChange={(checked) => saveSetting(wakeSetting, checked)}
-        />
-      </Group>
-
-      <Group title="Updates">
-        <ToggleRow
-          id="auto-update"
-          label="Update machines automatically"
-          description="Match this Mac's crewd after two idle minutes."
-          checked={autoUpdate}
-          onChange={(checked) => saveSetting(autoUpdateSetting, checked)}
-        />
-      </Group>
+      </Group>}
 
       {confirming && (
         <UpdateDialog
@@ -306,7 +263,7 @@ export function EnvironmentsPage({ workspaces, onOpenTerminal }: Props) {
             const { warning } = await host.remove(removing.id, wipe);
             await refreshRemotes();
             readTailnet();
-            setNotice(warning ? { tone: "error", text: warning } : { tone: "info", text: `${removing.name} removed` });
+            toast(warning ?? `${removing.name} removed`, warning ? "danger" : "success");
           }}
         />
       )}
@@ -326,7 +283,7 @@ function updateFor(link: EnvLink, local: EnvLink | null): string | null {
 type Action = { label: string; icon: LucideIcon; run: () => void; disabled?: boolean; danger?: boolean };
 
 function stateOf(link: EnvLink, busy: Busy | null, relay: boolean): { tone: Tone; label: string } {
-  if (busy) return { tone: "accent", label: `${busy.step ?? busy.label}…` };
+  if (busy) return { tone: "accent", label: `${busy.label}…` };
   if (link.mismatch) return { tone: "danger", label: "Needs update" };
   if (link.status === "offline") return { tone: "danger", label: "Offline" };
   if (link.status === "connecting") return { tone: "warning", label: "Connecting…" };
@@ -347,94 +304,62 @@ function StartingCard() {
 }
 
 /**
- * One machine: name and state on the first line, where it is under it, then
- * at most one short notice and a single strip with the connection and two
- * small load charts. Health details open under it; the rest lives in the menu.
+ * One machine: its name and where it is, what is going on with it beside them,
+ * then a single strip with the version and two small load charts. The rest
+ * lives in the menu.
  */
 function MachineCard({
   link,
-  workspaces,
   newer,
   relay,
   busy,
-  pending,
-  onCancelUpdate,
   actions,
-  up,
-  onTerminal,
   onUpdate,
   onReconnect,
 }: {
   link: EnvLink;
-  workspaces: number;
   newer: string | null;
   relay: boolean;
   busy: Busy | null;
-  /** An update waiting for the machine's sessions to finish. */
-  pending: RemoteUpdateState | null;
-  onCancelUpdate: () => void;
   actions: Action[];
-  up: boolean;
-  onTerminal: () => void;
   onUpdate: (() => void) | undefined;
   onReconnect: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const local = link.id === LOCAL;
   const live = link.status === "online" && !link.mismatch;
   const { samples } = useMachineMetrics(live ? link.id : null);
   const last = samples.at(-1);
   const info = link.info;
-  const state = stateOf(link, busy, relay);
-  const facts = [
-    local ? (info?.hostname ?? null) : whereOf(link),
-    info?.os ?? null,
-    plural(workspaces, "workspace"),
-  ].filter(Boolean);
+  // In progress, it says so where its action would be.
+  const progress = busy ? busy.label : link.status === "connecting" ? "Connecting" : null;
+  const where = local ? (info?.hostname ?? null) : whereOf(link);
+  const about = where && info?.os ? `${where} (${info.os})` : (where ?? info?.os ?? "");
   const dash = <span className="text-text-muted">—</span>;
 
   return (
     <article data-setting={`env-${link.id}`} className="flex flex-col rounded-[14px] bg-card">
       <header className="flex items-center gap-3 px-4 pt-4 pb-3">
         <span
-          className={`grid size-9 shrink-0 place-items-center rounded-[9px] bg-canvas shadow-[0_0_0_1px_var(--color-hairline)] ${link.status === "offline" && !local ? "text-placeholder" : "text-icon"}`}
+          className={`grid size-9 shrink-0 place-items-center rounded-[9px] bg-canvas shadow-[0_0_0_1px_var(--color-hairline)] text-icon`}
         >
           <EnvGlyph link={link} className="size-[18px]" />
         </span>
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2">
             <h3 className="truncate text-[14px] leading-5 font-semibold tracking-[-0.01em]">{link.name}</h3>
-            <Chip tone={state.tone}>{state.label}</Chip>
           </div>
-          <p className="truncate text-[12px] text-text-muted" title={facts.join(" · ")}>
-            {facts.map((fact, index) => (
-              <span key={fact}>
-                {index > 0 && " · "}
-                {index === 0 && !local ? <span className="font-mono text-[11.5px]">{fact}</span> : fact}
-              </span>
-            ))}
+          <p className="truncate text-[12px] text-text-muted" title={about}>
+            {about}
           </p>
         </div>
         <span className="flex shrink-0 items-center gap-1">
-          {up && <IconButton icon={SquareTerminalIcon} label={`Open a terminal on ${link.name}`} title="Open terminal" onClick={onTerminal} />}
+          <Status link={link} relay={relay} progress={progress} newer={newer} onUpdate={onUpdate} onReconnect={onReconnect} />
           <MachineMenu link={link} actions={actions} />
         </span>
       </header>
-      <Notice
-        link={link}
-        relay={relay}
-        busy={busy !== null}
-        pending={pending}
-        onUpdate={onUpdate}
-        onCancelUpdate={onCancelUpdate}
-        onReconnect={onReconnect}
-      />
       <dl className="mx-4 grid grid-cols-1 gap-x-8 gap-y-3 border-t border-hairline py-3 @[560px]:grid-cols-[1.2fr_1fr_1fr]">
-        <Stat
-          label="Connection"
-          sub={<Version link={link} newer={newer} busy={busy !== null || pending !== null} onUpdate={onUpdate} />}
-        >
-          <Connection link={link} relay={relay} busy={busy} />
+        <Stat label="Version">
+          <Version link={link} newer={newer} />
         </Stat>
         <Stat label="CPU" sub={live && info ? `${info.load.toFixed(2)} on ${plural(info.cpus, "core")}` : null} chart>
           {live && samples.length > 0 ? (
@@ -452,25 +377,13 @@ function MachineCard({
             <Sparkline
               samples={samples}
               value={(sample) => (sample.memTotal > 0 ? sample.memUsed / sample.memTotal : 0)}
-              format={(sample) => `${bytes(sample.memUsed)} of ${bytes(sample.memTotal)} · ${Math.round((sample.memUsed / Math.max(sample.memTotal, 1)) * 100)}%`}
+              format={(sample) => `${bytes(sample.memUsed)} of ${bytes(sample.memTotal)} (${Math.round((sample.memUsed / Math.max(sample.memTotal, 1)) * 100)}%)`}
             />
           ) : (
             dash
           )}
         </Stat>
       </dl>
-      <div className="mx-4 border-t border-hairline">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-          className="group flex h-9 items-center gap-1 text-[12px] text-text-muted outline-none hover:text-text focus-visible:text-text"
-        >
-          <ChevronRightIcon aria-hidden className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
-          Health details
-        </button>
-        {open && <Health link={link} />}
-      </div>
     </article>
   );
 }
@@ -486,38 +399,14 @@ function Stat({ label, sub, chart = false, children }: { label: string; sub?: Re
   );
 }
 
-function Connection({ link, relay, busy }: { link: EnvLink; relay: boolean; busy: Busy | null }) {
-  if (link.id === LOCAL) return <span>Started with Crew</span>;
-  if (busy) return <span className="text-text-muted">{busy.step ?? busy.label}…</span>;
-  if (link.status === "connecting") return <span className="text-text-muted">Connecting…</span>;
-  if (link.status === "offline")
-    return <span className="text-text-muted">{link.lastSeen ? `Last seen ${ago(link.lastSeen)}` : "Never connected"}</span>;
-  if (link.mismatch) return <span className="text-text-muted">Incompatible</span>;
+/** What crewd runs there; with an update, what it runs and what it goes to. */
+function Version({ link, newer }: { link: EnvLink; newer: string | null }) {
+  if (!link.version) return <span className="text-text-muted">—</span>;
+  if (!newer) return <span className="tabular-nums">{link.version}</span>;
   return (
     <span className="tabular-nums">
-      {link.latency !== null ? `${link.latency} ms` : "Online"}
-      {relay && <span className="text-text-muted"> · Relayed</span>}
+      <s>{link.version}</s> → {newer}
     </span>
-  );
-}
-
-/** `crewd a.b.c`, and what it could be updated to. */
-function Version({ link, newer, busy, onUpdate }: { link: EnvLink; newer: string | null; busy: boolean; onUpdate: (() => void) | undefined }) {
-  return (
-    <>
-      <span>{link.version ? `crewd ${link.version}` : "crewd"}</span>
-      {newer && onUpdate && !busy && (
-        <button
-          type="button"
-          onClick={onUpdate}
-          className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-info/12 px-2 text-[11px] font-medium text-info hover:bg-info/20"
-        >
-          <ArrowUpCircleIcon className="size-3" />
-          Update {link.version ? `${link.version} → ` : ""}
-          {newer}
-        </button>
-      )}
-    </>
   );
 }
 
@@ -527,127 +416,64 @@ function memorySub(sample: MachineSample | undefined, info: EnvLink["info"]): st
   return null;
 }
 
-/** At most one notice, in the alert's shape: what's wrong and the way past it. */
-function Notice({
+/** What is going on with a machine, on one line where its action would be, and the way past it. All well says nothing. */
+function Status({
   link,
   relay,
-  busy,
-  pending,
+  progress,
+  newer,
   onUpdate,
-  onCancelUpdate,
   onReconnect,
 }: {
   link: EnvLink;
   relay: boolean;
-  busy: boolean;
-  pending: RemoteUpdateState | null;
+  progress: string | null;
+  newer: string | null;
   onUpdate: (() => void) | undefined;
-  onCancelUpdate: () => void;
   onReconnect: () => void;
 }) {
-  if (busy || link.status === "connecting") return null;
-  const box = "mx-4 mb-3";
-  if (pending)
+  if (progress)
     return (
-      <Callout
-        className={box}
-        tone="info"
-        icon={HourglassIcon}
-        title={`Updates to ${pending.version} when idle`}
-        description={
-          pending.agentsRunning > 0
-            ? `${plural(pending.agentsRunning, "session")} working there. crewd updates once ${pending.agentsRunning === 1 ? "it finishes" : "they finish"}.`
-            : pending.queued
-              ? "Starting the update."
-              : "Nothing is working there; it updates once it has stayed idle for two minutes."
-        }
-        action={<Button onClick={onCancelUpdate}>Cancel</Button>}
-      />
+      <span className="flex items-center gap-1.5 pr-1 text-[12px] text-text-muted">
+        <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" />
+        {progress}
+      </span>
     );
   if (link.mismatch)
     return (
-      <Callout
-        className={box}
-        tone="danger"
-        icon={TriangleAlertIcon}
-        title="Incompatible crewd"
-        description="Update it to open workspaces."
-        action={
-          onUpdate && (
-            <Button variant="primary" onClick={onUpdate}>
-              Update
-            </Button>
-          )
-        }
-      />
+      <>
+        <Trouble icon={TriangleAlertIcon} ink="text-danger" text="Incompatible" why="Update it to open workspaces." />
+        {onUpdate && <RowAction label="Update" onClick={onUpdate} />}
+      </>
     );
-  if (link.status === "offline" && link.id !== LOCAL)
+  if (link.status === "offline") {
+    if (link.id === LOCAL) return <Trouble icon={CircleAlertIcon} ink="text-danger" text="Offline" why="Not responding." />;
     return (
-      <Callout
-        className={box}
-        tone="danger"
-        icon={CircleAlertIcon}
-        title={`Can't reach ${link.name}`}
-        description={link.error ?? (link.lastSeen ? `Last seen ${ago(link.lastSeen)}` : "Not connected yet.")}
-        action={<Button onClick={onReconnect}>Try again</Button>}
-      />
+      <>
+        <Trouble
+          icon={CircleAlertIcon}
+          ink="text-danger"
+          text="Can't reach"
+          why={link.error ?? (link.lastSeen ? `Last seen ${ago(link.lastSeen)}` : "Not connected yet.")}
+        />
+        <RowAction label="Try again" onClick={onReconnect} />
+      </>
     );
-  if (relay && link.status === "online")
-    return (
-      <Callout
-        className={box}
-        tone="warning"
-        icon={TriangleAlertIcon}
-        title="Relayed connection"
-        description="Terminals will lag. Open UDP 41641 or use a peer relay."
-      />
-    );
+  }
+  if (relay && link.status === "online") return <Trouble icon={TriangleAlertIcon} ink="text-warning" text="Slow connection" why="Terminals may lag." />;
+  if (newer && onUpdate) return <RowAction label="Update" onClick={onUpdate} />;
   return null;
 }
 
-/** What the daemon reports about its machine: the agent CLIs it found, where it lives and how it is reached. */
-function Health({ link }: { link: EnvLink }) {
-  const info = link.info;
-  if (!info) return <p className="pb-3 text-[12px] text-text-muted">Connect to see details.</p>;
-  const installed = new Set(info.installed);
+function Trouble({ icon: Glyph, ink, text, why }: { icon: LucideIcon; ink: string; text: string; why: string }) {
   return (
-    <dl className="mb-3 grid grid-cols-[7.5rem_1fr] items-center gap-x-4 gap-y-2 rounded-lg bg-canvas px-3 py-2.5 text-[12px] ring-1 ring-hairline">
-      <dt className="text-text-muted">Agent CLIs</dt>
-      <dd className="flex flex-wrap items-center gap-1.5">
-        {PROVIDERS.map((provider) => {
-          const found = installed.has(provider.binary);
-          // opencode says which version runs, or why none does (a 1.x install).
-          const said = provider.id === "opencode" ? info.opencode : undefined;
-          return (
-            <span
-              key={provider.id}
-              title={said ?? (found ? provider.binary : `${provider.binary} isn't installed there`)}
-              className={`flex h-6 items-center gap-1.5 rounded-md px-1.5 ring-1 ring-hairline ${found ? "" : "opacity-40"}`}
-            >
-              <ProviderIcon provider={provider.id} className="size-3.5" />
-              {provider.label}
-            </span>
-          );
-        })}
-      </dd>
-      <dt className="text-text-muted">Agents running</dt>
-      <dd>{info.agentsRunning}</dd>
-      <dt className="text-text-muted">Last seen</dt>
-      <dd>{link.lastSeen ? ago(link.lastSeen) : "—"}</dd>
-      <dt className="text-text-muted">Home</dt>
-      <dd className="truncate font-mono text-[11.5px]">{info.home}</dd>
-      {link.id !== LOCAL && (
-        <>
-          <dt className="text-text-muted">SSH</dt>
-          <dd className="font-mono text-[11.5px]">ssh {whereOf(link)}</dd>
-          <dt className="text-text-muted">Address</dt>
-          <dd className="font-mono text-[11.5px]">
-            {link.host}:{link.port}
-            {info.socksPort ? <span className="text-text-muted"> · browser proxy on {info.socksPort}</span> : null}
-          </dd>
-        </>
-      )}
-    </dl>
+    <Tooltip
+      content={why}
+      render={<span className="flex items-center gap-1.5 pr-1 text-[12px] text-text-muted" />}
+    >
+      <Glyph className={`size-3.5 shrink-0 ${ink}`} />
+      {text}
+    </Tooltip>
   );
 }
 
@@ -719,7 +545,8 @@ function Sparkline({
           style={{ left: x(picked) + 4 }}
           className="pointer-events-none absolute bottom-full z-50 mb-1.5 -translate-x-1/2 rounded-lg bg-accent px-2 py-1 text-[12px] leading-4 whitespace-nowrap text-inverse shadow-float"
         >
-          <span className="text-inverse/70">{time(picked)}</span> · {format(picked)}
+          <span className="mr-1.5 text-inverse/70">{time(picked)}</span>
+          {format(picked)}
         </span>
       )}
     </span>
@@ -753,37 +580,18 @@ function MachineMenu({ link, actions }: { link: EnvLink; actions: Action[] }) {
   );
 }
 
-function AddTile({ onAdd }: { onAdd: () => void }) {
-  return (
-    <button
-      type="button"
-      data-setting="add-machine"
-      onClick={onAdd}
-      className="flex items-center gap-4 rounded-[20px] bg-card px-5 py-4 text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50"
-    >
-      <span className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-canvas text-icon">
-        <PlusIcon className="size-5" />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="font-medium">Add a machine</span>
-        <span className="text-[12px] text-text-muted">Any SSH or Tailscale host.</span>
-      </span>
-      <ArrowRightIcon className="size-4 shrink-0 text-icon" />
-    </button>
-  );
-}
-
 function TailnetState({ tailnet, available }: { tailnet: Tailnet | null; available: boolean }) {
   if (!available) return <span className="text-[12px] text-text-muted">Only in the app</span>;
   if (!tailnet) return <span className="text-[12px] text-text-muted">Checking…</span>;
-  if (tailnet.state === "running")
-    return (
-      <>
-        <Chip tone="success">Connected</Chip>
-        {tailnet.account && <span className="text-[12px] text-text-muted">{tailnet.account}</span>}
-      </>
-    );
-  return <Chip tone="danger">{tailnet.message ?? "Not running"}</Chip>;
+  // All well says who it is signed in as, and nothing more.
+  if (tailnet.state === "running") return <span className="text-[12px] text-text-muted">{tailnet.account ?? "Connected"}</span>;
+  const Glyph = tailnet.state === "error" ? CircleAlertIcon : TriangleAlertIcon;
+  return (
+    <span className="flex items-center gap-1.5 text-[12px] text-text-muted">
+      <Glyph className={`size-3.5 shrink-0 ${tailnet.state === "error" ? "text-danger" : "text-warning"}`} />
+      {tailnet.message ?? "Not running"}
+    </span>
+  );
 }
 
 /* ── Dialogs ────────────────────────────────────────────────────────── */
@@ -866,7 +674,7 @@ function UpdateDialog({
       open
       onDismiss={onClose}
       title={`Update ${link.name} now?`}
-      description={`${plural(working, "session")} ${working === 1 ? "is" : "are"} working there. Updating restarts crewd, which breaks off ${working === 1 ? "its turn" : "their turns"}.`}
+      description={`${plural(working, "session")} ${working === 1 ? "is" : "are"} working there. Updating breaks off ${working === 1 ? "its turn" : "their turns"}.`}
     >
       <Footer>
         <Button variant="ghost" onClick={onClose}>
@@ -902,7 +710,7 @@ function RemoveDialog({
       title={`Remove ${link.name}?`}
       description={
         <>
-          Stops crewd and removes it from Crew; files stay on the machine.
+          Removes the machine from this list; its files stay on it.
           {workspaces > 0 && ` Its ${plural(workspaces, "workspace")} leave the rail.`}
         </>
       }
@@ -978,9 +786,9 @@ function LogsDialog({ link, onClose }: { link: EnvLink; onClose: () => void }) {
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <ScrollTextIcon className="size-4 text-icon" />
         <span className="font-medium">{link.name}</span>
-        <span className="font-mono text-[12px] text-text-muted">{local ? "crewd.log" : "journalctl --user -u crewd"}</span>
+        <span className="text-[12px] text-text-muted">Logs</span>
         <span className="flex-1" />
-        <Chip tone={state.tone}>{state.label}</Chip>
+        <Chip tone={state.tone} dot={false}>{state.label}</Chip>
       </div>
       <div ref={body} tabIndex={-1} className="min-h-40 flex-1 overflow-auto bg-canvas px-4 py-3 outline-none">
         {error ? (

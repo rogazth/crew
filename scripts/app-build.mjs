@@ -15,7 +15,7 @@ function run(command, args) {
   });
 }
 
-// crew rides in the bundle beside crewd; Settings › General › Command line links to it.
+// crew rides in the bundle beside crewd; the app runs it to install the daemon's LaunchAgent.
 await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 await run("swift", ["build", "-c", "release", "--package-path", "macos/menubar"]);
 await run("node", ["scripts/crewd-linux.mjs"]);

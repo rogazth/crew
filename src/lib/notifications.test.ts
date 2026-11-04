@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const notify = vi.fn();
 const dismissNotifications = vi.fn();
+const notificationStatus = vi.fn();
 vi.mock("./host", () => ({
+  notificationStatus: (...args: unknown[]) => notificationStatus(...args),
   notify: (...args: unknown[]) => notify(...args),
   dismissNotifications: (...args: unknown[]) => dismissNotifications(...args),
 }));
@@ -47,6 +49,8 @@ beforeEach(() => {
   vi.stubGlobal("document", { hasFocus: () => focused });
   notify.mockReset();
   notify.mockResolvedValue("shown");
+  notificationStatus.mockReset();
+  notificationStatus.mockResolvedValue("unknown");
   playSound.mockReset();
   showToast.mockReset();
   resetNotifications();
@@ -81,11 +85,40 @@ describe("dispatchNotification", () => {
       target: { workspaceId: "w1", sessionId: "s1" },
       silent: true,
     });
-    expect(playSound).toHaveBeenCalledWith("pop-down", 70, null);
+    expect(playSound).toHaveBeenCalledWith("pop-down", 70);
+  });
+
+  it("stays silent when macOS blocks the banner", async () => {
+    notify.mockResolvedValue("blocked");
+    expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "blocked" });
+    expect(playSound).not.toHaveBeenCalled();
+  });
+
+  it("the test button stays silent too when blocked", async () => {
+    focused = true;
+    notify.mockResolvedValue("blocked");
+    await dispatchNotification({ source: "test", title: "Crew", body: "Hi" });
+    expect(playSound).not.toHaveBeenCalled();
+  });
+
+  it("in front and blocked, shows the toast without the sound", async () => {
+    focused = true;
+    notificationStatus.mockResolvedValue("blocked");
+    expect(await dispatchNotification(done)).toEqual({ delivered: true });
+    expect(showToast).toHaveBeenCalled();
+    expect(playSound).not.toHaveBeenCalled();
+  });
+
+  it("in front, blocked and with toasts off, says it was blocked", async () => {
+    focused = true;
+    prefs({ toasts: false });
+    notificationStatus.mockResolvedValue("blocked");
+    expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "blocked" });
+    expect(playSound).not.toHaveBeenCalled();
   });
 
   it("leaves the system sound to the banner", async () => {
-    prefs({ kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, done: { banner: true, sound: "system" } } });
+    prefs({ kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, done: { enabled: true, sound: "system" } } });
     await dispatchNotification(done);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ silent: false }));
     expect(playSound).not.toHaveBeenCalled();
@@ -96,8 +129,9 @@ describe("dispatchNotification", () => {
     expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "disabled" });
     prefs({ pausedUntil: Date.now() + 60_000 });
     expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "paused" });
-    prefs({ kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, done: { banner: false, sound: "none" } } });
+    prefs({ kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, done: { enabled: false, sound: "pop-down" } } });
     expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "source-disabled" });
+    expect(playSound).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
     expect(playSound).not.toHaveBeenCalled();
   });
@@ -134,14 +168,6 @@ describe("dispatchNotification", () => {
     });
   });
 
-  it("shows a banner in front instead, when asked to", async () => {
-    focused = true;
-    prefs({ onlyWhenUnfocused: false });
-    await dispatchNotification(done);
-    expect(notify).toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
   it("only plays the sound in front with toasts off", async () => {
     focused = true;
     prefs({ toasts: false });
@@ -164,7 +190,7 @@ describe("dispatchNotification", () => {
     await dispatchNotification(test);
     expect(await dispatchNotification(test)).toEqual({ delivered: true });
     expect(notify).toHaveBeenCalledTimes(2);
-    expect(playSound).toHaveBeenCalledWith("pop-up", 70, null);
+    expect(playSound).toHaveBeenCalledWith("pop-up", 70);
   });
 
   it("reports macOS blocking it", async () => {

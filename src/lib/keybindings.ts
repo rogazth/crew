@@ -62,28 +62,26 @@ export function replaceClash(overrides: KeyOverrides, id: CommandId, chord: stri
   return setOverride(setOverride(overrides, other, kept), id, chord);
 }
 
-export type ImportResult =
+type ParsedOverrides =
   | { ok: true; overrides: KeyOverrides }
   | { ok: false; errors: string[] };
 
 /**
- * Reads a keybindings file: `{ "version": 1, "overrides": { id: chord | null } }`
- * or the bare map. All or nothing, so a file never half-applies: every unknown
+ * Reads the saved map of `id: chord | null`. All or nothing: every unknown
  * command, fixed row, malformed chord and clash is named.
  */
-export function parseImport(text: string, isMac: boolean): ImportResult {
+export function parseOverrides(text: string, isMac: boolean): ParsedOverrides {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    return { ok: false, errors: ["The file is not valid JSON."] };
+    return { ok: false, errors: ["Not valid JSON."] };
   }
-  const map = isRecord(raw) && "overrides" in raw ? raw.overrides : raw;
-  if (!isRecord(map)) return { ok: false, errors: ["Expected an object of command ids and shortcuts."] };
+  if (!isRecord(raw)) return { ok: false, errors: ["Expected an object of command ids and shortcuts."] };
 
   const errors: string[] = [];
   let overrides: KeyOverrides = {};
-  for (const [id, value] of Object.entries(map)) {
+  for (const [id, value] of Object.entries(raw)) {
     if (!isCommandId(id)) {
       errors.push(`Unknown command “${id}”.`);
     } else if (!isEditable(id)) {
@@ -110,7 +108,7 @@ export function clashes(overrides: KeyOverrides, isMac: boolean): string[] {
 /** What a stored value says, dropping what no longer parses; for reading back what was saved. */
 export function readStored(text: string | null, isMac: boolean): KeyOverrides {
   if (!text) return {};
-  const result = parseImport(text, isMac);
+  const result = parseOverrides(text, isMac);
   if (result.ok) return result.overrides;
   // A saved set that now clashes (a new default took its chord) still applies entry by entry.
   try {
@@ -124,10 +122,6 @@ export function readStored(text: string | null, isMac: boolean): KeyOverrides {
   } catch {
     return {};
   }
-}
-
-export function exportOverrides(overrides: KeyOverrides): string {
-  return `${JSON.stringify({ version: 1, overrides }, null, 2)}\n`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

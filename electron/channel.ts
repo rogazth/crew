@@ -17,7 +17,3 @@ export function appName(channel: Channel): string {
   return { release: "Crew", local: "Crew Local", dev: "Crew Dev" }[channel];
 }
 
-/** The command the Command line setting links onto the PATH. */
-export function cliLinkName(channel: Channel): string {
-  return { release: "crew", local: "crew-local", dev: "crew-dev" }[channel];
-}

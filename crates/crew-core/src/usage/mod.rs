@@ -7,7 +7,7 @@
 mod claude;
 pub(crate) mod codex;
 mod cursor;
-mod grok;
+pub(crate) mod grok;
 mod opencode;
 
 use std::io::Read;
@@ -205,6 +205,7 @@ impl UsageHost {
                     plan,
                     windows,
                     tokens: None,
+                    daily_tokens: None,
                     cost: None,
                     updated_at: now,
                     source: "stream".into(),
@@ -229,6 +230,7 @@ impl UsageHost {
                 plan,
                 windows,
                 tokens: None,
+                daily_tokens: None,
                 cost: None,
                 updated_at: now_millis(),
                 source: "app-server".into(),
@@ -290,6 +292,7 @@ impl UsageHost {
                 plan,
                 windows: Vec::new(),
                 tokens: None,
+                daily_tokens: None,
                 cost: None,
                 updated_at: now_millis(),
                 source: "cli".into(),
@@ -432,6 +435,7 @@ mod tests {
             plan: None,
             windows,
             tokens: None,
+            daily_tokens: None,
             cost: None,
             updated_at: at,
             source: "stream".into(),

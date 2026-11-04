@@ -250,7 +250,7 @@ function Offline({ env }: { env: EnvLink }) {
       <p className="font-medium">{connecting ? `Connecting to ${env.name}…` : env.mismatch ? `${env.name} needs an update` : `${env.name} is offline`}</p>
       <p className="max-w-72 text-[12px] text-text-muted">
         {env.mismatch
-          ? "Incompatible crewd. Update it in Settings › Environments."
+          ? "This machine needs an update. Update it in Settings › Environments."
           : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and that this Mac can reach it.`)}
       </p>
       {!connecting && !env.mismatch && (

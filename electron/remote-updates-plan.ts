@@ -27,13 +27,11 @@ export type Look = {
   agentsRunning: number;
   /** This Mac's crewd version, the one the machine is brought to. */
   target: string;
-  /** "Update machines automatically" is on. */
-  auto: boolean;
   now: number;
 };
 
 /**
- * `none`: up to date, switched off, or a failure still fresh. `wait`: behind,
+ * `none`: up to date, or a failure still fresh. `wait`: behind,
  * and a session works there or it has not been idle long enough. `update`: now.
  */
 export type Decision = { action: "none" | "wait" | "update"; memory: Memory };
@@ -44,7 +42,7 @@ export function decide(look: Look, memory: Memory): Decision {
     return { action: "none", memory: { ...memory, queued: false, idleSince: null } };
   }
   const held = memory.heldBack?.version === look.target && look.now - memory.heldBack.at < RETRY_AFTER_MS;
-  if (!memory.queued && (!look.auto || held)) return { action: "none", memory: { ...memory, idleSince: null } };
+  if (!memory.queued && held) return { action: "none", memory: { ...memory, idleSince: null } };
   if (look.agentsRunning > 0) return { action: "wait", memory: { ...memory, idleSince: null } };
   // Asked for by the user, it goes as soon as the last session is done.
   if (memory.queued) return { action: "update", memory };

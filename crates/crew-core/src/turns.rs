@@ -3596,12 +3596,9 @@ impl TurnHost {
         all
     }
 
-    /// How much a turn may do alone: the session's own autonomy, unless
-    /// Settings bypasses permissions for every session.
+    /// How much a turn may do alone: the session's own autonomy, which Settings
+    /// sets on every session at once (`session::set_access_everywhere`).
     fn autonomy(&self, session: &crate::session::Session) -> Autonomy {
-        if crate::session::bypass_permissions(&self.store) {
-            return Autonomy::Full;
-        }
         match session.autonomy.as_str() {
             "full" => Autonomy::Full,
             "auto" => Autonomy::Auto,
@@ -5261,10 +5258,10 @@ mod mailbox_tests {
         assert_eq!(launch["env"][crate::bot_folder::ENV], json!(folder.to_string_lossy()), "{launch}");
     }
 
-    /// The setting overrides a bot that asks: its next session is made the
-    /// way a "full" one is, and turning it off gives the bot its own back.
+    /// Access chosen in Settings reaches a bot that asks: its next session is
+    /// made the way a "full" one is, and choosing ask brings the questions back.
     #[test]
-    fn bypass_permissions_runs_an_asking_bot_without_asking() {
+    fn access_from_settings_reaches_a_bot_on_its_next_turn() {
         let world = world();
         let ws = workspace(&world);
         let asker = crate::session::create(
@@ -5286,12 +5283,11 @@ mod mailbox_tests {
         turn(&world, &asker, "one");
         assert!(!allowed_all(), "an asking bot asks by default");
 
-        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, Some("on"), crate::settings::GLOBAL)
-            .expect("set");
+        crate::session::set_access_everywhere(world.host.test_store(), "full").expect("set");
         turn(&world, &asker, "two");
-        assert!(allowed_all(), "bypass runs it without asking");
+        assert!(allowed_all(), "full access runs it without asking");
 
-        crate::settings::set(world.host.test_store(), crate::session::BYPASS_KEY, None, crate::settings::GLOBAL).expect("off");
+        crate::session::set_access_everywhere(world.host.test_store(), "ask").expect("set");
         turn(&world, &asker, "three");
         assert!(!allowed_all(), "off again, it asks again");
     }

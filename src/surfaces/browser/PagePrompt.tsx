@@ -226,7 +226,7 @@ function Body({ prompt, onAnswer }: { prompt: Prompt; onAnswer: (answer: PromptA
               Not now
             </Button>
             <Button variant="primary" className="text-[12px]" onClick={() => onAnswer({ settings: true })}>
-              Open System Settings
+              Open system settings
             </Button>
           </Actions>
         </>

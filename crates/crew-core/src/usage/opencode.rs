@@ -1,4 +1,5 @@
-//! opencode: tokens and cost of the last seven days, from `opencode stats`.
+//! opencode: tokens and cost of the last seven days, and those tokens by day,
+//! from `opencode stats`.
 //! It has no plan windows.
 
 use std::time::Duration;
@@ -7,6 +8,9 @@ use crew_protocol::PlanUsage;
 use serde_json::Value;
 
 use super::run;
+
+/// Today and the six before it.
+const DAYS: u32 = 7;
 
 pub fn read(bin: &str) -> Option<PlanUsage> {
     let json =
@@ -21,12 +25,30 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         plan: None,
         windows: Vec::new(),
         tokens: Some(tokens),
+        daily_tokens: daily(bin),
         cost,
         updated_at: crate::store::now_millis(),
         source: "cli".into(),
         status: None,
         overage_status: None,
     })
+}
+
+/// `stats` totals a span, not a day: `--days 3` is today and the two before it, so
+/// each day is what its span adds to the one after it. Each run takes milliseconds.
+fn daily(bin: &str) -> Option<Vec<u64>> {
+    let totals = (1..=DAYS)
+        .map(|days| {
+            let text = run(bin, &["stats", "--days", &days.to_string(), "--json"], Duration::from_secs(10))?;
+            parse_json(&text).map(|(tokens, _)| tokens)
+        })
+        .collect::<Option<Vec<u64>>>()?;
+    Some(days_from_totals(&totals))
+}
+
+/// Totals of the last 1, 2, ... days into each day's own, oldest first.
+pub fn days_from_totals(totals: &[u64]) -> Vec<u64> {
+    (0..totals.len()).rev().map(|at| totals[at].saturating_sub(if at == 0 { 0 } else { totals[at - 1] })).collect()
 }
 
 /// Tokens (input, output, reasoning and cache, as the CLI totals them) and cost of `stats --json`.
@@ -66,6 +88,11 @@ mod tests {
             "cache":{"read":18745129,"write":0}},"cost":1.25,"tools":{}}"#;
         assert_eq!(parse_json(text), Some((20_370_355, Some(1.25))));
         assert_eq!(parse_json("not json"), None);
+    }
+
+    #[test]
+    fn spans_become_days_oldest_first() {
+        assert_eq!(days_from_totals(&[0, 0, 0, 9, 9, 15, 20]), [5, 6, 0, 9, 0, 0, 0]);
     }
 
     #[test]

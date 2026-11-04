@@ -28,6 +28,8 @@ export type Reading = {
   history: UsageDayPoint[];
   /** Tokens and cost over the last week, for a provider with no plan windows. */
   tokens: number | null;
+  /** Those tokens day by day, oldest first, today last. */
+  dailyTokens: UsageTokensDay[] | null;
   cost: number | null;
   /** Claude's own verdict on the plan limit. */
   status: string | null;
@@ -62,6 +64,17 @@ export function weekOf(days: UsageDay[], now: number): UsageDayPoint[] {
   return Array.from({ length: 7 }, (_, index) => {
     const day = dayKey(now - (6 - index) * DAY);
     return { day, percent: Math.round(high.get(day) ?? 0) };
+  });
+}
+
+export type UsageTokensDay = { day: string; tokens: number };
+
+/** The tokens of each day ending today, against the local calendar the CLI counts them by. */
+export function tokenWeek(tokens: number[], now: number): UsageTokensDay[] {
+  return tokens.map((count, index) => {
+    const at = new Date(now - (tokens.length - 1 - index) * DAY);
+    const pad = (part: number) => String(part).padStart(2, "0");
+    return { day: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`, tokens: count };
   });
 }
 
@@ -100,6 +113,7 @@ export function mergeSnapshots(snapshots: Iterable<UsageSnapshot>, now: number):
         windows,
         history: weekOf(days.get(key) ?? [], now),
         tokens: reading.tokens ?? null,
+        dailyTokens: reading.dailyTokens ? tokenWeek(reading.dailyTokens, now) : null,
         cost: reading.cost ?? null,
         status: reading.status ?? null,
         updatedAt: reading.updatedAt,

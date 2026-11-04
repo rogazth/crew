@@ -36,10 +36,10 @@ export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
     if (!warm) void warmSettings().then(() => setWarm(true));
   }, [warm]);
   return (
-    <>
+    <div className="relative h-full">
       {warm && <Page key={shown} section={shown} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />}
       <Toasts />
-    </>
+    </div>
   );
 }
 

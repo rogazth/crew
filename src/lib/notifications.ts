@@ -1,4 +1,4 @@
-import { dismissNotifications, notify } from "./host";
+import { dismissNotifications, notificationStatus, notify } from "./host";
 import {
   isPaused,
   loadNotificationPrefs,
@@ -30,7 +30,7 @@ export type SkipReason =
   | "disabled"
   /** Do not disturb is on. */
   | "paused"
-  /** This kind has no banner and no sound. */
+  /** This kind is off. */
   | "source-disabled"
   /** The session's own switch is off. */
   | "muted"
@@ -109,11 +109,11 @@ export async function dispatchNotification(event: NotificationEvent): Promise<Di
   await Promise.race([loadNotificationPrefs(), new Promise((resolve) => setTimeout(resolve, PREFS_WAIT_MS))]);
   const prefs = notificationPrefs();
   const test = event.source === "test";
-  const kind: KindPrefs = event.source === "test" ? { ...prefs.kinds["needs-input"], banner: true } : prefs.kinds[event.source];
+  const kind: KindPrefs = event.source === "test" ? prefs.kinds["needs-input"] : prefs.kinds[event.source];
   if (!test) {
     if (!prefs.enabled) return skip("disabled");
     if (isPaused(prefs, Date.now())) return skip("paused");
-    if (!kind.banner && kind.sound === "none") return skip("source-disabled");
+    if (!kind.enabled) return skip("source-disabled");
   }
   const { session } = event;
   if (session && !session.notifications) return skip("muted");
@@ -122,26 +122,29 @@ export async function dispatchNotification(event: NotificationEvent): Promise<Di
   if (!test && !reserveCooldown(recent, cooldownKey(event), Date.now())) return skip("cooldown");
 
   const target: NotificationTarget | null = session ? { workspaceId: session.workspaceId, sessionId: session.id } : null;
-  const banner = kind.banner && (test || !(prefs.onlyWhenUnfocused && focused));
+  // Banners are for Crew in the background; in front, a sound and a toast are enough.
+  const banner = test || !focused;
   // In front, the window says it itself, where a banner would have.
-  const toast = kind.banner && !banner && focused && prefs.toasts;
-  // The OS's own sound rides on the banner; with no banner the window plays it.
-  if (kind.sound !== "system" || !banner) void playSound(kind.sound, prefs.volume, prefs.customSound);
+  const toast = !banner && prefs.toasts;
   if (toast) showToast({ title: event.title, body: event.body, source: event.source, target });
-  if (!banner) return kind.sound === "none" && !toast ? skip("suppressed-focus") : { delivered: true };
-
-  try {
-    const result = await notify({
-      title: event.title,
-      body: event.body.slice(0, BODY_LIMIT),
-      target,
-      silent: kind.sound !== "system",
-    });
-    return result === "shown" ? { delivered: true } : skip(result);
-  } catch {
-    // The banner is a courtesy; the transcript already has the news.
-    return skip("unsupported");
+  if (!banner) {
+    // No banner to answer for macOS: its last word on notifications decides the sound.
+    const blocked = (await notificationStatus().catch(() => "unknown")) === "blocked";
+    if (!blocked) void playSound(kind.sound, prefs.volume);
+    if (toast || (!blocked && kind.sound !== "none")) return { delivered: true };
+    return skip(blocked ? "blocked" : "suppressed-focus");
   }
+
+  // The banner is a courtesy; the transcript already has the news.
+  const result = await notify({
+    title: event.title,
+    body: event.body.slice(0, BODY_LIMIT),
+    target,
+    silent: kind.sound !== "system",
+  }).catch(() => "unsupported" as const);
+  // Blocked means silent too. The OS's own sound rides on the banner.
+  if (result !== "blocked" && kind.sound !== "system") void playSound(kind.sound, prefs.volume);
+  return result === "shown" ? { delivered: true } : skip(result);
 }
 
 function skip(reason: SkipReason): DispatchResult {

@@ -27,6 +27,7 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         plan,
         windows,
         tokens: None,
+        daily_tokens: None,
         cost: None,
         updated_at: crate::store::now_millis(),
         source: "cli".into(),
@@ -80,8 +81,9 @@ fn billing(bin: &str) -> Option<Value> {
 }
 
 /// The tier and credit window of a billing result. The share used is
-/// `creditUsagePercent`, or on-demand spend over its cap; a plan that says
-/// neither has no window rather than an empty one.
+/// `creditUsagePercent`, or on-demand spend over its cap. A period with neither
+/// has nothing spent yet: the field is left out at zero. With no period either
+/// there is no window, rather than an empty one.
 pub fn parse_billing(result: &Value) -> Option<(Option<String>, Vec<UsageWindow>)> {
     let config = result.get("config")?;
     let plan = result.get("subscription_tier").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
@@ -90,11 +92,15 @@ pub fn parse_billing(result: &Value) -> Option<(Option<String>, Vec<UsageWindow>
         Some(end) => (time("/currentPeriod/start"), Some(end)),
         None => (time("/billingPeriodStart"), time("/billingPeriodEnd")),
     };
-    let used = config.get("creditUsagePercent").and_then(Value::as_f64).or_else(|| {
-        let used = config.pointer("/onDemandUsed/val").and_then(Value::as_f64)?;
-        let cap = config.pointer("/onDemandCap/val").and_then(Value::as_f64).filter(|cap| *cap > 0.0)?;
-        Some(used / cap * 100.0)
-    });
+    let used = config
+        .get("creditUsagePercent")
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            let used = config.pointer("/onDemandUsed/val").and_then(Value::as_f64)?;
+            let cap = config.pointer("/onDemandCap/val").and_then(Value::as_f64).filter(|cap| *cap > 0.0)?;
+            Some(used / cap * 100.0)
+        })
+        .or(end.map(|_| 0.0));
     let kind = config.pointer("/currentPeriod/type").and_then(Value::as_str).unwrap_or_default();
     let minutes = start.zip(end).filter(|(start, end)| start < end).map(|(start, end)| (end - start) / 60_000).or(match kind {
         "USAGE_PERIOD_TYPE_WEEKLY" => Some(10080),
@@ -115,7 +121,7 @@ pub fn parse_billing(result: &Value) -> Option<(Option<String>, Vec<UsageWindow>
 }
 
 /// The email `grok login` kept (`$GROK_HOME` or `~/.grok`).
-fn login_email() -> Option<String> {
+pub(crate) fn login_email() -> Option<String> {
     let home = match std::env::var_os("GROK_HOME") {
         Some(home) => std::path::PathBuf::from(home),
         None => std::path::Path::new(&std::env::var_os("HOME")?).join(".grok"),
@@ -157,6 +163,15 @@ mod tests {
             "billingPeriodStart": "2026-10-01T00:00:00Z", "billingPeriodEnd": "2026-10-31T00:00:00Z" } });
         let (plan, windows) = parse_billing(&result).unwrap();
         assert_eq!((plan, windows[0].used_percent, windows[0].label.as_str()), (None, 25.0, "Monthly"));
+    }
+
+    #[test]
+    fn a_period_with_no_share_has_spent_nothing_yet() {
+        let result = json!({ "config": { "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-11-04T03:38:09.637+00:00", "end": "2026-11-11T03:38:09.637+00:00" } }, "subscription_tier": "SuperGrok" });
+        let (plan, windows) = parse_billing(&result).unwrap();
+        assert_eq!(plan.as_deref(), Some("SuperGrok"));
+        assert_eq!((windows[0].used_percent, windows[0].label.as_str(), windows[0].window_minutes), (0.0, "Weekly", Some(10080)));
     }
 
     #[test]

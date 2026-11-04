@@ -1,4 +1,5 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { sessionAccess } from "../lib/permissions";
 import { defaultAgentSetting, fitChoice, lastAgentsSetting, pickProvider, type AgentChoice } from "../lib/providers";
 import { peekSetting, saveSetting, useSetting } from "../lib/settingsEngine/store";
 import { useInstalledProviders } from "./useInstalledProviders";
@@ -31,7 +32,10 @@ function remember(next: AgentChoice) {
  */
 export function useDefaultAgent(refresh?: unknown) {
   const installed = useInstalledProviders(refresh);
-  const current = useSetting(defaultAgentSetting);
+  const saved = useSetting(defaultAgentSetting);
+  // The access chosen for every session is what a new one starts with too.
+  const access = useSetting(sessionAccess);
+  const current = useMemo(() => (access ? fitChoice({ ...saved, access }) : saved), [saved, access]);
   const currentDraft = useSyncExternalStore(subscribe, () => draft);
 
   const update = useCallback((next: AgentChoice) => {
@@ -47,9 +51,13 @@ export function useDefaultAgent(refresh?: unknown) {
 
   /** What this provider was last used with, else its own default model, effort and access. */
   const lastOf = useCallback(
-    (provider: AgentChoice["provider"]): AgentChoice =>
-      peekSetting(lastAgentsSetting)[provider] ??
-      fitChoice({ ...peekSetting(defaultAgentSetting), provider, model: "", effort: "", serviceTier: "" }),
+    (provider: AgentChoice["provider"]): AgentChoice => {
+      const last =
+        peekSetting(lastAgentsSetting)[provider] ??
+        fitChoice({ ...peekSetting(defaultAgentSetting), provider, model: "", effort: "", serviceTier: "" });
+      const chosen = peekSetting(sessionAccess);
+      return chosen ? fitChoice({ ...last, access: chosen }) : last;
+    },
     [],
   );
 

@@ -994,7 +994,11 @@ account?: string, plan?: string, windows: Array<UsageWindow>,
 /**
  * Tokens spent over the last seven days, for a provider with no plan windows (opencode).
  */
-tokens?: number, cost?: number, 
+tokens?: number, 
+/**
+ * Those tokens day by day, the machine's own calendar, oldest first, today last.
+ */
+dailyTokens?: Array<number>, cost?: number, 
 /**
  * When it was read, in milliseconds since the epoch.
  */

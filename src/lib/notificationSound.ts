@@ -2,7 +2,7 @@ import bubbleUrl from "../assets/sounds/bubble.wav";
 import popDownUrl from "../assets/sounds/pop-down.wav";
 import popUpUrl from "../assets/sounds/pop-up.wav";
 import thudUrl from "../assets/sounds/thud.wav";
-import { beep, readSound } from "./host";
+import { beep } from "./host";
 import type { SoundId } from "./notificationPrefs";
 
 const BUNDLED: Partial<Record<SoundId, string>> = {
@@ -12,41 +12,18 @@ const BUNDLED: Partial<Record<SoundId, string>> = {
   bubble: bubbleUrl,
 };
 
-/** The custom file, read once per path and kept as a blob URL. */
-const custom = new Map<string, Promise<string | null>>();
-
-function customUrl(path: string): Promise<string | null> {
-  let url = custom.get(path);
-  if (!url) {
-    url = readSound(path)
-      .then((bytes) => (bytes ? URL.createObjectURL(new Blob([new Uint8Array(bytes)])) : null))
-      .catch(() => null);
-    custom.set(path, url);
-    // A file that could not be read is tried again next time; it may be back.
-    void url.then((found) => found === null && custom.delete(path));
-  }
-  return url;
-}
-
-/** Forgets a custom file read earlier: the user picked another, or the same path changed. */
-export function forgetCustomSound(path: string): void {
-  const url = custom.get(path);
-  custom.delete(path);
-  void url?.then((found) => found && URL.revokeObjectURL(found));
-}
-
 /**
  * Plays `sound` at `volume` (0 to 100). `system` is the OS's beep, for when no
  * banner carries the OS sound. Resolves false when nothing could play: the
- * custom file is gone, or the browser still wants a gesture first.
+ * browser still wants a gesture first.
  */
-export async function playSound(sound: SoundId, volume: number, customPath: string | null): Promise<boolean> {
+export async function playSound(sound: SoundId, volume: number): Promise<boolean> {
   if (sound === "none" || volume <= 0) return false;
   if (sound === "system") {
     beep();
     return true;
   }
-  const url = sound === "custom" ? customPath && (await customUrl(customPath)) : BUNDLED[sound];
+  const url = BUNDLED[sound];
   if (!url) return false;
   const audio = new Audio(url);
   audio.volume = Math.min(1, volume / 100);

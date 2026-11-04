@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chordFromPress, parseChord, sameKeyOf } from "./chords";
 import { bindingGroups } from "./commandGroups";
 import { allKeysFor, commandChords, commandKeys, setKeyOverrides } from "./commands";
-import { clashes, exportOverrides, findClash, isEditable, parseImport, readStored, replaceClash, resetOverride, setOverride } from "./keybindings";
+import { clashes, findClash, isEditable, parseOverrides, readStored, replaceClash, resetOverride, setOverride } from "./keybindings";
 
 afterEach(() => setKeyOverrides({}));
 
@@ -107,15 +107,14 @@ describe("clash detection", () => {
   });
 });
 
-describe("import", () => {
-  it("accepts the exported shape and a bare map", () => {
+describe("parseOverrides", () => {
+  it("accepts a map of commands and chords", () => {
     const overrides = { close: "Mod+Alt+W", "open-palette": null };
-    expect(parseImport(exportOverrides(overrides), true)).toEqual({ ok: true, overrides });
-    expect(parseImport(JSON.stringify(overrides), true)).toEqual({ ok: true, overrides });
+    expect(parseOverrides(JSON.stringify(overrides), true)).toEqual({ ok: true, overrides });
   });
 
   it("names every problem and applies nothing", () => {
-    const result = parseImport(
+    const result = parseOverrides(
       JSON.stringify({ nope: "Mod+J", close: "banana", "workspace-1": "Mod+Alt+1", "new-bot": 3, "reopen-tab": "Mod+K" }),
       true,
     );
@@ -125,15 +124,15 @@ describe("import", () => {
     expect(result.errors[0]).toContain("nope");
   });
 
-  it("rejects a file that leaves two commands on one chord", () => {
-    const result = parseImport(JSON.stringify({ close: "Mod+K" }), true);
+  it("rejects a map that leaves two commands on one chord", () => {
+    const result = parseOverrides(JSON.stringify({ close: "Mod+K" }), true);
     expect(result).toMatchObject({ ok: false });
     if (!result.ok) expect(result.errors[0]).toMatch(/Close tab and Command palette/);
   });
 
   it("rejects text that is not JSON or not a map", () => {
-    expect(parseImport("{", true)).toMatchObject({ ok: false });
-    expect(parseImport("[1]", true)).toMatchObject({ ok: false });
+    expect(parseOverrides("{", true)).toMatchObject({ ok: false });
+    expect(parseOverrides("[1]", true)).toMatchObject({ ok: false });
   });
 
   it("reads saved overrides, dropping what no longer holds", () => {

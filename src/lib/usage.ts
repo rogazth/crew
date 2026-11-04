@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "./api";
 import { getLinks, subscribeLinks } from "./client/registry";
 import { notify } from "./host";
+import { isPaused, notificationPrefs } from "./notificationPrefs";
 import { defineSetting } from "./settingsEngine/define";
 import { hasSetting, peekSetting, saveSetting, setSetting, useSetting } from "./settingsEngine/store";
 import type { UsageSnapshot } from "./protocol";
@@ -316,17 +317,15 @@ export function useUsageSync() {
 export const NOTIFY_AT = 90;
 export const WARN_AT = 85;
 
-export type Alerts = { notify: boolean; composer: boolean; /** Minutes between refreshes. */ every: 1 | 5 | 15 };
+export type Alerts = { /** Minutes between refreshes. */ every: 1 | 5 | 15 };
 
 const ALERTS_KEY = "usage:alerts";
-const ALERT_DEFAULTS: Alerts = { notify: true, composer: true, every: 5 };
+const ALERT_DEFAULTS: Alerts = { every: 5 };
 export function parseAlerts(raw: string | null): Alerts | null {
   try {
     const saved = JSON.parse(raw ?? "null") as Partial<Alerts> | null;
     if (!saved || typeof saved !== "object") return null;
     return {
-      notify: typeof saved.notify === "boolean" ? saved.notify : ALERT_DEFAULTS.notify,
-      composer: typeof saved.composer === "boolean" ? saved.composer : ALERT_DEFAULTS.composer,
       every: saved.every === 1 || saved.every === 5 || saved.every === 15 ? saved.every : ALERT_DEFAULTS.every,
     };
   } catch {
@@ -365,13 +364,14 @@ function alertOn(list: Reading[]) {
   const result = crossings(list, looked, NOTIFY_AT);
   const first = looked === null;
   looked = result.look;
-  if (first || !peekSetting(alertsSetting).notify) return;
+  // Always on, but never past the switch that turns every notification off.
+  const prefs = notificationPrefs();
+  if (first || !prefs.enabled || isPaused(prefs, Date.now())) return;
   for (const crossing of result.fresh) void notify({ ...describe(crossing), target: null }).catch(() => {});
 }
 
-/** The reading to warn about in a composer on this provider: its tightest window past the threshold, when warnings are on. */
-export function warningFor(list: Reading[], provider: string, on: boolean): { reading: Reading; window: Window } | null {
-  if (!on) return null;
+/** The reading to warn about in a composer on this provider: its tightest window past the threshold. */
+export function warningFor(list: Reading[], provider: string): { reading: Reading; window: Window } | null {
   const top = tightest(list.filter((reading) => reading.provider === provider));
   return top && top.window.used >= WARN_AT ? top : null;
 }

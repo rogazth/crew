@@ -15,7 +15,6 @@ import type {
 import type { MachineRoute } from "./browser/machines";
 import type { MemoryPressure } from "./browser/retention";
 import type { NavSnapshot } from "./browser/snapshot";
-import type { CliResult, CliStatus } from "./cli";
 import type { LoginItemState } from "./loginItem";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { Banner, BannerResult, BannerState, DockBadge, NotificationTarget } from "./notify";
@@ -44,8 +43,6 @@ type CrewHost = {
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
   colorMode: ColorModeHost;
-  keybindings?: KeybindingsHost;
-  cli?: CliHost;
   loginItem?: LoginItemHost;
   /** The window's events for the trace main keeps. Absent outside Electron. */
   trace?: TraceHost;
@@ -55,20 +52,11 @@ type CrewHost = {
   remotes?: RemotesHost;
 };
 
-/** The keybindings file, through the native open and save dialogs. Absent outside Electron. */
-export type KeybindingsHost = {
-  /** The text of the .json the user picked; null when they cancel. */
-  importFile(): Promise<string | null>;
-  /** The path it was saved to; null when they cancel. */
-  exportFile(text: string): Promise<string | null>;
-};
-
 /** The rest of what a notification needs from main. */
 export type NotificationsHost = {
   /** The OS's own alert sound. */
   beep(): void;
   /** A custom sound's bytes; null for a file that is not audio, too big, or gone. */
-  readSound(path: string): Promise<Uint8Array | null>;
   status(): Promise<BannerState>;
   /** Crew's page in System Settings › Notifications. */
   openSettings(): Promise<void>;
@@ -136,13 +124,6 @@ export type RemotesHost = {
 export type ColorModeHost = {
   get(): Promise<string>;
   set(mode: string): Promise<void>;
-};
-
-/** The `crew` command on this Mac's PATH. Absent outside Electron. */
-export type CliHost = {
-  status(): Promise<CliStatus>;
-  install(): Promise<CliResult>;
-  uninstall(): Promise<CliResult>;
 };
 
 /** Whether Crew opens at login. Absent outside Electron. */
@@ -257,14 +238,6 @@ export function colorModeHost(): ColorModeHost | null {
   return crewHost()?.colorMode ?? null;
 }
 
-export function keybindingsHost(): KeybindingsHost | null {
-  return crewHost()?.keybindings ?? null;
-}
-
-export function cliHost(): CliHost | null {
-  return crewHost()?.cli ?? null;
-}
-
 export function loginItemHost(): LoginItemHost | null {
   return crewHost()?.loginItem ?? null;
 }
@@ -369,11 +342,6 @@ export function dismissNotifications(sessionId: string): void {
 
 export function beep(): void {
   crewHost()?.notifications.beep();
-}
-
-export async function readSound(path: string): Promise<Uint8Array | null> {
-  const host = crewHost();
-  return host ? host.notifications.readSound(path) : null;
 }
 
 /** Whether banners get through. A browser answers from its own permission. */

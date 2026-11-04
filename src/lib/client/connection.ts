@@ -119,7 +119,7 @@ export class Connection {
   }
 
   request<T>(method: string, params: object = {}): Promise<T> {
-    if (this.mismatch) return Promise.reject(new Error("Incompatible crewd. Update it in Settings › Environments."));
+    if (this.mismatch) return Promise.reject(new Error("This machine needs an update. Update it in Settings › Environments."));
     if (this.failFast && this.status === "offline" && !this.opened) {
       // The method and the machine, never the params.
       if (this.refused++ === 0) trace.warn("request.machine_down", { machine: this.envId, method });

@@ -7,7 +7,7 @@ import { CHANNELS } from "../src/lib/browser/bridge";
 import { LOCAL } from "../src/lib/client/route";
 import { isMachineAlias } from "../src/lib/browser/machines";
 import type { RemoteEnv } from "../src/lib/protocol";
-import { AUTO_UPDATE, DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote, type RemoteUpdateResult, type RemoteUpdateState } from "../src/lib/remotes";
+import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote, type RemoteUpdateResult, type RemoteUpdateState } from "../src/lib/remotes";
 import { setRemoteResolver } from "./browser/files";
 import { setMachines } from "./browser/guests";
 import type { Upstream } from "./browser/remote-proxy";
@@ -156,6 +156,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
         layout: layout(),
         signal: controller.signal,
         ...(typeof local?.protocol === "number" ? { reuseProtocol: local.protocol } : {}),
+        ...(input.tailnetIp ? { tailnetIp: input.tailnetIp } : {}),
         binaryFor: linuxBinary,
         // The same machine under another name (a public alias, its tailnet IP) is refused before anything changes there.
         check: async (ip) => {
@@ -251,7 +252,6 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
       const url = new URL(info.url);
       return (await peek(url.hostname, Number(url.port), info.token).catch(() => null))?.version || null;
     },
-    auto: async () => (await localRpc<string | null>(getDaemon, "settings_get", { key: AUTO_UPDATE }).catch(() => null)) !== "off",
     busy: (id) => busy.has(id) || installing !== null,
     update: updateMachine,
     publish: (states: Record<string, RemoteUpdateState>) => broadcast("remotes:update-states", states),
@@ -342,7 +342,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null, thisMac: Local
     } catch (error) {
       trace.warn("machine.remove_incomplete", { machine: row.id, wipe: wipe === true, error: errorText(error) });
       const reason = error instanceof Error ? error.message : String(error);
-      warning = `Removed from Crew, but crewd may still run on ${row.name}: ${reason}`;
+      warning = `Removed, but it may still be running on ${row.name}: ${reason}`;
     } finally {
       busy.delete(row.id);
     }

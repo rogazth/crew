@@ -1,12 +1,19 @@
+import type { Access } from "./providers";
 import { defineSetting } from "./settingsEngine/define";
 
-/** The daemon reads the same key: "on" runs every session without asking, absent leaves each to its own. */
-export const BYPASS_KEY = "sessions:bypass-permissions";
+/** The daemon reads the same key: setting it gives every session and bot this access. */
+export const ACCESS_KEY = "sessions:access";
 
-export const bypassPermissions = defineSetting<boolean>({
-  key: BYPASS_KEY,
+const LEVELS: readonly string[] = ["ask", "edits", "auto", "full"];
+
+/** Null until it is chosen, and new sessions start from the preferred agent's own. */
+export const sessionAccess = defineSetting<Access | null>({
+  key: ACCESS_KEY,
   scope: "global",
-  fallback: false,
-  parse: (raw) => raw?.trim() === "on",
-  format: (value) => (value ? "on" : null),
+  fallback: null,
+  parse: (raw) => {
+    const value = raw?.trim();
+    return value && LEVELS.includes(value) ? (value as Access) : null;
+  },
+  format: (value) => value,
 });

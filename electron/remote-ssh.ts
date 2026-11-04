@@ -151,7 +151,7 @@ export function lingerWarning(output: string, user: string): string | null {
   if (/^linger=yes$/m.test(output)) return null;
   const said = output.replace(/^linger=no\s*/m, "").trim().split("\n")[0]?.trim() ?? "";
   return (
-    `crewd runs, but systemd may stop it once you log out of the machine, and routines there stop with it: ` +
+    `It runs, but systemd may stop it once you log out of the machine, and routines there stop with it: ` +
     `lingering could not be turned on${said ? ` (${said})` : ""}. ` +
     `An admin can turn it on with: sudo loginctl enable-linger ${user}`
   );
@@ -186,6 +186,8 @@ async function installDaemonSteps(opts: {
    * this protocol is paired with as it is: no upload, no service change.
    */
   reuseProtocol?: number;
+  /** The machine's address on the tailnet as this Mac sees it, for when its own shell can't say. */
+  tailnetIp?: string;
   binaryFor: (arch: "x64" | "arm64") => string | null;
   onStep?: (step: StepUpdate) => void;
   /** Before anything is written: may refuse the machine by its tailnet address, as one already added. */
@@ -237,7 +239,9 @@ async function installDaemonSteps(opts: {
     let running: Paired | null = null;
     await step(report, "existing", async () => {
       // Without Tailscale there, crewd listens on the machine's loopback and is reached over ssh.
-      ip = (await tailnetIp(target, control, route.hostname)) ?? LOOPBACK;
+      // Only ever a tailnet address: crewd speaks plain WebSocket.
+      const given = opts.tailnetIp && isTailnetIp(opts.tailnetIp) ? opts.tailnetIp : null;
+      ip = (await tailnetIp(target, control, route.hostname)) ?? given ?? LOOPBACK;
       await opts.check?.(ip);
       const via = isLoopback(ip) ? "over SSH" : `at ${ip}`;
       if (opts.reuseProtocol === undefined) return `Reached ${via}`;
@@ -249,7 +253,7 @@ async function installDaemonSteps(opts: {
           .catch(() => null);
         if (found && found.protocol === opts.reuseProtocol) running = { ...found, ip };
       }
-      return running ? `crewd ${(running as Paired).version} already runs ${via}` : `Not installed yet; reached ${via}`;
+      return running ? `Version ${(running as Paired).version} already runs ${via}` : `Not installed yet; reached ${via}`;
     });
     if (running) {
       report({ id: "upload", state: "skipped", detail: "Not needed" });
@@ -341,7 +345,7 @@ async function installDaemonSteps(opts: {
 }
 
 function pairedDetail(paired: Paired): string {
-  return `crewd ${paired.version || "?"}${paired.os ? ` · ${paired.os}` : ""}`;
+  return `${paired.version || "?"}${paired.os ? ` (${paired.os})` : ""}`;
 }
 
 /**

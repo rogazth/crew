@@ -24,7 +24,7 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
   general: {
     id: "general",
     label: "General",
-    description: "Worktrees, sessions and startup.",
+    description: "Sessions and startup.",
     icon: SlidersHorizontalIcon,
   },
   appearance: {
@@ -111,9 +111,7 @@ const SETTINGS: IndexEntry[] = [
   { id: "retention", label: "Delete inactive sessions", page: "general", keywords: "cleanup retention old" },
   { id: "notify-needs-you", label: "Dock badge", page: "notifications", keywords: "dock badge needs you waiting" },
   { id: "login", label: "Open at login", page: "general", keywords: "startup launch sign in boot routines" },
-  { id: "reopen", label: "Reopen where you left off", page: "general", keywords: "startup restore workspace tabs home launch" },
-  { id: "crew-command", label: "crew command", page: "general", keywords: "cli path terminal install" },
-  { id: "bypass", label: "Bypass permissions", page: "providers", keywords: "danger skip approvals yolo" },
+  { id: "access", label: "Permissions", page: "providers", keywords: "access bypass danger skip approvals yolo full" },
   { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },
   { id: "style", label: "Style and accent colour", page: "appearance", keywords: "brand ink crew cobalt teal blue" },
   { id: "text-size", label: "Chat text size", page: "appearance", keywords: "font size zoom bigger smaller reading" },
@@ -136,11 +134,9 @@ const SETTINGS: IndexEntry[] = [
   { id: "machines", label: "Machines", page: "environments", keywords: "ssh tailscale remote environment server this mac" },
   { id: "add-machine", label: "Add a machine", page: "environments", keywords: "new environment remote ssh config tailscale install crewd server vm" },
   { id: "tailscale", label: "Tailscale", page: "environments", keywords: "tailnet network vpn" },
-  { id: "warn-relay", label: "Relay warnings", page: "environments", keywords: "tailscale relay derp lag" },
-  { id: "wake", label: "Reconnect on wake", page: "environments", keywords: "sleep heartbeat reconnect" },
   { id: "usage-limits", label: "Plan limits", page: "usage", keywords: "usage quota rate limit session weekly reset" },
   { id: "usage-rings", label: "Rings on the rail", page: "usage", keywords: "usage indicator rail widget" },
-  { id: "usage-alerts", label: "Usage alerts", page: "usage", keywords: "notify warn limit threshold" },
+  { id: "usage-refresh", label: "Refresh usage", page: "usage", keywords: "usage refresh interval" },
 ];
 
 let index: IndexEntry[] | null = null;

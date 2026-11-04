@@ -741,6 +741,9 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
 
     // Before the window can list them, or it would show rows already gone.
     let _ = session::sweep_disposable(&config.store);
+    if let Err(error) = session::bypass_to_access(&config.store) {
+        tracing::warn!(error = %crew_core::trace::error_text(&error), "settings.bypass_migration_failed");
+    }
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -1459,6 +1462,20 @@ async fn expire_sessions(hosts: &Hosts, days: u32) -> Result<Vec<String>, String
     Ok(gone)
 }
 
+/// A choice of access, made here or arriving from another machine, reaches
+/// every session on this one and every window showing them.
+async fn apply_access(hosts: &Hosts, rows: &[proto::SettingRow]) -> Result<(), String> {
+    let Some(level) = rows.iter().find(|row| row.key == session::ACCESS_KEY).and_then(|row| row.value.clone()) else {
+        return Ok(());
+    };
+    let store = hosts.store.clone();
+    let changed = block(move || session::set_access_everywhere(&store, &level)).await?;
+    for row in &changed {
+        hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(row) });
+    }
+    Ok(())
+}
+
 fn json(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
 }
@@ -1873,6 +1890,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let row = block(move || settings::set(&store, &key, value.as_deref(), &scope)).await?;
             hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: vec![row.clone()] });
+            apply_access(hosts, std::slice::from_ref(&row)).await?;
             json(row)
         }
         "settings_merge" => {
@@ -1882,6 +1900,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             if !taken.is_empty() {
                 hosts.hub.emit("settings-changed", proto::SettingsChanged { rows: taken.clone() });
             }
+            apply_access(hosts, &taken).await?;
             json(taken)
         }
         // Every browser tab in this Mac's strips, for main to tell each machine its own.

@@ -2,19 +2,12 @@ import { LaptopIcon, ServerIcon } from "lucide-react";
 import { LOCAL, type EnvLink } from "../lib/client/registry";
 import { statusText } from "../lib/envText";
 
-function tone(link: EnvLink | null): string {
-  if (!link || link.id === LOCAL) return "text-icon";
-  if (link.mismatch || link.status === "offline") return "text-danger";
-  if (link.status === "connecting") return "text-warning";
-  return "text-icon";
-}
-
 /** The machine's icon: a laptop for this Mac, a server for anything on the tailnet. */
 export const machineIcon = (remote: boolean) => (remote ? ServerIcon : LaptopIcon);
 
 export function EnvGlyph({ link, className = "size-4" }: { link: EnvLink | null; className?: string }) {
   const Glyph = !link || link.id === LOCAL ? LaptopIcon : ServerIcon;
-  return <Glyph aria-hidden className={`shrink-0 ${tone(link)} ${className}`} />;
+  return <Glyph aria-hidden className={`shrink-0 text-icon ${className}`} />;
 }
 
 /** The glyph on a small tile, the way a machine heads its row. */
@@ -44,7 +37,7 @@ export function ConnectionLabel({ link, relay = false, className = "" }: { link:
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 text-[12px] text-text-muted tabular-nums ${className}`}>
       <ConnectionDot link={link} relay={relay} />
-      {relay && link.status === "online" ? `Relay · ${text}` : text}
+      {relay && link.status === "online" ? `${text} (relay)` : text}
     </span>
   );
 }

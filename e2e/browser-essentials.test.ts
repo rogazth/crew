@@ -186,6 +186,6 @@ test("Settings lists the site", async () => {
   await crew.window.getByRole("button", { name: "More" }).click();
   await crew.window.getByRole("menuitem", { name: "Settings" }).click();
   await crew.window.getByRole("heading", { name: "Browser", level: 1 }).waitFor();
-  await crew.window.getByText("Blocked: Location").waitFor();
+  await crew.window.getByRole("combobox", { name: /^Location on / }).filter({ hasText: "Block" }).waitFor();
   await shot("settings");
 });

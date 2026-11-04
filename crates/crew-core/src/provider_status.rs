@@ -201,14 +201,21 @@ fn account_of(id: &str, path: &Path) -> Option<ProviderAccount> {
             None => parse_codex_login(&run(path, &["login", "status"], LOOKUP_TIMEOUT)?),
         },
         "cursor" => parse_cursor_status(&run(path, &["status", "--format", "json"], CURSOR_TIMEOUT)?),
-        "opencode" => parse_opencode_auth(&run(path, &["auth", "list"], LOOKUP_TIMEOUT)?),
+        // opencode has no account to show: its models answer without one, and what
+        // `auth list` holds are other services' credentials.
         // `grok models` exits 0 signed in or out, so the line is the signal.
         // A key in the environment is a login of its own; the value stays put.
         "grok" => {
             if api_key_present(std::env::var("XAI_API_KEY").ok().as_deref()) {
                 ProviderAccount { signed_in: Some(true), ..Default::default() }
             } else {
-                parse_grok_login(&run(path, &["models"], GROK_TIMEOUT)?)
+                let mut account = parse_grok_login(&run(path, &["models"], GROK_TIMEOUT)?);
+                // The sentence says whether; who and on what plan come from where Usage reads them.
+                if account.signed_in == Some(true) {
+                    account.email = crate::usage::grok::login_email();
+                    account.plan = crate::usage::grok::read(&path.to_string_lossy()).and_then(|usage| usage.plan);
+                }
+                account
             }
         }
         _ => return None,
@@ -389,26 +396,6 @@ pub fn parse_grok_update(json: &str) -> Option<String> {
     value.get("latestVersion")?.as_str().map(str::to_string).filter(|version| !version.is_empty())
 }
 
-/// One row per stored credential (`OpenAI  OAuth  stored`), or a count line;
-/// no row at all is signed out. Anything that is not rows says nothing.
-pub fn parse_opencode_auth(text: &str) -> ProviderAccount {
-    let plain = strip_ansi(text);
-    let rows = plain
-        .lines()
-        .map(|line| line.trim_matches(|c: char| c.is_whitespace() || "│┌└├─◇●".contains(c)))
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.to_lowercase().contains("credentials") && !line.to_lowercase().contains("environment"))
-        .count();
-    let lower = plain.to_lowercase();
-    if rows > 0 && !lower.contains("error") {
-        return ProviderAccount { signed_in: Some(true), ..Default::default() };
-    }
-    if lower.contains("0 credentials") || lower.contains("no credentials") || rows == 0 && !lower.trim().is_empty() {
-        return ProviderAccount { signed_in: Some(false), ..Default::default() };
-    }
-    ProviderAccount::default()
-}
-
 pub(crate) fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -534,16 +521,6 @@ mod tests {
         assert!(api_key_present(Some("present")));
         assert!(!api_key_present(Some("  ")));
         assert!(!api_key_present(None));
-    }
-
-    #[test]
-    fn opencode_auth_counts_stored_credentials() {
-        assert_eq!(parse_opencode_auth("OpenAI  OAuth                       stored\n").signed_in, Some(true));
-        let framed = "\u{1b}[0m┌  Credentials ~/.local/share/opencode/auth.json\n│\n●  OpenAI \u{1b}[90moauth\u{1b}[0m\n│\n└  1 credentials\n";
-        assert_eq!(parse_opencode_auth(framed).signed_in, Some(true));
-        let none = "┌  Credentials ~/.local/share/opencode/auth.json\n│\n└  0 credentials\n";
-        assert_eq!(parse_opencode_auth(none).signed_in, Some(false));
-        assert_eq!(parse_opencode_auth("").signed_in, None);
     }
 
     #[test]

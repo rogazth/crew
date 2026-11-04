@@ -14,7 +14,6 @@ import {
 } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
 import { NOTIFY_CHANNELS, type Banner, type DockBadge, type NotificationTarget } from "../src/lib/notify";
-import { CLI_CHANNELS } from "../src/lib/cli";
 import { LOGIN_ITEM_CHANNELS } from "../src/lib/loginItem";
 import type { InstallInput, InstallStep, ManualRemote, RemoteUpdateResult, RemoteUpdateState } from "../src/lib/remotes";
 import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
@@ -40,7 +39,6 @@ contextBridge.exposeInMainWorld("crewHost", {
   onNotificationClick: (cb: (target: NotificationTarget | null) => void) => listen(NOTIFY_CHANNELS.click, cb),
   notifications: {
     beep: () => ipcRenderer.send(NOTIFY_CHANNELS.beep),
-    readSound: (path: string) => ipcRenderer.invoke(NOTIFY_CHANNELS.sound, path),
     status: () => ipcRenderer.invoke(NOTIFY_CHANNELS.status),
     openSettings: () => ipcRenderer.invoke(NOTIFY_CHANNELS.settings),
     setBadge: (badge: DockBadge) => ipcRenderer.send(NOTIFY_CHANNELS.badge, badge),
@@ -76,11 +74,6 @@ contextBridge.exposeInMainWorld("crewHost", {
     onWake: (cb: () => void) => listen("remotes:wake", cb),
   },
   zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
-  cli: {
-    status: () => ipcRenderer.invoke(CLI_CHANNELS.status),
-    install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
-    uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
-  },
   // Over IPC and not the WebSocket: the socket may be what is failing.
   trace: {
     write: (records: TraceRecord[]) => ipcRenderer.send(TRACE_CHANNELS.window, records),
@@ -88,10 +81,6 @@ contextBridge.exposeInMainWorld("crewHost", {
   loginItem: {
     get: () => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.get),
     set: (enabled: boolean) => ipcRenderer.invoke(LOGIN_ITEM_CHANNELS.set, enabled),
-  },
-  keybindings: {
-    importFile: () => ipcRenderer.invoke("keybindings-import"),
-    exportFile: (text: string) => ipcRenderer.invoke("keybindings-export", text),
   },
   colorMode: {
     get: () => ipcRenderer.invoke("color-mode-get"),

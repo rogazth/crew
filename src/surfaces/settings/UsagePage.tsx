@@ -1,17 +1,17 @@
 // Usage: each provider's plan limits in full (what is left of every window,
 // when it resets, how it stands against an even pace, the last week day by
-// day), which providers get a ring on the rail, and when to be told. Read from
+// day), which providers get a ring on the rail, and how often it refreshes. Read from
 // every connected machine, one card per account.
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, GripVerticalIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
-import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { PointerActivationConstraints } from "@dnd-kit/dom";
 import { PointerSensor } from "@dnd-kit/react";
 import { Button, Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { SortableItem, SortableList } from "../../chrome/SortableList";
 import { Rings } from "../../chrome/UsageButton";
-import { Tokens } from "../../chrome/UsageTokens";
+import { count, Tokens } from "../../chrome/UsageTokens";
 import { WindowRow } from "../../chrome/UsageWindow";
 import {
   MAX_RINGS,
@@ -31,14 +31,12 @@ import {
   useNow,
   useReadings,
   useRings,
-  NOTIFY_AT,
-  WARN_AT,
   type RingConfig,
   type Reading,
   type Window,
 } from "../../lib/usage";
-import { hasWindows, type UsageDayPoint } from "../../lib/usageData";
-import { Group, Heading, RAISED, Row, SettingsPage, ToggleRow, toast } from "./ui";
+import { hasWindows, type UsageDayPoint, type UsageTokensDay } from "../../lib/usageData";
+import { Group, Heading, RAISED, Row, SettingsPage, toast } from "./ui";
 
 const REFRESH = [
   { value: "1", label: "Every minute" },
@@ -56,7 +54,7 @@ export function UsagePage() {
 
       <RingsSection />
 
-      <Alerts />
+      <RefreshEvery />
     </SettingsPage>
   );
 }
@@ -133,6 +131,8 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
           </div>
           <Week days={reading.history} color={color} limit={longest.label} />
         </>
+      ) : reading.dailyTokens ? (
+        <TokenWeek reading={reading} days={reading.dailyTokens} color={color} />
       ) : reading.tokens !== null || reading.cost !== null ? (
         <Tokens reading={reading} />
       ) : (
@@ -144,15 +144,47 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
 
 /* ── The last seven days ────────────────────────────────────────────── */
 
-/**
- * One thin bar per day: the most of the provider's longest window spent that
- * day, on a fixed 0‥100 scale so a short bar means room to spare. Each column
- * keeps a faint track to 100%; hovering one says its day and value.
- */
+type Bar = { key: string; day: string; today: boolean; height: number; tip: ReactNode };
+
+/** One thin bar per day on a 0‥100 scale, each keeping a faint track; hovering one says its day and value. */
+function DayBars({ bars, color, label }: { bars: Bar[]; color: string; label: string }) {
+  return (
+    <>
+      <div role="img" aria-label={label} className="flex h-10 gap-1.5">
+        {bars.map((bar) => (
+          <div key={bar.key} className="group relative flex h-full flex-1 justify-center">
+            <div className="relative h-full w-full rounded-[4px] bg-card transition-colors group-hover:bg-hover">
+              {bar.height > 0 && (
+                <div
+                  className="absolute inset-x-0 bottom-0 min-h-[3px] rounded-[4px] transition-[height] duration-500"
+                  style={{ height: `${bar.height}%`, background: color }}
+                />
+              )}
+            </div>
+            <span className="pointer-events-none absolute bottom-full z-10 mb-1.5 rounded-md bg-surface px-2 py-1 text-[11px] whitespace-nowrap opacity-0 shadow-float transition-opacity group-hover:opacity-100">
+              {bar.today ? "Today" : bar.day} · {bar.tip}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-1.5">
+        {bars.map((bar) => (
+          <span key={bar.key} className={`flex-1 text-center text-[11px] ${bar.today ? "font-medium text-text" : "text-text-muted"}`}>
+            {bar.today ? "Today" : bar.day}
+          </span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+const weekdayOf = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString([], { weekday: "short", timeZone: "UTC" });
+
+/** The most of the provider's longest window spent each day, on a fixed scale so a short bar means room to spare. */
 function Week({ days: points, color, limit }: { days: UsageDayPoint[]; color: string; limit: string }) {
   const days = points.map((point, index) => ({
     value: point.percent,
-    day: new Date(`${point.day}T12:00:00Z`).toLocaleDateString([], { weekday: "short", timeZone: "UTC" }),
+    day: weekdayOf(point.day),
     key: point.day,
     today: index === points.length - 1,
   }));
@@ -168,34 +200,48 @@ function Week({ days: points, color, limit }: { days: UsageDayPoint[]; color: st
           </span>
         )}
       </div>
-      <div
-        role="img"
-        aria-label={`Daily high ${of}: ${days.map((day) => `${day.day} ${day.value}%`).join(", ")}`}
-        className="flex h-10 gap-1.5"
-      >
-        {days.map((day) => (
-          <div key={day.key} className="group relative flex h-full flex-1 justify-center">
-            <div className="relative h-full w-full rounded-[4px] bg-card transition-colors group-hover:bg-hover">
-              {day.value > 0 && (
-                <div
-                  className="absolute inset-x-0 bottom-0 min-h-[3px] rounded-[4px] transition-[height] duration-500"
-                  style={{ height: `${day.value}%`, background: color }}
-                />
-              )}
-            </div>
-            <span className="pointer-events-none absolute bottom-full z-10 mb-1.5 rounded-md bg-surface px-2 py-1 text-[11px] whitespace-nowrap opacity-0 shadow-float transition-opacity group-hover:opacity-100">
-              {day.today ? "Today" : day.day} · <span className="font-medium tabular-nums">{day.value}%</span> {of}
-            </span>
-          </div>
-        ))}
+      <DayBars
+        color={color}
+        label={`Daily high ${of}: ${days.map((day) => `${day.day} ${day.value}%`).join(", ")}`}
+        bars={days.map((day) => ({
+          key: day.key,
+          day: day.day,
+          today: day.today,
+          height: day.value,
+          tip: (
+            <>
+              <span className="font-medium tabular-nums">{day.value}%</span> {of}
+            </>
+          ),
+        }))}
+      />
+    </div>
+  );
+}
+
+/** A provider with no plan to measure against: each day's tokens, against the week's busiest day. */
+function TokenWeek({ reading, days, color }: { reading: Reading; days: UsageTokensDay[]; color: string }) {
+  const most = Math.max(...days.map((day) => day.tokens));
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between text-[12px] text-text-muted">
+        <span>Last 7 days</span>
+        <span className="tabular-nums">
+          <span className="font-medium text-text">{count(reading.tokens ?? 0)}</span> tokens
+          {reading.cost ? ` · $${reading.cost.toFixed(2)}` : ""}
+        </span>
       </div>
-      <div className="flex gap-1.5">
-        {days.map((day) => (
-          <span key={day.key} className={`flex-1 text-center text-[11px] ${day.today ? "font-medium text-text" : "text-text-muted"}`}>
-            {day.today ? "Today" : day.day}
-          </span>
-        ))}
-      </div>
+      <DayBars
+        color={color}
+        label={`Tokens by day: ${days.map((day) => `${weekdayOf(day.day)} ${count(day.tokens)}`).join(", ")}`}
+        bars={days.map((day, index) => ({
+          key: day.day,
+          day: weekdayOf(day.day),
+          today: index === days.length - 1,
+          height: most > 0 ? (day.tokens / most) * 100 : 0,
+          tip: <span className="font-medium tabular-nums">{count(day.tokens)} tokens</span>,
+        }))}
+      />
     </div>
   );
 }
@@ -460,18 +506,12 @@ function CustomColor({ value, active, onChange }: { value: string; active: boole
   );
 }
 
-/* ── Alerts ─────────────────────────────────────────────────────────── */
+/* ── Refresh ─────────────────────────────────────────────────────── */
 
-function Alerts() {
+function RefreshEvery() {
   const alerts = useAlerts();
   return (
-    <Group title="Alerts" id="usage-alerts">
-      <ToggleRow checked={alerts.notify} onChange={(notify) => setAlerts({ notify })} label={`Notify at ${NOTIFY_AT}%`} />
-      <ToggleRow
-        checked={alerts.composer}
-        onChange={(composer) => setAlerts({ composer })}
-        label={`Warn in the composer at ${WARN_AT}%`}
-      />
+    <Group id="usage-refresh">
       <Row label="Refresh">
         <Select
           value={String(alerts.every) as (typeof REFRESH)[number]["value"]}
