@@ -12,7 +12,7 @@ export type SessionPatch = Partial<Pick<Session, "status" | "providerSessionId" 
 
 type PatchListener = (id: string, patch: SessionPatch) => void;
 
-type KnownSession = { name: string; workspaceId: string; notifications: boolean };
+type KnownSession = { name: string; workspaceId: string; notifications: boolean; kind: Session["kind"] };
 
 const patchListeners = new Set<PatchListener>();
 const statuses = new Map<string, SessionStatus>();
@@ -277,15 +277,6 @@ function onHarness(id: string, event: HarnessEvent) {
       announce(id, "needs-input", `Asks: ${first.question}`);
     }
   }
-  // A letter from a bot or a terminal; the user's own, and a note a bot left itself, are not news.
-  const from = event.type === "user.message" ? event.fromBot : undefined;
-  if (event.type === "user.message" && from && from.kind !== "user" && from.id !== id) {
-    announce(id, "mailbox", `From ${from.name}: ${firstLine(event.text)}`);
-  }
-}
-
-function firstLine(text: string): string {
-  return text.trim().split("\n")[0] ?? "";
 }
 
 function onStatus(event: SessionStatusEvent) {
@@ -334,13 +325,14 @@ export function rememberSessions(sessions: Session[]): void {
 }
 
 function remember(session: Session) {
-  known.set(session.id, { name: session.name, workspaceId: session.workspaceId, notifications: session.notifications });
+  known.set(session.id, { name: session.name, workspaceId: session.workspaceId, notifications: session.notifications, kind: session.kind });
 }
 
 /** News of a session this window knows; one it never listed has no name to put on it. */
 function announce(id: string, source: NotificationSource, body: string) {
   const row = known.get(id);
-  if (row) announceSession({ id, ...row }, source, body);
+  // A subagent answers to the session that started it, which asks the user if it has to.
+  if (row && row.kind !== "child") announceSession({ id, ...row }, source, body);
 }
 
 function whenSettled(id: string): Promise<boolean> {

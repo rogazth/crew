@@ -3,9 +3,10 @@ import type { Session, SessionStatus } from "./types";
 /** A session in one of these is waiting on the user: to answer it, or to read what it did. */
 const ATTENTION = new Set<SessionStatus>(["needs-input", "done", "error"]);
 
-export function attentionOf(sessions: readonly Pick<Session, "id" | "status" | "notifications">[]): Set<string> {
+export function attentionOf(sessions: readonly Pick<Session, "id" | "kind" | "status" | "notifications">[]): Set<string> {
   const waiting = new Set<string>();
-  for (const session of sessions) if (session.notifications && ATTENTION.has(session.status)) waiting.add(session.id);
+  // A subagent waits on the session that started it, not on the user.
+  for (const session of sessions) if (session.kind !== "child" && session.notifications && ATTENTION.has(session.status)) waiting.add(session.id);
   return waiting;
 }
 

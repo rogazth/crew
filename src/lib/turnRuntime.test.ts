@@ -196,6 +196,22 @@ describe("news of a session asking", () => {
     await vi.waitFor(() => expect(bodies()).toEqual(["Needs your input"]), { timeout: 3000 });
   });
 
+  it("never comes from a subagent: it answers to the session that started it", async () => {
+    runtime.rememberSessions([{ ...bot, kind: "child" as const, parentId: "lead" }]);
+    status("needs-input");
+    apply({ type: "approval.requested", requestId: 1, name: "Bash", title: "npm run lint", input: null });
+    status("done");
+    status("error");
+    await past(400);
+    expect(bodies()).toEqual([]);
+  });
+
+  it("does not come from a letter between agents", async () => {
+    apply({ type: "user.message", text: "Left 3 comments", fromBot: { id: "s2", name: "Reviewer", kind: "bot" } });
+    await past(100);
+    expect(bodies()).toEqual([]);
+  });
+
   it("says nothing if the session moved on first", async () => {
     status("needs-input");
     status("working");

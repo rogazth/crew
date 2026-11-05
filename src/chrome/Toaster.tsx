@@ -1,4 +1,4 @@
-import { BellIcon, CheckIcon, CircleAlertIcon, MailIcon, MessageCircleQuestionIcon, ShieldQuestionIcon, SquareTerminalIcon, WifiIcon, type LucideIcon as Icon } from "lucide-react";
+import { BellIcon, CheckIcon, CircleAlertIcon, MessageCircleQuestionIcon, ShieldQuestionIcon, SquareTerminalIcon, WifiIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { toast, Toaster as Sonner, useSonner } from "sonner";
 import type { NotificationSource } from "../lib/notifications";
@@ -14,7 +14,6 @@ const ICONS: Record<NotificationSource, Icon> = {
   done: CheckIcon,
   error: CircleAlertIcon,
   process: SquareTerminalIcon,
-  mailbox: MailIcon,
   bell: BellIcon,
   connection: WifiIcon,
   test: BellIcon,

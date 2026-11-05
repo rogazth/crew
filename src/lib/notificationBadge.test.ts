@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { attentionOf, NO_BADGE, nextBadge } from "./notificationBadge";
 
-const row = (id: string, status: "idle" | "working" | "needs-input" | "done" | "error", notifications = true) => ({
+const row = (id: string, status: "idle" | "working" | "needs-input" | "done" | "error", notifications = true, kind: "bot" | "child" = "bot") => ({
   id,
+  kind,
   status,
   notifications,
 });
@@ -11,6 +12,10 @@ describe("attentionOf", () => {
   it("is the sessions waiting on the user, muted ones left out", () => {
     const sessions = [row("a", "needs-input"), row("b", "done"), row("c", "working"), row("d", "error", false)];
     expect([...attentionOf(sessions)]).toEqual(["a", "b"]);
+  });
+
+  it("leaves out subagents, which wait on the session that started them", () => {
+    expect([...attentionOf([row("a", "needs-input", true, "child"), row("b", "done", true, "child"), row("c", "error")])]).toEqual(["c"]);
   });
 });
 

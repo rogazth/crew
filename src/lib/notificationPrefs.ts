@@ -8,7 +8,6 @@ export type NotificationKind =
   | "approval"
   | "error"
   | "process"
-  | "mailbox"
   | "bell"
   | "connection";
 
@@ -18,7 +17,6 @@ export const NOTIFICATION_KINDS: { id: NotificationKind; label: string; descript
   { id: "done", label: "Turn finished", description: "A session finished its turn." },
   { id: "error", label: "Error", description: "A session's turn failed." },
   { id: "process", label: "Command crashed", description: "A process failed or kept crashing." },
-  { id: "mailbox", label: "Bot message", description: "A bot received a message." },
   { id: "bell", label: "Terminal bell", description: "A terminal asked for attention." },
   { id: "connection", label: "Connection", description: "A machine connected or disconnected." },
 ];
@@ -62,8 +60,6 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
     done: { enabled: true, sound: "pop-down" },
     error: { enabled: true, sound: "thud" },
     process: { enabled: true, sound: "thud" },
-    // Bots that work together write to each other often; each turn still ends with its own news.
-    mailbox: { enabled: false, sound: "none" },
     bell: { enabled: true, sound: "bubble" },
     connection: { enabled: true, sound: "none" },
   },
