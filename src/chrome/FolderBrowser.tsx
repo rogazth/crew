@@ -6,7 +6,7 @@ import type { DirListing } from "../lib/protocol";
 import { errorText } from "../lib/remotes";
 import { joinPath, leafOf, parentOf, prettyPath, splitTyped } from "../lib/remotePath";
 import { recentKey } from "../lib/remoteUi";
-import { Button } from "./kit";
+import { Button, EmptyState } from "./kit";
 import { Kbd } from "./Kbd";
 
 type Row = {
@@ -245,20 +245,23 @@ export function FolderBrowser({ env, onOpen }: Props) {
 function Offline({ env }: { env: EnvLink }) {
   const connecting = env.status === "connecting";
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-      {connecting ? <LoaderCircleIcon className="size-5 animate-spin text-text-muted" /> : <WifiOffIcon className="size-5 text-danger" />}
-      <p className="font-medium">{connecting ? `Connecting to ${env.name}…` : env.mismatch ? `${env.name} needs an update` : `${env.name} is offline`}</p>
-      <p className="max-w-72 text-[12px] text-text-muted">
-        {env.mismatch
+    <EmptyState
+      className="flex-1 justify-center px-6 py-10"
+      icon={connecting ? <LoaderCircleIcon className="size-5 animate-spin text-text-muted" /> : <WifiOffIcon className="size-5 text-danger" />}
+      title={connecting ? `Connecting to ${env.name}…` : env.mismatch ? `${env.name} needs an update` : `${env.name} is offline`}
+      description={
+        env.mismatch
           ? "This machine needs an update. Update it in Settings › Environments."
-          : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and that this Mac can reach it.`)}
-      </p>
-      {!connecting && !env.mismatch && (
-        <Button variant="secondary" onClick={() => reconnect(env.id)}>
-          Try again
-        </Button>
-      )}
-    </div>
+          : (env.error ?? `Can't reach ${env.host ?? "the machine"}. Check it's on and that this Mac can reach it.`)
+      }
+      action={
+        !connecting && !env.mismatch ? (
+          <Button variant="secondary" onClick={() => reconnect(env.id)}>
+            Try again
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 

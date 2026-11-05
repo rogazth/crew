@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeftIcon, ArrowRightIcon, BookOpenIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, LayersIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, TableIcon, type LucideIcon as Icon } from "lucide-react";
 import { BotAvatar } from "./BotAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
-import { Footer, GroupHeader } from "./kit";
+import { Footer, GroupHeader, ListNote } from "./kit";
 import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
@@ -254,7 +254,7 @@ export function CommandPalette(props: Props) {
               </div>
             );
           })}
-          {items.length === 0 && <p className="px-2.5 py-8 text-center text-placeholder">No matches</p>}
+          {items.length === 0 && <ListNote />}
         </div>
         <Footer hints={[["↑↓", "move"], ["↵", "open"], ["⇥", "switch"], [">", "commands"]]} />
       </div>

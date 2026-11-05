@@ -1,9 +1,9 @@
 import { MinusIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { IconButton, Select, type Option } from "../chrome/kit";
-import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import { installedMonoFonts } from "../lib/fonts";
+import { Group, Row } from "./settings/ui";
 import {
   clamp,
   DEFAULT_TERMINAL_PREFS,
@@ -53,11 +53,11 @@ export function TerminalSettings() {
 
   return (
     <>
-      <SettingsSection title="Typography">
-        <SettingsRow label="Font size" description="Size of terminal text, in pixels.">
+      <Group title="Typography">
+        <Row label="Font size" description="Size of terminal text, in pixels.">
           {stepper("fontSize", "Font size", LIMITS.fontSize)}
-        </SettingsRow>
-        <SettingsRow id="terminal-font" label="Font family" description="Monospace font for every terminal.">
+        </Row>
+        <Row id="terminal-font" label="Font family" description="Monospace font for every terminal.">
           <Reset
             hidden={prefs.fontFamily === DEFAULT_TERMINAL_PREFS.fontFamily}
             onClick={() => set("fontFamily", DEFAULT_TERMINAL_PREFS.fontFamily)}
@@ -69,20 +69,20 @@ export function TerminalSettings() {
             onChange={(value) => set("fontFamily", value)}
             options={fonts.map((name) => ({ value: name, label: name }))}
           />
-        </SettingsRow>
-      </SettingsSection>
+        </Row>
+      </Group>
 
-      <SettingsSection title="Advanced">
-        <SettingsRow label="Font weight" description="Weight for regular text, 100 to 900.">
+      <Group title="Advanced">
+        <Row label="Font weight" description="Weight for regular text, 100 to 900.">
           {stepper("fontWeight", "Font weight", LIMITS.fontWeight, 100)}
-        </SettingsRow>
-        <SettingsRow label="Bold font weight" description="Weight for bold text, 100 to 900.">
+        </Row>
+        <Row label="Bold font weight" description="Weight for bold text, 100 to 900.">
           {stepper("fontWeightBold", "Bold font weight", LIMITS.fontWeight, 100)}
-        </SettingsRow>
-        <SettingsRow label="Line height" description="Row height as a multiple of the font size.">
+        </Row>
+        <Row label="Line height" description="Row height as a multiple of the font size.">
           {stepper("lineHeight", "Line height", LIMITS.lineHeight, 0.1)}
-        </SettingsRow>
-        <SettingsRow label="Font ligatures" description={autoNote}>
+        </Row>
+        <Row label="Font ligatures" description={autoNote}>
           <Select
             label="Font ligatures"
             className="w-28"
@@ -90,8 +90,8 @@ export function TerminalSettings() {
             onChange={(value) => set("ligatures", value)}
             options={LIGATURES}
           />
-        </SettingsRow>
-      </SettingsSection>
+        </Row>
+      </Group>
     </>
   );
 }

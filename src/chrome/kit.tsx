@@ -2,8 +2,9 @@ import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
 import { Select as BaseSelect } from "@base-ui/react/select";
 import { Switch as BaseSwitch } from "@base-ui/react/switch";
+import { Tabs } from "@base-ui/react/tabs";
 import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
-import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, LoaderCircleIcon, type LucideIcon as Icon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, LoaderCircleIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -16,6 +17,7 @@ import type {
 } from "react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Spring, frames, reducedMotion, type Tune } from "../lib/spring";
 import { Kbd } from "./Kbd";
 
 /**
@@ -23,6 +25,9 @@ import { Kbd } from "./Kbd";
  * same few tokens the sidebar and the palette use, so a sheet, a menu and a
  * settings page look like one app instead of three libraries.
  */
+
+/** A page's title: the frame's, and any page that draws its own header. */
+export const PAGE_TITLE = "text-[22px] leading-7 font-semibold tracking-[-0.02em]";
 
 /** A floating surface: palette, dialog, menu. */
 export const SURFACE = "rounded-float bg-surface text-text shadow-float";
@@ -86,6 +91,171 @@ export function TextArea({ className = "", ref, ...rest }: TextareaHTMLAttribute
   return <textarea ref={ref} {...rest} className={`${CONTROL} min-h-20 resize-y py-2 leading-relaxed ${className}`} />;
 }
 
+/** The small round clear inside a search, which leaves the focus in the field. */
+function ClearSearch({ onClear }: { onClear: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Clear search"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClear}
+      className="grid size-4 shrink-0 place-items-center rounded-full bg-text-muted/25 text-text outline-none hover:bg-text-muted/40 focus-visible:ring-2 focus-visible:ring-focus/50"
+    >
+      <XIcon className="size-2.5" strokeWidth={3} />
+    </button>
+  );
+}
+
+const SEARCH_INPUT = "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder";
+
+/**
+ * The search over a list or a page: a filled field with its glass, the same
+ * wherever a list narrows. Escape empties it first, and only then means anything
+ * else. `compact` is the sidebar's, on the chrome's ground.
+ */
+export function SearchField({
+  value,
+  onChange,
+  label,
+  placeholder = label,
+  autoFocus = false,
+  compact = false,
+  onKeyDown,
+  ref,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  placeholder?: string;
+  autoFocus?: boolean;
+  compact?: boolean;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+  ref?: Ref<HTMLInputElement>;
+}) {
+  return (
+    <label
+      className={`flex min-w-0 items-center gap-2 transition-shadow focus-within:shadow-[0_0_0_1.5px_color-mix(in_oklab,var(--color-focus)_45%,transparent)] ${
+        compact ? "h-8 rounded-lg bg-fill px-2.5" : "h-9 rounded-[10px] bg-card px-3"
+      }`}
+    >
+      <SearchIcon className={`shrink-0 text-icon ${compact ? "size-3.5" : "size-4"}`} />
+      <input
+        ref={ref}
+        value={value}
+        autoFocus={autoFocus}
+        spellCheck={false}
+        placeholder={placeholder}
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && value) {
+            event.stopPropagation();
+            event.nativeEvent.stopImmediatePropagation();
+            onChange("");
+            return;
+          }
+          onKeyDown?.(event);
+        }}
+        className={SEARCH_INPUT}
+      />
+      {value && <ClearSearch onClear={() => onChange("")} />}
+    </label>
+  );
+}
+
+/** A find that opens in place in a sidebar or a panel: X or Escape closes it, and so does leaving it empty. */
+export function FindField({
+  value,
+  onChange,
+  onClose,
+  label,
+  onKeyDown,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  label: string;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <div className="flex h-8 items-center gap-2 rounded-chrome bg-card pr-1 pl-2">
+      <SearchIcon className="size-3.5 shrink-0 text-icon" />
+      <input
+        autoFocus
+        value={value}
+        placeholder={label}
+        aria-label={label}
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => !value.trim() && onClose()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+            return;
+          }
+          onKeyDown?.(event);
+        }}
+        className={`${SEARCH_INPUT} py-0`}
+      />
+      <button
+        type="button"
+        aria-label="Close search"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onClose}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-icon hover:bg-hover hover:text-text"
+      >
+        <XIcon className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** The search at the top of a popup's list, ruled off from it. */
+export function PopupSearch({
+  onClear,
+  ref,
+  ...input
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "className"> & { onClear?: () => void; ref?: Ref<HTMLInputElement> }) {
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
+      <SearchIcon className="size-3.5 shrink-0 text-icon" />
+      <input ref={ref} spellCheck={false} {...input} className={SEARCH_INPUT} />
+      {input.value && onClear && <ClearSearch onClear={onClear} />}
+    </div>
+  );
+}
+
+/** What a popup's list says when it has no rows. */
+export function ListNote({ children = "No matches" }: { children?: ReactNode }) {
+  return <p className="px-2 py-8 text-center text-placeholder">{children}</p>;
+}
+
+/** A page's or a list's nothing: what is missing, what to try, and at most one way out. */
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  className = "py-10",
+}: {
+  icon?: ReactNode;
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`flex flex-col items-center gap-1 text-center ${className}`}>
+      {icon && <span className="mb-1 text-placeholder">{icon}</span>}
+      <p className="font-medium">{title}</p>
+      {description && <p className="max-w-72 text-[12px] text-text-muted">{description}</p>}
+      {action && <div className="mt-2">{action}</div>}
+    </div>
+  );
+}
+
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 const VARIANTS: Record<Variant, string> = {
@@ -95,8 +265,11 @@ const VARIANTS: Record<Variant, string> = {
   danger: "bg-danger text-white hover:bg-danger/90",
 };
 
+const SIZES = { md: "h-8", sm: "h-7 text-[12px]" };
+
 export function Button({
   variant = "secondary",
+  size = "md",
   icon: Glyph,
   loading = false,
   className = "",
@@ -105,19 +278,22 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant;
+  /** "sm": inside a row or a card, beside what it acts on. */
+  size?: keyof typeof SIZES;
   icon?: Icon;
   loading?: boolean;
   ref?: Ref<HTMLButtonElement>;
 }) {
+  const glyph = size === "sm" ? "size-3.5" : "size-4";
   return (
     <button
       ref={ref}
       type="button"
       {...rest}
       disabled={rest.disabled || loading}
-      className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 disabled:opacity-50 ${VARIANTS[variant]} ${className}`}
+      className={`inline-flex ${SIZES[size]} shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 disabled:opacity-50 ${VARIANTS[variant]} ${className}`}
     >
-      {loading ? <LoaderCircleIcon className="size-4 animate-spin" /> : Glyph && <Glyph className="size-4" />}
+      {loading ? <LoaderCircleIcon className={`${glyph} animate-spin`} /> : Glyph && <Glyph className={glyph} />}
       {children}
     </button>
   );
@@ -550,7 +726,7 @@ export function PageFrame({
         <div className={`mx-auto flex ${width === "wide" ? "max-w-[920px]" : "max-w-[720px]"} min-h-full flex-col gap-7 px-10 pt-12 pb-28`}>
           <header className={`flex items-center gap-4 px-1 ${hideHeader ? "sr-only" : ""}`}>
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 ref={heading} className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
+              <h1 ref={heading} className={`truncate ${PAGE_TITLE}`}>{title}</h1>
               {subtitle && <p className="text-text-muted">{subtitle}</p>}
             </div>
             {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
@@ -573,6 +749,7 @@ export function FilterChip<T extends string>({
   label,
   icon: Glyph,
   neutral,
+  align = "start",
 }: {
   value: T;
   options: Option<T>[];
@@ -581,6 +758,8 @@ export function FilterChip<T extends string>({
   icon?: Icon;
   /** The value that filters nothing; the chip stays quiet on it. */
   neutral?: T;
+  /** "end" for a chip at the right end of its line. */
+  align?: "start" | "end";
 }) {
   const current = options.find((option) => option.value === value);
   const lit = neutral !== undefined && value !== neutral;
@@ -599,7 +778,7 @@ export function FilterChip<T extends string>({
         <ChevronDownIcon className="size-3 opacity-60" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner side="bottom" align="start" sideOffset={6} className="z-50">
+        <Menu.Positioner side="bottom" align={align} sideOffset={6} className="z-50">
           <Menu.Popup className={PANEL}>
             <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
               {options.map((option) => (
@@ -616,5 +795,109 @@ export function FilterChip<T extends string>({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
+  );
+}
+
+// ζ ≈ 0.75: it gets there quick and settles with a touch of give.
+const PILL_TUNE: Tune = { stiffness: 520, damping: 34 };
+
+/**
+ * The tabs themselves, inside a `Tabs.Root` that holds `value`: the one open
+ * on a pill that slides to the next on a spring; picked again mid-way, it
+ * turns with the speed it had. The pill only moves and stretches; the labels
+ * never change weight, so nothing shifts under it. A label that changes width
+ * (a count) is measured again.
+ */
+export function PillTabs({
+  value,
+  tabs,
+  className = "",
+}: {
+  value: string;
+  tabs: { key: string; label: ReactNode }[];
+  className?: string;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+  const pill = useRef<HTMLSpanElement>(null);
+  const x = useRef<Spring | null>(null);
+  const w = useRef<Spring | null>(null);
+  useLayoutEffect(() => {
+    const tab = list.current?.querySelector<HTMLElement>(`[data-tab="${value}"]`);
+    const el = pill.current;
+    if (!tab || !el) return;
+    const paint = () => {
+      el.style.transform = `translateX(${x.current!.x}px)`;
+      el.style.width = `${w.current!.x}px`;
+    };
+    // The first time it is just there.
+    if (!x.current || !w.current) {
+      x.current = new Spring(tab.offsetLeft);
+      w.current = new Spring(tab.offsetWidth);
+      return paint();
+    }
+    const sx = x.current;
+    const sw = w.current;
+    sx.to = tab.offsetLeft;
+    sw.to = tab.offsetWidth;
+    if (sx.x === sx.to && sw.x === sw.to) return;
+    if (reducedMotion()) {
+      sx.snap();
+      sw.snap();
+      return paint();
+    }
+    return frames((dt, stalled) => {
+      sx.step(dt, PILL_TUNE);
+      sw.step(dt, PILL_TUNE);
+      if (stalled || (sx.settled(0.1) && sw.settled(0.1))) {
+        sx.snap();
+        sw.snap();
+      }
+      paint();
+      return sx.x !== sx.to || sw.x !== sw.to;
+    });
+  });
+  return (
+    <Tabs.List ref={list} className={`relative flex w-fit items-center rounded-full p-0.5 ${className}`}>
+      <span ref={pill} aria-hidden className="absolute top-0.5 bottom-0.5 left-0 rounded-full bg-card" />
+      {tabs.map((tab) => (
+        <Tabs.Tab
+          key={tab.key}
+          value={tab.key}
+          data-tab={tab.key}
+          className="relative flex h-7 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 data-active:text-text"
+        >
+          {tab.label}
+        </Tabs.Tab>
+      ))}
+    </Tabs.List>
+  );
+}
+
+/** A list split by state: pill tabs that say how many each one holds. */
+export function FilterTabs<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string; count: number }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <Tabs.Root value={value} onValueChange={(next) => onChange(next as T)}>
+      <PillTabs
+        value={value}
+        tabs={options.map((option) => ({
+          key: option.value,
+          label: (
+            <>
+              {option.label}
+              <span className="tabular-nums opacity-60">{option.count}</span>
+            </>
+          ),
+        }))}
+        className="-ml-0.5"
+      />
+    </Tabs.Root>
   );
 }

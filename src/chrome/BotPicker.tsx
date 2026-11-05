@@ -6,10 +6,10 @@
 // its workspace's. Popup: a search field, then bots grouped by
 // workspace. ↑/↓ move, Enter picks, Esc clears the search and then closes.
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, SearchIcon, XIcon } from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { BotAvatar } from "./BotAvatar";
-import { TOKEN } from "./kit";
+import { ListNote, PopupSearch, TOKEN } from "./kit";
 import { ProviderIcon } from "./ProviderIcon";
 import * as api from "../lib/api";
 import { fuzzyMatch } from "../lib/fuzzy";
@@ -155,47 +155,32 @@ export function BotPicker({ workspaces, workspaceId, sessionId, onChange }: Prop
             onKeyDown={onKeyDown}
             className="flex max-h-[min(420px,var(--available-height))] w-80 origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0 motion-reduce:transition-none"
           >
-            <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
-              <SearchIcon className="size-3.5 shrink-0 text-icon" />
-              <input
-                ref={search}
-                value={query}
-                placeholder="Search bots or workspaces"
-                aria-label="Search bots"
-                role="combobox"
-                aria-expanded
-                aria-controls={listId}
-                aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
-                spellCheck={false}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  setQuery(next);
-                  if (next.trim()) setCursor(0);
-                  else setCursor(currentIndex());
-                }}
-                className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-              />
-              {query && (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    clear();
-                    search.current?.focus();
-                  }}
-                  className="grid size-5 shrink-0 place-items-center rounded-md text-icon outline-none hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              )}
-            </div>
+            <PopupSearch
+              ref={search}
+              value={query}
+              placeholder="Search bots or workspaces"
+              aria-label="Search bots"
+              role="combobox"
+              aria-expanded
+              aria-controls={listId}
+              aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
+              onChange={(event) => {
+                const next = event.target.value;
+                setQuery(next);
+                if (next.trim()) setCursor(0);
+                else setCursor(currentIndex());
+              }}
+              onClear={() => {
+                clear();
+                search.current?.focus();
+              }}
+            />
 
             <div ref={list} id={listId} role="listbox" aria-label="Bots" className="min-h-0 flex-1 overflow-y-auto p-1.5">
               {loaded === null ? (
-                <p className="px-2 py-8 text-center text-placeholder">Loading bots…</p>
+                <ListNote>Loading bots…</ListNote>
               ) : groups.length === 0 ? (
-                <p className="px-2 py-8 text-center text-placeholder">{searching ? "No matches" : "No workspaces"}</p>
+                <ListNote>{searching ? "No matches" : "No workspaces"}</ListNote>
               ) : (
                 groups.map((group, groupAt) => (
                   <div key={group.workspace.id} role="group" aria-label={group.workspace.name} className="pb-1 last:pb-0">

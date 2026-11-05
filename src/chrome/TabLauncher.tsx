@@ -2,7 +2,7 @@ import { Popover } from "@base-ui/react/popover";
 import { BotIcon, FolderTreeIcon, GitBranchIcon, GlobeIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
 import { Fragment, cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import { BotAvatar } from "./BotAvatar";
-import { Footer, GroupHeader } from "./kit";
+import { Footer, GroupHeader, ListNote } from "./kit";
 import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
@@ -325,7 +325,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
           );
         })}
 
-        {items.length === 0 && <p className="px-3 py-6 text-center text-placeholder">No matches</p>}
+        {items.length === 0 && <ListNote />}
       </div>
       <Footer
         hints={[

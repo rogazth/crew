@@ -124,21 +124,14 @@ describe("dispatchNotification", () => {
     expect(playSound).not.toHaveBeenCalled();
   });
 
-  it("does nothing with notifications off, paused, or the kind switched off", async () => {
+  it("does nothing with notifications off or the kind switched off", async () => {
     prefs({ enabled: false });
     expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "disabled" });
-    prefs({ pausedUntil: Date.now() + 60_000 });
-    expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "paused" });
     prefs({ kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, done: { enabled: false, sound: "pop-down" } } });
     expect(await dispatchNotification(done)).toEqual({ delivered: false, reason: "source-disabled" });
     expect(playSound).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
     expect(playSound).not.toHaveBeenCalled();
-  });
-
-  it("is on again once the pause runs out", async () => {
-    prefs({ pausedUntil: Date.now() - 1 });
-    expect(await dispatchNotification(done)).toEqual({ delivered: true });
   });
 
   it("is quiet for a session with its notifications off", async () => {

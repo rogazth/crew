@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { notificationsHost } from "../lib/host";
 import { attentionOf, NO_BADGE, nextBadge } from "../lib/notificationBadge";
-import { isPaused } from "../lib/notificationPrefs";
 import type { Session } from "../lib/types";
 import { useNotificationPrefs } from "./useNotificationPrefs";
 
@@ -42,6 +41,6 @@ export function useDockBadge(sessions: Session[]) {
     if (count === sent.current) return;
     const rose = count > (sent.current ?? 0);
     sent.current = count;
-    host.setBadge({ count, bounce: rose && prefs.bounce && !isPaused(prefs, Date.now()) });
+    host.setBadge({ count, bounce: rose && prefs.bounce });
   }, [focused, prefs, sessions, shown]);
 }

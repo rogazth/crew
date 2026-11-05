@@ -7,8 +7,6 @@
 import { Menu } from "@base-ui/react/menu";
 import {
   ArrowDownToLineIcon,
-  CheckIcon,
-  ChevronsUpDownIcon,
   CircleAlertIcon,
   EllipsisIcon,
   FolderSearchIcon,
@@ -23,9 +21,8 @@ import {
   XIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { LucideIcon } from "lucide-react";
-import { ConnectionDot, ConnectionLabel, EnvGlyph } from "../../chrome/EnvBits";
-import { Button, IconButton, PANEL, ROW, Select } from "../../chrome/kit";
+import { EnvGlyph } from "../../chrome/EnvBits";
+import { Button, FilterChip, IconButton, PANEL, ROW } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { useEnvLinks } from "../../hooks/useEnvLinks";
 import { useProviderJobs } from "../../hooks/useProviderJobs";
@@ -38,7 +35,7 @@ import { errorText } from "../../lib/remotes";
 import { PROVIDER_META } from "./providerMeta";
 import { setProvidersEnv, useProvidersEnv } from "./route";
 import { RowAction } from "./integrations/bits";
-import { Callout, ConfirmDialog, CopyButton, Heading, toast, type ConfirmAsk } from "./ui";
+import { Callout, ConfirmDialog, CopyButton, Heading, Notice, toast, type ConfirmAsk } from "./ui";
 
 type Props = {
   onOpenTerminal: (envId: string, input?: string) => Promise<void>;
@@ -173,7 +170,7 @@ function Machine({ link, links, onOpenTerminal, onSettled }: Props & { link: Env
   const several = links.length > 1;
   const actions = (
     <div className="flex items-center gap-1">
-      <Button variant="ghost" className="h-7 text-[12px]" icon={RefreshCwIcon} loading={status.loading} disabled={!live} onClick={check}>
+      <Button variant="ghost" size="sm" icon={RefreshCwIcon} loading={status.loading} disabled={!live} onClick={check}>
         Check updates
       </Button>
       {offered.length > 0 && <InstallMenu rows={offered} ctx={ctx} />}
@@ -187,17 +184,7 @@ function Machine({ link, links, onOpenTerminal, onSettled }: Props & { link: Env
         {loaded && !empty && <Heading title="Installed" {...(several ? {} : { action: <div className="-mr-2.5">{actions}</div> })} />}
         {several && (
           <div data-setting="providers-env" className="flex items-center justify-between gap-3">
-            <Select
-              label="Machine"
-              className="w-52"
-              value={link.id}
-              onChange={setProvidersEnv}
-              options={links.map((l) => ({
-                value: l.id,
-                label: l.status === "offline" ? `${l.name} (offline)` : l.name,
-                icon: <EnvGlyph link={l} className="size-3.5 shrink-0 text-icon" />,
-              }))}
-            />
+            <EnvPicker link={link} links={links} />
             {loaded && !empty && actions}
           </div>
         )}
@@ -252,46 +239,20 @@ const DONE = {
 
 /* ── Which machine ──────────────────────────────────────────────────── */
 
-/**
- * A fixed-width trigger: picking a machine with a longer name never moves the row.
- * Providers' and Connectors' share the machine they show (`setProvidersEnv`); `small` sits in a section's title.
- */
-export function EnvPicker({ link, links, small = false }: { link: EnvLink; links: EnvLink[]; small?: boolean }) {
+/** Providers' and Connectors' share the machine they show (`setProvidersEnv`); `align="end"` when it ends its line. */
+export function EnvPicker({ link, links, align }: { link: EnvLink; links: EnvLink[]; align?: "start" | "end" }) {
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label="Machine"
-        className={`flex items-center rounded-lg bg-card text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50 data-popup-open:bg-hover ${
-          small ? "h-7 w-48 gap-2 pr-1.5 pl-1.5 text-[12.5px]" : "h-9 w-60 gap-2.5 pr-2 pl-2.5"
-        }`}
-      >
-        <span className={`grid shrink-0 place-items-center rounded-md bg-canvas text-icon ${small ? "size-5" : "size-6"}`}>
-          <EnvGlyph link={link} className="size-3.5" />
-        </span>
-        <span className="min-w-0 flex-1 truncate font-medium">{link.name}</span>
-        <ConnectionDot link={link} />
-        <ChevronsUpDownIcon className="size-3.5 shrink-0 text-icon" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner side="bottom" align={small ? "end" : "start"} sideOffset={4} className="z-50">
-          <Menu.Popup className={PANEL}>
-            <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-text-muted">Machine</div>
-            {links.map((l) => (
-              <Menu.Item key={l.id} className={`${ROW} h-11`} onClick={() => setProvidersEnv(l.id)}>
-                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-card text-icon">
-                  <EnvGlyph link={l} className="size-3.5" />
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{l.name}</span>
-                  <ConnectionLabel link={l} className="text-[11px]" />
-                </span>
-                <CheckIcon className={`size-4 shrink-0 ${l.id === link.id ? "" : "invisible"}`} />
-              </Menu.Item>
-            ))}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+    <FilterChip
+      label="Machine"
+      value={link.id}
+      onChange={setProvidersEnv}
+      {...(align ? { align } : {})}
+      options={links.map((l) => ({
+        value: l.id,
+        label: l.status === "offline" ? `${l.name} (offline)` : l.name,
+        icon: <EnvGlyph link={l} className="size-3.5" />,
+      }))}
+    />
   );
 }
 
@@ -449,38 +410,6 @@ function signOut(id: ProviderId, ctx: Ctx) {
   void jobs.start(id, "logout").catch(fail);
 }
 
-/** Something a card has to say: a line or two across its whole width, the colour only in the icon. */
-function Notice({
-  icon: Glyph,
-  ink,
-  spinning = false,
-  title,
-  children,
-  actions,
-}: {
-  icon: LucideIcon;
-  ink: string;
-  spinning?: boolean;
-  title: React.ReactNode;
-  children?: React.ReactNode;
-  actions?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-2.5 rounded-lg bg-canvas px-3 py-2 shadow-[0_0_0_1px_var(--color-hairline)]">
-      <Glyph className={`mt-0.5 size-4 shrink-0 ${ink} ${spinning ? "animate-spin motion-reduce:animate-none" : ""}`} />
-      <div className="min-w-0 flex-1">
-        <p>{title}</p>
-        {children && (
-          <p className="line-clamp-2 text-[12px] text-text-muted" data-selectable>
-            {children}
-          </p>
-        )}
-      </div>
-      {actions && <div className="flex shrink-0 items-center gap-1 self-center">{actions}</div>}
-    </div>
-  );
-}
-
 function DeviceCode({ flow, ctx }: { flow: { userCode: string; verificationUrl: string }; ctx: Ctx }) {
   return (
     <Notice
@@ -495,10 +424,10 @@ function DeviceCode({ flow, ctx }: { flow: { userCode: string; verificationUrl: 
       actions={
         <>
           <CopyButton text={flow.userCode} label="Copy code" />
-          <Button variant="ghost" className="h-7 text-[12px]" onClick={() => void openUrl(flow.verificationUrl).catch(fail)}>
+          <Button variant="ghost" size="sm" onClick={() => void openUrl(flow.verificationUrl).catch(fail)}>
             Open
           </Button>
-          <Button variant="ghost" className="h-7 text-[12px]" onClick={() => void ctx.jobs.cancelLogin().catch(fail)}>
+          <Button variant="ghost" size="sm" onClick={() => void ctx.jobs.cancelLogin().catch(fail)}>
             Cancel
           </Button>
         </>
@@ -521,7 +450,7 @@ function InstallMenu({ rows, ctx, primary = false }: { rows: { id: ProviderId; s
       <Menu.Trigger
         disabled={!ctx.live}
         render={
-          <Button variant={primary ? "primary" : "ghost"} className={primary ? "" : "h-7 text-[12px]"} icon={PlusIcon}>
+          <Button variant={primary ? "primary" : "ghost"} size={primary ? "md" : "sm"} icon={PlusIcon}>
             Install an agent
           </Button>
         }
@@ -568,11 +497,11 @@ function FailurePanel({ id, job, p, ctx }: { id: ProviderId; job: ProviderJob; p
       actions={
         <>
           {script && (
-            <Button variant="ghost" className="h-7 text-[12px]" disabled={!live} onClick={() => void jobs.start(id, "install", "script").catch(fail)}>
+            <Button variant="ghost" size="sm" disabled={!live} onClick={() => void jobs.start(id, "install", "script").catch(fail)}>
               Use script
             </Button>
           )}
-          <Button variant="ghost" className="h-7 text-[12px]" disabled={!live} onClick={() => void jobs.start(id, job.action, job.method).catch(fail)}>
+          <Button variant="ghost" size="sm" disabled={!live} onClick={() => void jobs.start(id, job.action, job.method).catch(fail)}>
             Try again
           </Button>
           <IconButton icon={XIcon} label="Dismiss" title="Dismiss" className="size-7" onClick={() => jobs.clear(id)} />

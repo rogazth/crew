@@ -50,8 +50,6 @@ export type NotificationPrefs = {
   bounce: boolean;
   /** 0 to 100, for the sounds Crew plays itself. */
   volume: number;
-  /** Do not disturb until this time (ms since the epoch). */
-  pausedUntil: number | null;
 };
 
 export const NOTIFICATION_PREFS_KEY = "notifications:prefs";
@@ -73,7 +71,6 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   badge: true,
   bounce: false,
   volume: 70,
-  pausedUntil: null,
 };
 
 const SOUND_IDS = new Set(SOUNDS.map((sound) => sound.id));
@@ -120,24 +117,7 @@ export function parseNotificationPrefs(raw: string | null): NotificationPrefs {
       typeof parsed.volume === "number" && Number.isFinite(parsed.volume)
         ? Math.round(Math.min(100, Math.max(0, parsed.volume)))
         : defaults.volume,
-    pausedUntil: typeof parsed.pausedUntil === "number" && Number.isFinite(parsed.pausedUntil) ? parsed.pausedUntil : null,
   };
-}
-
-export function isPaused(prefs: NotificationPrefs, now: number): boolean {
-  return prefs.pausedUntil !== null && prefs.pausedUntil > now;
-}
-
-/**
- * Do not disturb's two lengths: an hour, or until eight in the morning. Past
- * midnight, "tomorrow" is the morning about to come, not the one after.
- */
-export function pauseEnd(choice: "hour" | "tomorrow", now: Date): number {
-  if (choice === "hour") return now.getTime() + 60 * 60 * 1000;
-  const end = new Date(now);
-  if (now.getHours() >= 5) end.setDate(end.getDate() + 1);
-  end.setHours(8, 0, 0, 0);
-  return end.getTime();
 }
 
 export const notificationPrefsSetting = defineSetting<NotificationPrefs>({

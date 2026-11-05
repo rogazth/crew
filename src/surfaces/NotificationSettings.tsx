@@ -2,14 +2,10 @@ import { Slider } from "@base-ui/react/slider";
 import { BellOffIcon } from "lucide-react";
 import { useState } from "react";
 import { Button, Select, Switch, Toggle } from "../chrome/kit";
-import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
-import { useNow } from "../hooks/useNow";
 import { useNotificationPrefs } from "../hooks/useNotificationPrefs";
 import { notificationsHost } from "../lib/host";
 import {
-  isPaused,
   NOTIFICATION_KINDS,
-  pauseEnd,
   SOUNDS,
   type NotificationKind,
   type NotificationPrefs,
@@ -18,8 +14,8 @@ import {
 import { dispatchNotification, type SkipReason } from "../lib/notifications";
 import { playSound } from "../lib/notificationSound";
 import { READS, refresh, useRead } from "../lib/settingsReads";
-import { clock, dayName } from "../lib/time";
-import { Callout, toast } from "./settings/ui";
+import { RowAction } from "./settings/integrations/bits";
+import { Group, Row, Callout, toast } from "./settings/ui";
 
 const TEST_REASONS: Partial<Record<SkipReason, string>> = {
   blocked: "Notifications are blocked.",
@@ -47,7 +43,7 @@ export function NotificationSettings() {
   return (
     <>
       {status === "blocked" && <Blocked />}
-      <SettingsSection>
+      <Group>
         <Toggle
           label="Notifications"
           description="Turn all app notifications on or off."
@@ -60,20 +56,17 @@ export function NotificationSettings() {
           checked={prefs.toasts}
           onChange={(checked) => set("toasts", checked)}
         />
-        <DoNotDisturb prefs={prefs} onChange={(until) => set("pausedUntil", until)} />
-        <SettingsRow label="Test" description="Send a sample notification.">
-          <Button className="h-7 text-[12px]" onClick={test}>
-            Send test
-          </Button>
-        </SettingsRow>
-      </SettingsSection>
+        <Row label="Test" description="Send a sample notification.">
+          <RowAction label="Send test" onClick={test} />
+        </Row>
+      </Group>
 
       <div className={`flex flex-col gap-8 transition-opacity ${prefs.enabled ? "" : "opacity-50"}`}>
-        <SettingsSection title="Events">
+        <Group title="Events">
           {NOTIFICATION_KINDS.map((kind) => {
             const own = prefs.kinds[kind.id];
             return (
-              <SettingsRow key={kind.id} label={kind.label} description={kind.description}>
+              <Row key={kind.id} label={kind.label} description={kind.description}>
                 <SoundPicker
                   label={`${kind.label} sound`}
                   value={own.sound}
@@ -88,18 +81,18 @@ export function NotificationSettings() {
                     onChange={(enabled) => setKind(kind.id, { enabled })}
                   />
                 </div>
-              </SettingsRow>
+              </Row>
             );
           })}
-        </SettingsSection>
+        </Group>
 
-        <SettingsSection title="Sound">
-          <SettingsRow id="notif-sound" label="Volume" description="Doesn't affect the System sound.">
+        <Group title="Sound">
+          <Row id="notif-sound" label="Volume" description="Doesn't affect the System sound.">
             <Volume value={prefs.volume} onCommit={(volume) => set("volume", volume)} preview={prefs.kinds["needs-input"].sound} />
-          </SettingsRow>
-        </SettingsSection>
+          </Row>
+        </Group>
 
-        <SettingsSection title="Dock">
+        <Group title="Dock">
           <div data-setting="notify-needs-you">
             <Toggle
               label="Badge"
@@ -114,37 +107,9 @@ export function NotificationSettings() {
             checked={prefs.bounce}
             onChange={(checked) => set("bounce", checked)}
           />
-        </SettingsSection>
+        </Group>
       </div>
     </>
-  );
-}
-
-function DoNotDisturb({ prefs, onChange }: { prefs: NotificationPrefs; onChange: (until: number | null) => void }) {
-  const now = useNow(30_000);
-  const paused = isPaused(prefs, now);
-  const until = prefs.pausedUntil ?? 0;
-  const when = dayName(until, now) === "Today" ? clock(until) : `${dayName(until, now).toLowerCase()} at ${clock(until)}`;
-  return (
-    <SettingsRow
-      label="Do not disturb"
-      description={paused ? `Paused until ${when}.` : "Pause notifications for a while."}
-    >
-      {paused ? (
-        <Button className="h-7 text-[12px]" onClick={() => onChange(null)}>
-          Resume
-        </Button>
-      ) : (
-        <>
-          <Button variant="ghost" className="h-7 text-[12px]" onClick={() => onChange(pauseEnd("hour", new Date()))}>
-            For 1 hour
-          </Button>
-          <Button variant="ghost" className="h-7 text-[12px]" onClick={() => onChange(pauseEnd("tomorrow", new Date()))}>
-            Until tomorrow
-          </Button>
-        </>
-      )}
-    </SettingsRow>
   );
 }
 
@@ -159,7 +124,7 @@ function Blocked() {
       description={host ? undefined : "In your browser's site settings."}
       action={
         host && (
-          <Button className="h-7 text-[12px]" onClick={() => void host.openSettings()}>
+          <Button size="sm" onClick={() => void host.openSettings()}>
             Open system settings
           </Button>
         )

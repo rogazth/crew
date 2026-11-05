@@ -1,5 +1,4 @@
 import { Select, Toggle, type Option } from "../../chrome/kit";
-import { SettingsRow, SettingsSection } from "../../chrome/SettingsRow";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { changeSitePermissions, useSitePermissions } from "../../hooks/useSitePermissions";
 import { SEARCH_ENGINES } from "../../lib/browserPrefs";
@@ -7,12 +6,13 @@ import { decide, forget, PERMISSION_LABELS, SITE_PERMISSIONS, type SiteDecision,
 import { BROWSER_CLICK } from "../../lib/external";
 import { SiteIcon } from "../chat/SiteIcon";
 import { RowAction } from "./integrations/bits";
+import { Group, Row } from "./ui";
 
 export function BrowserSettings() {
   const { prefs, update } = useBrowserPrefs();
   return (
     <>
-      <SettingsSection title="Links">
+      <Group title="Links">
         <div data-setting="links-in-crew">
           <Toggle
             label="Open links in Crew"
@@ -25,9 +25,9 @@ export function BrowserSettings() {
             onChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
           />
         </div>
-      </SettingsSection>
-      <SettingsSection title="Pages">
-        <SettingsRow id="search-engine" label="Search engine" description="For address bar searches.">
+      </Group>
+      <Group title="Pages">
+        <Row id="search-engine" label="Search engine" description="For address bar searches.">
           <Select
             label="Search engine"
             className="w-40"
@@ -35,8 +35,8 @@ export function BrowserSettings() {
             onChange={(searchTemplate) => update({ ...prefs, searchTemplate })}
             options={SEARCH_ENGINES.map((engine): Option<string> => ({ value: engine.template, label: engine.label }))}
           />
-        </SettingsRow>
-      </SettingsSection>
+        </Row>
+      </Group>
       <SitePermissionsSettings />
     </>
   );
@@ -47,13 +47,13 @@ function SitePermissionsSettings() {
   const decisions = useSitePermissions();
   const sites = Object.keys(decisions).sort((a, b) => a.localeCompare(b));
   return (
-    <SettingsSection id="site-permissions" title="Site permissions">
+    <Group id="site-permissions" title="Site permissions">
       {sites.length === 0 ? (
         <p className="py-3 text-text-muted">No site permissions saved.</p>
       ) : (
         sites.map((site) => <SiteRow key={site} site={site} decided={decisions[site] ?? {}} />)
       )}
-    </SettingsSection>
+    </Group>
   );
 }
 

@@ -3,11 +3,8 @@
 // muted line, and the row's control at its right end. No eyebrow over a card:
 // what a card holds says what it is, in its own first row when it needs one.
 import { Tabs } from "@base-ui/react/tabs";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Spring, frames, reducedMotion, type Tune } from "../lib/spring";
-
-// ζ ≈ 0.75: it gets there quick and settles with a touch of give.
-const PILL_TUNE: Tune = { stiffness: 520, damping: 34 };
+import { useState, type ReactNode } from "react";
+import { PillTabs } from "./kit";
 
 /** A card of rows, hairlines between them. */
 // A rule between rows, never on the focus guards a picker puts beside its trigger while its menu is open.
@@ -116,77 +113,5 @@ export function PaneTabs({ tabs }: { tabs: { key: string; label: string; content
         </Tabs.Panel>
       ))}
     </Tabs.Root>
-  );
-}
-
-/**
- * The tabs themselves, inside a `Tabs.Root` that holds `value`: the one open
- * on a pill that slides to the next on a spring; picked again mid-way, it
- * turns with the speed it had. The pill only moves and stretches; the labels
- * never change weight, so nothing shifts under it. A label that changes width
- * (a count) is measured again.
- */
-export function PillTabs({
-  value,
-  tabs,
-  className = "",
-}: {
-  value: string;
-  tabs: { key: string; label: ReactNode }[];
-  className?: string;
-}) {
-  const list = useRef<HTMLDivElement>(null);
-  const pill = useRef<HTMLSpanElement>(null);
-  const x = useRef<Spring | null>(null);
-  const w = useRef<Spring | null>(null);
-  useLayoutEffect(() => {
-    const tab = list.current?.querySelector<HTMLElement>(`[data-tab="${value}"]`);
-    const el = pill.current;
-    if (!tab || !el) return;
-    const paint = () => {
-      el.style.transform = `translateX(${x.current!.x}px)`;
-      el.style.width = `${w.current!.x}px`;
-    };
-    // The first time it is just there.
-    if (!x.current || !w.current) {
-      x.current = new Spring(tab.offsetLeft);
-      w.current = new Spring(tab.offsetWidth);
-      return paint();
-    }
-    const sx = x.current;
-    const sw = w.current;
-    sx.to = tab.offsetLeft;
-    sw.to = tab.offsetWidth;
-    if (sx.x === sx.to && sw.x === sw.to) return;
-    if (reducedMotion()) {
-      sx.snap();
-      sw.snap();
-      return paint();
-    }
-    return frames((dt, stalled) => {
-      sx.step(dt, PILL_TUNE);
-      sw.step(dt, PILL_TUNE);
-      if (stalled || (sx.settled(0.1) && sw.settled(0.1))) {
-        sx.snap();
-        sw.snap();
-      }
-      paint();
-      return sx.x !== sx.to || sw.x !== sw.to;
-    });
-  });
-  return (
-    <Tabs.List ref={list} className={`relative flex w-fit items-center rounded-full p-0.5 ${className}`}>
-      <span ref={pill} aria-hidden className="absolute top-0.5 bottom-0.5 left-0 rounded-full bg-card" />
-      {tabs.map((tab) => (
-        <Tabs.Tab
-          key={tab.key}
-          value={tab.key}
-          data-tab={tab.key}
-          className="relative flex h-7 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 data-active:text-text"
-        >
-          {tab.label}
-        </Tabs.Tab>
-      ))}
-    </Tabs.List>
   );
 }

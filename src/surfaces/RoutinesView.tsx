@@ -1,10 +1,8 @@
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { BotAvatar } from "../chrome/BotAvatar";
-import { Button, FilterChip, PageFrame, type Option } from "../chrome/kit";
+import { Button, EmptyState, FilterChip, FilterTabs, PageFrame, SearchField, type Option } from "../chrome/kit";
 import { RoutineCard, RoutineTable } from "../chrome/RoutineCard";
-import { PillTabs } from "../chrome/BotPaneParts";
-import { Tabs } from "@base-ui/react/tabs";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { useRoutines, type RoutineEntry } from "../hooks/useRoutines";
 import { newRoutineDraft, toDraft, type RoutineDraft } from "../lib/routines";
@@ -26,12 +24,6 @@ type Props = {
 };
 
 type Filter = "all" | "active" | "paused";
-
-const FILTERS: Option<Filter>[] = [
-  { value: "all", label: "All" },
-  { value: "active", label: "Active" },
-  { value: "paused", label: "Paused" },
-];
 
 type Open = { kind: "new"; draft: RoutineDraft; workspaceId: string } | { kind: "edit"; id: string };
 
@@ -164,35 +156,17 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
       <div className="flex flex-col gap-3">
       {entries !== null && entries.length > 0 && (
         <>
-          <label className="flex h-9 min-w-0 items-center gap-2 rounded-[10px] bg-card px-3 transition-shadow focus-within:shadow-[0_0_0_1.5px_color-mix(in_oklab,var(--color-focus)_45%,transparent)]">
-            <SearchIcon className="size-4 shrink-0 text-icon" />
-            <input
-              value={query}
-              spellCheck={false}
-              placeholder="Search routines"
-              aria-label="Search routines"
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-            />
-          </label>
+          <SearchField value={query} label="Search routines" onChange={setQuery} />
           <div className="flex items-center gap-2">
-            <Tabs.Root value={filter} onValueChange={(next) => setFilter(next as Filter)}>
-              <PillTabs
-                value={filter}
-                tabs={FILTERS.map((option) => ({
-                  key: option.value,
-                  label: (
-                    <>
-                      {option.label}
-                      <span className="tabular-nums opacity-60">
-                        {option.value === "all" ? counts.all : option.value === "active" ? counts.active : counts.all - counts.active}
-                      </span>
-                    </>
-                  ),
-                }))}
-                className="-ml-0.5"
-              />
-            </Tabs.Root>
+            <FilterTabs
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "all", label: "All", count: counts.all },
+                { value: "active", label: "Active", count: counts.active },
+                { value: "paused", label: "Paused", count: counts.all - counts.active },
+              ]}
+            />
             <span className="flex-1" />
             {workspaceOptions.length > 2 && (
               <FilterChip
@@ -238,5 +212,5 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
 
 function Empty({ hasAny, hasBots, narrowing, filter }: { hasAny: boolean; hasBots: boolean; narrowing: boolean; filter: Filter }) {
   const line = narrowing ? "No routines match." : hasAny ? `No ${filter} routines.` : hasBots ? "No routines yet." : "Create a bot to add routines.";
-  return <p className="px-4 py-10 text-center text-[13px] text-text-muted">{line}</p>;
+  return <EmptyState title={line} />;
 }

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "./api";
 import { getLinks, subscribeLinks } from "./client/registry";
 import { notify } from "./host";
-import { isPaused, notificationPrefs } from "./notificationPrefs";
+import { notificationPrefs } from "./notificationPrefs";
 import { defineSetting } from "./settingsEngine/define";
 import { hasSetting, peekSetting, saveSetting, setSetting, useSetting } from "./settingsEngine/store";
 import type { UsageSnapshot } from "./protocol";
@@ -365,8 +365,7 @@ function alertOn(list: Reading[]) {
   const first = looked === null;
   looked = result.look;
   // Always on, but never past the switch that turns every notification off.
-  const prefs = notificationPrefs();
-  if (first || !prefs.enabled || isPaused(prefs, Date.now())) return;
+  if (first || !notificationPrefs().enabled) return;
   for (const crossing of result.fresh) void notify({ ...describe(crossing), target: null }).catch(() => {});
 }
 

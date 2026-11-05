@@ -1,7 +1,8 @@
 // The settings nav: a search that finds pages and single settings (Enter lands
 // on the row and lights it), and the pages grouped by what they govern.
-import { ArrowDownToLineIcon, CornerDownLeftIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { ArrowDownToLineIcon, CornerDownLeftIcon, RotateCwIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { SearchField } from "./kit";
 import { useProviderAttention } from "../hooks/useProviderStatus";
 import { useUpdateActions, useUpdateState } from "../hooks/useUpdate";
 import type { SettingsSectionId } from "../lib/settings";
@@ -54,43 +55,25 @@ export function SettingsSidebar({ section, onSelect }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 px-[11px] pt-2.5 pb-3">
-        <label className="flex h-8 items-center gap-2 rounded-lg bg-fill px-2.5 transition-shadow focus-within:shadow-[0_0_0_1.5px_color-mix(in_oklab,var(--color-focus)_45%,transparent)]">
-          <SearchIcon className="size-3.5 shrink-0 text-icon" />
-          <input
-            ref={input}
-            value={query}
-            spellCheck={false}
-            placeholder="Search settings"
-            aria-label="Search settings"
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setActive(0);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                if (query) e.stopPropagation();
-                setQuery("");
-              } else if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setActive((i) => Math.min(results.length - 1, i + 1));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setActive((i) => Math.max(0, i - 1));
-              } else if (e.key === "Enter" && results[active]) go(results[active]);
-            }}
-            className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-          />
-          {query && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => setQuery("")}
-              className="grid size-4 place-items-center rounded-full bg-text-muted/25 text-text hover:bg-text-muted/40"
-            >
-              <XIcon className="size-2.5" strokeWidth={3} />
-            </button>
-          )}
-        </label>
+        <SearchField
+          compact
+          ref={input}
+          value={query}
+          label="Search settings"
+          onChange={(next) => {
+            setQuery(next);
+            setActive(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActive((i) => Math.min(results.length - 1, i + 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActive((i) => Math.max(0, i - 1));
+            } else if (e.key === "Enter" && results[active]) go(results[active]);
+          }}
+        />
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-[11px] pb-3">

@@ -15,6 +15,7 @@ import { machineIcon } from "../../chrome/EnvBits";
 import type { Session } from "../../lib/types";
 import { usePanePlace, WorktreeFact } from "./panePlace";
 import { branchOf, useWhere, type Where } from "./where";
+import { PAGE_TITLE } from "../../chrome/kit";
 
 /** A fact about where or how something runs: a filled pill, never an outline. */
 export function Fact({ icon: Glyph, children, title, tone }: { icon: Icon; children: ReactNode; title?: string | undefined; tone?: "warning" }) {
@@ -72,7 +73,7 @@ export function EmptyHead({
     <div className="mx-auto flex w-full max-w-chat flex-col items-center gap-4 px-6 pb-5 text-center">
       {mark}
       <div className="flex flex-col items-center gap-1">
-        <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
+        <h1 className={PAGE_TITLE}>{title}</h1>
         {line && <p className="max-w-lg text-[13px] leading-5 text-balance text-text-muted">{line}</p>}
       </div>
       {facts && <div className="flex flex-wrap justify-center gap-1.5">{facts}</div>}

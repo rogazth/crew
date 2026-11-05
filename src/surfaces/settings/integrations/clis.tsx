@@ -53,7 +53,7 @@ function MachineServers({ link, links }: { link: EnvLink; links: EnvLink[] }) {
         layout="chips"
         fold={Infinity}
         // As on Providers: one machine at a time, and only when there is another.
-        action={links.length > 1 ? <EnvPicker small link={link} links={links} /> : undefined}
+        action={links.length > 1 ? <EnvPicker align="end" link={link} links={links} /> : undefined}
       >
         {groups.map((group) => (
           <ProviderChip key={group.key} envId={link.id} group={group} m={m} />

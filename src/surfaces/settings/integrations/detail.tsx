@@ -10,7 +10,7 @@ import { ArrowLeftIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import { EnvGlyph } from "../../../chrome/EnvBits";
-import { Card, IconButton } from "../../../chrome/kit";
+import { Card, IconButton, PAGE_TITLE } from "../../../chrome/kit";
 import { useEnvLinks } from "../../../hooks/useEnvLinks";
 import { LOCAL } from "../../../lib/client/registry";
 import type { ConnectorTool } from "../../../lib/protocol";
@@ -46,7 +46,7 @@ function Header({ mark, title, subtitle, action }: { mark: ReactNode; title: str
       <div className="flex items-center gap-3">
         {mark}
         <div className="flex min-w-0 flex-1 flex-col pr-6">
-          <h1 className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>
+          <h1 className={`truncate ${PAGE_TITLE}`}>{title}</h1>
           <p className="line-clamp-2 text-[13px] text-pretty text-text-muted" title={subtitle}>
             {subtitle}
           </p>

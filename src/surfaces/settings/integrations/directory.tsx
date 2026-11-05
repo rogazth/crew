@@ -8,13 +8,11 @@ import {
   CheckIcon,
   GlobeIcon,
   PlusIcon,
-  SearchIcon,
   TriangleAlertIcon,
-  XIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { openLink } from '../../../lib/external';
-import { Button, Field, IconButton, TextInput, Tooltip } from '../../../chrome/kit';
+import { Button, EmptyState, Field, IconButton, PAGE_TITLE, SearchField, TextInput, Tooltip } from '../../../chrome/kit';
 import type { RegistryServer } from '../../../lib/protocol';
 import { SettingsPage } from '../ui';
 import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from './dialog';
@@ -61,34 +59,13 @@ export function DirectoryPage() {
     <SettingsPage title="Browse connectors" hideHeader>
       <header className="flex items-center gap-2 px-1">
         <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-ml-1.5 size-8" onClick={home} />
-        <h1 className="min-w-0 flex-1 truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">Browse connectors</h1>
+        <h1 className={`min-w-0 flex-1 truncate ${PAGE_TITLE}`}>Browse connectors</h1>
         <Button icon={PlusIcon} onClick={() => ui.open({ kind: 'custom' })}>
           Custom
         </Button>
       </header>
       <div className="flex flex-col gap-3">
-        <label className="flex h-9 items-center gap-2 rounded-lg bg-card px-3 ring-1 ring-hairline transition-shadow focus-within:ring-[1.5px] focus-within:ring-focus/50">
-          <SearchIcon className="size-4 text-icon" />
-          <input
-            autoFocus
-            value={query}
-            spellCheck={false}
-            aria-label="Search"
-            placeholder="Search"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) =>
-              event.key === 'Escape' &&
-              query &&
-              (event.stopPropagation(), event.nativeEvent.stopImmediatePropagation(), setQuery(''))
-            }
-            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-placeholder"
-          />
-          {query && (
-            <button type="button" aria-label="Clear" onClick={() => setQuery('')} className="text-icon">
-              <XIcon className="size-3.5" />
-            </button>
-          )}
-        </label>
+        <SearchField autoFocus value={query} label="Search" onChange={setQuery} />
         <BuiltinRows query={query} />
         <p className="mt-2 -mb-2.5 px-1 text-[13px] text-text-muted">
           {error
@@ -117,16 +94,14 @@ export function DirectoryPage() {
           </Button>
         )}
         {!loading && q && list.length === 0 && (
-          <p className="px-1 text-[13px] text-text-muted">
-            No results for “{q}”.{' '}
-            <button
-              type="button"
-              onClick={() => ui.open({ kind: 'custom' })}
-              className="font-medium text-info outline-none focus-visible:underline"
-            >
-              Add a custom connector
-            </button>
-          </p>
+          <EmptyState
+            title={`No results for “${q}”`}
+            action={
+              <Button size="sm" onClick={() => ui.open({ kind: 'custom' })}>
+                Add a custom connector
+              </Button>
+            }
+          />
         )}
       </div>
     </SettingsPage>

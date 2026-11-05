@@ -2,16 +2,17 @@
 // (one per command, never a second), see a clash before it happens, reset one or
 // all. Edits are saved and bind at once, in the window and in the keys main
 // forwards from pages.
-import { PlusIcon, RotateCcwIcon, SearchIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { RotateCcwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Button, Select, Tooltip } from "../../chrome/kit";
+import { Button, EmptyState, FilterTabs, SearchField, Tooltip } from "../../chrome/kit";
 import { saveKeyOverrides, useKeyOverrides } from "../../hooks/useKeybindings";
 import { chordFromPress } from "../../lib/chords";
 import { COMMANDS, isCommandId, storedChordLabel, type CommandId } from "../../lib/commands";
 import { bindingGroups } from "../../lib/commandGroups";
 import { IS_MAC } from "../../lib/hotkey";
 import { findClash, isEditable, replaceClash, resetOverride, setOverride } from "../../lib/keybindings";
-import { Group, SettingsPage, toast } from "./ui";
+import { RowAction } from "./integrations/bits";
+import { Group, Notice, SettingsPage, toast } from "./ui";
 
 const MODS = ["⌃", "⌥", "⇧", "⌘"] as const;
 
@@ -28,7 +29,7 @@ type Clash = { id: CommandId; chord: string; other: CommandId };
 export function KeybindingsPage() {
   const o = useKeyOverrides();
   const [query, setQuery] = useState("");
-  const [onlyModified, setOnlyModified] = useState(false);
+  const [filter, setFilter] = useState<"all" | "modified">("all");
   const [recording, setRecording] = useState<string | null>(null);
   const [held, setHeld] = useState("");
   const [hint, setHint] = useState<string | null>(null);
@@ -38,19 +39,26 @@ export function KeybindingsPage() {
   const text = query.trim().toLowerCase();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the rows read the live bindings, which `o` stands for
   const all = useMemo(() => bindingGroups(), [o]);
+  // Text narrows the list; the tabs then split what is left, and count it.
+  const matching = useMemo(
+    () =>
+      all.map((g) => ({
+        ...g,
+        rows: g.rows.filter((r) => !text || r.label.toLowerCase().includes(text) || r.chords.some((c) => c.toLowerCase().includes(text))),
+      })),
+    [all, text],
+  );
+  const counts = useMemo(() => {
+    const rows = matching.flatMap((g) => g.rows);
+    return { all: rows.length, modified: rows.filter((r) => r.id in o).length };
+  }, [matching, o]);
+  const onlyModified = filter === "modified";
   const groups = useMemo(
     () =>
-      all
-        .map((g) => ({
-          ...g,
-          rows: g.rows.filter(
-            (r) =>
-              (!onlyModified || r.id in o) &&
-              (!text || r.label.toLowerCase().includes(text) || r.chords.some((c) => c.toLowerCase().includes(text))),
-          ),
-        }))
+      matching
+        .map((g) => ({ ...g, rows: g.rows.filter((r) => !onlyModified || r.id in o) }))
         .filter((g) => g.rows.length > 0),
-    [all, o, text, onlyModified],
+    [matching, o, onlyModified],
   );
 
   // The new chord takes the place of whatever the command had: one shortcut each, never a second.
@@ -125,26 +133,14 @@ export function KeybindingsPage() {
         </Button>
       }
     >
-      <div className="sticky top-0 z-10 -mx-3 -my-3 flex items-center gap-2 bg-canvas px-3 py-3">
-        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-canvas px-2.5 ring ring-border focus-within:ring-[1.5px] focus-within:ring-focus/50">
-          <SearchIcon className="size-4 shrink-0 text-icon" />
-          <input
-            value={query}
-            spellCheck={false}
-            placeholder="Search commands or keys"
-            aria-label="Search keybindings"
-            onChange={(e) => setQuery(e.target.value)}
-            className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-          />
-        </label>
-        <Select<"all" | "modified">
-          label="Filter keybindings"
-          className="w-36 shrink-0"
-          value={onlyModified ? "modified" : "all"}
-          onChange={(next) => setOnlyModified(next === "modified")}
+      <div className="sticky top-0 z-10 -mx-3 -my-3 flex flex-col gap-3 bg-canvas px-3 py-3">
+        <SearchField value={query} label="Search keybindings" placeholder="Search commands or keys" onChange={setQuery} />
+        <FilterTabs
+          value={filter}
+          onChange={setFilter}
           options={[
-            { value: "all", label: "All" },
-            { value: "modified", label: modified ? `Modified (${modified})` : "Modified" },
+            { value: "all", label: "All", count: counts.all },
+            { value: "modified", label: "Modified", count: counts.modified },
           ]}
         />
       </div>
@@ -169,14 +165,7 @@ export function KeybindingsPage() {
                     )}
                   </span>
                   {changed && !rec && (
-                    <button
-                      type="button"
-                      onClick={() => reset(row.id)}
-                      className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-text-muted hover:bg-hover hover:text-text"
-                    >
-                      <RotateCcwIcon className="size-3" />
-                      Reset
-                    </button>
+                    <RowAction label="Reset" onClick={() => reset(row.id)} />
                   )}
                   <span className="-mr-1 flex items-center gap-1">
                     {rec ? (
@@ -190,35 +179,35 @@ export function KeybindingsPage() {
                         onRemove={() => saveKeyOverrides(setOverride(o, row.id as CommandId, null))}
                       />
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => record(row.id)}
-                        className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-text-muted outline-none hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
-                      >
-                        <PlusIcon className="size-3.5" /> Set
-                      </button>
+                      <RowAction label="Set" onClick={() => record(row.id)} />
                     )}
                   </span>
                 </div>
                 {rowClash && (
-                  <div className="mt-1.5 mb-1 flex items-center gap-3 rounded-lg bg-warning/12 py-1.5 pr-1.5 pl-3">
-                    <TriangleAlertIcon className="size-4 shrink-0 text-warning" />
-                    <p className="min-w-0 flex-1 text-[12px]">
-                      <Chord chord={storedChordLabel(rowClash.chord)} small /> is used by{" "}
-                      <span className="font-medium">{labelOf(rowClash.other)}</span>
-                      {!isEditable(rowClash.other) && ", which is reserved and cannot be changed"}
-                    </p>
-                    <Button variant="ghost" className="h-7 text-[12px]" onClick={() => setClash(null)}>
-                      Cancel
-                    </Button>
-                    {isEditable(rowClash.other) && (
-                      <Button
-                        className="h-7 text-[12px]"
-                        onClick={() => commit(rowClash.id, rowClash.chord, rowClash.other)}
-                      >
-                        Replace
-                      </Button>
-                    )}
+                  <div className="mt-1.5 mb-1">
+                    <Notice
+                      icon={TriangleAlertIcon}
+                      ink="text-warning"
+                      title={
+                        <>
+                          <Chord chord={storedChordLabel(rowClash.chord)} small /> is used by{" "}
+                          <span className="font-medium">{labelOf(rowClash.other)}</span>
+                          {!isEditable(rowClash.other) && ", which is reserved and cannot be changed"}
+                        </>
+                      }
+                      actions={
+                        <>
+                          <Button variant="ghost" size="sm" onClick={() => setClash(null)}>
+                            Cancel
+                          </Button>
+                          {isEditable(rowClash.other) && (
+                            <Button size="sm" onClick={() => commit(rowClash.id, rowClash.chord, rowClash.other)}>
+                              Replace
+                            </Button>
+                          )}
+                        </>
+                      }
+                    />
                   </div>
                 )}
               </div>
@@ -227,12 +216,10 @@ export function KeybindingsPage() {
         </Group>
       ))}
       {groups.length === 0 && (
-        <div className="flex flex-col items-center gap-1 py-10 text-center">
-          <p>{onlyModified && !text ? "No changes yet" : `No results for “${query.trim()}”`}</p>
-          <p className="text-[12px] text-text-muted">
-            {onlyModified ? "Edited shortcuts appear here." : "Try a command name or key."}
-          </p>
-        </div>
+        <EmptyState
+          title={onlyModified && !text ? "No changes yet" : `No results for “${query.trim()}”`}
+          description={onlyModified ? "Edited shortcuts appear here." : "Try a command name or key."}
+        />
       )}
     </SettingsPage>
   );

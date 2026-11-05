@@ -3,7 +3,7 @@ import { BotIcon, EllipsisIcon, LoaderCircleIcon, PlayIcon, PowerIcon, Trash2Ico
 import { useEffect, useState } from "react";
 import { BotPicker } from "../chrome/BotPicker";
 import { CardHead, PaneCard, PaneRow, PaneSentence } from "../chrome/BotPaneParts";
-import { Button, IconButton, PANEL, ROW, Switch, usePageTrail } from "../chrome/kit";
+import { Button, IconButton, PANEL, ROW, Switch, usePageTrail, PAGE_TITLE } from "../chrome/kit";
 import { RunMark } from "../chrome/RoutineCard";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
@@ -106,7 +106,7 @@ export function RoutineEditor({
               onKeyDown={(event) => {
                 if (event.key === "Enter") event.currentTarget.blur();
               }}
-              className="h-7 min-w-0 flex-1 truncate bg-transparent text-[22px] leading-7 font-semibold tracking-[-0.02em] outline-none placeholder:text-placeholder"
+              className={`h-7 min-w-0 flex-1 truncate bg-transparent ${PAGE_TITLE} outline-none placeholder:text-placeholder`}
             />
             {(onRunNow || onDelete) && (
               <Menu.Root modal={false}>

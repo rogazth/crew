@@ -2,7 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import { GlobeIcon, HistoryIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { Button } from "../chrome/kit";
+import { Button, EmptyState, PAGE_TITLE } from "../chrome/kit";
 import * as api from "../lib/api";
 import { CLEAR_RANGES, clearSince, groupByDay, hostOf, type ClearRange } from "../lib/browser/history";
 import type { HistoryEntry } from "../lib/protocol";
@@ -93,10 +93,10 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 px-8 pt-10 pb-16">
         <div className="flex items-center gap-3">
-          <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">History</h1>
+          <h1 className={PAGE_TITLE}>History</h1>
           <Menu.Root modal={false}>
-            <Menu.Trigger render={<Button variant="secondary" className="ml-auto h-7" />}>
-              Clear…
+            <Menu.Trigger render={<Button variant="secondary" className="ml-auto" />}>
+              Clear
             </Menu.Trigger>
             <Menu.Portal>
               <Menu.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
@@ -140,7 +140,7 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
               </section>
             ))}
             {more && (
-              <Button variant="secondary" className="h-7 self-center" onClick={loadMore}>
+              <Button variant="secondary" size="sm" className="self-center" onClick={loadMore}>
                 Show older
               </Button>
             )}
@@ -190,13 +190,6 @@ function Row({
 }
 
 function Blank({ searching, text }: { searching: boolean; text: string }) {
-  if (searching) {
-    return <p className="py-16 text-center text-[13px] text-text-muted">No results for {`"${text}"`}</p>;
-  }
-  return (
-    <div className="flex flex-col items-center gap-2 py-20 text-center">
-      <HistoryIcon className="size-5 text-placeholder" />
-      <p className="text-[13px] text-text-muted">No history yet</p>
-    </div>
-  );
+  if (searching) return <EmptyState title={`No results for "${text}"`} className="py-16" />;
+  return <EmptyState icon={<HistoryIcon className="size-5" />} title="No history yet" className="py-20" />;
 }

@@ -9,7 +9,7 @@ vi.mock("./client", () => ({
 }));
 vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }));
 
-const { DEFAULT_NOTIFICATION_PREFS, isPaused, parseNotificationPrefs, pauseEnd } = await import("./notificationPrefs");
+const { DEFAULT_NOTIFICATION_PREFS, parseNotificationPrefs } = await import("./notificationPrefs");
 
 describe("parseNotificationPrefs", () => {
   it("starts from the defaults", () => {
@@ -51,25 +51,10 @@ describe("parseNotificationPrefs", () => {
 
   it("drops what it does not know", () => {
     const parsed = parseNotificationPrefs(
-      JSON.stringify({ volume: 400, pausedUntil: "soon", kinds: { error: { enabled: "yes", sound: "kazoo" } } }),
+      JSON.stringify({ volume: 400, pausedUntil: 1_800_000_000_000, kinds: { error: { enabled: "yes", sound: "kazoo" } } }),
     );
     expect(parsed.volume).toBe(100);
-    expect(parsed.pausedUntil).toBeNull();
+    expect(parsed).not.toHaveProperty("pausedUntil");
     expect(parsed.kinds.error).toEqual(DEFAULT_NOTIFICATION_PREFS.kinds.error);
-  });
-});
-
-describe("do not disturb", () => {
-  it("lasts an hour, or until eight tomorrow", () => {
-    const now = new Date(2026, 9, 3, 22, 15);
-    expect(pauseEnd("hour", now)).toBe(new Date(2026, 9, 3, 23, 15).getTime());
-    expect(pauseEnd("tomorrow", now)).toBe(new Date(2026, 9, 4, 8, 0).getTime());
-    expect(pauseEnd("tomorrow", new Date(2026, 9, 4, 0, 30))).toBe(new Date(2026, 9, 4, 8, 0).getTime());
-  });
-
-  it("is over once its time passes", () => {
-    expect(isPaused({ ...DEFAULT_NOTIFICATION_PREFS, pausedUntil: 100 }, 99)).toBe(true);
-    expect(isPaused({ ...DEFAULT_NOTIFICATION_PREFS, pausedUntil: 100 }, 100)).toBe(false);
-    expect(isPaused(DEFAULT_NOTIFICATION_PREFS, 0)).toBe(false);
   });
 });

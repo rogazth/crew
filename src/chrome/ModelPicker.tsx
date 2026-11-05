@@ -1,10 +1,11 @@
 import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, SearchIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useInstalledProviders } from "../hooks/useInstalledProviders";
 import { useListedModels } from "../hooks/useListedModels";
 import { pickerKeyDown } from "./promptKeys";
+import { ListNote, PopupSearch } from "./kit";
 import {
   PROVIDERS,
   modelLabel,
@@ -206,50 +207,35 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
                 ))}
               </div>
             )}
-            <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
-              <SearchIcon className="size-3.5 shrink-0 text-icon" />
-              <input
-                ref={search}
-                value={query}
-                // Opened by a key typed on the row: the caret goes after it, not before.
-                onFocus={(event) => event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length)}
-                placeholder="Search models"
-                aria-label="Search models"
-                spellCheck={false}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  setQuery(next);
-                  if (next.trim()) {
-                    setCursor(0);
-                    return;
-                  }
-                  setArmed(false);
-                  setCursor(tab === provider ? modelIndex(tab, model) : 0);
-                }}
-                className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
-              />
-              {query && (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    setQuery("");
-                    setArmed(false);
-                    setCursor(tab === provider ? modelIndex(tab, model) : 0);
-                    search.current?.focus();
-                  }}
-                  className="grid size-5 shrink-0 place-items-center rounded-md text-icon hover:bg-hover hover:text-text"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              )}
-            </div>
+            <PopupSearch
+              ref={search}
+              value={query}
+              // Opened by a key typed on the row: the caret goes after it, not before.
+              onFocus={(event) => event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length)}
+              placeholder="Search models"
+              aria-label="Search models"
+              onChange={(event) => {
+                const next = event.target.value;
+                setQuery(next);
+                if (next.trim()) {
+                  setCursor(0);
+                  return;
+                }
+                setArmed(false);
+                setCursor(tab === provider ? modelIndex(tab, model) : 0);
+              }}
+              onClear={() => {
+                setQuery("");
+                setArmed(false);
+                setCursor(tab === provider ? modelIndex(tab, model) : 0);
+                search.current?.focus();
+              }}
+            />
 
             {searching ? (
               <div ref={list} className="min-h-0 flex-1 overflow-y-auto p-1.5">
                 {rows.length === 0 ? (
-                  <p className="px-2 py-8 text-center text-placeholder">No matches</p>
+                  <ListNote />
                 ) : (
                   rows.map((row, index) => (
                     <ModelRow

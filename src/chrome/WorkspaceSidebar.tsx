@@ -23,7 +23,6 @@ import {
   RotateCwIcon,
   SearchIcon,
   LayersIcon,
-  XIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
@@ -60,6 +59,7 @@ import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
 import { sessionPath, worktreeLabel } from "../lib/worktrees";
 import { SidebarViewMenu } from "./SidebarViewMenu";
+import { FindField } from "./kit";
 
 export type WorkspaceSidebarProps = {
   workspace: Workspace;
@@ -468,7 +468,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
         <div className="px-2">
           <div className={`${STICKY} -mx-2 px-2`}>
             {searching ? (
-              <SearchField
+              <SidebarFind
                 query={query}
                 onChange={setQuery}
                 onClose={() => {
@@ -947,7 +947,7 @@ function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; on
   );
 }
 
-function SearchField({
+function SidebarFind({
   query,
   onChange,
   onClose,
@@ -960,42 +960,22 @@ function SearchField({
   onEnter: () => void;
   onDown: () => void;
 }) {
-  const input = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
   return (
-    <div className="flex h-8 items-center gap-2 rounded-chrome bg-card pr-1 pl-2">
-      <SearchIcon className="size-3.5 shrink-0 text-icon" />
-      <input
-        ref={input}
-        value={query}
-        placeholder="Find bots and sessions"
-        aria-label="Find bots and sessions"
-        spellCheck={false}
-        onChange={(event) => onChange(event.target.value)}
-        onBlur={() => !query.trim() && onClose()}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.stopPropagation();
-            onClose();
-          } else if (event.key === "Enter") {
-            event.preventDefault();
-            onEnter();
-          } else if (event.key === "ArrowDown") {
-            event.preventDefault();
-            onDown();
-          }
-        }}
-        className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
-      />
-      <button
-        type="button"
-        aria-label="Close search"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={onClose}
-        className="grid size-6 shrink-0 place-items-center rounded-md text-icon hover:bg-hover hover:text-text"
-      >
-        <XIcon className="size-3.5" />
-      </button>
-    </div>
+    <FindField
+      value={query}
+      label="Find bots and sessions"
+      onChange={onChange}
+      onClose={onClose}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onEnter();
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          onDown();
+        }
+      }}
+    />
   );
 }
 

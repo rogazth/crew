@@ -62,30 +62,32 @@ export function Group({
   const heading = useId();
   return (
     <section className="flex flex-col gap-2" data-setting={id} aria-labelledby={title ? heading : undefined}>
-      {(title || action) && (
-        <div className={`flex min-h-6 gap-3 px-2.5 ${action ? "items-center" : "items-end"}`}>
-          <div className="flex min-w-0 flex-1 flex-col">
-            {title && (
-              <h2 id={heading} className="text-[12px] font-medium text-text-muted">
-                {title}
-              </h2>
-            )}
-            {description && <p className="text-[12px] text-text-muted">{description}</p>}
-          </div>
-          {action}
-        </div>
-      )}
+      {(title || action) && <Heading id={heading} title={title} description={description} action={action} />}
       <Card>{children}</Card>
     </section>
   );
 }
 
 /** A heading over things that are not rows: provider cards, theme cards. */
-export function Heading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+export function Heading({
+  id,
+  title,
+  description,
+  action,
+}: {
+  id?: string | undefined;
+  title?: string | undefined;
+  description?: string | undefined;
+  action?: ReactNode;
+}) {
   return (
     <div className={`flex min-h-6 gap-3 px-2.5 ${action ? "items-center" : "items-end"}`}>
       <div className="flex min-w-0 flex-1 flex-col">
-        <h2 className="text-[12px] font-medium text-text-muted">{title}</h2>
+        {title && (
+          <h2 id={id} className="text-[12px] font-medium text-text-muted">
+            {title}
+          </h2>
+        )}
         {description && <p className="text-[12px] text-text-muted">{description}</p>}
       </div>
       {action}
@@ -209,6 +211,39 @@ export function Callout({
         {description && <p className="truncate text-[12px] text-text-muted">{description}</p>}
       </div>
       {action}
+    </div>
+  );
+}
+
+/** Something a card or a row has to say: a line or two across its width, the colour only in the icon. */
+export function Notice({
+  icon: Glyph,
+  ink,
+  spinning = false,
+  title,
+  children,
+  actions,
+}: {
+  icon: LucideIcon;
+  ink: string;
+  spinning?: boolean;
+  title: ReactNode;
+  children?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    // One line sits centred with its actions; two hang from the icon.
+    <div className={`flex gap-2.5 rounded-lg bg-canvas px-3 py-2 shadow-[0_0_0_1px_var(--color-hairline)] ${children ? "items-start" : "items-center"}`}>
+      <Glyph className={`size-4 shrink-0 ${children ? "mt-0.5" : ""} ${ink} ${spinning ? "animate-spin motion-reduce:animate-none" : ""}`} />
+      <div className="min-w-0 flex-1">
+        <p>{title}</p>
+        {children && (
+          <p className="line-clamp-2 text-[12px] text-text-muted" data-selectable>
+            {children}
+          </p>
+        )}
+      </div>
+      {actions && <div className="flex shrink-0 items-center gap-1 self-center">{actions}</div>}
     </div>
   );
 }

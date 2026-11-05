@@ -3,9 +3,9 @@
 // opens a searchable list of worktrees (⌥W from the composer), and picking one
 // starts it there instead. A bot, a page or a tab with no place says nothing.
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, ChevronDownIcon, GitBranchIcon, SearchIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, GitBranchIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ROW } from "../../chrome/kit";
+import { ROW, ListNote, PopupSearch } from "../../chrome/kit";
 import { fuzzyMatch } from "../../lib/fuzzy";
 import { pickerKeyDown } from "../../chrome/promptKeys";
 import { IS_MAC } from "../../lib/hotkey";
@@ -141,24 +141,24 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
             onKeyDown={onKeyDown}
             className="flex max-h-[min(360px,70vh)] w-72 origin-(--transform-origin) flex-col overflow-hidden rounded-xl bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
           >
-            <div className="flex h-9 shrink-0 items-center gap-2 border-b border-hairline px-3">
-              <SearchIcon className="size-3.5 shrink-0 text-icon" />
-              <input
-                ref={search}
-                value={query}
-                placeholder="Start this session in…"
-                aria-label="Search worktrees"
-                spellCheck={false}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setCursor(event.target.value.trim() ? 0 : currentIndex);
-                }}
-                className="h-full min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-placeholder"
-              />
-            </div>
+            <PopupSearch
+              ref={search}
+              value={query}
+              placeholder="Start this session in…"
+              aria-label="Search worktrees"
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setCursor(event.target.value.trim() ? 0 : currentIndex);
+              }}
+              onClear={() => {
+                setQuery("");
+                setCursor(currentIndex);
+                search.current?.focus();
+              }}
+            />
             <div ref={list} role="listbox" aria-label="Worktrees" className="min-h-0 flex-1 overflow-y-auto p-1">
               {rows.length === 0 ? (
-                <p className="px-2 py-6 text-center text-placeholder">No matches</p>
+                <ListNote />
               ) : (
                 rows.map((item, index) => (
                   <div

@@ -1,6 +1,5 @@
 import { dismissNotifications, notificationStatus, notify } from "./host";
 import {
-  isPaused,
   loadNotificationPrefs,
   notificationPrefs,
   type KindPrefs,
@@ -28,8 +27,6 @@ export type NotificationEvent = {
 export type SkipReason =
   /** Notifications are off altogether. */
   | "disabled"
-  /** Do not disturb is on. */
-  | "paused"
   /** This kind is off. */
   | "source-disabled"
   /** The session's own switch is off. */
@@ -112,7 +109,6 @@ export async function dispatchNotification(event: NotificationEvent): Promise<Di
   const kind: KindPrefs = event.source === "test" ? prefs.kinds["needs-input"] : prefs.kinds[event.source];
   if (!test) {
     if (!prefs.enabled) return skip("disabled");
-    if (isPaused(prefs, Date.now())) return skip("paused");
     if (!kind.enabled) return skip("source-disabled");
   }
   const { session } = event;

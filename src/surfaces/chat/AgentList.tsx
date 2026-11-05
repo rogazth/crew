@@ -22,7 +22,7 @@ import {
   type LucideIcon as Icon,
 } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
-import { PANEL, ROW } from "../../chrome/kit";
+import { PANEL, ROW, FindField } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { StatusDot } from "../../chrome/StatusDot";
 import { modelLine, tokensLabel, tokensTitle, type ConversationEntry, type PanelEntry } from "../../lib/backgroundPanel";
@@ -149,28 +149,7 @@ export function AgentList({
     <div data-agent-list className="flex min-h-0 flex-1 flex-col text-[13px]">
       <div className="shrink-0 px-3 pt-2.5 pb-1">
         {searching ? (
-          <div className="flex h-8 items-center gap-2 rounded-chrome bg-card pr-1 pl-2">
-            <SearchIcon className="size-3.5 shrink-0 text-icon" />
-            <input
-              autoFocus
-              value={query}
-              placeholder="Find sub-agents"
-              aria-label="Find sub-agents"
-              spellCheck={false}
-              onChange={(event) => setQuery(event.target.value)}
-              onBlur={() => !query.trim() && closeSearch()}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  closeSearch();
-                }
-              }}
-              className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
-            />
-            <button type="button" aria-label="Close search" onMouseDown={(event) => event.preventDefault()} onClick={closeSearch} className="grid size-6 shrink-0 place-items-center rounded-md text-icon hover:bg-hover hover:text-text">
-              <XIcon className="size-3.5" />
-            </button>
-          </div>
+          <FindField value={query} label="Find sub-agents" onChange={setQuery} onClose={closeSearch} />
         ) : (
           <div className="flex h-8 items-center gap-0.5 pl-1.5">
             <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">Sub-agents</span>
