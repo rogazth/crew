@@ -40,7 +40,12 @@ pub enum Changed<'a> {
     Mailbox(&'a str),
     Session(&'a str),
     /// What `subagent`, of `session`'s, waits on has reached the user.
-    UserAsked { session: &'a str, subagent: &'a str, kind: &'a str, text: &'a str },
+    UserAsked {
+        session: &'a str,
+        subagent: &'a str,
+        kind: &'a str,
+        text: &'a str,
+    },
 }
 
 /// Told what changed (see [`Store::set_listener`]).
@@ -582,6 +587,12 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
             tx.execute_batch(crate::connectors::machines::MIGRATION_V48)?;
         }
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (48, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 49 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::usage::MIGRATION_V49)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (49, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     Ok(())

@@ -1,17 +1,17 @@
 // Usage: each provider's plan limits in full (what is left of every window,
-// when it resets, how it stands against an even pace, the last week day by
-// day), which providers get a ring on the rail, and how often it refreshes. Read from
+// when it resets, how it stands against an even pace), its tokens of the last
+// days, which providers get a ring on the rail, and how often it refreshes. Read from
 // every connected machine, one card per account.
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, GripVerticalIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
-import { memo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { PointerActivationConstraints } from "@dnd-kit/dom";
 import { PointerSensor } from "@dnd-kit/react";
 import { Button, Select } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { SortableItem, SortableList } from "../../chrome/SortableList";
 import { Rings } from "../../chrome/UsageButton";
-import { count, Tokens } from "../../chrome/UsageTokens";
+import { Tokens } from "../../chrome/UsageTokens";
 import { WindowRow } from "../../chrome/UsageWindow";
 import {
   MAX_RINGS,
@@ -35,8 +35,9 @@ import {
   type Reading,
   type Window,
 } from "../../lib/usage";
-import { hasWindows, type UsageDayPoint, type UsageTokensDay } from "../../lib/usageData";
-import { Group, Heading, RAISED, Row, SettingsPage, toast } from "./ui";
+import { hasWindows } from "../../lib/usageData";
+import { UsageChart } from "./UsageChart";
+import { Group, Heading, Row, SettingsPage, toast } from "./ui";
 
 const REFRESH = [
   { value: "1", label: "Every minute" },
@@ -74,7 +75,7 @@ function PlanLimits() {
   const rings = useRings();
   const now = useNow();
   const all = inOrder(rings, useReadings());
-  const shown = all.filter((reading) => reading.plan !== null || hasWindows(reading) || reading.tokens !== null);
+  const shown = all.filter((reading) => reading.plan !== null || hasWindows(reading) || reading.tokens !== null || reading.tokenDays !== null);
   const silent = all.filter((reading) => !shown.includes(reading));
   return (
       <section className="flex flex-col gap-2" data-setting="usage-limits">
@@ -112,7 +113,7 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
     null,
   );
   return (
-    <div className={`flex flex-col gap-3 rounded-xl px-3.5 py-3 ${RAISED}`}>
+    <div className="flex flex-col gap-3 rounded-xl bg-card px-3.5 py-3">
       <div className="flex items-center gap-2">
         <ProviderIcon provider={reading.provider} className="size-4" />
         <span className="font-semibold">{reading.name}</span>
@@ -122,18 +123,16 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
         <span className="ml-auto truncate text-[12px] text-text-muted">{reading.account}</span>
       </div>
 
-      {longest ? (
-        <>
-          <div className="grid grid-cols-1 gap-x-6 gap-y-3 @[560px]:grid-cols-2">
-            {reading.windows.map((window) => (
-              <WindowRow key={window.id} window={window} color={color} at />
-            ))}
-          </div>
-          <Week days={reading.history} color={color} limit={longest.label} />
-        </>
-      ) : reading.dailyTokens ? (
-        <TokenWeek reading={reading} days={reading.dailyTokens} color={color} />
-      ) : reading.tokens !== null || reading.cost !== null ? (
+      {longest && (
+        <div className="grid grid-cols-1 gap-x-6 gap-y-3 @[560px]:grid-cols-2">
+          {reading.windows.map((window) => (
+            <WindowRow key={window.id} window={window} color={color} at />
+          ))}
+        </div>
+      )}
+      {reading.tokenDays ? (
+        <UsageChart days={reading.tokenDays} divided={longest !== null} />
+      ) : longest ? null : reading.tokens !== null || reading.cost !== null ? (
         <Tokens reading={reading} />
       ) : (
         <span className="text-[12px] text-text-muted">Limits unavailable</span>
@@ -141,110 +140,6 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
     </div>
   );
 });
-
-/* ── The last seven days ────────────────────────────────────────────── */
-
-type Bar = { key: string; day: string; today: boolean; height: number; tip: ReactNode };
-
-/** One thin bar per day on a 0‥100 scale, each keeping a faint track; hovering one says its day and value. */
-function DayBars({ bars, color, label }: { bars: Bar[]; color: string; label: string }) {
-  return (
-    <>
-      <div role="img" aria-label={label} className="flex h-10 gap-1.5">
-        {bars.map((bar) => (
-          <div key={bar.key} className="group relative flex h-full flex-1 justify-center">
-            <div className="relative h-full w-full rounded-[4px] bg-card transition-colors group-hover:bg-hover">
-              {bar.height > 0 && (
-                <div
-                  className="absolute inset-x-0 bottom-0 min-h-[3px] rounded-[4px] transition-[height] duration-500"
-                  style={{ height: `${bar.height}%`, background: color }}
-                />
-              )}
-            </div>
-            <span className="pointer-events-none absolute bottom-full z-10 mb-1.5 rounded-md bg-surface px-2 py-1 text-[11px] whitespace-nowrap opacity-0 shadow-float transition-opacity group-hover:opacity-100">
-              {bar.today ? "Today" : bar.day} · {bar.tip}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-1.5">
-        {bars.map((bar) => (
-          <span key={bar.key} className={`flex-1 text-center text-[11px] ${bar.today ? "font-medium text-text" : "text-text-muted"}`}>
-            {bar.today ? "Today" : bar.day}
-          </span>
-        ))}
-      </div>
-    </>
-  );
-}
-
-const weekdayOf = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString([], { weekday: "short", timeZone: "UTC" });
-
-/** The most of the provider's longest window spent each day, on a fixed scale so a short bar means room to spare. */
-function Week({ days: points, color, limit }: { days: UsageDayPoint[]; color: string; limit: string }) {
-  const days = points.map((point, index) => ({
-    value: point.percent,
-    day: weekdayOf(point.day),
-    key: point.day,
-    today: index === points.length - 1,
-  }));
-  const peak = days.reduce((best, day) => (day.value > best.value ? day : best), days[0]!);
-  const of = `of the ${limit.toLowerCase()} limit`;
-  return (
-    <div className="flex flex-col gap-2 border-t border-hairline pt-3">
-      <div className="flex items-baseline justify-between text-[12px] text-text-muted">
-        <span>Last 7 days</span>
-        {peak.value > 0 && (
-          <span className="tabular-nums">
-            Peak <span className="font-medium text-text">{peak.value}%</span> {peak.today ? "today" : `on ${peak.day}`}
-          </span>
-        )}
-      </div>
-      <DayBars
-        color={color}
-        label={`Daily high ${of}: ${days.map((day) => `${day.day} ${day.value}%`).join(", ")}`}
-        bars={days.map((day) => ({
-          key: day.key,
-          day: day.day,
-          today: day.today,
-          height: day.value,
-          tip: (
-            <>
-              <span className="font-medium tabular-nums">{day.value}%</span> {of}
-            </>
-          ),
-        }))}
-      />
-    </div>
-  );
-}
-
-/** A provider with no plan to measure against: each day's tokens, against the week's busiest day. */
-function TokenWeek({ reading, days, color }: { reading: Reading; days: UsageTokensDay[]; color: string }) {
-  const most = Math.max(...days.map((day) => day.tokens));
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between text-[12px] text-text-muted">
-        <span>Last 7 days</span>
-        <span className="tabular-nums">
-          <span className="font-medium text-text">{count(reading.tokens ?? 0)}</span> tokens
-          {reading.cost ? ` · $${reading.cost.toFixed(2)}` : ""}
-        </span>
-      </div>
-      <DayBars
-        color={color}
-        label={`Tokens by day: ${days.map((day) => `${weekdayOf(day.day)} ${count(day.tokens)}`).join(", ")}`}
-        bars={days.map((day, index) => ({
-          key: day.day,
-          day: weekdayOf(day.day),
-          today: index === days.length - 1,
-          height: most > 0 ? (day.tokens / most) * 100 : 0,
-          tip: <span className="font-medium tabular-nums">{count(day.tokens)} tokens</span>,
-        }))}
-      />
-    </div>
-  );
-}
 
 /* ── Rings on the rail ──────────────────────────────────────────────── */
 
@@ -261,8 +156,8 @@ const RING_SENSORS = [
 
 /**
  * The rail's rings: a click ticks a provider on or off, a long press picks it
- * up to move its ring in or out, and the swatch sets its colour, which follows
- * it everywhere usage is drawn.
+ * up to move its ring in or out, and the swatch sets its colour, on its ring and
+ * its limits' lines. The daily bars are the same on every provider.
  */
 function RingsSection() {
   const rings = useRings();
@@ -313,7 +208,7 @@ function RingsSection() {
                       <GripVerticalIcon aria-hidden className="size-3.5 shrink-0 text-placeholder group-hover:text-text-muted" />
                       <span
                         className={`grid size-4 shrink-0 place-items-center rounded-[5px] transition-colors ${
-                          on ? "bg-text text-inverse" : `ring-1 ring-border-strong ${disabled ? "opacity-40" : ""}`
+                          on ? "bg-accent text-inverse" : `ring-1 ring-border-strong ${disabled ? "opacity-40" : ""}`
                         }`}
                       >
                         {on && <CheckIcon className="size-2.5" strokeWidth={3} />}

@@ -1,14 +1,16 @@
-//! What each provider account has spent of its plan: the latest reading per
-//! provider and account, and a week of daily highs, kept in the store. Claude
-//! reports its windows with a turn, Codex can be asked at any time, Cursor,
-//! Grok and opencode are read from their CLIs; each adapter lives in a module
-//! of its own and hands `record` a [`PlanUsage`].
+//! What each provider account has spent: the latest reading of its plan per
+//! provider and account, and the tokens of the last days, kept in the store.
+//! Claude reports its windows with a turn, Codex can be asked at any time,
+//! Cursor, Grok and opencode are read from their CLIs; each adapter lives in a
+//! module of its own and hands `record` a [`PlanUsage`], and its tokens to
+//! `refresh_tokens` as a [`Tally`].
 
 mod claude;
 pub(crate) mod codex;
 mod cursor;
 pub(crate) mod grok;
 mod opencode;
+mod tokens;
 
 use std::io::Read;
 use std::os::unix::process::CommandExt;
@@ -16,11 +18,12 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crew_protocol::{PlanUsage, UsageDay, UsageSnapshot, UsageWindow};
+use crew_protocol::{PlanUsage, UsageSnapshot, UsageTokens};
 use rusqlite::{params, OptionalExtension};
 
 use crate::agent::AgentHost;
 use crate::store::{now_millis, Store};
+use tokens::{Since, Spent, Tally};
 
 pub const MIGRATION_V39: &str = "CREATE TABLE IF NOT EXISTS usage_readings (
    provider   TEXT NOT NULL,
@@ -37,8 +40,25 @@ pub const MIGRATION_V39: &str = "CREATE TABLE IF NOT EXISTS usage_readings (
    PRIMARY KEY (provider, account, day)
  );";
 
+/// `next_day` is the first day still worth reading again: anything before it is
+/// final, and is kept here after its logs are gone.
+pub const MIGRATION_V49: &str = "CREATE TABLE IF NOT EXISTS usage_tokens (
+   provider    TEXT NOT NULL,
+   day         TEXT NOT NULL,
+   model       TEXT NOT NULL,
+   input       INTEGER NOT NULL,
+   output      INTEGER NOT NULL,
+   cache_write INTEGER NOT NULL,
+   cache_read  INTEGER NOT NULL,
+   PRIMARY KEY (provider, day, model)
+ );
+ CREATE TABLE IF NOT EXISTS usage_tokens_read (
+   provider TEXT PRIMARY KEY,
+   next_day TEXT NOT NULL
+ );";
+
 /// Days of history kept, today included.
-const HISTORY_DAYS: i64 = 7;
+const HISTORY_DAYS: i64 = 30;
 /// How long `claude auth status` is trusted before it is asked again.
 const AUTH_TTL: Duration = Duration::from_secs(10 * 60);
 
@@ -64,10 +84,9 @@ impl UsageHost {
         *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
     }
 
-    /// Every reading held and seven days of history.
+    /// Every reading held and the tokens of the days kept.
     pub fn snapshot(&self) -> Result<UsageSnapshot, String> {
-        let now = now_millis();
-        let oldest = day_of(now - (HISTORY_DAYS - 1) * DAY_MS);
+        let oldest = local_day_of(now_millis() - (HISTORY_DAYS - 1) * DAY_MS);
         self.store.with(|conn| {
             let mut readings: Vec<PlanUsage> = conn
                 .prepare_cached("SELECT reading FROM usage_readings")?
@@ -76,38 +95,115 @@ impl UsageHost {
                 .collect();
             readings
                 .sort_by(|a, b| (a.provider.as_str(), a.account.as_deref()).cmp(&(b.provider.as_str(), b.account.as_deref())));
-            let history = conn
-                .prepare_cached("SELECT provider, account, day, percent FROM usage_history WHERE day >= ?1 ORDER BY day")?
+            let tokens = conn
+                .prepare_cached(
+                    "SELECT provider, day, model, input, output, cache_write, cache_read FROM usage_tokens
+                     WHERE day >= ?1 ORDER BY provider, day, model",
+                )?
                 .query_map(params![oldest], |row| {
-                    let account: String = row.get(1)?;
-                    Ok(UsageDay {
+                    Ok(UsageTokens {
                         provider: row.get(0)?,
-                        account: Some(account).filter(|a| !a.is_empty()),
-                        day: row.get(2)?,
-                        percent: row.get(3)?,
+                        day: row.get(1)?,
+                        model: row.get(2)?,
+                        input: row.get::<_, i64>(3)? as u64,
+                        output: row.get::<_, i64>(4)? as u64,
+                        cache_write: row.get::<_, i64>(5)? as u64,
+                        cache_read: row.get::<_, i64>(6)? as u64,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(UsageSnapshot { readings, history })
+            Ok(UsageSnapshot { readings, tokens })
         })
     }
 
-    /// Keeps a reading, adds it to the day's high, and tells the listener when
-    /// it differs from what was held. With `merge`, windows the reading does
+    /// Keeps a reading and tells the listener when it differs from what was held. With `merge`, windows the reading does
     /// not name stay as they were (Claude reports one window at a time).
     pub fn record(&self, mut reading: PlanUsage, merge: bool) {
         match self.write(&mut reading, merge) {
-            Ok(true) => {
-                let listener = self.listener.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if let (Some(listener), Ok(snapshot)) = (listener, self.snapshot()) {
-                    listener(&snapshot);
-                }
-            }
+            Ok(true) => self.tell(),
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(provider = %reading.provider, error = %crate::trace::error_text(&error.to_string()), "usage.reading_unkept")
             }
         }
+    }
+
+    fn tell(&self) {
+        let listener = self.listener.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let (Some(listener), Ok(snapshot)) = (listener, self.snapshot()) {
+            listener(&snapshot);
+        }
+    }
+
+    /// Reads a provider's tokens from the first day not yet final and keeps
+    /// them. One that cannot be read leaves what is held as it was.
+    pub(crate) fn refresh_tokens(&self, provider: &str, read: impl FnOnce(&Since) -> Option<Tally>) {
+        let now = now_millis();
+        let next = self.store.with(|conn| {
+            conn.prepare_cached("SELECT next_day FROM usage_tokens_read WHERE provider = ?1")?
+                .query_row(params![provider], |row| row.get::<_, String>(0))
+                .optional()
+        });
+        let since = since_day(next.ok().flatten(), now);
+        let Some(tally) = read(&since) else {
+            return;
+        };
+        match self.write_tokens(provider, &since, &tally, now) {
+            Ok(true) => self.tell(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(provider, error = %crate::trace::error_text(&error.to_string()), "usage.tokens_unkept")
+            }
+        }
+    }
+
+    /// Replaces the days read, drops those past what is kept, and says whether
+    /// anything changed. Yesterday stays open: a turn can run past midnight.
+    fn write_tokens(&self, provider: &str, since: &Since, tally: &Tally, now: i64) -> Result<bool, String> {
+        self.store.with(|conn| {
+            let held = Tally(
+                conn.prepare_cached(
+                    "SELECT day, model, input, output, cache_write, cache_read FROM usage_tokens WHERE provider = ?1 AND day >= ?2",
+                )?
+                .query_map(params![provider, since.day], |row| {
+                    Ok((
+                        (row.get(0)?, row.get(1)?),
+                        Spent {
+                            input: row.get::<_, i64>(2)? as u64,
+                            output: row.get::<_, i64>(3)? as u64,
+                            cache_write: row.get::<_, i64>(4)? as u64,
+                            cache_read: row.get::<_, i64>(5)? as u64,
+                        },
+                    ))
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            );
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM usage_tokens WHERE provider = ?1 AND day >= ?2", params![provider, since.day])?;
+            for ((day, model), spent) in &tally.0 {
+                tx.execute(
+                    "INSERT INTO usage_tokens (provider, day, model, input, output, cache_write, cache_read)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        provider,
+                        day,
+                        model,
+                        spent.input as i64,
+                        spent.output as i64,
+                        spent.cache_write as i64,
+                        spent.cache_read as i64
+                    ],
+                )?;
+            }
+            tx.execute("DELETE FROM usage_tokens WHERE day < ?1", params![local_day_of(now - (HISTORY_DAYS - 1) * DAY_MS)])?;
+            tx.execute(
+                "INSERT INTO usage_tokens_read (provider, next_day) VALUES (?1, ?2)
+                 ON CONFLICT (provider) DO UPDATE SET next_day = ?2",
+                params![provider, local_day_of(now - DAY_MS)],
+            )?;
+            tx.commit()?;
+            Ok(held != *tally)
+        })
     }
 
     fn write(&self, reading: &mut PlanUsage, merge: bool) -> Result<bool, String> {
@@ -170,18 +266,6 @@ impl UsageHost {
             if !account.is_empty() {
                 conn.execute("DELETE FROM usage_readings WHERE provider = ?1 AND account = ''", params![provider])?;
             }
-            if let Some(percent) = longest_window_percent(&reading.windows) {
-                let today = day_of(reading.updated_at);
-                conn.execute(
-                    "INSERT INTO usage_history (provider, account, day, percent) VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT (provider, account, day) DO UPDATE SET percent = MAX(percent, ?4)",
-                    params![provider, account, today, percent],
-                )?;
-                conn.execute(
-                    "DELETE FROM usage_history WHERE day < ?1",
-                    params![day_of(reading.updated_at - (HISTORY_DAYS - 1) * DAY_MS)],
-                )?;
-            }
             Ok(changed)
         })
     }
@@ -205,7 +289,6 @@ impl UsageHost {
                     plan,
                     windows,
                     tokens: None,
-                    daily_tokens: None,
                     cost: None,
                     updated_at: now,
                     source: "stream".into(),
@@ -230,7 +313,6 @@ impl UsageHost {
                 plan,
                 windows,
                 tokens: None,
-                daily_tokens: None,
                 cost: None,
                 updated_at: now_millis(),
                 source: "app-server".into(),
@@ -266,6 +348,19 @@ impl UsageHost {
             scope.spawn(|| self.refresh_with("cursor-agent", cursor::read));
             scope.spawn(|| self.refresh_with("grok", grok::read));
             scope.spawn(|| self.refresh_with("opencode", opencode::read));
+            scope.spawn(|| self.refresh_tokens("claude", claude::tokens));
+            scope.spawn(|| self.refresh_tokens("codex", codex::tokens));
+            scope.spawn(|| self.refresh_tokens("grok", grok::tokens));
+            scope.spawn(|| {
+                if AgentHost::resolve("cursor-agent").is_ok() {
+                    self.refresh_tokens("cursor", cursor::tokens);
+                }
+            });
+            scope.spawn(|| {
+                if let Ok(bin) = AgentHost::resolve("opencode") {
+                    self.refresh_tokens("opencode", |since| opencode::tokens(&bin.path, since));
+                }
+            });
         });
     }
 
@@ -292,7 +387,6 @@ impl UsageHost {
                 plan,
                 windows: Vec::new(),
                 tokens: None,
-                daily_tokens: None,
                 cost: None,
                 updated_at: now_millis(),
                 source: "cli".into(),
@@ -310,11 +404,6 @@ fn same_reading(a: &PlanUsage, b: &PlanUsage) -> bool {
     strip(a) == strip(b)
 }
 
-/// The share used of the longest window, which is what a day's high is of.
-fn longest_window_percent(windows: &[UsageWindow]) -> Option<f64> {
-    windows.iter().max_by_key(|w| w.window_minutes.unwrap_or(0)).map(|w| w.used_percent)
-}
-
 /// What a window of this many minutes is called.
 pub(crate) fn window_label(minutes: i64) -> String {
     match minutes {
@@ -329,23 +418,32 @@ pub(crate) fn window_label(minutes: i64) -> String {
 
 pub(crate) const DAY_MS: i64 = 86_400_000;
 
-/// `YYYY-MM-DD` (UTC) of a time in milliseconds.
-pub(crate) fn day_of(ms: i64) -> String {
-    let (y, m, d) = civil_from_days(ms.div_euclid(DAY_MS));
-    format!("{y:04}-{m:02}-{d:02}")
+/// `YYYY-MM-DD` of a time in milliseconds, on this machine's calendar: the day
+/// a provider's own tools would say it was spent on.
+pub(crate) fn local_day_of(ms: i64) -> String {
+    let secs = ms.div_euclid(1000) as libc::time_t;
+    // SAFETY: both point at live locals, and `localtime_r` keeps neither.
+    let tm = unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&secs, &mut tm);
+        tm
+    };
+    format!("{:04}-{:02}-{:02}", i64::from(tm.tm_year) + 1900, tm.tm_mon + 1, tm.tm_mday)
 }
 
-/// Hinnant's algorithm: the civil date of a day count since 1970-01-01.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
+/// The days to read: from the first not yet final, never past what is kept.
+fn since_day(next: Option<String>, now: i64) -> Since {
+    let oldest = local_day_of(now - (HISTORY_DAYS - 1) * DAY_MS);
+    let day = next.filter(|next| *next > oldest).unwrap_or(oldest);
+    let days = (day_number(&local_day_of(now)) - day_number(&day) + 1).max(1);
+    // An hour over, as a day can be 25 hours long.
+    Since { day, days: days as u32, from_ms: now - days * DAY_MS - 3_600_000 }
+}
+
+fn day_number(day: &str) -> i64 {
+    let mut parts = day.split('-').map(|part| part.parse::<i64>().unwrap_or(0));
+    let (y, m, d) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    days_from_civil(y, m, d)
 }
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
@@ -417,6 +515,7 @@ pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crew_protocol::UsageWindow;
 
     fn window(id: &str, used: f64, minutes: i64) -> UsageWindow {
         UsageWindow {
@@ -435,7 +534,6 @@ mod tests {
             plan: None,
             windows,
             tokens: None,
-            daily_tokens: None,
             cost: None,
             updated_at: at,
             source: "stream".into(),
@@ -451,10 +549,7 @@ mod tests {
 
     #[test]
     fn days_and_iso_times_round_trip() {
-        assert_eq!(day_of(0), "1970-01-01");
-        assert_eq!(day_of(1_792_457_829_939), "2026-10-20");
         assert_eq!(parse_iso_ms("2026-11-07T02:51:47.912Z"), Some(1_794_019_907_912));
-        assert_eq!(day_of(parse_iso_ms("2026-11-07T02:51:47.912Z").unwrap()), "2026-11-07");
         assert_eq!(parse_iso_ms("2026-11-07T02:51:47.912+00:00"), Some(1_794_019_907_912));
         assert_eq!(parse_iso_ms("2026-11-06T23:51:47.912-03:00"), Some(1_794_019_907_912));
         assert_eq!(parse_iso_ms("2026-11-07T02:51:47+00:00"), Some(1_794_019_907_000));
@@ -470,13 +565,11 @@ mod tests {
     }
 
     #[test]
-    fn a_reading_merges_windows_keeps_the_days_high_and_tells_only_of_a_change() {
+    fn a_reading_merges_windows_and_tells_only_of_a_change() {
         let host = host();
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         host.set_listener(Arc::new(move |_| *count.lock().unwrap() += 1));
-        // The start of today: the snapshot keeps the last week from now, and
-        // the readings a few seconds apart stay on one day.
         let day = now_millis().div_euclid(DAY_MS) * DAY_MS;
         host.record(reading(Some("a@x.dev"), vec![window("seven_day", 10.0, 10080)], day), true);
         host.record(reading(Some("a@x.dev"), vec![window("five_hour", 40.0, 300)], day + 1000), true);
@@ -488,8 +581,6 @@ mod tests {
         assert_eq!(snapshot.readings.len(), 1);
         let ids: Vec<_> = snapshot.readings[0].windows.iter().map(|w| (w.id.as_str(), w.used_percent)).collect();
         assert_eq!(ids, vec![("five_hour", 40.0), ("seven_day", 20.0)]);
-        assert_eq!(snapshot.history.len(), 1);
-        assert_eq!(snapshot.history[0].percent, 25.0, "the high of the longest window");
         assert_eq!(*told.lock().unwrap(), 4);
     }
 
@@ -504,13 +595,57 @@ mod tests {
         assert_eq!(snapshot.readings[0].windows.len(), 2);
     }
 
+    fn spent(input: u64) -> Spent {
+        Spent { input, output: 2, cache_write: 3, cache_read: 4 }
+    }
+
     #[test]
-    fn history_older_than_a_week_is_dropped() {
-        let host = host();
+    fn the_days_to_read_start_at_the_first_not_final_and_never_past_what_is_kept() {
         let now = now_millis();
-        host.record(reading(Some("a"), vec![window("seven_day", 50.0, 10080)], now - 9 * DAY_MS), false);
-        host.record(reading(Some("a"), vec![window("seven_day", 60.0, 10080)], now), false);
-        let days: Vec<_> = host.snapshot().unwrap().history.iter().map(|d| d.day.clone()).collect();
-        assert_eq!(days, vec![day_of(now)]);
+        assert_eq!(since_day(None, now).day, local_day_of(now - (HISTORY_DAYS - 1) * DAY_MS));
+        assert_eq!(since_day(None, now).days, HISTORY_DAYS as u32);
+        let yesterday = local_day_of(now - DAY_MS);
+        let since = since_day(Some(yesterday.clone()), now);
+        assert_eq!((since.day.as_str(), since.days), (yesterday.as_str(), 2));
+        assert_eq!(since_day(Some("2000-01-01".into()), now).days, HISTORY_DAYS as u32);
+    }
+
+    #[test]
+    fn tokens_are_kept_after_their_logs_are_gone_and_told_only_when_they_change() {
+        let host = host();
+        let told = Arc::new(Mutex::new(0));
+        let count = told.clone();
+        host.set_listener(Arc::new(move |_| *count.lock().unwrap() += 1));
+        let now = now_millis();
+        let (today, yesterday, older) = (local_day_of(now), local_day_of(now - DAY_MS), local_day_of(now - 5 * DAY_MS));
+        host.refresh_tokens("claude", |since| {
+            assert_eq!(since.days, HISTORY_DAYS as u32, "nothing was read yet");
+            let mut tally = Tally::default();
+            tally.add(since, older.clone(), "opus", spent(1));
+            tally.add(since, today.clone(), "opus", spent(2));
+            Some(tally)
+        });
+        assert_eq!(*told.lock().unwrap(), 1);
+        // The next read only asks from yesterday on, and an older day stays held.
+        host.refresh_tokens("claude", |since| {
+            assert_eq!(since.day, yesterday);
+            let mut tally = Tally::default();
+            tally.add(since, today.clone(), "opus", spent(2));
+            Some(tally)
+        });
+        assert_eq!(*told.lock().unwrap(), 1, "the same again is not news");
+        let held =
+            |host: &UsageHost| host.snapshot().unwrap().tokens.iter().map(|row| (row.day.clone(), row.input)).collect::<Vec<_>>();
+        assert_eq!(held(&host), vec![(older.clone(), 1), (today.clone(), 2)]);
+        // A read that fails leaves it all as it was.
+        host.refresh_tokens("claude", |_| None);
+        assert_eq!(held(&host), vec![(older.clone(), 1), (today.clone(), 2)]);
+        host.refresh_tokens("claude", |since| {
+            let mut tally = Tally::default();
+            tally.add(since, today.clone(), "opus", spent(9));
+            Some(tally)
+        });
+        assert_eq!(held(&host), vec![(older, 1), (today, 9)]);
+        assert_eq!(*told.lock().unwrap(), 2);
     }
 }

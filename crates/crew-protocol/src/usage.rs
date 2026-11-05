@@ -41,10 +41,6 @@ pub struct PlanUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub tokens: Option<u64>,
-    /// Those tokens day by day, the machine's own calendar, oldest first, today last.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "Array<number>")]
-    pub daily_tokens: Option<Vec<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<f64>,
@@ -63,26 +59,33 @@ pub struct PlanUsage {
     pub overage_status: Option<String>,
 }
 
-/// The most an account's longest window stood at on a day (UTC, `YYYY-MM-DD`).
+/// What one model of a provider spent on a day, on the calendar of the machine
+/// that read it. `input` never includes what the cache served.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct UsageDay {
+pub struct UsageTokens {
     pub provider: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub account: Option<String>,
     pub day: String,
-    pub percent: f64,
+    pub model: String,
+    #[ts(type = "number")]
+    pub input: u64,
+    #[ts(type = "number")]
+    pub output: u64,
+    #[ts(type = "number")]
+    pub cache_write: u64,
+    #[ts(type = "number")]
+    pub cache_read: u64,
 }
 
-/// Every reading this machine holds, and seven days of history.
+/// Every reading this machine holds, and the tokens of the days it keeps.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct UsageSnapshot {
     pub readings: Vec<PlanUsage>,
-    pub history: Vec<UsageDay>,
+    #[serde(default)]
+    pub tokens: Vec<UsageTokens>,
 }
 
 /// `usage_read`. With `refresh`, the CLIs are asked again first.

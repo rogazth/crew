@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use crew_protocol::{PlanUsage, UsageWindow};
 use serde_json::{json, Value};
 
-use super::{parse_iso_ms, window_label};
+use super::tokens::{written_since, Since, Spent, Tally};
+use super::{local_day_of, parse_iso_ms, window_label};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the CLI is given to leave on its own once its stdin closes.
@@ -27,7 +28,6 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         plan,
         windows,
         tokens: None,
-        daily_tokens: None,
         cost: None,
         updated_at: crate::store::now_millis(),
         source: "cli".into(),
@@ -138,9 +138,66 @@ pub fn parse_login_email(json: &Value) -> Option<String> {
     supergrok.chain(entries.iter()).find_map(|(_, entry)| email(entry))
 }
 
+pub fn tokens(since: &Since) -> Option<Tally> {
+    Some(read_tokens(&crate::provider_session::grok_home()?.join("sessions"), since))
+}
+
+/// Each session keeps its `usage.json`, `sessions/<cwd>/<id>/usage.json`, turn
+/// by turn and model by model. `inputTokens` includes what the cache served.
+fn read_tokens(sessions: &std::path::Path, since: &Since) -> Tally {
+    let mut tally = Tally::default();
+    let folders = |dir: &std::path::Path| {
+        std::fs::read_dir(dir).map(|entries| entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    for path in folders(sessions).iter().flat_map(|cwd| folders(cwd)).map(|session| session.join("usage.json")) {
+        if !written_since(&path, since.from_ms) {
+            continue;
+        }
+        let Some(usage) = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()) else {
+            continue;
+        };
+        for turn in usage.get("turns").and_then(Value::as_array).into_iter().flatten() {
+            let Some(at) = turn.get("endedAt").and_then(Value::as_str).and_then(parse_iso_ms) else {
+                continue;
+            };
+            for (model, spent) in turn.get("modelUsage").and_then(Value::as_object).into_iter().flatten() {
+                let number = |key: &str| spent.get(key).and_then(Value::as_u64).unwrap_or(0);
+                let cached = number("cachedReadTokens");
+                tally.add(
+                    since,
+                    local_day_of(at),
+                    model,
+                    Spent {
+                        input: number("inputTokens").saturating_sub(cached),
+                        output: number("outputTokens"),
+                        cache_write: number("cacheCreationTokens"),
+                        cache_read: cached,
+                    },
+                );
+            }
+        }
+    }
+    tally
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::tokens::test_support::{folder, since_ever};
     use super::*;
+
+    #[test]
+    fn tokens_come_from_each_turn_of_each_session_without_the_cache_in_the_input() {
+        let sessions = folder();
+        std::fs::create_dir_all(sessions.join("cwd/one")).unwrap();
+        std::fs::create_dir_all(sessions.join("cwd/none")).unwrap();
+        let at = "2026-11-02T12:00:00.000+00:00";
+        let turn = json!({ "endedAt": at, "inputTokens": 999, "modelUsage": { "grok-4.7-build": {
+            "inputTokens": 100, "outputTokens": 5, "cachedReadTokens": 60, "cacheCreationTokens": 1, "reasoningTokens": 2 } } });
+        std::fs::write(sessions.join("cwd/one/usage.json"), json!({ "turns": [turn, turn] }).to_string()).unwrap();
+        let tally = read_tokens(&sessions, &since_ever());
+        let key = (local_day_of(parse_iso_ms(at).unwrap()), "grok-4.7-build".to_string());
+        assert_eq!(tally.0[&key], Spent { input: 80, output: 10, cache_write: 2, cache_read: 120 });
+    }
 
     // As grok 1.0.70 answers `_x.ai/billing` for SuperGrok on unified billing.
     const BILLING: &str = r#"{"config":{"creditUsagePercent":3.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY",

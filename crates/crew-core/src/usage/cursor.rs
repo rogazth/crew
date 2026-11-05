@@ -6,7 +6,9 @@
 //! the reading has the plan and account and no window. An account on the X
 //! subscription, which shares one plan between Cursor and Grok, is limited by
 //! a weekly pool instead: `get-sand-usage-status` says how much of it is
-//! spent, and `usage-summary` stays at zero for it.
+//! spent, and `usage-summary` stays at zero for it. Its files hold no tokens:
+//! those come from the dashboard's `get-filtered-usage-events`, which is not a
+//! published API and counts the whole account, not this machine.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -14,19 +16,24 @@ use std::time::Duration;
 
 use base64::Engine;
 use crew_protocol::{PlanUsage, UsageWindow};
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use super::{parse_iso_ms, run, window_label};
+use super::tokens::{Since, Spent, Tally};
+use super::{local_day_of, parse_iso_ms, run, window_label};
 
 const SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
 const SAND_URL: &str = "https://cursor.com/api/dashboard/get-sand-usage-status";
+const EVENTS_URL: &str = "https://cursor.com/api/dashboard/get-filtered-usage-events";
+const EVENTS_PAGE: u64 = 100;
+/// More than a month of events would ever fill; a bound on a loop over a server's word.
+const MOST_PAGES: u64 = 200;
 
 pub fn read(bin: &str) -> Option<PlanUsage> {
     let about = run(bin, &["about", "--format", "json"], Duration::from_secs(30)).and_then(|text| parse_about(&text));
     let token = access_token();
     let summary = token.as_deref().and_then(|token| fetch(token, SUMMARY_URL, "")).and_then(|text| parse_summary(&text));
     let now = crate::store::now_millis();
-    let weekly = token.as_deref().and_then(|token| fetch(token, SAND_URL, SAND_REQUEST)).and_then(|text| parse_sand(&text, now));
+    let weekly = token.as_deref().and_then(|token| fetch(token, SAND_URL, &post("{}"))).and_then(|text| parse_sand(&text, now));
     if about.is_none() && summary.is_none() && weekly.is_none() {
         return None;
     }
@@ -44,7 +51,6 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         overage_status: None,
         windows,
         tokens: None,
-        daily_tokens: None,
         cost: None,
         updated_at: now,
     })
@@ -98,6 +104,50 @@ pub fn parse_sand(text: &str, now: i64) -> Option<UsageWindow> {
     })
 }
 
+pub fn tokens(since: &Since) -> Option<Tally> {
+    let token = access_token()?;
+    let now = crate::store::now_millis();
+    let mut tally = Tally::default();
+    let mut read = 0;
+    for page in 1..=MOST_PAGES {
+        let body = json!({ "teamId": 0, "startDate": since.from_ms.to_string(), "endDate": now.to_string(), "page": page, "pageSize": EVENTS_PAGE });
+        let text = fetch(&token, EVENTS_URL, &post(&body.to_string()))?;
+        let (events, total) = parse_events(&text, since, &mut tally)?;
+        read += events;
+        if events == 0 || read >= total {
+            break;
+        }
+    }
+    Some(tally)
+}
+
+/// Adds a page of events to the tally, and says how many it held and how many
+/// there are in all. An event the dashboard counts in requests has no tokens.
+pub fn parse_events(text: &str, since: &Since, tally: &mut Tally) -> Option<(u64, u64)> {
+    let json: Value = serde_json::from_str(text.trim()).ok()?;
+    let total = json.get("totalUsageEventsCount").and_then(Value::as_u64).unwrap_or(0);
+    let Some(events) = json.get("usageEventsDisplay").and_then(Value::as_array) else {
+        return Some((0, total));
+    };
+    for event in events {
+        let (Some(usage), Some(model)) = (event.get("tokenUsage"), event.get("model").and_then(Value::as_str)) else {
+            continue;
+        };
+        let Some(at) = event.get("timestamp").and_then(Value::as_str).and_then(|at| at.parse::<i64>().ok()) else {
+            continue;
+        };
+        let number = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let spent = Spent {
+            input: number("inputTokens"),
+            output: number("outputTokens"),
+            cache_write: number("cacheWriteTokens"),
+            cache_read: number("cacheReadTokens"),
+        };
+        tally.add(since, local_day_of(at), model, spent);
+    }
+    Some((events.len() as u64, total))
+}
+
 /// The token `cursor-agent login` stored, if it can be found cheaply.
 fn access_token() -> Option<String> {
     // The token goes into a curl config: anything but a JWT's characters is refused.
@@ -138,10 +188,12 @@ fn session_value(token: &str) -> Option<String> {
     Some(format!("{}%3A%3A{token}", sub.rsplit('|').next()?))
 }
 
-/// The rest of a curl config that posts an empty body, as the dashboard's
+/// The rest of a curl config that posts a JSON body, as the dashboard's
 /// endpoints want, with the `Origin` they check.
-const SAND_REQUEST: &str =
-    "request = \"POST\"\nheader = \"Content-Type: application/json\"\nheader = \"Origin: https://cursor.com\"\ndata = \"{}\"\n";
+fn post(body: &str) -> String {
+    let data = serde_json::to_string(body).unwrap_or_default();
+    format!("request = \"POST\"\nheader = \"Content-Type: application/json\"\nheader = \"Origin: https://cursor.com\"\ndata = {data}\n")
+}
 
 /// `curl` is given its request on stdin, so the token is not on a command line.
 fn fetch(token: &str, url: &str, extra: &str) -> Option<String> {
@@ -161,7 +213,30 @@ fn fetch(token: &str, url: &str, extra: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tokens::test_support::since_ever;
     use super::*;
+
+    #[test]
+    fn events_give_their_tokens_and_those_counted_in_requests_give_none() {
+        // As cursor.com answered in November 2026, trimmed.
+        let text = r#"{"totalUsageEventsCount":579,"usageEventsDisplay":[
+            {"timestamp":"1793000000000","model":"grok-bot-default","isTokenBasedCall":true,
+             "tokenUsage":{"inputTokens":52,"outputTokens":13196,"cacheWriteTokens":254446,"cacheReadTokens":1967687,"totalCents":157.2}},
+            {"timestamp":"1793000000000","model":"grok-bot-default","isTokenBasedCall":true,"tokenUsage":{"inputTokens":8,"outputTokens":4}},
+            {"timestamp":"1793000000000","model":"grok-bot-automation","isTokenBasedCall":false}]}"#;
+        let mut tally = Tally::default();
+        assert_eq!(parse_events(text, &since_ever(), &mut tally), Some((3, 579)));
+        assert_eq!(tally.0.len(), 1);
+        let key = (local_day_of(1_793_000_000_000), "grok-bot-default".to_string());
+        assert_eq!(tally.0[&key], Spent { input: 60, output: 13_200, cache_write: 254_446, cache_read: 1_967_687 });
+        assert_eq!(parse_events("not json", &since_ever(), &mut tally), None);
+        assert_eq!(parse_events("{}", &since_ever(), &mut tally), Some((0, 0)));
+    }
+
+    #[test]
+    fn a_body_is_quoted_for_the_curl_config() {
+        assert!(post(r#"{"page":1}"#).ends_with("data = \"{\\\"page\\\":1}\"\n"));
+    }
 
     #[test]
     fn about_gives_the_email_and_tier() {

@@ -994,11 +994,7 @@ account?: string, plan?: string, windows: Array<UsageWindow>,
 /**
  * Tokens spent over the last seven days, for a provider with no plan windows (opencode).
  */
-tokens?: number, 
-/**
- * Those tokens day by day, the machine's own calendar, oldest first, today last.
- */
-dailyTokens?: Array<number>, cost?: number, 
+tokens?: number, cost?: number, 
 /**
  * When it was read, in milliseconds since the epoch.
  */
@@ -1992,19 +1988,20 @@ export type UploadChunk = { id: string, extension: string, offset: number, base6
 export type UrlKey = { urlKey: string, };
 
 /**
- * The most an account's longest window stood at on a day (UTC, `YYYY-MM-DD`).
- */
-export type UsageDay = { provider: string, account?: string, day: string, percent: number, };
-
-/**
  * `usage_read`. With `refresh`, the CLIs are asked again first.
  */
 export type UsageRead = { refresh?: boolean, };
 
 /**
- * Every reading this machine holds, and seven days of history.
+ * Every reading this machine holds, and the tokens of the days it keeps.
  */
-export type UsageSnapshot = { readings: Array<PlanUsage>, history: Array<UsageDay>, };
+export type UsageSnapshot = { readings: Array<PlanUsage>, tokens: Array<UsageTokens>, };
+
+/**
+ * What one model of a provider spent on a day, on the calendar of the machine
+ * that read it. `input` never includes what the cache served.
+ */
+export type UsageTokens = { provider: string, day: string, model: string, input: number, output: number, cacheWrite: number, cacheRead: number, };
 
 /**
  * One limit of a plan: a share of a rolling window, spent so far.

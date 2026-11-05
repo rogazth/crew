@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use crew_protocol::{PlanUsage, UsageWindow};
 use serde_json::{json, Value};
 
-use super::window_label;
+use super::tokens::{jsonl_files, lines_with, Since, Spent, Tally};
+use super::{local_day_of, parse_iso_ms, window_label};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -161,7 +162,6 @@ pub fn reading(limits: &Value, account: Option<&Value>, now: i64) -> Option<Plan
         plan: plan.or(account_plan),
         windows,
         tokens: None,
-        daily_tokens: None,
         cost: None,
         updated_at: now,
         source: "app-server".into(),
@@ -170,9 +170,92 @@ pub fn reading(limits: &Value, account: Option<&Value>, now: i64) -> Option<Plan
     })
 }
 
+pub fn tokens(since: &Since) -> Option<Tally> {
+    Some(read_tokens(&crate::provider_session::codex_home()?, since))
+}
+
+/// A session's `token_count` events each say what the last request spent, and
+/// the model is named by the `turn_context` before them. An event with the
+/// running total unchanged repeats the one before it; `input_tokens` includes
+/// what the cache served.
+fn read_tokens(home: &std::path::Path, since: &Since) -> Tally {
+    let mut tally = Tally::default();
+    let number = |usage: &Value, key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    for folder in ["sessions", "archived_sessions"] {
+        for path in jsonl_files(&home.join(folder), since.from_ms) {
+            let mut model = String::from("unknown");
+            let mut total = None;
+            lines_with(&path, "_", |line| {
+                if !line.contains("token_count") && !line.contains("turn_context") {
+                    return;
+                }
+                let Ok(event) = serde_json::from_str::<Value>(line) else {
+                    return;
+                };
+                let payload = event.get("payload");
+                if event.get("type").and_then(Value::as_str) == Some("turn_context") {
+                    if let Some(named) = payload.and_then(|p| p.get("model")).and_then(Value::as_str) {
+                        model = named.to_string();
+                    }
+                    return;
+                }
+                if payload.and_then(|p| p.get("type")).and_then(Value::as_str) != Some("token_count") {
+                    return;
+                }
+                let info = payload.and_then(|p| p.get("info"));
+                let Some(usage) = info.and_then(|i| i.get("last_token_usage")) else {
+                    return;
+                };
+                let running =
+                    info.and_then(|i| i.get("total_token_usage")).and_then(|t| t.get("total_tokens")).and_then(Value::as_u64);
+                if running.is_some() && running == total {
+                    return;
+                }
+                total = running;
+                let Some(at) = event.get("timestamp").and_then(Value::as_str).and_then(parse_iso_ms) else {
+                    return;
+                };
+                let cached = number(usage, "cached_input_tokens");
+                let spent = Spent {
+                    input: number(usage, "input_tokens").saturating_sub(cached),
+                    output: number(usage, "output_tokens"),
+                    cache_write: number(usage, "cache_write_input_tokens"),
+                    cache_read: cached,
+                };
+                tally.add(since, local_day_of(at), &model, spent);
+            });
+        }
+    }
+    tally
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::tokens::test_support::{folder, since_ever};
     use super::*;
+
+    #[test]
+    fn tokens_take_the_model_of_the_turn_and_leave_the_cache_out_of_the_input() {
+        let home = folder();
+        std::fs::create_dir_all(home.join("sessions/2026/11")).unwrap();
+        let at = "2026-11-02T12:00:00.000Z";
+        let count = |total: u64| {
+            format!(
+                r#"{{"timestamp":"{at}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"total_tokens":{total}}},"last_token_usage":{{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2,"total_tokens":12}}}}}}}}"#
+            )
+        };
+        let log = [
+            format!(r#"{{"timestamp":"{at}","type":"turn_context","payload":{{"model":"gpt-6-luna"}}}}"#),
+            count(12),
+            count(12),
+            format!(r#"{{"timestamp":"{at}","type":"event_msg","payload":{{"type":"token_count","info":null}}}}"#),
+            count(24),
+        ];
+        std::fs::write(home.join("sessions/2026/11/rollout.jsonl"), log.join("\n")).unwrap();
+        let tally = read_tokens(&home, &since_ever());
+        let key = (local_day_of(parse_iso_ms(at).unwrap()), "gpt-6-luna".to_string());
+        assert_eq!(tally.0[&key], Spent { input: 12, output: 4, cache_write: 0, cache_read: 8 });
+    }
 
     // As Codex 0.160 answers `account/rateLimits/read` and `account/read`.
     const LIMITS: &str = r#"{"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex","limitName":null,

@@ -1,10 +1,15 @@
 //! Claude: windows from the `rate_limit_event` its stream-json emits (Claude
 //! Code 2.1.299), who is signed in from `claude auth status`.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use crew_protocol::UsageWindow;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use super::window_label;
+use super::tokens::{jsonl_files, lines_with, Since, Spent, Tally};
+use super::{local_day_of, parse_iso_ms, window_label};
 
 /// The windows a `rate_limit_event` names. It only comes with a turn:
 /// `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":
@@ -67,10 +72,103 @@ pub fn parse_auth_status(text: &str) -> Option<(String, Option<String>)> {
     Some((account, plan))
 }
 
+/// Where Claude Code keeps its transcripts.
+fn projects() -> Option<PathBuf> {
+    let root = match std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".claude"),
+    };
+    Some(root.join("projects"))
+}
+
+pub fn tokens(since: &Since) -> Option<Tally> {
+    Some(read_tokens(&projects()?, since))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogLine {
+    timestamp: Option<String>,
+    request_id: Option<String>,
+    message: Option<LogMessage>,
+}
+
+#[derive(Deserialize)]
+struct LogMessage {
+    id: Option<String>,
+    model: Option<String>,
+    usage: Option<LogUsage>,
+}
+
+#[derive(Deserialize)]
+struct LogUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+}
+
+/// One reply takes a log line per block, each repeating the whole reply's
+/// usage, and a resumed session copies its history: a reply counts once.
+fn read_tokens(projects: &Path, since: &Since) -> Tally {
+    let mut tally = Tally::default();
+    let mut seen = HashSet::new();
+    for path in jsonl_files(projects, since.from_ms) {
+        lines_with(&path, "\"usage\"", |line| {
+            let Ok(LogLine { timestamp: Some(at), request_id, message: Some(message) }) = serde_json::from_str(line) else {
+                return;
+            };
+            let LogMessage { id, model: Some(model), usage: Some(usage) } = message else {
+                return;
+            };
+            if model == "<synthetic>" || !seen.insert((id, request_id)) {
+                return;
+            }
+            let Some(at) = parse_iso_ms(&at) else {
+                return;
+            };
+            let spent = Spent {
+                input: usage.input_tokens.unwrap_or(0),
+                output: usage.output_tokens.unwrap_or(0),
+                cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
+                cache_read: usage.cache_read_input_tokens.unwrap_or(0),
+            };
+            tally.add(since, local_day_of(at), &model, spent);
+        });
+    }
+    tally
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::tokens::test_support::{folder, since_ever};
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reply_counts_once_however_many_lines_and_files_repeat_it() {
+        let dir = folder();
+        std::fs::create_dir_all(dir.join("project/subagents")).unwrap();
+        let line = |id: &str, model: &str| {
+            format!(
+                r#"{{"timestamp":"2026-11-02T12:00:00.000Z","requestId":"r{id}","message":{{"id":"{id}","model":"{model}","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}}}}"#
+            )
+        };
+        let session =
+            [line("a", "claude-opus-5-5"), line("a", "claude-opus-5-5"), line("b", "<synthetic>"), "not json \"usage\"".into()];
+        std::fs::write(dir.join("project/one.jsonl"), session.join("\n")).unwrap();
+        std::fs::write(
+            dir.join("project/subagents/two.jsonl"),
+            line("a", "claude-opus-5-5") + "\n" + &line("c", "claude-haiku-5-5"),
+        )
+        .unwrap();
+        let tally = read_tokens(&dir, &since_ever());
+        let day = local_day_of(parse_iso_ms("2026-11-02T12:00:00.000Z").unwrap());
+        let one = Spent { input: 1, output: 2, cache_write: 3, cache_read: 4 };
+        assert_eq!(tally.0.len(), 2);
+        assert_eq!(tally.0[&(day.clone(), "claude-opus-5-5".to_string())], one);
+        assert_eq!(tally.0[&(day, "claude-haiku-5-5".to_string())], one);
+    }
 
     #[test]
     fn a_rate_limit_event_gives_its_unified_windows() {
