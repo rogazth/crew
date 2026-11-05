@@ -102,8 +102,26 @@ test("what the session started is one line under the composer, and its sheet lis
   await agentsSegment().waitFor();
   assert.match(await agentsSegment().innerText(), /^1 agent$/, "a child that reported is not working");
 
-  // The agent is in the panel, what it left running in the sheet.
+  // The agent is in the panel, what it left running in the sheet. The first time it opens, it slides in like every other.
+  const widths = crew.window.evaluate(
+    () =>
+      new Promise<number[]>((done) => {
+        const slot = document.querySelector<HTMLElement>("[data-side-slot]")!;
+        const seen: number[] = [];
+        const end = performance.now() + 800;
+        const tick = () => {
+          seen.push(slot.getBoundingClientRect().width);
+          if (performance.now() < end) requestAnimationFrame(tick);
+          else done(seen);
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
   await agentsSegment().click();
+  const seen = await widths;
+  const final = seen.at(-1)!;
+  const between = new Set(seen.filter((width) => width > 0 && Math.abs(width - final) > 1));
+  assert.ok(final > 0 && between.size >= 3, `it jumped open: ${[...new Set(seen)].join(", ")}`);
   await agentRow("Lint pass").waitFor();
   assert.match((await agentRow("Lint pass").innerText()).replace(/\s+/g, " "), /Lint pass/);
   await agentsSegment().click();

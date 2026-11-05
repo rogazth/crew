@@ -83,8 +83,9 @@ export function SidePanel({ open, active, onHost, children }: { open: boolean; a
   const start = useRef<{ x: number; width: number } | null>(null);
 
   // A chat coming on screen shows its panel as it left it; only opening and closing it moves.
+  // Mounting is opening: the chat mounts this the first time its panel opens.
   const [wasActive, setWasActive] = useState(active);
-  const [settling, setSettling] = useState(true);
+  const [settling, setSettling] = useState(false);
   if (wasActive !== active) {
     setWasActive(active);
     setSettling(true);
@@ -102,7 +103,8 @@ export function SidePanel({ open, active, onHost, children }: { open: boolean; a
     return () => host.remove();
   }, [host]);
 
-  useEffect(() => placeHost(host, width), [host, width]);
+  // Before the first frame: without it the sheet has no width to slide in at.
+  useLayoutEffect(() => placeHost(host, width), [host, width]);
 
   useLayoutEffect(() => {
     hideHost(host, !active);
