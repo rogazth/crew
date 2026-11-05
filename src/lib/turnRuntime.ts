@@ -18,6 +18,8 @@ const patchListeners = new Set<PatchListener>();
 const statuses = new Map<string, SessionStatus>();
 const seenDone = new Set<string>();
 const known = new Map<string, KnownSession>();
+/** Subagents the user wrote to in this window, until that turn ends. */
+const userTurns = new Set<string>();
 const waiters = new Map<string, Array<(ok: boolean) => void>>();
 let foreground: string | null = null;
 let booted = false;
@@ -36,10 +38,13 @@ export function boot(): Promise<void> {
       const apply = payload as TranscriptApply;
       onHarness(apply.sessionId, apply.event);
     });
-    // A session passing its subagent's approval on: the one way a subagent reaches the user.
+    // The one way a subagent reaches the user: under its parent's name, opening its own card.
     client.on("user-asked", (payload) => {
       const asked = payload as UserAsked;
-      announce(asked.sessionId, "approval", `${asked.subagent} wants to run: ${asked.title}`, `asked:${asked.sessionId}:${asked.subagent}`);
+      const parent = known.get(asked.sessionId);
+      if (!parent) return;
+      const source = asked.kind === "question" ? "needs-input" : "approval";
+      announceSession({ ...parent, id: asked.subagentId }, source, asked.text, `asked:${asked.subagentId}`);
     });
     client.on("session-status", (payload) => {
       onStatus(payload as SessionStatusEvent);
@@ -88,6 +93,7 @@ export async function send(
   const id = session.id;
   remember(session);
   if (transcript.read(id).working) return false;
+  userTurns.add(id);
   await boot();
   await transcript.load(id);
   const finished = whenSettled(id);
@@ -304,6 +310,7 @@ function onStatus(event: SessionStatusEvent) {
     finishWaiters(id, status !== "error");
     if (status === "error") announce(id, "error", "Ran into an error");
     if (status === "done") announce(id, "done", lastReply(id));
+    userTurns.delete(id);
   }
 }
 
@@ -334,10 +341,11 @@ function remember(session: Session) {
 }
 
 /** News of a session this window knows; one it never listed has no name to put on it. */
-function announce(id: string, source: NotificationSource, body: string, key?: string) {
+function announce(id: string, source: NotificationSource, body: string) {
   const row = known.get(id);
-  // A subagent answers to the session that started it, which asks the user if it has to.
-  if (row && row.kind !== "child") announceSession({ id, ...row }, source, body, key);
+  // A subagent answers to the session that started it, which asks the user if
+  // it has to. A turn the user started in its tab is theirs to hear of.
+  if (row && (row.kind !== "child" || userTurns.has(id))) announceSession({ id, ...row }, source, body);
 }
 
 function whenSettled(id: string): Promise<boolean> {

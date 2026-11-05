@@ -109,15 +109,20 @@ pub struct MailboxChanged {
     pub session_id: String,
 }
 
-/// A session passed one of its subagents' approvals on to the user, who
-/// decides it in Crew. Pushed as `user-asked`.
+/// What a subagent waits on has reached the user, who answers it in Crew: its
+/// parent passed it on, or could not be woken to deal with it. Pushed as
+/// `user-asked`.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct UserAsked {
+    /// The parent, whose name it goes out under.
     pub session_id: String,
-    pub subagent: String,
-    pub title: String,
+    /// The subagent, whose card it opens.
+    pub subagent_id: String,
+    /// `approval` or `question`.
+    pub kind: String,
+    pub text: String,
 }
 
 /// The user has read a session up to `cursor`; absent, up to its last event.

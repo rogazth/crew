@@ -312,9 +312,16 @@ impl SessionTools {
         row.kind == "child" && row.parent_id.is_some() && caller.session_id() == row.parent_id.as_deref()
     }
 
+    /// Whether what `row` waits on is `caller`'s to act on: the user's, or its parent's.
+    fn acts_on(caller: &Caller, row: &Session) -> bool {
+        matches!(caller, Caller::User { .. }) || Self::is_parent(caller, row)
+    }
+
     /// How `caller` can act on an approval `row` waits on.
     fn approval_note(&self, caller: &Caller, row: &Session, request: &Value) -> String {
-        if self.may_decide(caller, row, request) {
+        if matches!(caller, Caller::User { .. }) {
+            format!("send_message to {} with decision allow or deny.", row.id)
+        } else if self.may_decide(caller, row, request) {
             format!("send_message to {} with decision allow or deny, or ask_user to have the user decide it.", row.id)
         } else {
             format!("Your autonomy does not cover it: send_message to {} with decision deny or ask_user. Only the user can allow it, in Crew.", row.id)
@@ -326,7 +333,7 @@ impl SessionTools {
     fn peer_status(&self, caller: &Caller, row: &Session) -> String {
         match row.status.as_str() {
             "needs-input" if self.pending_question(row).is_some() => "question".into(),
-            "needs-input" if self.pending_approval(row).is_some() && (Self::is_parent(caller, row) || matches!(caller, Caller::User { .. })) => {
+            "needs-input" if self.pending_approval(row).is_some() && Self::acts_on(caller, row) => {
                 "approval".into()
             }
             "needs-input" => "waiting_for_user".into(),
@@ -492,14 +499,14 @@ impl SessionTools {
             ),
             Some(_) => return Err("answers is a list: one answer per question, in the order they were asked".into()),
         };
-        let decision = match text(args.get("decision")).as_deref() {
-            None => None,
+        let chosen = text(args.get("decision"));
+        let ask_user = chosen.as_deref() == Some("ask_user");
+        let decision = match chosen.as_deref() {
+            None | Some("ask_user") => None,
             Some("allow") => Some(ApprovalDecision::Allow),
             Some("deny") => Some(ApprovalDecision::Deny),
-            Some("ask_user") => None,
             Some(other) => return Err(format!("decision is allow, deny or ask_user, not \"{other}\"")),
         };
-        let ask_user = text(args.get("decision")).as_deref() == Some("ask_user");
         let body = text(args.get("text"));
         if body.is_none() && answers.is_none() && decision.is_none() && !ask_user {
             return Err("text is required".into());
@@ -507,7 +514,7 @@ impl SessionTools {
         let target = self.find_peer(caller, &to)?;
         self.may_send(caller, &target)?;
         if ask_user {
-            return self.ask_user(caller, &target);
+            return self.ask_user(caller, &target, body.as_deref());
         }
         if let Some(decision) = decision {
             return self.decide(caller, &target, decision, body.as_deref());
@@ -678,7 +685,8 @@ impl SessionTools {
     /// `send_message` with the decision ask_user: a parent passes what its
     /// subagent waits on to the user. The answer is the user's own, on the
     /// card in Crew: a parent saying they agreed would let it allow anything.
-    fn ask_user(&self, caller: &Caller, target: &Session) -> Result<Value, String> {
+    /// `text`, if any, stands beside that card.
+    fn ask_user(&self, caller: &Caller, target: &Session, text: Option<&str>) -> Result<Value, String> {
         if !Self::is_parent(caller, target) {
             return Err(format!(
                 "{} ({}) is not a session you started: ask_user is only for an approval your own session waits on.",
@@ -703,18 +711,19 @@ impl SessionTools {
                 target.name
             ));
         };
-        self.store.user_asked(&me.id, &target.name, &title);
+        self.store.user_asked(&me.id, &target.id, "approval", &format!("{} wants to run: {title}", target.name));
+        let why = text.map(str::trim).filter(|text| !text.is_empty()).map(|text| format!(". {text}")).unwrap_or_default();
         self.turns
             .transcripts()
-            .apply(&target.id, crew_protocol::HarnessEvent::SessionNote { message: format!("{} asked the user: {title}", me.name) });
+            .apply(&target.id, crew_protocol::HarnessEvent::SessionNote { message: format!("{} asked the user: {title}{why}", me.name) });
         self.saw(caller, target, target.cursor);
         Ok(json!({
             "to": target.name,
             "id": target.id,
             "delivery": "asked_user",
             "note": format!(
-                "The user was told. They decide it in Crew, and it goes straight to {}: nothing they tell you counts as \
-                 allowing it. Its report wakes you when its turn ends.",
+                "Crew notified the user, who decides it there, and it goes straight to {}: nothing they tell you counts \
+                 as allowing it. If they are away it waits. Its report wakes you when its turn ends.",
                 target.name
             )
         }))
@@ -1204,10 +1213,10 @@ impl SessionTools {
         Ok(session::get(&self.store, row.id.clone())?.unwrap_or(row))
     }
 
-    /// Block until `row` ends a turn (its report), stops on a question, or
-    /// `timeout` passes. An approval it waits on is the user's, so the wait
-    /// carries on past it. What the wait hands back counts as seen: the same
-    /// report or question does not also wake the caller.
+    /// Block until `row` ends a turn (its report), stops on a question or on
+    /// an approval that is the caller's to act on, or `timeout` passes. What
+    /// the wait hands back counts as seen: the same report or question does
+    /// not also wake the caller.
     fn await_turn(&self, caller: &Caller, row: &Session, timeout: Duration) -> Result<Value, String> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -1221,7 +1230,7 @@ impl SessionTools {
                     if event["event"] == "needs-input" {
                         let request = &event["request"];
                         if request["kind"] == "approval" {
-                            if !Self::is_parent(caller, &now) {
+                            if !Self::acts_on(caller, &now) {
                                 // Not this caller's to act on. Keep waiting.
                                 continue;
                             }
@@ -2186,7 +2195,7 @@ pub fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_peers",
-            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session of the user's), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval you can decide, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
+            description: "Who is in this workspace and who you can write to: its bots and sessions, each with its id, type (bot; subagent, started with delegate by the session in parent; session, a session of the user's, which launched_by names if another session started it), kind (bot; session, a subagent or a session of the user's), status (idle, working, background: its turn is over with work still running in the background, question: waiting on a question you can answer, approval: waiting on an approval that is yours to allow, deny or pass to the user, waiting_for_user: waiting on the user's approval, error, exited), where it works (main checkout or its branch), and write: whether send_message and interrupt_session reach it from you (a session cannot write to one that runs with more autonomy than it has).",
             schema: json!({ "type": "object", "properties": {} }),
             audience: Audience::EVERYONE,
             cli: vec![crate::tools::top("peers").about("The bots and sessions here: status, who started them, and whether you can write to them.").eg("crew peers\n  crew peers --json | jq '.[] | select(.kind == \"bot\") | .id'")],
@@ -2198,7 +2207,7 @@ pub fn catalog() -> Vec<Tool> {
                 "It arrives as a turn, in an envelope naming you: your name and id, and that a model wrote it. Idle, the reader starts on it now; busy, it waits until the current turn ends. ",
                 "steer: true puts it into the running turn instead, to correct its course, where the CLI can take that (Claude and Codex); anywhere else it is queued. ",
                 "To a subagent that is waiting on a question, it answers the question, from anyone who may write to it: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
-                "To a subagent you started that is waiting on an approval, decision allow or deny decides it, if you could do the same yourself (text, if any, follows as a message). ",
+                "To a subagent you started that is waiting on an approval: decision allow, if you could do the same yourself; deny; or ask_user, to have the user decide it in Crew (text, if any, follows as a message, or with ask_user stands beside their card). ",
                 "The result says how it went: delivery started, queued, steered or answered. A reply, if any, reaches you as a message of its own, if your CLI has turns to put it in."
             ),
             schema: json!({
@@ -6726,8 +6735,8 @@ time.sleep(600)
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = asked.clone();
         w.turns.store().set_listener(Arc::new(move |what| {
-            if let crate::store::Changed::UserAsked { session, subagent, title } = what {
-                sink.lock().unwrap().push((session.to_string(), subagent.to_string(), title.to_string()));
+            if let crate::store::Changed::UserAsked { session, subagent, text, .. } = what {
+                sink.lock().unwrap().push((session.to_string(), subagent.to_string(), text.to_string()));
             }
         }));
         let bot = w.session("bot", "Careful", "edits");
@@ -6745,7 +6754,7 @@ time.sleep(600)
             let heard = asked.lock().unwrap();
             assert_eq!(heard.len(), 1, "{heard:?}");
             assert_eq!(heard[0].0, me);
-            assert_eq!(heard[0].1, w.row(&id).name);
+            assert_eq!(heard[0].1, id, "it opens the subagent's card");
             assert!(heard[0].2.contains("touch asked.txt"), "{heard:?}");
         }
         assert_eq!(w.row(&id).status, "needs-input", "asking decided it");
@@ -6757,6 +6766,34 @@ time.sleep(600)
         let late = w.call(&bot, "send_message", json!({ "to": id, "decision": "ask_user" }));
         assert!(late.is_err_and(|e| e.contains("not waiting on an approval")));
         w.settle(&me);
+    }
+
+    /// A parent that cannot be woken would never act, so what its subagent
+    /// waits on reaches the user, however little the subagent usually does.
+    #[test]
+    fn what_waits_on_a_paused_parent_reaches_the_user() {
+        let w = world();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = asked.clone();
+        w.turns.store().set_listener(Arc::new(move |what| {
+            if let crate::store::Changed::UserAsked { session, subagent, text, .. } = what {
+                sink.lock().unwrap().push((session.to_string(), subagent.to_string(), text.to_string()));
+            }
+        }));
+        let bot = w.session("bot", "Lead", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let (id, _) = w.codex(&bot, "ASK", Some("ask"));
+        session::set_auto_turns(w.turns.store(), &me, session::PAUSE_AFTER);
+        until_asking(&w, &id);
+        {
+            let heard = asked.lock().unwrap();
+            assert_eq!(heard.len(), 1, "{heard:?}");
+            assert_eq!((heard[0].0.as_str(), heard[0].1.as_str()), (me.as_str(), id.as_str()));
+            assert!(heard[0].2.contains("wants to run"), "{heard:?}");
+        }
+        let request = session_events::latest(w.turns.store(), &id).unwrap().unwrap().request.unwrap();
+        w.turns.respond(&id, request["request_id"].as_u64().unwrap(), ApprovalDecision::Deny).expect("deny");
+        w.settle(&id);
     }
 
     /// A session of the user's that started a subagent answers for it as a

@@ -277,7 +277,7 @@ impl ToolFamily for ProcessTools {
                 if let (Caller::Child(me), Some(turns), true, false) = (caller, &self.turns, waits, caller.full_autonomy()) {
                     if turns.process_proposed(me, &saved) {
                         row["pending_approval"] = json!(format!(
-                            "Waiting for approval: {} decides it, or the user in Crew.",
+                            "Waiting for approval: {} deals with it.",
                             me.parent_id.as_deref().map(|id| self.who(Some(id))).unwrap_or_else(|| "whoever started you".into())
                         ));
                     }

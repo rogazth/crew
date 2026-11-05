@@ -212,15 +212,32 @@ describe("news of a session asking", () => {
     expect(bodies()).toEqual([]);
   });
 
-  it("reaches the user from a subagent only through its parent, under the parent's name", async () => {
+  it("reaches the user from a subagent only through its parent, under its name, opening the subagent", async () => {
     const lead = { ...bot, id: "lead", name: "Lead" };
     runtime.rememberSessions([lead]);
-    emit("user-asked", { sessionId: "lead", subagent: "Schema check", title: "npm run db:migrate" });
+    emit("user-asked", { sessionId: "lead", subagentId: "c1", kind: "approval", text: "Schema check wants to run: npm run db:migrate" });
     await vi.waitFor(() => expect(bodies()).toEqual(["Schema check wants to run: npm run db:migrate"]), { timeout: 3000 });
-    expect((notify.mock.calls[0]?.[0] as { title: string }).title).toBe("Lead");
-    // A second subagent is news of its own, inside the same parent's cooldown.
-    emit("user-asked", { sessionId: "lead", subagent: "Docs pass", title: "rm -rf docs" });
+    const banner = notify.mock.calls[0]?.[0] as { title: string; target: { sessionId: string } };
+    expect(banner.title).toBe("Lead");
+    expect(banner.target.sessionId).toBe("c1");
+    // Another subagent is news of its own, inside the same parent's cooldown.
+    emit("user-asked", { sessionId: "lead", subagentId: "c2", kind: "question", text: "Docs pass asks: which one?" });
     await vi.waitFor(() => expect(bodies()).toHaveLength(2), { timeout: 3000 });
+  });
+
+  it("hears a subagent's turn when the user started it", async () => {
+    const child = { ...bot, kind: "child" as const, parentId: "lead" };
+    request.mockResolvedValue({ blocks: [], seq: 0, working: false, status: "idle" });
+    void runtime.send(child, "/tmp", "carry on");
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    status("error");
+    await vi.waitFor(() => expect(bodies()).toEqual(["Ran into an error"]), { timeout: 3000 });
+    // Only that turn: the next one is its parent's again.
+    notifications.resetNotifications();
+    status("working");
+    status("error");
+    await past(100);
+    expect(bodies()).toEqual(["Ran into an error"]);
   });
 
   it("says nothing if the session moved on first", async () => {

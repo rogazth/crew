@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS app_state (
 pub enum Changed<'a> {
     Mailbox(&'a str),
     Session(&'a str),
-    /// `session` passed its subagent's approval on to the user.
-    UserAsked { session: &'a str, subagent: &'a str, title: &'a str },
+    /// What `subagent`, of `session`'s, waits on has reached the user.
+    UserAsked { session: &'a str, subagent: &'a str, kind: &'a str, text: &'a str },
 }
 
 /// Told what changed (see [`Store::set_listener`]).
@@ -119,9 +119,9 @@ impl Store {
         self.changed(Changed::Mailbox(session_id));
     }
 
-    /// A session has asked the user to decide what its subagent waits on.
-    pub fn user_asked(&self, session: &str, subagent: &str, title: &str) {
-        self.changed(Changed::UserAsked { session, subagent, title });
+    /// What a subagent waits on has reached the user.
+    pub fn user_asked(&self, session: &str, subagent: &str, kind: &str, text: &str) {
+        self.changed(Changed::UserAsked { session, subagent, kind, text });
     }
 
     /// Something a session's row is read with changed: an event of its own,

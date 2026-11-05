@@ -1998,23 +1998,30 @@ impl TurnHost {
         if child.kind != "child" || (process.approved && process.proposed.is_none()) {
             return false;
         }
-        let Some(parent) = self.deciding_parent(child, &json!({ "kind": "process" })) else {
+        let Some(parent) = child.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten()) else {
             return false;
         };
+        let mut body = mailbox::process_approval_text(process);
+        if !may_decide(&self.autonomy(&parent), &json!({ "kind": "process" })) {
+            body.push_str(mailbox::BEYOND_AUTONOMY);
+        }
         let from = crew_protocol::BotRef { id: child.id.clone(), name: child.name.clone(), kind: Some("session".into()) };
-        let letter = mailbox::Letter::new(&parent.id, &from, &mailbox::process_approval_text(process), mailbox::APPROVAL, None);
+        let letter = mailbox::Letter::new(&parent.id, &from, &body, mailbox::APPROVAL, None);
         if mailbox::put(&self.store, letter).is_err() {
             return false;
+        }
+        if self.is_stalled(&parent.id) {
+            let text = format!("{} wants to run: the process \"{}\"", child.name, process.spec.name);
+            self.store.user_asked(&parent.id, &child.id, "approval", &text);
         }
         self.wake(&parent.id);
         true
     }
 
-    /// The bot that started `child`, when it may decide `request` for it:
-    /// only what it could do itself without asking anyone.
-    pub fn deciding_parent(&self, child: &crate::session::Session, request: &Value) -> Option<crate::session::Session> {
-        let parent = child.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
-        (parent.kind == "bot" && may_decide(&self.autonomy(&parent), request)).then_some(parent)
+    /// Whether letters no longer start a turn in `session_id`: it has had its
+    /// automatic turns, or its last turn failed before reading them.
+    fn is_stalled(&self, session_id: &str) -> bool {
+        session::paused(&self.store, session_id) || self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
     /// The autonomy a session effectively runs with, for a tool deciding
@@ -2666,9 +2673,7 @@ impl TurnHost {
         let user_wrote = |letters: &[mailbox::Letter]| letters.iter().any(|letter| letter.from.kind.as_deref() == Some("user"));
         // A paused session, or one whose last turn failed before reading its
         // letters, is started by the user alone.
-        let stalled =
-            session::paused(&self.store, session_id) || self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id);
-        if stalled && !mailbox::waiting(&self.store, session_id).is_ok_and(|waiting| user_wrote(&waiting)) {
+        if self.is_stalled(session_id) && !mailbox::waiting(&self.store, session_id).is_ok_and(|waiting| user_wrote(&waiting)) {
             return false;
         }
         let letters = match mailbox::claim_batch(&self.store, session_id, mailbox::BATCH_CHARS) {
@@ -2994,19 +2999,24 @@ impl TurnHost {
         let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
             return;
         };
-        if session.kind == "child" {
-            self.child_event(&session, "needs-input", "", Some(&request));
+        if session.kind != "child" {
+            return;
+        }
+        self.child_event(&session, "needs-input", "", Some(&request));
+        // Its parent would hear of it and act, but cannot be woken: nobody
+        // else knows it waits, and the user is who can start the parent again.
+        if let Some(parent) = session.parent_id.as_deref().filter(|parent| self.is_stalled(parent)) {
+            let kind = if request.get("questions").is_some() { "question" } else { "approval" };
+            self.store.user_asked(parent, &session.id, kind, &mailbox::user_asked_text(&session.name, &request));
         }
     }
 
-    /// A bot that started a session hears how each turn ended in its own
+    /// A session that started a subagent hears how each turn ended in its own
     /// box, as a `report` letter that wakes it, so it never sits in a wait to
     /// find out; what it asks, as a `question` letter it answers with
-    /// `send_message`; and an approval it could give itself, as an
-    /// `approval` letter it decides with `send_message`. The user's card
-    /// stays either way. A terminal or the user has no turns to hand it to:
-    /// they wait, or read.
-    /// `None` when there is no bot parent to tell.
+    /// `send_message`; and what it wants approved, as an `approval` letter it
+    /// allows, denies or passes to the user. The card stays either way.
+    /// `None` when there is no parent with turns to tell.
     fn report_letter(
         &self,
         session: &crate::session::Session,

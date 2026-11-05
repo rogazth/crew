@@ -2032,10 +2032,23 @@ windowMinutes?: number,
 resetsAt?: number, };
 
 /**
- * A session passed one of its subagents' approvals on to the user, who
- * decides it in Crew. Pushed as `user-asked`.
+ * What a subagent waits on has reached the user, who answers it in Crew: its
+ * parent passed it on, or could not be woken to deal with it. Pushed as
+ * `user-asked`.
  */
-export type UserAsked = { sessionId: string, subagent: string, title: string, };
+export type UserAsked = { 
+/**
+ * The parent, whose name it goes out under.
+ */
+sessionId: string, 
+/**
+ * The subagent, whose card it opens.
+ */
+subagentId: string, 
+/**
+ * `approval` or `question`.
+ */
+kind: string, text: string, };
 
 export type VaultCallback = { state: string, 
 /**

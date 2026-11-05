@@ -289,9 +289,9 @@ pub fn approval_envelope(from: &BotRef, body: &str) -> String {
         String::new()
     } else {
         format!(
-            "\n\nDecide with send_message to {id}: {{\"to\": \"{id}\", \"decision\": \"allow\"}} or \"deny\". \
-             If it is the user's call, ask the user first with your question tool; the user can also decide it in \
-             Crew, and the first answer counts.",
+            "\n\nAct on it with send_message to {id}: {{\"to\": \"{id}\", \"decision\": \"allow\"}} if your autonomy \
+             covers it, \"deny\", or \"ask_user\" to have the user decide it in Crew. It reaches them only if you do \
+             that, and what they tell you does not count as allowing it.",
             id = from.id
         )
     };
@@ -304,6 +304,17 @@ fn who_session(from: &BotRef) -> String {
     } else {
         format!("{} ({})", from.name, from.id)
     }
+}
+
+/// What reaches the user of what a subagent waits on, as a line.
+pub fn user_asked_text(subagent: &str, request: &serde_json::Value) -> String {
+    use serde_json::Value;
+    if let Some(question) = request.get("questions").and_then(Value::as_array).and_then(|all| all.first()) {
+        return format!("{subagent} asks: {}", question.get("question").and_then(Value::as_str).unwrap_or("a question"));
+    }
+    let title = request.get("title").and_then(Value::as_str).map(str::trim).filter(|title| !title.is_empty());
+    let what = title.or_else(|| request.get("tool").and_then(Value::as_str)).unwrap_or("something");
+    format!("{subagent} wants to run: {what}")
 }
 
 /// A child's questions as its parent reads them: each with its options.
@@ -346,12 +357,11 @@ pub fn questions_text(request: &serde_json::Value) -> String {
         .join("\n")
 }
 
+/// Told to a parent whose own autonomy does not reach what its subagent wants.
+pub const BEYOND_AUTONOMY: &str = "\n\nYour autonomy does not cover this, so you cannot allow it: deny it, or use ask_user.";
+
 /// What a child's approval request asks, as its parent reads it: the tool,
 /// what it would do, why (when the CLI said), and its input.
-/// Told to a parent whose own autonomy does not reach what its subagent wants.
-pub const BEYOND_AUTONOMY: &str = "\n\nYour autonomy does not cover this, so you cannot allow it. Deny it, or, if the \
-user should decide, ask them with the decision ask_user: they decide it in Crew, and only that counts as their answer.";
-
 pub fn approval_text(request: &serde_json::Value) -> String {
     use serde_json::Value;
     let tool = request.get("tool").and_then(Value::as_str).unwrap_or("a tool");
@@ -1420,7 +1430,7 @@ mod tests {
             "input": { "command": "npm test", "description": "Run the unit tests" } });
         let out = render(&Letter::new("p1", &from, &approval_text(&request), APPROVAL, Some(3)), None);
         assert!(out.starts_with("## Approval from session claude: build (c1)\n\nIt wants to use Bash: npm test\nWhy: Run the unit tests\nInput: {"), "{out}");
-        assert!(out.contains(r#"{"to": "c1", "decision": "allow"}"#) && out.contains("first answer counts"), "{out}");
+        assert!(out.contains(r#"{"to": "c1", "decision": "allow"}"#) && out.contains("ask_user"), "{out}");
     }
 
     #[test]
