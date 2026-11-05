@@ -13,8 +13,6 @@ export const BOT_AVATARS = [
   { id: "pixelbot", label: "Pixelbot", load: (): Promise<Definition> => import("@dicebear/styles/pixelbot.json") },
   { id: "voxel-bot", label: "Voxel Bot", load: (): Promise<Definition> => import("@dicebear/styles/voxel-bot.json") },
   { id: "moods", label: "Moods", load: (): Promise<Definition> => import("@dicebear/styles/moods.json") },
-  { id: "glass", label: "Glass", load: (): Promise<Definition> => import("@dicebear/styles/glass.json") },
-  { id: "blobs", label: "Blobs", load: (): Promise<Definition> => import("@dicebear/styles/blobs.json") },
 ] as const;
 
 export type BotAvatarId = (typeof BOT_AVATARS)[number]["id"];
@@ -81,8 +79,6 @@ const RENDER: Record<BotAvatarId, Render> = {
   "voxel-bot": { backgroundColor: ["#00000000"], scale: 1.2 },
   moods: { backgroundColor: ["#00000000"], scale: 1.3 },
   pixelbot: { borderRadius: 24, scale: 1.3 },
-  glass: { borderRadius: 24 },
-  blobs: { borderRadius: 24 },
 };
 
 export function avatarRender(id: BotAvatarId): Render {
