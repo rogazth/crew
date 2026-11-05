@@ -203,14 +203,16 @@ export function useStatusSheet(shown: boolean, onClose: () => void, onEscape: ()
   return { box, trigger, opened };
 }
 
-export function StatusSheet({ ref, title, action, children, ...rest }: { ref: Ref<HTMLDivElement>; title: string; action?: ReactNode; children: ReactNode } & Omit<ComponentProps<"div">, "ref" | "title">) {
+export function StatusSheet({ ref, title, action, children, ...rest }: { ref: Ref<HTMLDivElement>; title?: string; action?: ReactNode; children: ReactNode } & Omit<ComponentProps<"div">, "ref" | "title">) {
   return (
     <div ref={ref} tabIndex={-1} {...rest} className="absolute inset-x-[42px] bottom-full z-20 mb-2 flex max-h-[min(50vh,320px)] flex-col overflow-y-auto overscroll-contain rounded-[14px] bg-surface p-1.5 shadow-float ring-1 ring-border outline-none">
-      <div className="flex h-7 shrink-0 items-center pl-2 text-[12px] font-medium text-text-muted">
-        {title}
-        <span className="flex-1" />
-        {action}
-      </div>
+      {title && (
+        <div className="flex h-7 shrink-0 items-center pl-2 text-[12px] font-medium text-text-muted">
+          {title}
+          <span className="flex-1" />
+          {action}
+        </div>
+      )}
       {children}
     </div>
   );

@@ -74,13 +74,6 @@ describe("the sheet's rows", () => {
     expect(stateLabel(server("a", "failed"))).toBe("Failed");
     expect(stateLabel(server("a", "needs_auth"))).toBe("Needs sign-in");
   });
-
-  it("says a provider that reports nothing does not", async () => {
-    const { unreportedNote } = await mcp();
-    expect(unreportedNote({ servers: [], reported: false }, "Cursor")).toBe("Cursor does not report its servers");
-    expect(unreportedNote(status(), "Cursor")).toBeNull();
-    expect(unreportedNote(null, "Cursor")).toBeNull();
-  });
 });
 
 describe("the store", () => {
@@ -132,6 +125,32 @@ describe("after a sign-in terminal", () => {
     request.mockRejectedValue(new Error("Server status: needs-auth"));
     await reconnectAfterSignIn("tab2", "s1", "sentry");
     expect(readMcp("s1")).toBeNull();
+  });
+});
+
+describe("sessionServers", () => {
+  const listed = (name: string, state: McpState, offInCrew = false) => ({ provider: "claude", name, transport: "http", target: "", scope: null, state, error: null, tools: null, offInCrew, canSignIn: true, canRemove: false });
+
+  it("takes what the CLI says once it has said it", async () => {
+    const { sessionServers } = await mcp();
+    const said = status(server("docs", "connected"));
+    expect(sessionServers(said, [listed("other", "connected")])).toEqual(said);
+  });
+
+  it("takes what the CLI has on the machine before that, without what is off in Crew", async () => {
+    const { sessionServers } = await mcp();
+    const before = sessionServers({ servers: [], reported: false }, [listed("docs", "connected"), listed("off", "connected", true), listed("sentry", "needs_auth")]);
+    expect(before.reported).toBe(false);
+    expect(before.servers.map((one) => [one.name, one.state])).toEqual([["docs", "connected"], ["sentry", "needs_auth"]]);
+    expect(sessionServers(null, []).servers).toEqual([]);
+  });
+});
+
+describe("activeServers", () => {
+  it("leaves out what is switched off, and keeps what needs the user first", async () => {
+    const { activeServers } = await mcp();
+    const listed = activeServers(status(server("docs", "connected"), server("off", "disabled"), server("sentry", "needs_auth")));
+    expect(listed.map((one) => one.name)).toEqual(["sentry", "docs"]);
   });
 });
 

@@ -5,7 +5,6 @@ import { composerHints } from "../../lib/composerHints";
 import { effortsOf, fitChoice, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import type { TreeMention } from "../../lib/agentMentions";
 import type { CommandEntry } from "../../lib/protocol";
-import { sortedServers, useMcp } from "../../lib/mcp";
 import { refreshCommands } from "../../lib/slashCommands";
 import type { Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
@@ -133,9 +132,8 @@ export function Composer({
   const hints = composerHints({ working, escBack, stepsEffort });
   // The keys are the first to go: with every indicator on, the line has no room for them.
   const quota = useQuota(session.provider);
-  const servers = sortedServers(useMcp(session.id));
   const remote = useWhere(session).remote;
-  const crowded = [(work?.entries.length ?? 0) > 0, servers.length > 0, !!quota, remote].filter(Boolean).length >= 3;
+  const crowded = [(work?.entries.length ?? 0) > 0, !!quota, remote].filter(Boolean).length >= 2;
   // A long name leaves the placeholder rather than crowd it.
   const shortName = session.name.length > 24 ? "" : ` ${session.name}`;
 

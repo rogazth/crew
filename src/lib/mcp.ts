@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { mcpReconnect, providerServersList } from "./api";
 import { client } from "./client";
-import type { McpChanged, McpServer, McpState, McpStatus } from "./protocol";
+import type { McpChanged, McpServer, McpState, McpStatus, ProviderServer } from "./protocol";
 
 /**
  * Which MCP servers each session has and how they stand (plan decision 20):
@@ -124,10 +124,17 @@ export function sortedServers(status: McpStatus | null | undefined): McpServer[]
   return (status?.servers ?? []).map((server, at) => ({ server, at })).sort((a, b) => rank(a.server) - rank(b.server) || a.at - b.at).map(({ server }) => server);
 }
 
-/** The line a session whose provider does not report its servers shows where its servers would be. */
-export function unreportedNote(status: McpStatus | null | undefined, provider: string): string | null {
-  if (!status || status.reported) return null;
-  return `${provider} does not report its servers`;
+/** What the session has on, in that order: one switched off is the Connectors page's to list. */
+export const activeServers = (status: McpStatus | null | undefined): McpServer[] => sortedServers(status).filter((server) => server.state !== "disabled");
+
+/**
+ * What a session has on: what its CLI says, once it has said it. Until then,
+ * what that CLI has on the session's machine, which names the same servers.
+ */
+export function sessionServers(status: McpStatus | null | undefined, inventory: readonly ProviderServer[]): McpStatus {
+  if (status?.reported) return status;
+  const servers = inventory.filter((one) => !one.offInCrew).map((one): McpServer => ({ name: one.name, state: one.state, ...(one.error ? { error: one.error } : {}) }));
+  return { servers, reported: false };
 }
 
 const reconnected = new Set<string>();

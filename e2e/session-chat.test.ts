@@ -521,7 +521,7 @@ test("a session paused after 20 automatic turns says so at the transcript's foot
   assert.equal((await crew.request<{ paused?: boolean }>("session_get", { id: session.id })).paused, false);
 });
 
-test("a session's connectors show under the prompt, a dot says one needs the user, and the sheet opens its sign-in in a terminal", async () => {
+test("a session's connectors show under the prompt, a dot says one needs the user, and the sheet lists them over the way to the page", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   const servers = path.join(crew.home, "fake-claude-mcp.json");
@@ -529,6 +529,11 @@ test("a session's connectors show under the prompt, a dot says one needs the use
     servers,
     JSON.stringify([
       { name: "docs", status: "connected" },
+      { name: "context7", status: "connected" },
+      { name: "chrome-devtools", status: "connected" },
+      { name: "figma", status: "connected" },
+      { name: "a-server-with-a-rather-long-name", status: "connected" },
+      { name: "off", status: "disabled" },
       { name: "sentry", status: "needs-auth" },
       { name: "broken", status: "failed", error: "ENOENT: no such file or directory" },
     ]),
@@ -536,8 +541,12 @@ test("a session's connectors show under the prompt, a dot says one needs the use
   try {
     const session = await newChat(workspace.id);
     const chip = crew.window.locator("[data-status-line]:visible [data-connectors-trigger]");
-    // The CLI is not up before the first message: nothing to say yet.
-    assert.equal(await chip.count(), 0);
+    // The CLI is not up before the first message and the machine lists none: the page, straight.
+    await chip.click();
+    await chip.waitFor({ state: "hidden" });
+    assert.equal(await crew.window.locator("[data-connectors-sheet]").count(), 0, "no sheet with nothing in it");
+    await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
+    await chip.waitFor();
     await send("which servers");
     await said("Reply 1: which servers").waitFor();
     await chip.waitFor();
@@ -548,12 +557,19 @@ test("a session's connectors show under the prompt, a dot says one needs the use
     await chip.click();
     const sheet = crew.window.locator("[data-connectors-sheet]:visible");
     const row = (name: string) => sheet.locator(`[data-server="${name}"]`);
-    // A summary: one fix where one is needed, and no switch.
-    await row("docs").waitFor();
-    assert.equal(await row("docs").getByRole("button").count(), 0, "a connected server asks for nothing");
+    // All alike, what needs the user first: no action on any, no switch, and the page's button under them.
+    assert.deepEqual(await sheet.locator("[data-server]").evaluateAll((all) => all.map((one) => one.getAttribute("data-server"))), ["sentry", "broken", "docs", "context7", "chrome-devtools", "figma", "a-server-with-a-rather-long-name"]);
+    assert.deepEqual(await sheet.getByRole("button").allInnerTexts(), ["Manage connectors"]);
     assert.equal(await sheet.getByRole("switch").count(), 0, "switching one off is the page's");
-    assert.equal(await row("broken").getAttribute("title"), "ENOENT: no such file or directory");
-    await row("broken").getByRole("button", { name: "Retry" }).waitFor();
+    assert.equal(await row("off").count(), 0, "one switched off is the page's too");
+    assert.equal(await row("sentry").locator("[data-server-dot]").count(), 1);
+    assert.equal(await row("docs").locator("[data-server-dot]").count(), 0);
+    assert.equal(await row("broken").getAttribute("title"), "broken: Failed: ENOENT: no such file or directory");
+    const list = await row("sentry").boundingBox();
+    const manage = await sheet.getByRole("button", { name: "Manage connectors" }).boundingBox();
+    assert.ok(list && manage && manage.y > list.y, "Manage is under the list");
+    assert.ok(((await sheet.boundingBox())?.height ?? 999) < 200, "the sheet stays small");
+    if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "connectors-sheet.png") });
 
     // Esc hands the keyboard back to the segment that opened it from the keyboard.
     await crew.window.keyboard.press("Escape");
@@ -567,21 +583,11 @@ test("a session's connectors show under the prompt, a dot says one needs the use
 
     // Manage goes to the page.
     await chip.click();
-    await sheet.getByRole("button", { name: "Manage" }).click();
+    await sheet.getByRole("button", { name: "Manage connectors" }).click();
     await chip.waitFor({ state: "hidden" });
     assert.equal(await sheet.count(), 0, "the sheet closed");
     await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
     await chip.waitFor();
-    await chip.click();
-    await sheet.waitFor();
-
-    // Claude's login is its own command, in a terminal tab of Crew's.
-    await row("sentry").getByRole("button", { name: "Sign in" }).click();
-    await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "Sign in to sentry" }).waitFor();
-    await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.argv.join(" ") === "mcp login sentry"), {
-      message: "the login runs as `claude mcp login sentry`",
-    });
-    assert.equal(await sheet.count(), 0, "the sheet stayed over the chat");
     await idle(session);
   } finally {
     await rm(servers, { force: true });
