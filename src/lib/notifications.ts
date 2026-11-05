@@ -7,7 +7,7 @@ import {
 } from "./notificationPrefs";
 import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
-import { showToast, toastManager } from "./toasts";
+import { closeSessionToast, showToast } from "./toasts";
 import type { Session } from "./types";
 
 /** What a notification is news of; each kind has its own switch in Settings. `test` is the button there. */
@@ -65,7 +65,7 @@ export function setVisibleSession(id: string | null): void {
 export function markSeen(): void {
   if (!visible || !windowFocused()) return;
   dismissNotifications(visible);
-  toastManager.close(`session:${visible}`);
+  closeSessionToast(visible);
 }
 
 /**

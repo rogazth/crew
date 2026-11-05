@@ -1,20 +1,12 @@
-import { Toast } from "@base-ui/react/toast";
-import {
-  BellIcon,
-  CheckIcon,
-  CircleAlertIcon,
-  MailIcon,
-  MessageCircleQuestionIcon,
-  ShieldQuestionIcon,
-  SquareTerminalIcon,
-  WifiIcon,
-  XIcon,
-  type LucideIcon as Icon,
-} from "lucide-react";
+import { BellIcon, CheckIcon, CircleAlertIcon, MailIcon, MessageCircleQuestionIcon, ShieldQuestionIcon, SquareTerminalIcon, WifiIcon, type LucideIcon as Icon } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { toast, Toaster as Sonner, useSonner } from "sonner";
 import type { NotificationSource } from "../lib/notifications";
 import type { NotificationTarget } from "../lib/notify";
-import { toastManager, type ToastData } from "../lib/toasts";
-import { SURFACE } from "./kit";
+import { attachToasts, toastText, type ToastNews } from "../lib/toasts";
+import type { Session } from "../lib/types";
+import { BotAvatar } from "./BotAvatar";
+import { ProviderIcon } from "./ProviderIcon";
 
 const ICONS: Record<NotificationSource, Icon> = {
   "needs-input": MessageCircleQuestionIcon,
@@ -28,62 +20,153 @@ const ICONS: Record<NotificationSource, Icon> = {
   test: BellIcon,
 };
 
-/**
- * News of another session while Crew is in front: a stack in the bottom right
- * corner, newest in front, that fans out on hover. Open goes to the session.
- */
-export function Toaster({ onOpen }: { onOpen: (target: NotificationTarget) => void }) {
-  return (
-    <Toast.Provider toastManager={toastManager} limit={3}>
-      <Toast.Portal>
-        <Toast.Viewport data-toaster className="fixed right-4 bottom-4 z-50 w-[340px] max-w-[calc(100vw-32px)] outline-none">
-          <Toasts onOpen={onOpen} />
-        </Toast.Viewport>
-      </Toast.Portal>
-    </Toast.Provider>
-  );
+/** Inside the main panel's top right corner, and so clear of the tab bar above it, the window's drag region: the pointer stops reaching the page there. */
+const TOP = 48;
+const RIGHT = 16;
+const WIDTH = 320;
+/** Its rows are at least this tall (index.css), which puts Clear all under them. */
+const ROW = 46;
+const GAP = 5;
+const VISIBLE = 3;
+/** A press that moves further than this was a swipe, not a click. */
+const CLICK_SLOP = 4;
+
+const STYLE = { "--width": `${WIDTH}px`, "--border-radius": "12px" } as CSSProperties;
+
+function Face({ news, session }: { news: ToastNews; session: Session | undefined }) {
+  const Glyph = ICONS[news.source];
+  if (session?.kind === "bot") return <BotAvatar seed={session.id} bare className="size-[18px]" />;
+  if (session) return <ProviderIcon provider={session.provider} className="size-4" />;
+  return <Glyph aria-hidden className={`size-3.5 ${news.source === "error" || news.source === "process" ? "text-danger" : "text-icon"}`} />;
 }
 
-function Toasts({ onOpen }: { onOpen: (target: NotificationTarget) => void }) {
-  const { toasts, close } = Toast.useToastManager<ToastData>();
-  return toasts.map((toast) => {
-    const source = toast.data?.source ?? "test";
-    const target = toast.data?.target ?? null;
-    const Glyph = ICONS[source];
-    return (
-      <Toast.Root
-        key={toast.id}
-        toast={toast}
-        className={`${SURFACE} absolute right-0 bottom-0 w-full origin-bottom select-none [--gap:0.5rem] [--peek:0.5rem] [--scale:calc(max(0,1-(var(--toast-index)*0.05)))] [--shrink:calc(1-var(--scale))] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] z-[calc(1000-var(--toast-index))] h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))] [transition:transform_0.4s_cubic-bezier(0.22,1,0.36,1),opacity_0.3s,height_0.15s] after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-[''] data-expanded:h-(--toast-height) data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))] data-limited:opacity-0 data-starting-style:[transform:translateY(150%)] data-ending-style:opacity-0 [&[data-ending-style]:not([data-limited]):not([data-swipe-direction])]:[transform:translateY(150%)] data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))] data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))] motion-reduce:transition-none`}
-      >
-        <Toast.Content className="flex items-start gap-3 overflow-hidden p-3 transition-opacity duration-200 data-behind:opacity-0 data-expanded:opacity-100">
-          <Glyph
-            aria-hidden
-            className={`mt-0.5 size-4 shrink-0 ${source === "error" || source === "process" ? "text-danger" : "text-icon"}`}
-          />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <Toast.Title className="truncate font-medium" />
-            <Toast.Description className="line-clamp-2 text-[12px] text-text-muted" />
-          </div>
-          {target && (
-            <Toast.Action
-              className="inline-flex h-7 shrink-0 items-center rounded-md bg-card px-2.5 text-[12px] font-medium text-text ring-1 ring-hairline outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus/50"
-              onClick={() => {
-                close(toast.id);
-                onOpen(target);
-              }}
-            >
-              Open
-            </Toast.Action>
-          )}
-          <Toast.Close
-            aria-label="Dismiss"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
-          >
-            <XIcon className="size-3.5" />
-          </Toast.Close>
-        </Toast.Content>
-      </Toast.Root>
-    );
+const rowOf = (target: EventTarget) => (target instanceof Element ? target.closest("[data-sonner-toast]") : null);
+
+/**
+ * News of another session while Crew is in front, on sonner: it owns the stack,
+ * the fan-out on hover, the newest three showing, the older ones moving up, and
+ * the swipe left or right that dismisses one. Nothing leaves on a timer. A click
+ * opens the session; Clear all, under the stack, dismisses every one.
+ */
+export function Toaster({ onOpen, sessions }: { onOpen: (target: NotificationTarget) => void; sessions: Session[] }) {
+  const { toasts } = useSonner();
+  // Sonner's own hover ends at the stack; this one also holds it open over Clear all.
+  const [hovered, setHovered] = useState(false);
+  const [live, setLive] = useState(0);
+  const area = useRef<HTMLDivElement>(null);
+  const latest = useRef({ onOpen, sessions });
+  const targets = useRef(new Map<string, NotificationTarget | null>());
+  const pressedAt = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    latest.current = { onOpen, sessions };
   });
+
+  // Rows sonner has started removing: they move the stack at once, and leave `toasts` only later.
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    const count = () => setLive(el.querySelectorAll("[data-sonner-toast]:not([data-removed='true'])").length);
+    const observer = new MutationObserver(count);
+    observer.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-removed"] });
+    return () => observer.disconnect();
+  }, []);
+
+  // Nothing left to hold open, even if the pointer never left.
+  if (toasts.length === 0 && hovered) setHovered(false);
+
+  // Native, not React's: a row removed from under the pointer sends React no mouseleave, and the stack would stay open.
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    const enter = () => setHovered(true);
+    const leave = () => setHovered(false);
+    el.addEventListener("mouseenter", enter);
+    el.addEventListener("mouseleave", leave);
+    return () => {
+      el.removeEventListener("mouseenter", enter);
+      el.removeEventListener("mouseleave", leave);
+    };
+  }, []);
+
+  useEffect(() => {
+    const bySession = new Map<string, string>();
+    let serial = 0;
+    return attachToasts({
+      show: (news) => {
+        const id = `toast-${++serial}`;
+        const sessionId = news.target?.sessionId;
+        if (sessionId) {
+          // One per session: news of it replaces the last and comes to the front.
+          const last = bySession.get(sessionId);
+          if (last) toast.dismiss(last);
+          bySession.set(sessionId, id);
+        }
+        targets.current.set(id, news.target);
+        const { title, description } = toastText(news);
+        const session = latest.current.sessions.find((candidate) => candidate.id === sessionId);
+        toast(title, {
+          id,
+          testId: id,
+          ...(description ? { description } : { className: "toast-title-only" }),
+          icon: <Face news={news} session={session} />,
+          duration: Infinity,
+        });
+      },
+      closeSession: (sessionId) => {
+        const id = bySession.get(sessionId);
+        if (id) toast.dismiss(id);
+      },
+    });
+  }, []);
+
+  const open = (row: Element | null) => {
+    const id = row instanceof HTMLElement ? row.dataset.testid : undefined;
+    if (!id) return;
+    const target = targets.current.get(id);
+    targets.current.delete(id);
+    toast.dismiss(id);
+    if (target) latest.current.onOpen(target);
+  };
+
+  const seen = Math.min(live, VISIBLE);
+
+  return (
+    <div
+      ref={area}
+      data-toaster
+      // Only listens for its rows, which sonner makes focusable.
+      role="presentation"
+      onPointerDownCapture={(event) => {
+        pressedAt.current = { x: event.clientX, y: event.clientY };
+      }}
+      onClick={(event) => {
+        const from = pressedAt.current;
+        if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) > CLICK_SLOP) return;
+        open(rowOf(event.target));
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") open(rowOf(event.target));
+      }}
+    >
+      <Sonner position="top-right" hotkey={[]} expand={hovered} visibleToasts={VISIBLE} gap={GAP} swipeDirections={["left", "right"]} offset={{ top: TOP, right: RIGHT }} style={STYLE} />
+      {hovered && live > 1 && (
+        // Its strip starts where the stack ends, so the pointer never leaves on the way, and moves when the stack does.
+        <div
+          className="fixed z-50 flex justify-end"
+          style={{ top: TOP + seen * ROW + (seen - 1) * GAP, right: RIGHT, width: WIDTH, paddingTop: GAP, transition: "top 400ms ease" }}
+        >
+          <button
+            type="button"
+            className="toast-clear"
+            onClick={() => {
+              toast.dismiss();
+              setHovered(false);
+            }}
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

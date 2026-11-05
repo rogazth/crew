@@ -388,7 +388,7 @@ export function App() {
   return (
     <>
     <LinkRouter open={nav.openBrowser} />
-    <Toaster onOpen={openNotified} />
+    <Toaster onOpen={openNotified} sessions={all} />
     {/* Under a bot's pane the whole window steps back (useRecede); the pane is portaled out of it. */}
     <div ref={appRoot} data-app className="flex h-full">
       <SlideShell

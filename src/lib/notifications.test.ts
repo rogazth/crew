@@ -22,7 +22,7 @@ const showToast = vi.fn();
 const closeToast = vi.fn();
 vi.mock("./toasts", () => ({
   showToast: (...args: unknown[]) => showToast(...args),
-  toastManager: { close: (...args: unknown[]) => closeToast(...args) },
+  closeSessionToast: (...args: unknown[]) => closeToast(...args),
 }));
 
 const {
@@ -202,7 +202,7 @@ describe("markSeen", () => {
     focused = true;
     setVisibleSession("s1");
     expect(dismissNotifications).toHaveBeenCalledWith("s1");
-    expect(closeToast).toHaveBeenCalledWith("session:s1");
+    expect(closeToast).toHaveBeenCalledWith("s1");
   });
 
   it("waits for the window to come to the front", () => {

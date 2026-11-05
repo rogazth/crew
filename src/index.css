@@ -1741,3 +1741,85 @@ button:not(:disabled):active {
 @media (prefers-reduced-motion: reduce) {
   .crew-range::-webkit-slider-thumb { transition: none; }
 }
+
+/* Sonner's notifications (chrome/Toaster), in the app's tokens: glass, with a short shadow, since a long one reads through it as a gradient on the card below. */
+[data-toaster] [data-sonner-toaster] {
+  z-index: 50;
+  font-family: inherit;
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"] {
+  min-height: 46px;
+  padding: 6px 12px;
+  align-items: flex-start;
+  gap: 0;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text);
+  background: color-mix(in oklab, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 6px -2px oklch(0% 0 0 / 0.12);
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"]:hover {
+  background: color-mix(in oklab, var(--color-text) 2%, var(--color-surface));
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"].toast-title-only {
+  align-items: center;
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"] [data-icon] {
+  width: 18px;
+  height: 16px;
+  margin: 0 6px 0 0;
+  justify-content: center;
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"] [data-content] {
+  gap: 1px;
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"] [data-title] {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-toaster] [data-sonner-toast][data-styled="true"] [data-description] {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 15px;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast-clear {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  background: color-mix(in oklab, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: 0 2px 6px -2px oklch(0% 0 0 / 0.12);
+  animation: toast-clear-in 200ms ease 150ms both;
+}
+
+.toast-clear:hover {
+  color: var(--color-text);
+  background: color-mix(in oklab, var(--color-text) 2%, var(--color-surface));
+}
+
+@keyframes toast-clear-in {
+  from {
+    opacity: 0;
+  }
+}

@@ -1,25 +1,47 @@
-import { Toast } from "@base-ui/react/toast";
 import type { NotificationSource } from "./notifications";
 import type { NotificationTarget } from "./notify";
 
-export type ToastData = { source: NotificationSource; target: NotificationTarget | null };
+export type ToastNews = { title: string; body: string; source: NotificationSource; target: NotificationTarget | null };
 
-/** The window's own notifications, for news that arrives while Crew is in front. */
-export const toastManager = Toast.createToastManager<ToastData>();
+/** What draws the window's own notifications, for news that arrives while Crew is in front. */
+export type ToastSink = { show: (news: ToastNews) => void; closeSession: (sessionId: string) => void };
 
-/** Long enough to read and reach for Open; a question waits longer, since nothing moves until it is answered. */
-const TIMEOUT_MS = 6000;
-const ASKING_TIMEOUT_MS = 12000;
+let sink: ToastSink | null = null;
 
-export function showToast(toast: { title: string; body: string } & ToastData): void {
-  const asking = toast.source === "needs-input" || toast.source === "approval" || toast.source === "error";
-  toastManager.add({
-    // One per session: news of it replaces the last instead of piling up.
-    ...(toast.target ? { id: `session:${toast.target.sessionId}` } : {}),
-    title: toast.title,
-    description: toast.body,
-    timeout: asking ? ASKING_TIMEOUT_MS : TIMEOUT_MS,
-    priority: asking ? "high" : "low",
-    data: { source: toast.source, target: toast.target },
-  });
+/** The Toaster, while it is on screen; the answer takes it off. */
+export function attachToasts(next: ToastSink): () => void {
+  sink = next;
+  return () => {
+    if (sink === next) sink = null;
+  };
+}
+
+export function showToast(news: ToastNews): void {
+  sink?.show(news);
+}
+
+/** Its session has been seen, so its news comes down. */
+export function closeSessionToast(sessionId: string): void {
+  sink?.closeSession(sessionId);
+}
+
+/** What a session's news says it did, after its name. Anything else has a title that says it already. */
+const VERBS: Partial<Record<NotificationSource, string>> = {
+  "needs-input": "needs your answer",
+  approval: "wants your approval",
+  error: "hit an error",
+  done: "finished",
+  mailbox: "sent you a message",
+  bell: "rang the bell",
+};
+
+/** Bodies that repeat what the verb just said: the row is its title alone. */
+const REPEATS_THE_VERB = new Set(["Needs your input", "Ran into an error"]);
+
+export function toastText(news: Pick<ToastNews, "title" | "body" | "source" | "target">): { title: string; description: string | null } {
+  const verb = news.target ? VERBS[news.source] : undefined;
+  return {
+    title: verb ? `${news.title} ${verb}` : news.title,
+    description: verb && REPEATS_THE_VERB.has(news.body) ? null : news.body,
+  };
 }
