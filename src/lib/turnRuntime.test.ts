@@ -212,6 +212,17 @@ describe("news of a session asking", () => {
     expect(bodies()).toEqual([]);
   });
 
+  it("reaches the user from a subagent only through its parent, under the parent's name", async () => {
+    const lead = { ...bot, id: "lead", name: "Lead" };
+    runtime.rememberSessions([lead]);
+    emit("user-asked", { sessionId: "lead", subagent: "Schema check", title: "npm run db:migrate" });
+    await vi.waitFor(() => expect(bodies()).toEqual(["Schema check wants to run: npm run db:migrate"]), { timeout: 3000 });
+    expect((notify.mock.calls[0]?.[0] as { title: string }).title).toBe("Lead");
+    // A second subagent is news of its own, inside the same parent's cooldown.
+    emit("user-asked", { sessionId: "lead", subagent: "Docs pass", title: "rm -rf docs" });
+    await vi.waitFor(() => expect(bodies()).toHaveLength(2), { timeout: 3000 });
+  });
+
   it("says nothing if the session moved on first", async () => {
     status("needs-input");
     status("working");

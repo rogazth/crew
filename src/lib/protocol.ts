@@ -2031,6 +2031,12 @@ windowMinutes?: number,
  */
 resetsAt?: number, };
 
+/**
+ * A session passed one of its subagents' approvals on to the user, who
+ * decides it in Crew. Pushed as `user-asked`.
+ */
+export type UserAsked = { sessionId: string, subagent: string, title: string, };
+
 export type VaultCallback = { state: string, 
 /**
  * The redirect the tab caught, whole: `http://127.0.0.1:…/callback?code=…&state=…`.

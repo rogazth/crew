@@ -108,7 +108,7 @@ A kept process is released after a failed turn or 30 idle minutes, and the next 
 
 ## Sessions a caller starts
 
-`delegate` starts a subagent. Its report wakes the parent, or answers a `wait: true`. A subagent stopped on a question wakes its parent too; approvals belong to the user or the parent.
+`delegate` starts a subagent. Its report wakes the parent, or answers a `wait: true`. A subagent stopped on a question or an approval wakes its parent too, and notifies nobody else. The parent allows only what its own autonomy covers; past that it denies, or passes it to the user with `ask_user`, who decides on the subagent's card in Crew, so a parent cannot allow anything by claiming the user agreed.
 
 ```mermaid
 sequenceDiagram

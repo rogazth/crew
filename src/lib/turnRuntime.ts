@@ -5,7 +5,7 @@ import { restartPrompt, type Prompt } from "./confirm";
 import { announceSession, type NotificationSource } from "./notifications";
 import * as transcript from "./transcript";
 import type { Session, SessionStatus } from "./types";
-import type { SessionStatusEvent, TranscriptApply, TurnStart } from "./protocol";
+import type { SessionStatusEvent, TranscriptApply, TurnStart, UserAsked } from "./protocol";
 
 /** Runtime-owned columns. The sidebar renders them; only this module writes them. */
 export type SessionPatch = Partial<Pick<Session, "status" | "providerSessionId" | "updatedAt">>;
@@ -35,6 +35,11 @@ export function boot(): Promise<void> {
     client.on("transcript-apply", (payload) => {
       const apply = payload as TranscriptApply;
       onHarness(apply.sessionId, apply.event);
+    });
+    // A session passing its subagent's approval on: the one way a subagent reaches the user.
+    client.on("user-asked", (payload) => {
+      const asked = payload as UserAsked;
+      announce(asked.sessionId, "approval", `${asked.subagent} wants to run: ${asked.title}`, `asked:${asked.sessionId}:${asked.subagent}`);
     });
     client.on("session-status", (payload) => {
       onStatus(payload as SessionStatusEvent);
@@ -329,10 +334,10 @@ function remember(session: Session) {
 }
 
 /** News of a session this window knows; one it never listed has no name to put on it. */
-function announce(id: string, source: NotificationSource, body: string) {
+function announce(id: string, source: NotificationSource, body: string, key?: string) {
   const row = known.get(id);
   // A subagent answers to the session that started it, which asks the user if it has to.
-  if (row && row.kind !== "child") announceSession({ id, ...row }, source, body);
+  if (row && row.kind !== "child") announceSession({ id, ...row }, source, body, key);
 }
 
 function whenSettled(id: string): Promise<boolean> {

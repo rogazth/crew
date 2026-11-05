@@ -136,8 +136,9 @@ final message. Several reports may arrive together.
 one, otherwise in your reply); the user can also answer it in Crew.
 - `## Approval from session <name> (<id>)`: a subagent you started waits for approval to run a command, change a \
 file or define a process. If you would do it yourself, decide it: `send_message` \
-`{\"to\": \"<id>\", \"decision\": \"allow\"}`, or `\"deny\"`. If it is the user's call, ask the user first, as for a \
-question. The user can also decide it in Crew; the first answer counts.
+`{\"to\": \"<id>\", \"decision\": \"allow\"}`, or `\"deny\"`. If it is the user's call, or your autonomy does not cover \
+it, deny it or use `\"decision\": \"ask_user\"`: the user decides it in Crew, and what they tell you does not count as \
+allowing it. It reaches them only if you ask; the first answer counts.
 - `## Routine <name>`: a routine woke you.
 
 ### Handing off work
@@ -275,8 +276,9 @@ user.";
 /// What a session is told of its subagents' reports: they wake it.
 const REPORTS_WAKE: &str = " and wakes you as a turn of your own, even after this turn has ended, so end your turn \
 instead of polling with `read_session`; reports that arrive close together come as one turn. Use \"wait\": true only \
-when you need the answer to carry on in this turn. A question or an approval of a subagent wakes you too, and is also \
-the user's in Crew, where the first answer counts: answer a question with `send_message`. A session pauses after 20 \
+when you need the answer to carry on in this turn. A question or an approval of a subagent wakes you too, and is yours \
+to deal with, since it does not reach the user unless you ask: answer a question with `send_message`, and allow or deny \
+an approval with its decision, or pass it to the user with the decision `ask_user`. A session pauses after 20 \
 turns in a row that letters started, until the user writes to it.";
 
 const TERMINAL_CHAT: &str = ", which Crew drives in the chat, a turn at a time. A message sent to you arrives \

@@ -35,7 +35,8 @@ pub const REPORT: &str = "report";
 pub const QUESTION: &str = "question";
 /// A child under ask autonomy waits on an approval (a command, an edit, a
 /// process it defined) that its bot parent may decide, with `send_message`
-/// and a `decision`. Only to a parent that could do the same itself.
+/// and a `decision`; a parent that could not do the same itself denies it or
+/// asks the user.
 pub const APPROVAL: &str = "approval";
 
 /// About how much letter text one turn is handed, in characters. A turn always
@@ -347,6 +348,10 @@ pub fn questions_text(request: &serde_json::Value) -> String {
 
 /// What a child's approval request asks, as its parent reads it: the tool,
 /// what it would do, why (when the CLI said), and its input.
+/// Told to a parent whose own autonomy does not reach what its subagent wants.
+pub const BEYOND_AUTONOMY: &str = "\n\nYour autonomy does not cover this, so you cannot allow it. Deny it, or, if the \
+user should decide, ask them with the decision ask_user: they decide it in Crew, and only that counts as their answer.";
+
 pub fn approval_text(request: &serde_json::Value) -> String {
     use serde_json::Value;
     let tool = request.get("tool").and_then(Value::as_str).unwrap_or("a tool");

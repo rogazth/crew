@@ -109,6 +109,17 @@ pub struct MailboxChanged {
     pub session_id: String,
 }
 
+/// A session passed one of its subagents' approvals on to the user, who
+/// decides it in Crew. Pushed as `user-asked`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct UserAsked {
+    pub session_id: String,
+    pub subagent: String,
+    pub title: String,
+}
+
 /// The user has read a session up to `cursor`; absent, up to its last event.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]

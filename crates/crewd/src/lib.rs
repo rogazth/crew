@@ -640,6 +640,10 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
                 heard.emit("session-updated", SessionUpdated { session: proto_session(&row) });
             }
         }
+        crew_core::store::Changed::UserAsked { session, subagent, title } => heard.emit(
+            "user-asked",
+            proto::UserAsked { session_id: session.to_string(), subagent: subagent.to_string(), title: title.to_string() },
+        ),
     }));
     let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
     transcripts.set_events(hub.clone());

@@ -150,11 +150,12 @@ function skip(reason: SkipReason): DispatchResult {
 type Announced = Pick<Session, "id" | "workspaceId" | "name" | "notifications">;
 
 /** News of a session, under its name; a click on it opens the session. */
-export function announceSession(session: Announced, source: NotificationSource, body: string): void {
+export function announceSession(session: Announced, source: NotificationSource, body: string, key?: string): void {
   void dispatchNotification({
     source,
     title: session.name,
     body,
+    ...(key ? { key } : {}),
     session: { id: session.id, workspaceId: session.workspaceId, notifications: session.notifications },
   });
 }

@@ -3035,10 +3035,13 @@ impl TurnHost {
                     let body = mailbox::questions_text(request);
                     Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::QUESTION, Some(cursor)))
                 }
-                // Only to a parent that could do it itself; otherwise the
-                // user's card is all there is.
-                Some("approval") if may_decide(&self.autonomy(&parent), request) => {
-                    let body = mailbox::approval_text(request);
+                // A subagent answers to its parent, also for what the parent
+                // could not do itself: that one it denies, or asks the user.
+                Some("approval") => {
+                    let mut body = mailbox::approval_text(request);
+                    if !may_decide(&self.autonomy(&parent), request) {
+                        body.push_str(mailbox::BEYOND_AUTONOMY);
+                    }
                     Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::APPROVAL, Some(cursor)))
                 }
                 _ => None,
