@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { toast, Toaster as Sonner, useSonner } from "sonner";
 import type { NotificationSource } from "../lib/notifications";
 import type { NotificationTarget } from "../lib/notify";
-import { attachToasts, toastText, type ToastNews } from "../lib/toasts";
+import { attachToasts, type ToastNews } from "../lib/toasts";
 import type { Session } from "../lib/types";
 import { BotAvatar } from "./BotAvatar";
 import { ProviderIcon } from "./ProviderIcon";
@@ -102,12 +102,12 @@ export function Toaster({ onOpen, sessions }: { onOpen: (target: NotificationTar
           bySession.set(sessionId, id);
         }
         targets.current.set(id, news.target);
-        const { title, description } = toastText(news);
         const session = latest.current.sessions.find((candidate) => candidate.id === sessionId);
-        toast(title, {
+        // Who it is about, and a line of what they said.
+        toast(news.title, {
           id,
           testId: id,
-          ...(description ? { description } : { className: "toast-title-only" }),
+          ...(news.body ? { description: news.body } : { className: "toast-title-only" }),
           icon: <Face news={news} session={session} />,
           duration: Infinity,
         });

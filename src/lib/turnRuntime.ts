@@ -240,11 +240,42 @@ export async function dispose(id: string): Promise<void> {
   finishWaiters(id, false);
 }
 
+/**
+ * A session reads needs-input just before the question or approval that says
+ * what for arrives. News of it waits this long for that, or the cooldown would
+ * keep the vague line and shut out the one worth reading.
+ */
+const ASK_DETAIL_MS = 300;
+const vagueAsks = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelVagueAsk(id: string) {
+  const timer = vagueAsks.get(id);
+  if (timer) clearTimeout(timer);
+  vagueAsks.delete(id);
+}
+
+function announceVagueAsk(id: string) {
+  cancelVagueAsk(id);
+  vagueAsks.set(
+    id,
+    setTimeout(() => {
+      vagueAsks.delete(id);
+      announce(id, "needs-input", "Needs your input");
+    }, ASK_DETAIL_MS),
+  );
+}
+
 function onHarness(id: string, event: HarnessEvent) {
-  if (event.type === "approval.requested") announce(id, "approval", `Wants to run: ${event.title}`);
+  if (event.type === "approval.requested") {
+    cancelVagueAsk(id);
+    announce(id, "approval", `Wants to run: ${event.title}`);
+  }
   if (event.type === "question.requested") {
     const first = event.questions[0];
-    if (first) announce(id, "needs-input", `Asks: ${first.question}`);
+    if (first) {
+      cancelVagueAsk(id);
+      announce(id, "needs-input", `Asks: ${first.question}`);
+    }
   }
   // A letter from a bot or a terminal; the user's own, and a note a bot left itself, are not news.
   const from = event.type === "user.message" ? event.fromBot : undefined;
@@ -271,7 +302,8 @@ function onStatus(event: SessionStatusEvent) {
     updatedAt: event.updatedAt,
     ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
   });
-  if (status === "needs-input") announce(id, "needs-input", "Needs your input");
+  if (status === "needs-input") announceVagueAsk(id);
+  else cancelVagueAsk(id);
   if (status === "done" || status === "idle" || status === "error" || status === "exited") {
     finishWaiters(id, status !== "error");
     if (status === "error") announce(id, "error", "Ran into an error");

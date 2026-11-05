@@ -166,6 +166,44 @@ describe("pass", () => {
   });
 });
 
+describe("news of a session asking", () => {
+  const apply = (event: unknown) => emit("transcript-apply", { sessionId: bot.id, seq: 1, event });
+  const bodies = () => notify.mock.calls.map(([banner]) => (banner as { body: string }).body);
+  const past = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  beforeEach(() => {
+    notify.mockResolvedValue("shown");
+    runtime.rememberSessions([bot]);
+  });
+
+  // The daemon sets the status first, on every provider; the cooldown would keep whichever came first.
+  it("says what an approval wants, though needs-input came ahead of it", async () => {
+    status("needs-input");
+    apply({ type: "approval.requested", requestId: 1, name: "Bash", title: "npm run lint", input: null });
+    await vi.waitFor(() => expect(bodies()).toEqual(["Wants to run: npm run lint"]), { timeout: 3000 });
+    await past(400);
+    expect(bodies()).toEqual(["Wants to run: npm run lint"]);
+  });
+
+  it("says what a question asks, though needs-input came ahead of it", async () => {
+    status("needs-input");
+    apply({ type: "question.requested", requestId: 1, questions: [{ question: "Which one?" }] });
+    await vi.waitFor(() => expect(bodies()).toEqual(["Asks: Which one?"]), { timeout: 3000 });
+  });
+
+  it("falls back to the vague line when nothing explains it", async () => {
+    status("needs-input");
+    await vi.waitFor(() => expect(bodies()).toEqual(["Needs your input"]), { timeout: 3000 });
+  });
+
+  it("says nothing if the session moved on first", async () => {
+    status("needs-input");
+    status("working");
+    await past(400);
+    expect(bodies()).toEqual([]);
+  });
+});
+
 describe("the status the sidebar sees", () => {
   it("shows a finished turn as done, so a closed tab is worth looking at", () => {
     const seen: string[] = [];
