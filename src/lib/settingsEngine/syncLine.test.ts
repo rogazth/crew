@@ -18,6 +18,6 @@ test("a failure outranks waiting", () => {
   );
 });
 
-test("says when everything agrees", () => {
-  expect(syncLine([machine("falcon-heavy", "synced")])).toBe("Synced across your machines.");
+test("says nothing while they agree or are on their way to", () => {
+  expect(syncLine([machine("falcon-heavy", "synced"), machine("devbox", "syncing")])).toBeUndefined();
 });
