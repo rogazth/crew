@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { launchCrew, MOD, pressChord, type Crew } from "./harness.ts";
 
-const PAGES = ["General", "Appearance", "Notifications", "Terminal", "Browser", "Environments", "Providers", "Usage", "Keybindings", "About"];
+const PAGES = ["General", "Notifications", "Browser", "Environments", "Providers", "Usage", "Keybindings", "About"];
 
 type Frame = { title: string; rows: string; switches: string };
 

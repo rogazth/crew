@@ -353,7 +353,7 @@ function Mark({
               ? "bg-danger"
               : remote.status === "connecting"
                 ? "animate-pulse bg-warning"
-                : "bg-text"
+                : "bg-accent"
           }`}
         >
           <ServerIcon className="size-2.5" strokeWidth={2.5} />

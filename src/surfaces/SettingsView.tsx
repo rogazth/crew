@@ -4,7 +4,6 @@ import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import { settingsWarm, warmSettings } from "../lib/settingsReads";
 import type { Workspace } from "../lib/types";
 import { AboutPage } from "./settings/AboutPage";
-import { AppearancePage } from "./settings/AppearancePage";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { EnvironmentsPage } from "./settings/EnvironmentsPage";
 import { GeneralPage } from "./settings/GeneralPage";
@@ -13,7 +12,6 @@ import { ProvidersPage } from "./settings/ProvidersPage";
 import { SettingsPage, Toasts } from "./settings/ui";
 import { UsagePage } from "./settings/UsagePage";
 import { NotificationSettings } from "./NotificationSettings";
-import { TerminalSettings } from "./TerminalSettings";
 
 type Props = {
   section: SettingsSectionId;
@@ -22,7 +20,7 @@ type Props = {
 };
 
 /**
- * One page per section. Appearance, Keybindings, About, General, Usage and
+ * One page per section. Keybindings, About, General, Usage and
  * Environments are the redesigned pages; the rest are the components that work
  * against the real daemon and host, in the same frame (settings/pages.ts lists
  * any section still pending).
@@ -45,8 +43,6 @@ export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
 
 function Page({ section, workspaces, onOpenTerminal }: Props) {
   switch (section) {
-    case "appearance":
-      return <AppearancePage />;
     case "keybindings":
       return <KeybindingsPage />;
     case "general":
@@ -55,12 +51,6 @@ function Page({ section, workspaces, onOpenTerminal }: Props) {
       return (
         <Framed section={section}>
           <NotificationSettings />
-        </Framed>
-      );
-    case "terminal":
-      return (
-        <Framed section={section}>
-          <TerminalSettings />
         </Framed>
       );
     case "browser":

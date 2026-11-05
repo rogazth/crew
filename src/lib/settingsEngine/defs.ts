@@ -1,7 +1,6 @@
 // Every setting the engine holds, each defined beside what it means. A new one
 // goes here, so a global one is known from its first reconciliation; one whose
 // key depends on something (a provider's install method) is defined where it is used.
-import { accentSetting } from "../accent";
 import { botAvatarSetting } from "../botAvatar";
 import { browserPrefsSetting } from "../browserPrefs";
 import { sitePermissionsSetting } from "../browser/permissions";
@@ -22,7 +21,6 @@ export const ALL_SETTINGS: SettingDef<never>[] = [
   sessionAccess,
   defaultAgentSetting,
   lastAgentsSetting,
-  accentSetting,
   chatTextSetting,
   botAvatarSetting,
   terminalPrefsSetting,

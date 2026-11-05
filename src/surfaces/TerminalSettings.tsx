@@ -53,7 +53,7 @@ export function TerminalSettings() {
 
   return (
     <>
-      <Group title="Typography">
+      <Group title="Terminal">
         <Row label="Font size" description="Size of terminal text, in pixels.">
           {stepper("fontSize", "Font size", LIMITS.fontSize)}
         </Row>
@@ -70,9 +70,6 @@ export function TerminalSettings() {
             options={fonts.map((name) => ({ value: name, label: name }))}
           />
         </Row>
-      </Group>
-
-      <Group title="Advanced">
         <Row label="Font weight" description="Weight for regular text, 100 to 900.">
           {stepper("fontWeight", "Font weight", LIMITS.fontWeight, 100)}
         </Row>

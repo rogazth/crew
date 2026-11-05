@@ -9,10 +9,8 @@ import {
   GlobeIcon,
   InfoIcon,
   KeyboardIcon,
-  PaletteIcon,
   ServerIcon,
   SlidersHorizontalIcon,
-  SquareTerminalIcon,
   type LucideIcon,
 } from "lucide-react";
 import { bindingGroups } from "../../lib/commandGroups";
@@ -24,14 +22,8 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
   general: {
     id: "general",
     label: "General",
-    description: "Sessions and startup.",
+    description: "Startup, links, sessions and how the app looks.",
     icon: SlidersHorizontalIcon,
-  },
-  appearance: {
-    id: "appearance",
-    label: "Appearance",
-    description: "Theme, style, text size and bot faces.",
-    icon: PaletteIcon,
   },
   notifications: {
     id: "notifications",
@@ -63,16 +55,10 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
     description: "Machines your sessions run on.",
     icon: ServerIcon,
   },
-  terminal: {
-    id: "terminal",
-    label: "Terminal",
-    description: "Font, size and spacing.",
-    icon: SquareTerminalIcon,
-  },
   browser: {
     id: "browser",
     label: "Browser",
-    description: "Links, search and site permissions.",
+    description: "Search and site permissions.",
     icon: GlobeIcon,
   },
   about: {
@@ -93,9 +79,8 @@ export const PENDING: readonly SettingsSectionId[] = [];
 type NavGroup = { title: string | null; pages: SettingsSectionId[] };
 
 const GROUPS: NavGroup[] = [
-  { title: "App", pages: ["general", "appearance", "notifications", "keybindings"] },
+  { title: "App", pages: ["general", "notifications", "keybindings", "browser"] },
   { title: "Agents", pages: ["providers", "usage", "environments"] },
-  { title: "Tools", pages: ["terminal", "browser"] },
   { title: null, pages: ["about"] },
 ];
 
@@ -112,10 +97,9 @@ const SETTINGS: IndexEntry[] = [
   { id: "notify-needs-you", label: "Dock badge", page: "notifications", keywords: "dock badge needs you waiting" },
   { id: "login", label: "Open at login", page: "general", keywords: "startup launch sign in boot routines" },
   { id: "access", label: "Permissions", page: "providers", keywords: "access bypass danger skip approvals yolo full" },
-  { id: "theme", label: "Theme", page: "appearance", keywords: "dark light mode system" },
-  { id: "style", label: "Style and accent colour", page: "appearance", keywords: "brand ink crew cobalt teal blue" },
-  { id: "text-size", label: "Chat text size", page: "appearance", keywords: "font size zoom bigger smaller reading" },
-  { id: "avatar", label: "Bot avatar style", page: "appearance", keywords: "faces dicebear" },
+  { id: "theme", label: "Theme", page: "general", keywords: "dark light mode system" },
+  { id: "text-size", label: "Chat text size", page: "general", keywords: "font size zoom bigger smaller reading" },
+  { id: "avatar", label: "Bot avatar style", page: "general", keywords: "faces dicebear" },
   { id: "provider-claude", label: "Claude Code", page: "providers", keywords: "anthropic sign in" },
   { id: "provider-codex", label: "Codex", page: "providers", keywords: "openai chatgpt" },
   { id: "provider-opencode", label: "OpenCode", page: "providers", keywords: "sst install" },
@@ -127,8 +111,8 @@ const SETTINGS: IndexEntry[] = [
   { id: "changelog", label: "What's new", page: "about", keywords: "changelog release notes" },
   { id: "licenses", label: "Licenses", page: "about", keywords: "open source third party notices acknowledgements" },
   { id: "notif-sound", label: "Notification sound", page: "notifications", keywords: "alert banner" },
-  { id: "terminal-font", label: "Terminal font", page: "terminal", keywords: "mono ligatures size" },
-  { id: "links-in-crew", label: "Open links in Crew", page: "browser", keywords: "default browser" },
+  { id: "terminal-font", label: "Terminal font", page: "general", keywords: "mono ligatures size" },
+  { id: "links-in-crew", label: "Open links in Crew", page: "general", keywords: "default browser chat terminal" },
   { id: "search-engine", label: "Search engine", page: "browser", keywords: "google duckduckgo address bar" },
   { id: "site-permissions", label: "Site permissions", page: "browser", keywords: "camera microphone" },
   { id: "machines", label: "Machines", page: "environments", keywords: "ssh tailscale remote environment server this mac" },

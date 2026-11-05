@@ -1,6 +1,6 @@
 // L1: a link the CLI prints in a terminal. By default it leaves for the
 // default browser (the sandbox's fake `xdg-open`, which keeps what it was
-// given). With Settings › Browser › "Open links in Crew" on, the same click
+// given). With Settings › General › "Open links in Crew" on, the same click
 // opens a Crew page on it, which the local server sees load, and nothing goes
 // out; Ctrl+Shift+click (⌘⇧ on macOS) still sends it out.
 import assert from "node:assert/strict";
@@ -85,10 +85,10 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
     "with links leaving the app, the click went somewhere besides the default browser, once",
   );
 
-  // Settings › Browser › Open links in Crew.
+  // Settings › General › Open links in Crew.
   const page = crew.window;
   await pressChord(crew, `${MOD}+,`);
-  await page.getByRole("button", { name: "Browser", exact: true }).click();
+  await page.getByRole("button", { name: "General", exact: true }).click();
   const toggle = page.locator('[data-setting="links-in-crew"]').getByRole("switch");
   assert.equal(await toggle.getAttribute("aria-checked"), "false", "links start out leaving the app");
   await toggle.click();

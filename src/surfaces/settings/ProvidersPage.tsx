@@ -154,7 +154,7 @@ function Permissions() {
                 <Icon className={`size-4 ${on ? "text-text" : off ? "text-placeholder" : "text-icon"}`} />
                 <span
                   className={`grid size-4 place-items-center rounded-full transition-colors ${
-                    on ? "bg-text text-inverse" : "ring-1 ring-border-strong group-disabled:opacity-0"
+                    on ? "bg-accent text-inverse" : "ring-1 ring-border-strong group-disabled:opacity-0"
                   }`}
                 >
                   {on && <CheckIcon className="size-2.5" strokeWidth={3} />}

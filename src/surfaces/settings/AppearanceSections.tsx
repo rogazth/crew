@@ -1,34 +1,23 @@
-// Appearance: theme as three little windows, the style (the palette) as
-// swatches, the chat text size and bot faces, with a live preview that wears
-// every choice. Motion follows the OS (prefers-reduced-motion), so it has no control.
-import { ArrowUpIcon, CheckIcon, MinusIcon, PlusIcon } from "lucide-react";
+// General's looks: theme as three little windows, the chat text size and bot
+// faces. Motion follows the OS (prefers-reduced-motion), so it has no control.
+import { CheckIcon, MinusIcon, PlusIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { useBotAvatar } from "../../hooks/useBotAvatar";
-import { useAccent } from "../../hooks/useAccent";
 import { useChatText } from "../../hooks/useChatText";
 import { useColorMode } from "../../hooks/useColorMode";
-import { ACCENTS, type AccentId } from "../../lib/accent";
 import { BOT_AVATARS } from "../../lib/botAvatar";
 import { CHAT_TEXT_MAX, CHAT_TEXT_MIN, DEFAULT_CHAT_TEXT } from "../../lib/chatText";
 import { COLOR_MODES } from "../../lib/colorMode";
-import { Heading, RAISED, SettingsPage } from "./ui";
+import { Heading } from "./ui";
 
-export function AppearancePage() {
+export function AppearanceSections() {
   return (
-    <SettingsPage title="Appearance" wide>
-      <div className="grid grid-cols-1 items-start gap-8 @[900px]:grid-cols-[minmax(0,1fr)_288px]">
-        <div className="order-2 flex min-w-0 flex-col gap-8 @[900px]:order-1">
-          <ThemePicker />
-          <StylePicker />
-          <TextSize />
-          <AvatarPicker />
-        </div>
-        <div className="order-1 @[900px]:sticky @[900px]:top-6 @[900px]:order-2">
-          <Preview />
-        </div>
-      </div>
-    </SettingsPage>
+    <>
+      <ThemePicker />
+      <TextSize />
+      <AvatarPicker />
+    </>
   );
 }
 
@@ -62,8 +51,8 @@ function ThemePicker() {
 }
 
 /**
- * A tiny window drawn with the live tokens under a forced colour scheme, so it
- * wears the style picked below in its own light or dark.
+ * A tiny window drawn with the live tokens under a forced colour scheme, in its
+ * own light or dark.
  */
 function MiniApp({ scheme }: { scheme: "light" | "dark" }) {
   return (
@@ -128,64 +117,12 @@ function Radio({ on }: { on: boolean }) {
   return (
     <span
       className={`grid size-4 shrink-0 place-items-center rounded-full transition-colors ${
-        on ? "bg-text text-inverse" : "ring-1 ring-border-strong"
+        on ? "bg-accent text-inverse" : "ring-1 ring-border-strong"
       }`}
     >
       {on && <CheckIcon className="size-2.5" strokeWidth={3} />}
     </span>
   );
-}
-
-/* ── Style: one shape, three colourways ─────────────────────────────── */
-
-const STYLES: Record<AccentId, { line: string; light: string; dark: string }> = {
-  ink: { line: "Monochrome", light: "oklch(22% 0.005 285)", dark: "oklch(94% 0 0)" },
-  teal: { line: "Warm greys", light: "oklch(50% 0.1 200)", dark: "oklch(80% 0.11 188)" },
-  cobalt: { line: "Blue", light: "oklch(57% 0.2 258)", dark: "oklch(68% 0.17 255)" },
-};
-
-function StylePicker() {
-  const { accent, update } = useAccent();
-  return (
-    <section className="flex flex-col gap-2" data-setting="style">
-      <Heading title="Style" description="Accent and greys." />
-      <div role="radiogroup" aria-label="Style" className="grid grid-cols-3 gap-3">
-        {ACCENTS.map((item) => {
-          const s = STYLES[item.id];
-          const on = accent === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              onClick={() => update(item.id)}
-              className={`flex items-center gap-3 rounded-[14px] p-2.5 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus/50 ${
-                on
-                  ? "bg-card shadow-[inset_0_0_0_1.5px_var(--color-text)]"
-                  : "bg-card shadow-[0_0_0_1px_var(--color-hairline)] hover:bg-hover"
-              }`}
-            >
-              <Swatch light={s.light} dark={s.dark} />
-              <span className="flex min-w-0 flex-col">
-                <span className="font-medium">{item.label}</span>
-                <span className="truncate text-[12px] text-text-muted">{s.line}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/** The accent in both themes, split on the diagonal. */
-function Swatch({ light, dark }: { light: string; dark: string }) {
-  const style: CSSProperties = {
-    borderRadius: 8,
-    background: `linear-gradient(135deg, ${light} 0 50%, ${dark} 50% 100%)`,
-  };
-  return <span aria-hidden className="size-9 shrink-0 shadow-[inset_0_0_0_1px_var(--color-border)]" style={style} />;
 }
 
 /* ── Chat text size ─────────────────────────────────────────────────── */
@@ -198,7 +135,7 @@ function TextSize() {
   return (
     <section className="flex flex-col gap-2" data-setting="text-size">
       <Heading title="Chat text size" description="The conversation and the composer." />
-      <div className={`${RAISED} flex items-center gap-3 rounded-[14px] px-4 py-3`}>
+      <div className="flex items-center gap-3 rounded-xl bg-card px-4 py-3">
         <span aria-hidden className="text-[11px] text-text-muted">
           A
         </span>
@@ -260,7 +197,7 @@ function AvatarPicker() {
   return (
     <section className="flex flex-col gap-2" data-setting="avatar">
       <Heading title="Bot faces" />
-      <div role="radiogroup" aria-label="Avatar style" className="grid grid-cols-3 gap-3">
+      <div role="radiogroup" aria-label="Avatar style" className="grid grid-cols-2 gap-3 @[620px]:grid-cols-4">
         {BOT_AVATARS.map((style) => (
           <PickCard key={style.id} on={avatar === style.id} onClick={() => update(style.id)} label={style.label}>
             <span className="flex h-12 items-center justify-center gap-1.5 rounded-[8px] bg-canvas/60">
@@ -272,72 +209,5 @@ function AvatarPicker() {
         ))}
       </div>
     </section>
-  );
-}
-
-/* ── Preview ────────────────────────────────────────────────────────── */
-
-/** The preview is a miniature of the app, so the chat text keeps its proportion rather than its px. */
-const PREVIEW_SCALE = 0.8;
-
-function Preview() {
-  const { size } = useChatText();
-  const chatText: CSSProperties = { fontSize: size * PREVIEW_SCALE };
-  return (
-    <figure className={`${RAISED} flex flex-col gap-2 rounded-[20px] p-2`}>
-      <figcaption className="flex items-center justify-between px-2 pt-1 text-[11px] text-text-muted">
-        <span>Preview</span>
-        <span>Live</span>
-      </figcaption>
-      <div className="flex h-[210px] overflow-hidden rounded-xl bg-sidebar @[900px]:h-[300px]">
-        <div className={`flex w-[104px] shrink-0 flex-col p-1.5 gap-0.5`}>
-          <p className="px-1.5 pt-1 pb-1 text-[10px] text-text-muted">Sessions</p>
-          {[
-            { seed: "atlas", name: "Atlas", on: true, dot: "working" },
-            { seed: "scout", name: "Scout", on: false, dot: "wants" },
-            { seed: "crew", name: "Pilot", on: false, dot: "" },
-          ].map((s) => (
-            <span
-              key={s.seed}
-              className={`flex h-8 items-center gap-1.5 rounded-chrome px-1.5 text-[12px] ${s.on ? "bg-selected font-medium" : ""}`}
-            >
-              <BotAvatar seed={s.seed} className="size-4" animated={s.dot === "working"} />
-              <span className="min-w-0 flex-1 truncate">{s.name}</span>
-              {s.dot === "wants" && <span className="size-1.5 rounded-full bg-warning" />}
-              {s.dot === "working" && (
-                <span className={`size-2 rounded-full border-[1.5px] border-accent/25 border-t-accent animate-spin`} />
-              )}
-            </span>
-          ))}
-        </div>
-        <div className="my-1.5 mr-1.5 flex min-w-0 flex-1 flex-col gap-3 rounded-lg bg-canvas p-3 shadow-[0_0_0_1px_var(--color-hairline)]">
-          <div className="-mx-3 -mt-3 flex h-8 items-center gap-1.5 border-b border-hairline px-3 text-[11px]">
-            <span className="font-medium">Atlas</span>
-            <span className="truncate text-text-muted">empty-state</span>
-          </div>
-          <span className="flex-1" />
-          <p
-            className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-fill px-2.5 py-1.5 leading-snug"
-            style={chatText}
-          >
-            Make the empty state friendlier
-          </p>
-          <div className="flex items-start gap-2">
-            <BotAvatar seed="atlas" className="size-5" animated />
-            <p className="min-w-0 flex-1 leading-snug" style={chatText}>
-              Done. The list now says what to do next, with a button to start.
-            </p>
-          </div>
-          <div className="flex items-center justify-between rounded-xl bg-card py-1 pr-1 pl-2.5">
-            <span className="text-placeholder" style={chatText}>
-              Reply to Atlas
-            </span>
-            <span className="grid size-5 place-items-center rounded-md bg-accent text-inverse">
-              <ArrowUpIcon className="size-3" strokeWidth={3} />
-            </span>
-          </div>
-        </div>
-      </div>
-    </figure>
   );
 }

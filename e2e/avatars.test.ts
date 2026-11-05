@@ -1,4 +1,4 @@
-// A1: bots' faces. Settings › Appearance › "Avatar style" changes every
+// A1: bots' faces. Settings › General › "Avatar style" changes every
 // bot's face, and "Change Face…" gives one bot a face of its own; crewd
 // keeps both (`bot:avatar`, `bot:faces`) and a relaunch draws the same
 // face. Faces are compared as the images drawn (their data URIs), never
@@ -56,9 +56,9 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   });
   const born = await faceOf(crew, "Scout");
 
-  // Settings › Appearance › Bot faces: any style but the one in use.
+  // Settings › General › Bot faces: any style but the one in use.
   await pressChord(crew, `${MOD}+,`);
-  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  await page.getByRole("button", { name: "General", exact: true }).click();
   const styles = page.getByRole("radiogroup", { name: "Avatar style" });
   await styles.waitFor();
   await styles.getByRole("radio", { checked: false }).first().click();

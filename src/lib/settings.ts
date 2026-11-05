@@ -1,8 +1,6 @@
 export const SETTINGS_SECTIONS = [
   { id: "general", label: "General" },
-  { id: "appearance", label: "Appearance" },
   { id: "notifications", label: "Notifications" },
-  { id: "terminal", label: "Terminal" },
   { id: "browser", label: "Browser" },
   { id: "environments", label: "Environments" },
   { id: "providers", label: "Providers" },

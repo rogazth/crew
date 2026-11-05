@@ -1,9 +1,8 @@
-import { Select, Toggle, type Option } from "../../chrome/kit";
+import { Select, type Option } from "../../chrome/kit";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { changeSitePermissions, useSitePermissions } from "../../hooks/useSitePermissions";
 import { SEARCH_ENGINES } from "../../lib/browserPrefs";
 import { decide, forget, PERMISSION_LABELS, SITE_PERMISSIONS, type SiteDecision, type SitePermission } from "../../lib/browser/permissions";
-import { BROWSER_CLICK } from "../../lib/external";
 import { SiteIcon } from "../chat/SiteIcon";
 import { RowAction } from "./integrations/bits";
 import { Group, Row } from "./ui";
@@ -12,21 +11,7 @@ export function BrowserSettings() {
   const { prefs, update } = useBrowserPrefs();
   return (
     <>
-      <Group title="Links">
-        <div data-setting="links-in-crew">
-          <Toggle
-            label="Open links in Crew"
-            description={
-              prefs.openLinksInCrew
-                ? `Chat and terminal links open here. ${BROWSER_CLICK}-click for your browser.`
-                : "Chat and terminal links open in your browser."
-            }
-            checked={prefs.openLinksInCrew}
-            onChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
-          />
-        </div>
-      </Group>
-      <Group title="Pages">
+      <Group>
         <Row id="search-engine" label="Search engine" description="For address bar searches.">
           <Select
             label="Search engine"

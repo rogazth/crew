@@ -119,16 +119,18 @@ export function Row({
 
 export function ToggleRow({
   id,
+  title,
   ...props
 }: {
   id?: string;
+  title?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
   description?: string;
 }) {
   return (
-    <div data-setting={id}>
+    <div data-setting={id} title={title}>
       <Toggle {...props} />
     </div>
   );

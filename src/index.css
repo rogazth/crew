@@ -85,20 +85,12 @@
 }
 
 /*
- * The palettes: one shape (the radii, shadows and layout above and below) in
- * three colourways, picked in Appearance › Style and set on <html data-accent>.
- * They only swap colour tokens; nothing about size, radius or depth. Unlayered
- * on purpose: they beat the @theme values above without !important.
- *
- *   ink    — the default. Monochrome, refined: shadows over borders, soft
- *            tinted signals, concentric radii, one activity glyph.
- *   teal   — the brand from the crew's own faces: teal ink, warm tinted
- *            neutrals, the roundest of the three.
- *   cobalt — a flat shell with a confident blue for the one thing to do.
+ * The palette. Unlayered on purpose: it beats the @theme values above without
+ * !important. Monochrome and refined (shadows over borders, soft tinted signals,
+ * concentric radii, one activity glyph).
  */
 
-/* Ink is what any other value of the attribute, or none, falls back to. */
-:root:where(:not([data-accent="teal"], [data-accent="cobalt"])) {
+:root {
   /* One ground for all the chrome, a step under the sheet. The dark ramp sits
      higher than the neutral one (L16 chrome, 21 sheet, 25 float, 30 fill):
      every step is at least 1.1:1 from its neighbour, not 1.05. */
@@ -121,57 +113,6 @@
   --color-tab-off: light-dark(var(--color-card), transparent);
   --shadow-float:
     0 0 0 1px var(--color-hairline), 0 16px 40px -12px oklch(0% 0 0 / 0.18), 0 4px 12px -4px oklch(0% 0 0 / 0.06);
-}
-
-:root[data-accent="teal"] {
-  /* Neutrals lean a breath toward the brand so grey never reads as dead. */
-  --color-canvas: light-dark(#ffffff, oklch(19% 0.008 210));
-  --color-sidebar: light-dark(oklch(96.4% 0.006 200), oklch(14.5% 0.008 210));
-  --color-rail: var(--color-sidebar);
-  --color-surface: light-dark(#ffffff, oklch(23% 0.01 210));
-  --color-fill: light-dark(oklch(93% 0.008 200), oklch(28% 0.01 210));
-  --color-border: light-dark(oklch(30% 0.02 210 / 0.1), oklch(100% 0 0 / 0.09));
-  --color-border-strong: light-dark(oklch(30% 0.02 210 / 0.18), oklch(100% 0 0 / 0.16));
-  --color-hairline: light-dark(oklch(30% 0.02 210 / 0.08), oklch(100% 0 0 / 0.08));
-  --color-card: light-dark(oklch(40% 0.03 210 / 0.05), oklch(100% 0 0 / 0.05));
-  --color-text: light-dark(oklch(22% 0.012 220), oklch(96% 0.004 200));
-  --color-text-muted: light-dark(oklch(50% 0.014 220), oklch(72% 0.01 210));
-  --color-icon: light-dark(oklch(32% 0.014 220), oklch(86% 0.008 200));
-  --color-hover: light-dark(oklch(35% 0.03 210 / 0.06), oklch(100% 0 0 / 0.06));
-  --color-selected: light-dark(oklch(55% 0.1 195 / 0.13), oklch(75% 0.1 190 / 0.16));
-
-  /* Brand teal: the Planner's face, deepened until white reads on it. */
-  --color-accent: light-dark(oklch(50% 0.1 200), oklch(80% 0.11 188));
-  --color-accent-hover: light-dark(oklch(45% 0.1 200), oklch(85% 0.1 188));
-  --color-inverse: light-dark(#ffffff, oklch(18% 0.02 210));
-  --color-focus: light-dark(oklch(55% 0.12 200), oklch(78% 0.11 190));
-  --color-link: light-dark(oklch(48% 0.11 205), oklch(80% 0.11 190));
-
-  --shadow-float:
-    0 0 0 1px var(--color-hairline), 0 16px 40px -12px oklch(25% 0.04 210 / 0.18), 0 4px 12px -4px oklch(25% 0.04 210 / 0.06);
-
-  --activity: var(--color-accent);
-}
-
-:root[data-accent="cobalt"] {
-  --color-canvas: light-dark(#ffffff, oklch(16.5% 0.004 260));
-  --color-sidebar: light-dark(oklch(96.6% 0.004 260), oklch(13% 0.004 260));
-  --color-rail: var(--color-sidebar);
-  --color-surface: light-dark(#ffffff, oklch(21% 0.006 260));
-  --color-fill: light-dark(oklch(94.5% 0.004 260), oklch(26% 0.006 260));
-  --color-card: light-dark(oklch(94.5% 0.004 260 / 0.7), oklch(100% 0 0 / 0.055));
-  --color-hover: light-dark(oklch(30% 0.02 260 / 0.05), oklch(100% 0 0 / 0.06));
-  --color-selected: light-dark(oklch(30% 0.02 260 / 0.085), oklch(100% 0 0 / 0.11));
-
-  /* HeroUI's primary. Blue carries "do this": primary buttons, a switch on,
-     a picked option, focus, and the turning arc. Nothing else. */
-  --color-accent: light-dark(oklch(57% 0.2 258), oklch(68% 0.17 255));
-  --color-accent-hover: light-dark(oklch(52% 0.2 258), oklch(73% 0.15 255));
-  --color-inverse: #ffffff;
-  --color-focus: light-dark(oklch(57% 0.2 258), oklch(70% 0.16 255));
-  --color-link: var(--color-accent);
-
-  --activity: var(--color-accent);
 }
 
 html,
@@ -710,7 +651,7 @@ html[data-sidebar-resize="active"] * {
 .crew-chip-on-ink {
   background: color-mix(in srgb, var(--color-canvas) 70%, transparent);
 }
-/* The chat's text size: the transcript and the composer read it. Settings > Appearance sets it on <html>. */
+/* The chat's text size: the transcript and the composer read it. Settings > General sets it on <html>. */
 :root {
   --chat-text: 14px;
 }
