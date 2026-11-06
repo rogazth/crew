@@ -63,6 +63,7 @@ export function ModelControls({ value, onChange, lockProvider = false, openers }
       <ModelPicker
         {...(openers?.model ? { ref: openers.model } : {})}
         trigger="chip"
+        compact
         provider={value.provider}
         model={value.provider === "opencode" ? fitted.model : value.model}
         lockProvider={lockProvider}

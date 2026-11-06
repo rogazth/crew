@@ -579,9 +579,10 @@ html[data-sidebar-resize="active"] * {
 }
 /*
  * A scroller whose content fades out at an edge it can still scroll past, and
- * only there: no cut at rest, no fade where the content ends. The script only
- * flips the two lengths (see `scrollShadow`). They snap, never ease: a fade
- * that eases in on first paint reads as the shadow arriving late.
+ * only there: no cut at rest, no fade where the content ends. The script sets
+ * the two lengths from how much is left past each edge, up to `--fade-size`
+ * (40px unless the scroller says), so a fade thins out as its end comes up
+ * (see `scrollShadow`). No transition: it follows the scroll as it is.
  */
 @property --fade-top {
   syntax: "<length>";
@@ -594,20 +595,29 @@ html[data-sidebar-resize="active"] * {
   initial-value: 0px;
 }
 .crew-scroll-shadow {
-  --fade-size: 40px;
+  /* Eased (smoothstep), not linear: a straight ramp shows a line where it meets the solid. */
   mask-image: linear-gradient(
     to bottom,
-    transparent,
-    #000 var(--fade-top),
-    #000 calc(100% - var(--fade-bottom)),
-    transparent
+    rgb(0 0 0 / 0.000) calc(var(--fade-top) * 0),
+    rgb(0 0 0 / 0.104) calc(var(--fade-top) * 0.2),
+    rgb(0 0 0 / 0.352) calc(var(--fade-top) * 0.4),
+    rgb(0 0 0 / 0.648) calc(var(--fade-top) * 0.6),
+    rgb(0 0 0 / 0.896) calc(var(--fade-top) * 0.8),
+    rgb(0 0 0 / 1.000) calc(var(--fade-top) * 1),
+    rgb(0 0 0 / 1.000) calc(100% - var(--fade-bottom) * 1),
+    rgb(0 0 0 / 0.896) calc(100% - var(--fade-bottom) * 0.8),
+    rgb(0 0 0 / 0.648) calc(100% - var(--fade-bottom) * 0.6),
+    rgb(0 0 0 / 0.352) calc(100% - var(--fade-bottom) * 0.4),
+    rgb(0 0 0 / 0.104) calc(100% - var(--fade-bottom) * 0.2),
+    rgb(0 0 0 / 0.000) calc(100% - var(--fade-bottom) * 0)
   );
 }
+/* A scroller that only flags its edges still fades them whole; `scrollShadow` sets the lengths over these. */
 .crew-scroll-shadow[data-fade-top] {
-  --fade-top: var(--fade-size);
+  --fade-top: var(--fade-size, 40px);
 }
 .crew-scroll-shadow[data-fade-bottom] {
-  --fade-bottom: var(--fade-size);
+  --fade-bottom: var(--fade-size, 40px);
 }
 /*
  * A control that floats over a scroller, on a plain disc of the surface so what

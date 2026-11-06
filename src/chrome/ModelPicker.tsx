@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref, type UIEvent } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
@@ -6,6 +6,8 @@ import { useInstalledProviders } from "../hooks/useInstalledProviders";
 import { useListedModels } from "../hooks/useListedModels";
 import { pickerKeyDown } from "./promptKeys";
 import { ListNote, PopupSearch } from "./kit";
+import { useSlidingPill } from "./useSlidingPill";
+import { scrollShadow } from "../lib/scrollShadow";
 import {
   PROVIDERS,
   modelLabel,
@@ -35,6 +37,8 @@ type Props = {
   trigger?: "field" | "chip";
   /** The whole row is the trigger instead, labelled as given (ROW_TRIGGER). */
   row?: RowLabel;
+  /** The narrow popup: providers in a strip under the models. A row's picker always is. */
+  compact?: boolean;
   disabled?: boolean;
   /** A running session keeps its CLI: only its own provider's models are offered. */
   lockProvider?: boolean;
@@ -44,7 +48,7 @@ type Props = {
 type KeyDown = KeyboardEvent<HTMLDivElement> & { preventBaseUIHandler?: () => void };
 
 /** Providers beside their models: hover a provider, click a model. A query searches every provider at once. */
-export function ModelPicker({ ref, provider, model, trigger = "field", row, disabled = false, lockProvider = false, onChange }: Props) {
+export function ModelPicker({ ref, provider, model, trigger = "field", row, compact: narrow = false, disabled = false, lockProvider = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const [query, setQuery] = useState("");
@@ -54,8 +58,8 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const chip = trigger === "chip";
-  // A row's picker sits in a narrow pane: the providers go in a strip over the models, not a column beside them.
-  const compact = row !== undefined;
+  // A row's picker sits in a narrow pane: the providers go in a strip under the models, not a column beside them.
+  const compact = narrow || row !== undefined;
   const installed = useInstalledProviders(open);
   useListedModels(provider);
   // The session's own provider stays reachable even after its CLI is gone.
@@ -72,6 +76,18 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
     if (!open || active < 0) return;
     list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [open, active, needle, tab]);
+
+  const { list: strip, pill } = useSlidingPill<HTMLDivElement>(open && compact && !searching ? tab : null, 4);
+
+  // The list fades at an edge it can scroll past. It mounts after the popup
+  // opens, so it measures as it lands; new rows (a provider, its listed models) measure again.
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    list.current = el;
+    if (el) scrollShadow(el);
+  }, []);
+  useLayoutEffect(() => {
+    if (list.current) scrollShadow(list.current);
+  }, [open, needle, tab, rows.length]);
 
   function openChange(next: boolean) {
     if (next) {
@@ -185,28 +201,6 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
             className={`flex ${compact ? "h-[320px] w-[288px]" : "h-[380px] w-[420px]"} origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0`}
           >
             {open && tabs.map((p) => <WarmModels key={p.id} provider={p.id} />)}
-            {/* Compact: the providers' faces, the search, the models; nothing else. Picking a provider leaves a search. */}
-            {compact && (
-              <div role="tablist" aria-label="Provider" className="flex shrink-0 items-center gap-0.5 border-b border-hairline p-1.5">
-                {tabs.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={p.id === tab && !searching}
-                    aria-label={p.label}
-                    title={p.label}
-                    onClick={() => {
-                      setQuery("");
-                      showTab(p.id);
-                    }}
-                    className={`grid size-8 place-items-center rounded-lg transition-colors ${p.id === tab && !searching ? "bg-selected" : "hover:bg-hover"}`}
-                  >
-                    <ProviderIcon provider={p.id} className="size-4" />
-                  </button>
-                ))}
-              </div>
-            )}
             <PopupSearch
               ref={search}
               value={query}
@@ -233,7 +227,7 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
             />
 
             {searching ? (
-              <div ref={list} className="min-h-0 flex-1 overflow-y-auto p-1.5">
+              <div ref={measure} onScroll={fade} className="crew-scroll-shadow min-h-0 flex-1 overflow-y-auto p-1.5 [--fade-size:32px]">
                 {rows.length === 0 ? (
                   <ListNote />
                 ) : (
@@ -253,7 +247,7 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
               </div>
             ) : compact ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div ref={list} role="tabpanel" className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
+                <div ref={measure} role="tabpanel" onScroll={fade} className="crew-scroll-shadow flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5 [--fade-size:32px]">
                   {rows.map((row, index) => (
                     <ModelRow
                       key={row.model.id}
@@ -297,7 +291,7 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
                   })}
                 </div>
 
-                <div ref={list} role="tabpanel" className="flex min-w-0 flex-1 flex-col overflow-y-auto p-1.5">
+                <div ref={measure} role="tabpanel" onScroll={fade} className="crew-scroll-shadow flex min-w-0 flex-1 flex-col overflow-y-auto p-1.5 [--fade-size:32px]">
                   <span className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">{providerOf(tab)?.label} models</span>
                   {rows.map((row, index) => (
                     <ModelRow
@@ -310,6 +304,35 @@ export function ModelPicker({ ref, provider, model, trigger = "field", row, disa
                       onHover={() => setCursor(index)}
                       onPick={() => pick(row)}
                     />
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Compact: the search, the models, the providers under them; nothing else. Picking a provider leaves a search. */}
+            {compact && (
+              <div className="shrink-0">
+                {/* The providers sharing the row evenly, a pill sliding to the one shown (as `PillTabs`). A search lights none. */}
+                <div ref={strip} role="tablist" aria-label="Provider" className="relative flex items-center p-0.5">
+                  <span ref={pill} aria-hidden className="absolute top-0.5 bottom-0.5 left-0 rounded-full bg-card" />
+                  {tabs.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="tab"
+                      data-tab={p.id}
+                      aria-selected={p.id === tab && !searching}
+                      aria-label={p.label}
+                      title={p.label}
+                      onClick={() => {
+                        setQuery("");
+                        showTab(p.id);
+                      }}
+                      className={`relative grid h-7 min-w-0 flex-1 place-items-center rounded-full outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-focus/50 ${
+                        p.id === tab && !searching ? "" : "opacity-55 hover:opacity-100"
+                      }`}
+                    >
+                      <ProviderIcon provider={p.id} className="size-4" />
+                    </button>
                   ))}
                 </div>
               </div>
@@ -353,6 +376,10 @@ function ModelRow({
       {current && <CheckIcon className="size-4 shrink-0 text-icon" />}
     </button>
   );
+}
+
+function fade(event: UIEvent<HTMLDivElement>) {
+  scrollShadow(event.currentTarget);
 }
 
 /** A key that writes a character, or takes one away: what a search field would take. A space stays a button's press. */

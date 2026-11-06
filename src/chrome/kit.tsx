@@ -17,8 +17,8 @@ import type {
 } from "react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Spring, frames, reducedMotion, type Tune } from "../lib/spring";
 import { Kbd } from "./Kbd";
+import { useSlidingPill } from "./useSlidingPill";
 
 /**
  * Crew's own controls. Every floating surface, field and row reads from the
@@ -798,15 +798,11 @@ export function FilterChip<T extends string>({
   );
 }
 
-// ζ ≈ 0.75: it gets there quick and settles with a touch of give.
-const PILL_TUNE: Tune = { stiffness: 520, damping: 34 };
-
 /**
  * The tabs themselves, inside a `Tabs.Root` that holds `value`: the one open
- * on a pill that slides to the next on a spring; picked again mid-way, it
- * turns with the speed it had. The pill only moves and stretches; the labels
- * never change weight, so nothing shifts under it. A label that changes width
- * (a count) is measured again.
+ * on a pill that slides to the next on a spring (`useSlidingPill`). The pill
+ * only moves and stretches; the labels never change weight, so nothing shifts
+ * under it.
  */
 export function PillTabs({
   value,
@@ -817,45 +813,7 @@ export function PillTabs({
   tabs: { key: string; label: ReactNode }[];
   className?: string;
 }) {
-  const list = useRef<HTMLDivElement>(null);
-  const pill = useRef<HTMLSpanElement>(null);
-  const x = useRef<Spring | null>(null);
-  const w = useRef<Spring | null>(null);
-  useLayoutEffect(() => {
-    const tab = list.current?.querySelector<HTMLElement>(`[data-tab="${value}"]`);
-    const el = pill.current;
-    if (!tab || !el) return;
-    const paint = () => {
-      el.style.transform = `translateX(${x.current!.x}px)`;
-      el.style.width = `${w.current!.x}px`;
-    };
-    // The first time it is just there.
-    if (!x.current || !w.current) {
-      x.current = new Spring(tab.offsetLeft);
-      w.current = new Spring(tab.offsetWidth);
-      return paint();
-    }
-    const sx = x.current;
-    const sw = w.current;
-    sx.to = tab.offsetLeft;
-    sw.to = tab.offsetWidth;
-    if (sx.x === sx.to && sw.x === sw.to) return;
-    if (reducedMotion()) {
-      sx.snap();
-      sw.snap();
-      return paint();
-    }
-    return frames((dt, stalled) => {
-      sx.step(dt, PILL_TUNE);
-      sw.step(dt, PILL_TUNE);
-      if (stalled || (sx.settled(0.1) && sw.settled(0.1))) {
-        sx.snap();
-        sw.snap();
-      }
-      paint();
-      return sx.x !== sx.to || sw.x !== sw.to;
-    });
-  });
+  const { list, pill } = useSlidingPill<HTMLDivElement>(value);
   return (
     <Tabs.List ref={list} className={`relative flex w-fit items-center rounded-full p-0.5 ${className}`}>
       <span ref={pill} aria-hidden className="absolute top-0.5 bottom-0.5 left-0 rounded-full bg-card" />
