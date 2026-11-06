@@ -97,7 +97,6 @@ export type WorkspaceSidebarProps = {
 };
 
 const NO_TREES: string[] = [];
-const NO_COMMANDS: string[] = [];
 
 // ── Reading a session's state ───────────────────────────────────────────────
 
@@ -501,7 +500,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                       count={section.sessions.length}
                       loudest={loudest(section.sessions, activeId)}
                       showDiff={shows(prefs, "diff")}
-                      running={props.running?.get(section.tree.path) ?? NO_COMMANDS}
                       onRemove={() => !section.tree!.main && props.onRemoveWorktree(section.tree!)}
                       onFold={(next) => fold(section.key, next)}
                       onAdd={() => props.onNewSession(section.tree!.path)}
@@ -839,7 +837,6 @@ function WorktreeHeading({
   count,
   loudest: status,
   showDiff,
-  running,
   onRemove,
   onFold,
   onAdd,
@@ -850,7 +847,6 @@ function WorktreeHeading({
   count: number;
   loudest: SessionStatus;
   showDiff: boolean;
-  running: string[];
   onRemove: () => void;
   onFold: (open: boolean) => void;
   onAdd: () => void;
@@ -862,7 +858,7 @@ function WorktreeHeading({
         type="button"
         data-nav
         aria-expanded={open}
-        title={running.length > 0 ? `${tree.path}\n${running.length} running\n${running.join("\n")}` : tree.path}
+        title={tree.path}
         onClick={() => onFold(!open)}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={(event) => {
@@ -886,9 +882,6 @@ function WorktreeHeading({
         </span>
         <span className="min-w-0 flex-1 truncate font-medium text-text/85">{worktreeLabel(tree)}</span>
         <span className="flex shrink-0 items-center gap-2 transition-opacity group-hover/tree:opacity-0">
-          {running.length > 0 && (
-            <LayersIcon aria-label={`${running.length} commands running`} className="size-3 text-success" />
-          )}
           {open && showDiff && (tree.add > 0 || tree.del > 0) && (
             <span className="text-[11px] tabular-nums">
               <span className="text-success">+{tree.add}</span> <span className="text-danger">−{tree.del}</span>
