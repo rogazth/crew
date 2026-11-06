@@ -216,9 +216,6 @@ export function App() {
     confirms,
     removeSession: remove,
     closePage,
-    route: work.route,
-    routeTo: work.routeTo,
-    root: active?.path ?? null,
   });
 
   // Where each command can run, the main checkout first, and what runs where:
@@ -286,9 +283,8 @@ export function App() {
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
 
-  // The worktree the sidebar's + asked the start screen to start in, until it is used or the sidebar moves on.
-  const [startIn, setStartIn] = useState<string | null>(null);
-  useEffect(() => setStartIn(null), [work.current?.path, active?.id]);
+  // The worktree the sidebar's + asked the start screen to start in, until a tab comes up.
+  const { setStartIn } = work;
   const { newSession, startSession, launch } = useLaunch({
     worktree: work.placeIn,
     create,
@@ -436,8 +432,6 @@ export function App() {
             onSelect: nav.openSession,
             // The main checkout is stored as null, so it asks for no worktree.
             onNewBot: (path) => sheet.newBot(path === undefined || path === active.path ? undefined : path),
-            currentWorktree: work.current?.path ?? null,
-            onSelectWorktree: work.selectWorktree,
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) => startSession(undefined, path),
             onToggleNotifications: (session) => void update(session.id, { ...session, notifications: !session.notifications }),
@@ -559,13 +553,9 @@ export function App() {
                     workspaceId={active.id}
                     places={panePlaces}
                     agents={startAgents}
-                    defaultPath={startIn ?? work.placeIn ?? active.path}
-                    onPlace={(path) => {
-                      setStartIn(null);
-                      worktrees.select(path);
-                    }}
+                    defaultPath={work.placeIn ?? active.path}
+                    onPlace={setStartIn}
                     onAsk={(text, choice, path, files) => {
-                      setStartIn(null);
                       void newSession(choice, path === active.path ? null : path, text, files);
                     }}
                   />
@@ -689,7 +679,9 @@ export function App() {
             const tree = await worktrees.create(branch);
             setDialog(null);
             closePage();
+            // The new worktree's start screen, or its bot: no worktree is switched to apart from what is on screen.
             if (withBot) sheet.newBot(tree.path);
+            else startSession(undefined, tree.path);
           }}
         />
       )}

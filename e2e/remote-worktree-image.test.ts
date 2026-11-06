@@ -11,12 +11,12 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   addRemote,
-  goToWorktree,
   launchCrew,
   MOD,
   pressChord,
   remoteRequest,
   startChat,
+  startInWorktree,
   sessionTab,
   SSH_USER,
   waitFor,
@@ -88,7 +88,7 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     await workspaceMark(crew, "api").waitFor();
 
     await worktreeHeader(crew, "feat/pics").waitFor();
-    await goToWorktree(crew, "feat/pics");
+    await startInWorktree(crew, "feat/pics");
 
     await pressChord(crew, `${MOD}+p`);
     const palette = page.getByRole("dialog", { name: "Command palette" });

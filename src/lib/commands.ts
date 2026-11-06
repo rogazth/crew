@@ -284,7 +284,7 @@ export function liveCommands(): LiveCommand[] {
 
 /** Tab plumbing and the palette's own doors: bound, but noise in a command list. */
 const UNLISTED =
-  /^(next-tab|prev-tab|workspace-[1-9]|worktree-[1-9]|close|open-palette|go-to-file|open-actions)$/;
+  /^(next-tab|prev-tab|workspace-[1-9]|close|open-palette|go-to-file|open-actions)$/;
 
 /** Live commands worth offering in the palette, in declaration order. */
 export function listedCommands(): { id: CommandId; label: string; keys: string }[] {

@@ -5,7 +5,6 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
-  lastUsed,
   NO_TABS,
   offPages,
   openTab,
@@ -181,11 +180,6 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [mutate, placeOf],
   );
 
-  /** The tab last on screen of those `keep` takes, or none when it takes none. */
-  const selectLastUsed = useCallback(
-    (keep: (tab: Tab) => boolean) => mutate((s) => selectTab(s, lastUsed(s, keep)?.id ?? null)),
-    [mutate],
-  );
   /**
    * Brings `tabId` on screen in a context that may not be read yet: the tab
    * waits as its active one and takes over once the saved tabs arrive.
@@ -317,7 +311,6 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     collapse,
     collapseOther,
     expand,
-    selectLastUsed,
     selectIn,
     openIn,
     adopt,

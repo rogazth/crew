@@ -69,10 +69,6 @@ export type WorkspaceSidebarProps = {
   onSelect: (session: Session) => void;
   onNewBot: (worktree?: string) => void;
   onNewSession: (worktree?: string) => void;
-  /** The worktree on screen, by its path: its heading is marked. */
-  currentWorktree: string | null;
-  /** Makes the worktree at `path` the one on screen. */
-  onSelectWorktree: (path: string) => void;
   onToggleNotifications: (session: Session) => void;
   onMarkRead: (session: Session) => void;
   onNewWorktree: () => void;
@@ -141,7 +137,6 @@ function TreeGlyph({ tree, className }: { tree: Worktree | undefined; className:
 // ── Menus ───────────────────────────────────────────────────────────────────
 
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New session here", icon: "terminal" };
-const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to worktree", icon: "open" };
 const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New bot here", icon: "bot" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy branch", icon: "branch" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove worktree…" };
@@ -175,9 +170,8 @@ function sessionActions(session: Session, tree: Worktree | undefined): MenuEntry
 }
 
 /** Copy Path joins them in the menu itself. */
-function worktreeActions(tree: Worktree, current: boolean): MenuEntry[] {
+function worktreeActions(tree: Worktree): MenuEntry[] {
   return tidy([
-    ...(current ? [] : [SWITCH_HERE, SEPARATOR]),
     NEW_SESSION_HERE,
     NEW_BOT_HERE,
     SEPARATOR,
@@ -404,11 +398,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
       return out;
     });
   const fold = (key: string, next: boolean) => setFolds((prev) => new Map(prev).set(key, next));
-  /** A click on a worktree makes it the one on screen and unfolds it. */
-  const activate = (path: string) => {
-    props.onSelectWorktree(path);
-    fold(`tree:${path}`, true);
-  };
   const empty = terminals.length === 0;
 
   return (
@@ -513,8 +502,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                       loudest={loudest(section.sessions, activeId)}
                       showDiff={shows(prefs, "diff")}
                       running={props.running?.get(section.tree.path) ?? NO_COMMANDS}
-                      current={section.tree.path === props.currentWorktree}
-                      onActivate={() => (section.tree!.path === props.currentWorktree ? fold(section.key, !isOpen) : activate(section.tree!.path))}
                       onRemove={() => !section.tree!.main && props.onRemoveWorktree(section.tree!)}
                       onFold={(next) => fold(section.key, next)}
                       onAdd={() => props.onNewSession(section.tree!.path)}
@@ -603,11 +590,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           point={menu.point}
           title={worktreeLabel(menu.tree)}
           path={menu.tree.path}
-          actions={worktreeActions(menu.tree, menu.tree.path === props.currentWorktree)}
+          actions={worktreeActions(menu.tree)}
           onPick={(id) => {
             const tree = menu.tree;
             setMenu(null);
-            if (id === "switch") activate(tree.path);
             if (id === "new-session") props.onNewSession(tree.path);
             if (id === "new-bot") props.onNewBot(tree.path);
             if (id === "copy-branch" && tree.branch) void navigator.clipboard.writeText(tree.branch);
@@ -854,8 +840,6 @@ function WorktreeHeading({
   loudest: status,
   showDiff,
   running,
-  current,
-  onActivate,
   onRemove,
   onFold,
   onAdd,
@@ -867,8 +851,6 @@ function WorktreeHeading({
   loudest: SessionStatus;
   showDiff: boolean;
   running: string[];
-  current: boolean;
-  onActivate: () => void;
   onRemove: () => void;
   onFold: (open: boolean) => void;
   onAdd: () => void;
@@ -880,9 +862,8 @@ function WorktreeHeading({
         type="button"
         data-nav
         aria-expanded={open}
-        aria-current={current ? "true" : undefined}
         title={running.length > 0 ? `${tree.path}\n${running.length} running\n${running.join("\n")}` : tree.path}
-        onClick={onActivate}
+        onClick={() => onFold(!open)}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -903,7 +884,7 @@ function WorktreeHeading({
           <TreeGlyph tree={tree} className="size-3.5 text-icon group-hover/tree:hidden" />
           <ChevronRightIcon className={`hidden size-3.5 text-icon transition-transform group-hover/tree:block ${open ? "rotate-90" : ""}`} />
         </span>
-        <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold text-text" : "font-medium text-text/85"}`}>{worktreeLabel(tree)}</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-text/85">{worktreeLabel(tree)}</span>
         <span className="flex shrink-0 items-center gap-2 transition-opacity group-hover/tree:opacity-0">
           {running.length > 0 && (
             <LayersIcon aria-label={`${running.length} commands running`} className="size-3 text-success" />

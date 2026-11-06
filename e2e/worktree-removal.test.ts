@@ -8,7 +8,6 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
-  currentWorktree,
   gitWorktrees,
   launchCrew,
   newSession,
@@ -93,7 +92,7 @@ async function strand(t: TestContext) {
   const tree = path.join(crew.worktrees, "app/feat-gone");
 
   await newWorktree(crew, "feat/gone");
-  await worktreeHeader(crew, "feat/gone").and(currentWorktree(crew)).waitFor();
+  await worktreeHeader(crew, "feat/gone").waitFor();
   const session = await newSession(crew, workspace.id, tree);
   assert.equal(session.worktree, tree);
   await sendInChat(crew, "hello");
@@ -109,14 +108,14 @@ async function strand(t: TestContext) {
   await crew.git(workspace.path, "worktree", "remove", "--force", tree);
   assert.ok(!existsSync(tree));
 
-  // Back to the window: the worktree's line goes and the main checkout takes over.
+  // Back to the window: the worktree's line goes and the main checkout's stays.
   await returnToWindow(crew);
   await worktreeHeader(crew, "feat/gone").waitFor({ state: "detached" });
-  await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
+  await worktreeHeader(crew, "main").waitFor();
 
   // The session's process ended with the app; its next start is what matters.
   crew = await crew.restart();
-  await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
+  await worktreeHeader(crew, "main").waitFor();
   return { crew, workspace, session, tabId };
 }
 

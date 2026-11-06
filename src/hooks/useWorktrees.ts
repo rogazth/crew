@@ -4,24 +4,19 @@ import { publishWorktrees } from "../lib/placeStore";
 import type { Workspace, Worktree } from "../lib/types";
 import { asListed } from "../lib/worktrees";
 
-const activeKey = (workspaceId: string) => `worktree:${workspaceId}`;
-
 /** Until git answers, the workspace folder stands in as its only worktree. */
 const standIn = (path: string): Worktree => ({ path, branch: null, main: true, add: 0, del: 0, dirty: 0, locked: null });
 
 /**
- * The workspace's worktrees as git lists them, and the one on screen. Read on
- * every workspace switch and whenever the window comes back, since worktrees
- * are made and removed outside crew too. Each workspace's last answer is kept,
- * so switching back shows it while git is asked again, which on a remote
- * machine takes a moment. The one on screen is remembered per workspace.
+ * The workspace's worktrees as git lists them. Read on every workspace switch
+ * and whenever the window comes back, since worktrees are made and removed
+ * outside crew too. Each workspace's last answer is kept, so switching back
+ * shows it while git is asked again, which on a remote machine takes a moment.
  */
 export function useWorktrees(workspace: Workspace | null) {
   const path = workspace?.path ?? "";
-  const workspaceId = workspace?.id ?? "";
   // A few rows per workspace shown, so keeping them all costs next to nothing.
   const [listed, setListed] = useState<Record<string, Worktree[]>>({});
-  const [chosen, setChosen] = useState<Record<string, string>>({});
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -40,18 +35,6 @@ export function useWorktrees(workspace: Workspace | null) {
     };
   }, [path, tick]);
 
-  useEffect(() => {
-    if (!workspaceId || chosen[workspaceId] !== undefined) return;
-    let cancelled = false;
-    void api
-      .stateGet(activeKey(workspaceId))
-      .then((raw) => !cancelled && setChosen((prev) => ({ ...prev, [workspaceId]: raw ?? "" })))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, chosen]);
-
   const answer = listed[path];
   // The chat's context row reads the same answer.
   useEffect(() => {
@@ -62,36 +45,18 @@ export function useWorktrees(workspace: Workspace | null) {
     () => (answer && answer.length > 0 ? asListed(answer, path) : path ? [standIn(path)] : []),
     [answer, path],
   );
-  // A remembered worktree that git no longer lists falls back to the main checkout.
-  const active = list.find((tree) => tree.path === chosen[workspaceId]) ?? list.find((tree) => tree.main) ?? list[0] ?? null;
-
-  // Once git has answered, crewd forgets it too, so the next launch starts in the main checkout.
-  const stale = known && !!chosen[workspaceId] && !list.some((tree) => tree.path === chosen[workspaceId]);
-  useEffect(() => {
-    if (stale) void api.stateDelete(activeKey(workspaceId)).catch(() => {});
-  }, [stale, workspaceId]);
+  const main = list.find((tree) => tree.main) ?? list[0] ?? null;
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
-
-  /** Another workspace's worktree can be chosen too, ahead of switching to it. */
-  const select = useCallback(
-    (treePath: string, inWorkspace: string = workspaceId) => {
-      if (!inWorkspace) return;
-      setChosen((prev) => ({ ...prev, [inWorkspace]: treePath }));
-      void api.stateSet(activeKey(inWorkspace), treePath).catch(() => {});
-    },
-    [workspaceId],
-  );
 
   const create = useCallback(
     async (branch: string) => {
       const tree = await api.addWorktree(path, branch);
       setListed((prev) => (prev[path] ? { ...prev, [path]: [...prev[path], tree] } : prev));
-      select(tree.path);
       refresh();
       return tree;
     },
-    [path, refresh, select],
+    [path, refresh],
   );
 
   /** Git's answer now, for a caller that cannot wait for the next focus. */
@@ -107,24 +72,19 @@ export function useWorktrees(workspace: Workspace | null) {
       setListed((prev) =>
         prev[path] ? { ...prev, [path]: prev[path].filter((entry) => entry.path !== tree.path) } : prev,
       );
-      // Remembered on screen, it would be picked again if the same path came back.
-      if (chosen[workspaceId] === tree.path) {
-        setChosen((prev) => ({ ...prev, [workspaceId]: "" }));
-        void api.stateDelete(activeKey(workspaceId)).catch(() => {});
-      }
       refresh();
     },
-    [chosen, path, refresh, workspaceId],
+    [path, refresh],
   );
 
   return {
     list,
     /** Whether `list` is git's answer yet, or the workspace folder standing in for it. */
     known,
-    active,
+    /** The main checkout: where the window works when nothing on screen names a worktree. */
+    main,
     refresh,
     reread,
-    select,
     create,
     remove,
   };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { client } from "../lib/client";
 import type { SessionCreated } from "../lib/protocol";
 import { tabPlace } from "../lib/strips";
@@ -12,7 +12,9 @@ import { useWorktrees } from "./useWorktrees";
 /**
  * Where you are working: the workspace, the worktree inside it, and the tab
  * strip that goes with them. One strip holds the whole workspace's tabs, and
- * the tab on screen says which worktree you are in.
+ * the tab on screen says which worktree you are in; no worktree is chosen
+ * apart from it. With no tab up, the start screen's place does, else the main
+ * checkout.
  */
 export function useWorkContext(
   workspace: Workspace | null,
@@ -20,7 +22,6 @@ export function useWorkContext(
   everywhere: { workspaces: Workspace[]; sessions: Session[] },
 ) {
   const worktrees = useWorktrees(workspace);
-  const chosen = worktrees.active;
   const context = workspace?.id ?? null;
   // With worktrees to tell apart, each tab names its own, for the pane's worktree line.
   const { known, list } = worktrees;
@@ -54,45 +55,17 @@ export function useWorkContext(
     [listed, workspace?.id],
   );
 
-  // The tab on screen names the worktree; a file or page tab leaves the chosen one, and
-  // so does a bot's: it belongs to the workspace, so talking to it keeps you where you stand.
-  const onScreen = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
-  const tabTree = onScreen ? sessions.find((s) => s.id === onScreen && s.kind !== "bot") : undefined;
-  const tabPath = tabTree ? pathOf(tabTree) : null;
-  const current = worktrees.list.find((tree) => tree.path === tabPath) ?? chosen;
-
-  /** The worktree at `path` becomes current. */
-  const routeTo = useCallback(
-    (path: string | null) => {
-      if (!path || path === current?.path) return;
-      worktrees.select(path);
-    },
-    [current?.path, worktrees],
-  );
-
-  /** The same for the worktree `session` runs in; a bot belongs to the workspace and leaves you where you stand. */
-  const route = useCallback(
-    (session: Session) => {
-      if (session.kind !== "bot") routeTo(pathOf(session));
-    },
-    [pathOf, routeTo],
-  );
-
-  /**
-   * Going to a worktree brings up the tab last used there, or none, so the
-   * strip agrees.
-   */
-  const selectWorktree = useCallback(
-    (path: string) => {
-      worktrees.select(path);
-      tabs.selectLastUsed((tab) => {
-        if (tab.kind !== "session") return false;
-        const session = sessions.find((s) => s.id === tab.sessionId);
-        return session !== undefined && pathOf(session) === path;
-      });
-    },
-    [pathOf, sessions, tabs, worktrees],
-  );
+  // The tab on screen names the worktree; one with no place (a page, a bot's tab) is the main checkout's.
+  const onScreen = tabs.active && workspace ? tabPlace(tabs.active, workspace, list, sessions) : null;
+  /** The worktree the start screen starts in, when it was asked for one; it lasts until a tab comes up. */
+  const [startIn, setStartIn] = useState<string | null>(null);
+  const tabUp = tabs.active !== null;
+  useEffect(() => {
+    if (tabUp) setStartIn(null);
+  }, [tabUp]);
+  useEffect(() => setStartIn(null), [context]);
+  const here = onScreen ?? (tabUp ? null : startIn);
+  const current = list.find((tree) => tree.path === here) ?? worktrees.main;
 
   const latest = useRef({ tabs, everywhere });
   useEffect(() => {
@@ -123,9 +96,7 @@ export function useWorkContext(
     current,
     /** What a new session stores as its worktree: null for the main checkout. */
     placeIn: current && !current.main ? current.path : null,
-    route,
-    routeTo,
-    selectWorktree,
+    setStartIn,
     pathOf,
     placeOf,
     tabPlaceOf,

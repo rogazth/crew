@@ -12,8 +12,8 @@ function sources(dir: string): string[] {
 }
 
 /**
- * The files that may touch `app_state`, the window's memory: tabs, the worktree on
- * screen, widths, what was last opened. A choice in Settings does not belong
+ * The files that may touch `app_state`, the window's memory: tabs, widths, what
+ * was last opened. A choice in Settings does not belong
  * there: it goes through `defineSetting`, or it never reaches the other machines.
  */
 const WINDOW_MEMORY = [
@@ -28,7 +28,6 @@ const WINDOW_MEMORY = [
   "src/hooks/useSidebarWidth.ts",
   "src/hooks/useTabs.ts",
   "src/hooks/useTour.ts",
-  "src/hooks/useWorktrees.ts",
   "src/lib/api.ts",
   "src/lib/tabsMigration.ts",
   "src/surfaces/settings/integrations/vault.ts",

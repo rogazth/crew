@@ -17,21 +17,13 @@ type Deps = {
   confirms: ReturnType<typeof useConfirmations>;
   removeSession: (id: string) => Promise<void>;
   closePage: () => void;
-  /**
-   * Opening a session's tab makes the worktree it runs in current.
-   */
-  route: (session: Session) => void;
-  /** The same for a worktree by its folder: a command's run belongs to the worktree it runs in. */
-  routeTo: (path: string | null) => void;
-  /** The main checkout's folder, for a run that is its. */
-  root: string | null;
 };
 
 /**
  * Everything that brings a tab to the front. Pages stack over the tabs, so each
  * of these leaves the page first.
  */
-export function useNavigation({ tabs, sessions, confirms, removeSession, closePage, route, routeTo, root }: Deps) {
+export function useNavigation({ tabs, sessions, confirms, removeSession, closePage }: Deps) {
   /** Wraps a tab action so it lands in view instead of behind whatever page is up. */
   const inTabs = useCallback(
     (act: () => void) => () => {
@@ -45,10 +37,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     (session: Session) => {
       closePage();
       const tab = { id: sessionTabId(session.id), kind: "session" as const, sessionId: session.id };
-      route(session);
       tabs.open(tab);
     },
-    [closePage, route, tabs],
+    [closePage, tabs],
   );
 
   /**
@@ -142,10 +133,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
       if (!session) return;
       closePage();
       const tab = newSignInTab(session.worktree, { sessionId, server, command });
-      route(session);
       tabs.open(tab);
     },
-    [closePage, route, sessions, tabs],
+    [closePage, sessions, tabs],
   );
 
   /** The provider's own login, in a terminal tab of the session's worktree. A clean exit restarts its CLI. */
@@ -156,10 +146,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
       closePage();
       const label = providerOf(provider)?.label ?? provider;
       const tab = newSignInTab(session.worktree, { sessionId, command }, `Sign in to ${label}`);
-      route(session);
       tabs.open(tab);
     },
-    [closePage, route, sessions, tabs],
+    [closePage, sessions, tabs],
   );
 
   /** A command's run, in a tab; the same run again comes back to its tab. */
@@ -167,10 +156,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     (process: Process, worktree: string | null) => {
       closePage();
       const tab = { id: processTabId(process.id, worktree), kind: "process" as const, processId: process.id, title: process.name, worktree };
-      routeTo(worktree ?? root);
       tabs.open(tab);
     },
-    [closePage, root, routeTo, tabs],
+    [closePage, tabs],
   );
 
   /** Every call is a new tab: pages have no natural key to dedupe on. */

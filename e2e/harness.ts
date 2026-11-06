@@ -721,16 +721,12 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
-/** The worktree named `label` in the sidebar panel: the window comes to work in it. */
-export async function goToWorktree(crew: Crew, label: string): Promise<void> {
-  const header = worktreeHeader(crew, label);
-  await header.click();
-  await header.and(currentWorktree(crew)).waitFor();
-}
-
-/** Narrows a worktree's line to the one the window works in: `worktreeHeader(crew, label).and(currentWorktree(crew))`. */
-export function currentWorktree(crew: Crew): Locator {
-  return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
+/** The start screen in the worktree named `label`, from its line's + in the sidebar panel. */
+export async function startInWorktree(crew: Crew, label: string): Promise<void> {
+  await crew.window
+    .locator("[data-sidebar-panel]")
+    .getByRole("button", { name: `New session in ${label}`, exact: true })
+    .click();
 }
 
 export type GitWorktree = { path: string; branch: string | null };
