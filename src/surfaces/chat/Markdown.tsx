@@ -3,9 +3,7 @@ import {
   cloneElement,
   isValidElement,
   memo,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type ComponentProps,
   type ReactNode,
@@ -23,7 +21,6 @@ import { BROWSER_CLICK, openLink } from "../../lib/external";
 import { isPathLike, localPath, namedDirs } from "../../lib/localLink";
 import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
-import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { Blockquote } from "./Alert";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
@@ -194,17 +191,15 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   const dirsKey = useMemo(() => namedDirs(text).join("\n"), [text]);
   const dirs = useMemo(() => (dirsKey ? dirsKey.split("\n") : []), [dirsKey]);
   const last = runs.length - 1;
-  const host = useVeilCadence(text, streaming === true);
   return (
     <MessageDirs value={dirs}>
-    <div ref={host} className="crew-md">
+    <div className="crew-md">
       {runs.map((run, index) => (
         // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- runs only grow at the end while streaming; a content key would remount every chunk
         <MarkdownRun
           key={index}
           kind={run.kind}
           text={run.text}
-          veiled={streaming === true}
           animating={streaming === true && index === last}
         />
       ))}
@@ -214,39 +209,6 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
 });
 
 /**
- * Stable: a new object here would rebuild streamdown's timeline mid-turn and
- * re-fade the whole message, so the length rides a CSS variable instead.
- * Streamdown settles a word's fade as soon as the next token lands; the rule
- * below overrides that duration, which is what keeps several chunks dissolving
- * at once instead of each one snapping after a frame.
- */
-const VEIL = { animation: "fadeIn", sep: "word", stagger: 28, maxBacklogMs: 320 } as const;
-
-/**
- * Times how fast the text is arriving and hands the fade length to the CSS
- * below as a variable on the turn's root. It is written straight to the node
- * rather than kept in state: the cadence is a property of the paint, and a
- * render per token to carry it would cost more than the fade is worth.
- */
-function useVeilCadence(text: string, streaming: boolean) {
-  const host = useRef<HTMLDivElement>(null);
-  const seen = useRef({ text: "", at: 0, ema: VEIL_EMA_SEED_MS });
-  useLayoutEffect(() => {
-    const state = seen.current;
-    if (streaming && text !== state.text) {
-      const now = performance.now();
-      if (state.at !== 0 && text.startsWith(state.text)) {
-        state.ema = veilEmaNext(state.ema, now - state.at);
-      }
-      state.at = now;
-      state.text = text;
-    }
-    host.current?.style.setProperty("--crew-veil-ms", `${veilDurationMs(state.ema)}ms`);
-  }, [text, streaming]);
-  return host;
-}
-
-/**
  * A turn re-splits its whole text on every token, so every settled run comes
  * back with the same string. Memoising per run is what keeps Streamdown from
  * re-parsing the finished paragraphs behind the one still arriving.
@@ -254,12 +216,10 @@ function useVeilCadence(text: string, streaming: boolean) {
 const MarkdownRun = memo(function MarkdownRun({
   kind,
   text,
-  veiled,
   animating,
 }: {
   kind: "prose" | "wide";
   text: string;
-  veiled: boolean;
   animating: boolean;
 }) {
   const className = runClass(kind, text);
@@ -273,7 +233,6 @@ const MarkdownRun = memo(function MarkdownRun({
         rehypePlugins={REHYPE}
         plugins={PLUGINS}
         isAnimating={animating}
-        {...(veiled ? { animated: VEIL } : {})}
       >
         {text}
       </Streamdown>
