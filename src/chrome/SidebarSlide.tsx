@@ -70,8 +70,14 @@ export function SlideShell({ open, width, sidebar, children }: Props) {
       r.laidOut = laidOut;
       content.current.style.width = `calc(100% - ${laidOut}px)`;
       // The tabs stay clear of the traffic lights: the reserve is whatever of it the panel no longer covers.
+      // A reserve wider than the sidebar would still show a sliver open; that excess is eased out over
+      // the way, so it reaches 0 exactly at the edge instead of snapping there.
       const strip = inset();
-      if (strip) strip.style.width = laidOut >= r.sb - 0.5 ? "0px" : `${Math.max(0, r.insetFull - laidOut)}px`;
+      if (strip) {
+        const excess = Math.max(0, r.insetFull - r.sb);
+        const opened = clamp01((laidOut - SNEAK) / Math.max(1, r.sb - SNEAK));
+        strip.style.width = `${Math.max(0, r.insetFull - laidOut - excess * opened)}px`;
+      }
     }
 
     // The sidebar sinks in z, its left edge where it is, as its frame closes in on the card.
