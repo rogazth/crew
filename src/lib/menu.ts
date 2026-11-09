@@ -70,7 +70,7 @@ export function tidy(entries: MenuEntry[]): MenuEntry[] {
 export type MenuPoint = { x: number; y: number };
 
 export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit" };
-export const EDIT: MenuAction = { id: "edit", label: "Bot settings…", icon: "settings" };
+export const EDIT: MenuAction = { id: "edit", label: "Bot settings", icon: "settings" };
 export const DELETE: MenuAction = {
   id: "delete",
   label: "Delete",

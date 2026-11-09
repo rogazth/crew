@@ -55,7 +55,7 @@ type Props = {
   path?: string;
   /** When set, the name field sits at the top of the popover and focuses on open. */
   rename?: { initial: string; onCommit: (name: string) => void };
-  /** Narrower floor for menus of short labels. */
+  /** As wide as its short labels, between a narrower floor and ceiling. */
   compact?: boolean;
 };
 
@@ -179,7 +179,7 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
       aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 ${compact ? "min-w-36" : "min-w-40"} max-w-80 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
+      className={`fixed z-50 ${compact ? "min-w-28 max-w-60" : "min-w-40 max-w-80"} rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
         rename || path ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}

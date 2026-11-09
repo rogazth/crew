@@ -114,7 +114,6 @@ export function App() {
     remove,
     forget,
     reorder,
-    setStatus,
     dropWorkspace: forgetSessions,
     reload: reloadSessions,
   } = useSessions(workspaceId);
@@ -440,11 +439,6 @@ export function App() {
             onNewBot: (path) => sheet.newBot(path === undefined || path === active.path ? undefined : path),
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) => startSession(undefined, path),
-            onToggleNotifications: (session) => void update(session.id, { ...session, notifications: !session.notifications }),
-            onMarkRead: (session) => {
-              void api.markSessionRead(session.id).catch(() => {});
-              setStatus(session.id, "idle");
-            },
             onNewWorktree: () => setDialog("new-worktree"),
             onRemoveWorktree: (tree) =>
               confirms.askWorktree(

@@ -38,11 +38,8 @@ import { commandKeys } from "../lib/commands";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
 import { childrenOf, failedUnseen, unseen } from "../lib/letters";
 import {
-  COPY_NAME,
   DELETE,
   EDIT,
-  MARK_READ,
-  OPEN,
   RENAME,
   SEPARATOR,
   menuFromEvent,
@@ -69,8 +66,6 @@ export type WorkspaceSidebarProps = {
   onSelect: (session: Session) => void;
   onNewBot: (worktree?: string) => void;
   onNewSession: (worktree?: string) => void;
-  onToggleNotifications: (session: Session) => void;
-  onMarkRead: (session: Session) => void;
   onNewWorktree: () => void;
   onRemoveWorktree: (tree: Worktree) => void;
   onEdit: (session: Session) => void;
@@ -138,34 +133,13 @@ function TreeGlyph({ tree, className }: { tree: Worktree | undefined; className:
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New session here", icon: "terminal" };
 const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New bot here", icon: "bot" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy branch", icon: "branch" };
-const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove worktree…" };
+const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove worktree" };
 const NEW_WORKTREE: MenuAction = { id: "new-worktree", label: "New worktree…", icon: "branch" };
 const REMOVE_WORKSPACE: MenuAction = { ...DELETE, label: "Remove workspace…" };
 
-function sessionActions(session: Session, tree: Worktree | undefined): MenuEntry[] {
-  const unreadNow = session.status === "done" || session.status === "error" || unseen(session);
-  if (session.kind === "bot")
-    return tidy([
-      OPEN,
-      EDIT,
-      SEPARATOR,
-      { id: "notifications", label: "Notifications", icon: "bell", checked: session.notifications },
-      ...(unreadNow ? [MARK_READ] : []),
-      COPY_NAME,
-      SEPARATOR,
-      DELETE,
-    ]);
-  return tidy([
-    OPEN,
-    RENAME,
-    ...(unreadNow ? [MARK_READ] : []),
-    COPY_NAME,
-    SEPARATOR,
-    { ...NEW_SESSION_HERE, label: tree ? `New Session in ${worktreeLabel(tree)}` : NEW_SESSION_HERE.label },
-    ...(tree?.branch ? [COPY_BRANCH] : []),
-    SEPARATOR,
-    DELETE,
-  ]);
+function sessionActions(session: Session): MenuEntry[] {
+  if (session.kind === "bot") return [EDIT, DELETE];
+  return [RENAME, DELETE];
 }
 
 /** Copy Path joins them in the menu itself. */
@@ -353,6 +327,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
     dot: dotOf(session, activeId),
     onSelect: (event) => pick(session, modifiersOf(event)),
     onMenu: (point) => openMenu(point, session),
+    menuOpen: menu?.kind === "session" && menu.session.id === session.id,
     onClearSelection: () => setHeld(null),
     onRemove: () => removeFrom(session),
   });
@@ -557,11 +532,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
         <ActionMenu
           key={menu.session.id}
           point={menu.point}
-          title={selected.size > 1 && selected.has(menu.session.id) ? `${selected.size} selected` : menu.session.name}
+          compact
           actions={
             selected.size > 1 && selected.has(menu.session.id)
               ? [{ ...DELETE, label: `Delete ${selected.size} Items` }]
-              : sessionActions(menu.session, props.home ? undefined : treeOf(menu.session))
+              : sessionActions(menu.session)
           }
           onPick={(id) => {
             const session = menu.session;
@@ -570,13 +545,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
               queueMicrotask(() => setRenaming(session.id));
               return;
             }
-            if (id === "open") props.onSelect(session);
             if (id === "edit") props.onEdit(session);
-            if (id === "notifications") props.onToggleNotifications(session);
-            if (id === "mark-read") props.onMarkRead(session);
-            if (id === "copy-name") void navigator.clipboard.writeText(session.name);
-            if (id === "new-session") props.onNewSession(pathOf(session));
-            if (id === "copy-branch") void navigator.clipboard.writeText(treeOf(session)?.branch ?? "");
             if (id === "delete") removeFrom(session);
           }}
           onClose={() => setMenu(null)}
@@ -964,9 +933,47 @@ type CardProps = {
   dot: SessionStatus;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
   onMenu: (point: MenuPoint) => void;
+  /** Its menu is up: the ellipsis that opens it stays shown. */
+  menuOpen: boolean;
   onClearSelection: () => void;
   onRemove: () => void;
 };
+
+/**
+ * The ellipsis over a session's right end, shown on hover (or while its menu is
+ * up): the same menu a right-click opens, under the button. A press while the
+ * menu is up only closes it, as the menu closes itself on any press outside.
+ */
+function RowMenuButton({ label, open, onMenu }: { label: string; open: boolean; onMenu: (point: MenuPoint) => void }) {
+  const wasOpen = useRef(false);
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={`More actions for ${label}`}
+      title="More actions"
+      aria-haspopup="menu"
+      aria-expanded={open}
+      onPointerDown={() => {
+        wasOpen.current = open;
+      }}
+      onClick={(event) => {
+        if (wasOpen.current) {
+          wasOpen.current = false;
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        onMenu({ x: rect.left, y: rect.bottom + 4 });
+      }}
+      className={`absolute top-1 right-1 grid size-6 place-items-center rounded-md text-icon transition-opacity hover:bg-hover hover:text-text group-hover/row:opacity-100 aria-expanded:bg-hover aria-expanded:text-text ${open ? "opacity-100" : "opacity-0"}`}
+    >
+      <EllipsisIcon className="size-3.5" />
+    </button>
+  );
+}
+
+/** What sits under the ellipsis falls away while it shows. */
+const UNDER_MENU = (open: boolean) => `transition-opacity group-hover/row:opacity-0 ${open ? "opacity-0" : ""}`;
 
 const SURFACE = (active: boolean, selected: boolean) =>
   active ? "bg-selected" : selected ? "bg-selected/60" : "hover:bg-hover focus-visible:bg-hover";
@@ -1041,25 +1048,42 @@ const titleOf = (session: Session) =>
   `${session.name} — ${providerLine(session.provider, session.model)}${session.launchedBy ? `\nStarted by ${session.launchedByName ?? "a session"}` : ""}`;
 
 /** A session on one line, under its worktree's heading: what runs it, its name, when, its dot. */
-function Line({ session, prefs, active, selected, dot, onSelect, onMenu, onClearSelection, onRemove, onRename }: CardProps & { onRename: () => void }) {
+function Line({
+  session,
+  prefs,
+  active,
+  selected,
+  dot,
+  onSelect,
+  onMenu,
+  menuOpen,
+  onClearSelection,
+  onRemove,
+  onRename,
+}: CardProps & { onRename: () => void }) {
   return (
-    <button
-      type="button"
-      data-nav
-      data-session={session.id}
-      data-selected={selected || undefined}
-      onClick={onSelect}
-      onContextMenu={(event) => onMenu(menuFromEvent(event))}
-      onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
-      title={titleOf(session)}
-      aria-current={active ? "page" : undefined}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
-    >
-      <ProviderIcon provider={session.provider} className="size-4" />
-      <span className={`min-w-0 flex-1 truncate ${active || dot === "done" ? "font-medium" : ""}`}>{session.name}</span>
-      {shows(prefs, "updated") && <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{elapsed(session.updatedAt)}</span>}
-      {shows(prefs, "status") && <StatusDot status={dot} />}
-    </button>
+    <div className="group/row relative">
+      <button
+        type="button"
+        data-nav
+        data-session={session.id}
+        data-selected={selected || undefined}
+        onClick={onSelect}
+        onContextMenu={(event) => onMenu(menuFromEvent(event))}
+        onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
+        title={titleOf(session)}
+        aria-current={active ? "page" : undefined}
+        className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
+      >
+        <ProviderIcon provider={session.provider} className="size-4" />
+        <span className={`min-w-0 flex-1 truncate ${active || dot === "done" ? "font-medium" : ""}`}>{session.name}</span>
+        <span className={`flex shrink-0 items-center gap-2.5 ${UNDER_MENU(menuOpen)}`}>
+          {shows(prefs, "updated") && <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{elapsed(session.updatedAt)}</span>}
+          {shows(prefs, "status") && <StatusDot status={dot} />}
+        </span>
+      </button>
+      <RowMenuButton label={session.name} open={menuOpen} onMenu={onMenu} />
+    </div>
   );
 }
 
@@ -1078,6 +1102,7 @@ function TwoLines({
   editing,
   onSelect,
   onMenu,
+  menuOpen,
   onClearSelection,
   onRemove,
   onRename,
@@ -1113,25 +1138,32 @@ function TwoLines({
       </div>
     );
   return (
-    <button
-      type="button"
-      data-nav
-      data-session={session.id}
-      data-selected={selected || undefined}
-      onClick={onSelect}
-      onContextMenu={(event) => onMenu(menuFromEvent(event))}
-      onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
-      title={titleOf(session)}
-      aria-current={active ? "page" : undefined}
-      className={`flex w-full flex-col gap-0.5 rounded-chrome px-2 py-1 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
-    >
-      <span className="flex h-6 items-center gap-2.5">
-        {icon}
-        <span className={`min-w-0 flex-1 truncate ${active || dot === "done" ? "font-medium" : ""}`}>{session.name}</span>
-        {shows(prefs, "status") && <StatusDot status={dot} />}
-      </span>
-      {second}
-    </button>
+    <div className="group/row relative">
+      <button
+        type="button"
+        data-nav
+        data-session={session.id}
+        data-selected={selected || undefined}
+        onClick={onSelect}
+        onContextMenu={(event) => onMenu(menuFromEvent(event))}
+        onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
+        title={titleOf(session)}
+        aria-current={active ? "page" : undefined}
+        className={`flex w-full flex-col gap-0.5 rounded-chrome px-2 py-1 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
+      >
+        <span className="flex h-6 items-center gap-2.5">
+          {icon}
+          <span className={`min-w-0 flex-1 truncate ${active || dot === "done" ? "font-medium" : ""}`}>{session.name}</span>
+          {shows(prefs, "status") && (
+            <span className={`flex ${UNDER_MENU(menuOpen)}`}>
+              <StatusDot status={dot} />
+            </span>
+          )}
+        </span>
+        {second}
+      </button>
+      <RowMenuButton label={session.name} open={menuOpen} onMenu={onMenu} />
+    </div>
   );
 }
 
