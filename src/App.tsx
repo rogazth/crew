@@ -384,7 +384,15 @@ export function App() {
 
   // The fresh session on screen can start in another worktree; its first screen says so and offers it.
   const panePick =
-    paneMove && panePlace && paneSession ? { sessionId: paneSession.id, place: panePlace, places: panePlaces, onMove: paneMove } : null;
+    paneMove && panePlace && paneSession
+      ? {
+          sessionId: paneSession.id,
+          place: panePlace,
+          places: panePlaces,
+          onMove: paneMove,
+          onCreate: async (branch: string) => paneMove((await worktrees.create(branch)).path),
+        }
+      : null;
 
   return (
     <>
@@ -555,6 +563,7 @@ export function App() {
                     agents={startAgents}
                     defaultPath={work.placeIn ?? active.path}
                     onPlace={setStartIn}
+                    onCreateWorktree={async (branch) => setStartIn((await worktrees.create(branch)).path)}
                     onAsk={(text, choice, path, files) => {
                       void newSession(choice, path === active.path ? null : path, text, files);
                     }}

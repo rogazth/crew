@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Session, Workspace, Worktree } from "./types";
 import {
   branchError,
+  branchSlug,
   isDirtyRefusal,
   removalCost,
   sessionPath,
@@ -63,6 +64,15 @@ describe("branch names", () => {
     expect(branchError("has space")).not.toBeNull();
     expect(branchError("a..b")).not.toBeNull();
     expect(branchError("feat/")).not.toBeNull();
+  });
+
+  it("turns words into one", () => {
+    expect(branchSlug("Lorem ipsum")).toBe("lorem-ipsum");
+    expect(branchSlug("  feat/New login page! ")).toBe("feat/new-login-page");
+    expect(branchSlug("Añadir canción")).toBe("anadir-cancion");
+    expect(branchSlug("a..b // c")).toBe("a.b/c");
+    expect(branchSlug("fix/")).toBe("fix");
+    expect(branchSlug(" ?! ")).toBeNull();
   });
 });
 

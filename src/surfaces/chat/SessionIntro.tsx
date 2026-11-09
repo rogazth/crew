@@ -102,7 +102,7 @@ export function IntroHead({ session }: { session: Session }) {
           {/* A bot lives outside any worktree: only a plain session can start in one. */}
           {!bot &&
             (pane ? (
-              <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} />
+              <WorktreeFact place={pane.place} places={pane.places} onMove={pane.onMove} onCreate={pane.onCreate} />
             ) : (
               branch && <Fact icon={GitBranchIcon}>{branch}</Fact>
             ))}

@@ -61,6 +61,30 @@ export function branchError(branch: string): string | null {
   return null;
 }
 
+/**
+ * Words typed in a worktree search as a branch git takes: lower case, each run
+ * of anything else a dash, slashes kept as folders. "Lorem ipsum" is
+ * `lorem-ipsum`, "feat/New login" `feat/new-login`; null when nothing is left.
+ */
+export function branchSlug(text: string): string | null {
+  const name = text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split("/")
+    .map((part) =>
+      part
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/\.{2,}/g, ".")
+        .replace(/-{2,}/g, "-")
+        .replace(/^[-.]+|[-.]+$/g, "")
+        .replace(/\.lock$/, ""),
+    )
+    .filter(Boolean)
+    .join("/");
+  return name && !branchError(name) ? name : null;
+}
+
 /** What removing a worktree takes with it, for the prompt that asks. Git keeps the branch. */
 export function removalCost(dirty: number, sessions: number, locked: string | null = null): string {
   return [

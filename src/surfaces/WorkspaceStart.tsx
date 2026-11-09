@@ -198,6 +198,7 @@ export function WorkspaceStart({
   places,
   defaultPath,
   onPlace,
+  onCreateWorktree,
   agents,
   onAsk,
 }: {
@@ -207,6 +208,8 @@ export function WorkspaceStart({
   defaultPath: string;
   /** A worktree picked on the badge, remembered: the next first screen opens on it too. */
   onPlace: (path: string) => void;
+  /** A worktree made on a new branch from the badge's search, then picked. */
+  onCreateWorktree: (branch: string) => Promise<void>;
   /** The workspace's bots and sessions, for `@`. */
   agents: readonly Session[];
   /** A new session in the worktree at `path`, with `text` as its first message, in what the chips say. */
@@ -223,7 +226,7 @@ export function WorkspaceStart({
       cwd={defaultPath}
       facts={
         <>
-          {place && <WorktreeFact place={place} places={places} onMove={onPlace} />}
+          {place && <WorktreeFact place={place} places={places} onMove={onPlace} onCreate={onCreateWorktree} />}
           <Fact icon={machineIcon(link !== null)}>{machine}</Fact>
         </>
       }

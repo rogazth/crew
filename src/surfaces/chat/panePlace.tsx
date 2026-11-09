@@ -3,12 +3,13 @@
 // opens a searchable list of worktrees (⌥W from the composer), and picking one
 // starts it there instead. A bot, a page or a tab with no place says nothing.
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, ChevronDownIcon, GitBranchIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, GitBranchIcon, LoaderIcon, PlusIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ROW, ListNote, PopupSearch } from "../../chrome/kit";
 import { fuzzyMatch } from "../../lib/fuzzy";
 import { pickerKeyDown } from "../../chrome/promptKeys";
 import { IS_MAC } from "../../lib/hotkey";
+import { branchSlug } from "../../lib/worktrees";
 
 export type Place = { path: string; label: string };
 
@@ -17,7 +18,13 @@ export type Place = { path: string; label: string };
  * worktrees it could start in, and what picking one does. Only that session's
  * first screen reads it; the chats behind other tabs are mounted too.
  */
-export const PanePlaceContext = createContext<{ sessionId: string; place: Place; places: Place[]; onMove: (path: string) => void } | null>(null);
+export const PanePlaceContext = createContext<{
+  sessionId: string;
+  place: Place;
+  places: Place[];
+  onMove: (path: string) => void;
+  onCreate: (branch: string) => Promise<void>;
+} | null>(null);
 
 export const usePanePlace = (sessionId: string) => {
   const pick = useContext(PanePlaceContext);
@@ -39,10 +46,22 @@ type KeyDown = KeyboardEvent<HTMLDivElement> & { preventBaseUIHandler?: () => vo
 
 /**
  * The worktree as a fact on a new session's first screen, opening the list of
- * worktrees it can start in: a search field, then the worktrees. ↑/↓ move,
- * Enter picks, Esc clears the search and then closes.
+ * worktrees it can start in: a search field, then the worktrees. What is typed
+ * can also name a new one, made and started in from the list's last row. ↑/↓
+ * move, Enter picks, Esc clears the search and then closes.
  */
-export function WorktreeFact({ place, places, onMove }: { place: Place; places: Place[]; onMove: (path: string) => void }) {
+export function WorktreeFact({
+  place,
+  places,
+  onMove,
+  onCreate,
+}: {
+  place: Place;
+  places: Place[];
+  onMove: (path: string) => void;
+  /** Makes the worktree for this branch and starts there; absent, the list only picks. */
+  onCreate?: (branch: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -50,7 +69,9 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
   const list = useRef<HTMLDivElement>(null);
   /** What had the keyboard when it opened: ⌥W from the composer goes back there, a click to the badge. */
   const back = useRef<HTMLElement | null>(null);
-  const choosable = places.length > 1;
+  const [creating, setCreating] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const choosable = places.length > 1 || Boolean(onCreate);
 
   const needle = query.trim();
   const rows = needle
@@ -60,7 +81,11 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
         .sort((a, b) => b.hit!.score - a.hit!.score || a.at - b.at)
         .map((row) => row.item)
     : places;
-  const active = rows.length === 0 ? -1 : Math.min(cursor, rows.length - 1);
+  // The branch the words would make, unless a worktree already answers to it.
+  const slug = onCreate && needle ? branchSlug(needle) : null;
+  const fresh = slug && !places.some((item) => item.label === slug) ? slug : null;
+  const count = rows.length + (fresh ? 1 : 0);
+  const active = count === 0 ? -1 : Math.min(cursor, count - 1);
   const currentIndex = Math.max(0, places.findIndex((item) => item.path === place.path));
 
   const openChange = (next: boolean) => {
@@ -68,7 +93,9 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
       back.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setQuery("");
       setCursor(currentIndex);
+      setFailure(null);
     }
+    if (!next && creating) return;
     setOpen(next);
   };
   const latest = useRef(openChange);
@@ -103,6 +130,20 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
     if (item.path !== place.path) onMove(item.path);
   };
 
+  const create = async (branch: string) => {
+    if (!onCreate || creating) return;
+    setCreating(true);
+    setFailure(null);
+    try {
+      await onCreate(branch);
+      setOpen(false);
+    } catch (error) {
+      setFailure(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const onKeyDown = (event: KeyDown) => {
     if (pickerKeyDown(event, "W", () => setOpen(false))) return;
     if (event.key === "Escape" && query) {
@@ -116,13 +157,14 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setCursor(Math.max(0, Math.min(rows.length - 1, (active < 0 ? 0 : active) + step)));
+      setCursor(Math.max(0, Math.min(count - 1, (active < 0 ? 0 : active) + step)));
       return;
     }
     if (event.key === "Enter" && active >= 0) {
       event.preventDefault();
       const row = rows[active];
       if (row) pick(row);
+      else if (fresh) void create(fresh);
     }
   };
 
@@ -144,11 +186,13 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
             <PopupSearch
               ref={search}
               value={query}
-              placeholder="Start this session in…"
+              placeholder={onCreate ? "Start in, or create a worktree…" : "Start this session in…"}
+              readOnly={creating}
               aria-label="Search worktrees"
               onChange={(event) => {
                 setQuery(event.target.value);
                 setCursor(event.target.value.trim() ? 0 : currentIndex);
+                setFailure(null);
               }}
               onClear={() => {
                 setQuery("");
@@ -157,7 +201,7 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
               }}
             />
             <div ref={list} role="listbox" aria-label="Worktrees" className="min-h-0 flex-1 overflow-y-auto p-1">
-              {rows.length === 0 ? (
+              {count === 0 ? (
                 <ListNote />
               ) : (
                 rows.map((item, index) => (
@@ -177,7 +221,33 @@ export function WorktreeFact({ place, places, onMove }: { place: Place; places: 
                   </div>
                 ))
               )}
+              {fresh && (
+                <div
+                  role="option"
+                  aria-selected={active === rows.length}
+                  aria-disabled={creating || undefined}
+                  data-index={rows.length}
+                  data-highlighted={active === rows.length ? "" : undefined}
+                  onMouseMove={() => active !== rows.length && setCursor(rows.length)}
+                  onClick={() => void create(fresh)}
+                  title={`Create a worktree on a new branch, ${fresh}, and start there`}
+                  className={ROW}
+                >
+                  {creating ? (
+                    <LoaderIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-icon" />
+                  ) : (
+                    <PlusIcon aria-hidden className="size-3.5 shrink-0 text-icon" />
+                  )}
+                  <span className="shrink-0">Create</span>
+                  <span className="min-w-0 flex-1 truncate text-text-muted">{fresh}</span>
+                </div>
+              )}
             </div>
+            {failure && (
+              <p data-error className="border-t border-hairline px-3 py-2 text-[12px] text-danger">
+                {failure}
+              </p>
+            )}
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
