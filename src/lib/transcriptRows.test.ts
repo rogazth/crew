@@ -87,14 +87,15 @@ describe("groupRows", () => {
     expect((rows[0] as { block: Block }).block.text).toBe("done");
   });
 
-  it("breaks the day when half an hour passed between messages", () => {
-    const at = Date.parse("2026-09-17T09:00:00Z");
+  it("breaks the day only when the day changes", () => {
+    const at = new Date(2026, 8, 17, 9, 0).getTime();
     const rows = groupRows([
       block("user", "morning", { at }),
       block("assistant", "hi", { at: at + 1000 }),
-      block("user", "still there?", { at: at + 31 * 60_000 }),
+      block("user", "still there?", { at: at + 3 * 3600e3 }),
+      block("user", "next day", { at: new Date(2026, 8, 18, 8, 0).getTime() }),
     ]);
-    expect(kinds(rows)).toEqual(["date", "message", "message", "date", "message"]);
+    expect(kinds(rows)).toEqual(["date", "message", "message", "message", "date", "message"]);
   });
 
   it("does not break the day for a reply that came back late", () => {
@@ -221,6 +222,48 @@ describe("threadRows", () => {
 });
 
 describe("foldTurns", () => {
+  it("folds a one-off approval with its call, and keeps one that outlasts it as a card", () => {
+    const rows = foldTurns(
+      groupRows([
+        block("user", "tidy up", { at: 1_000 }),
+        block("tool", "Edit a.rs", {
+          tool: { callId: "e1", name: "Edit", title: "Edit a.rs", status: "completed" },
+          approval: { requestId: 1, name: "Edit", input: { file_path: "/a.rs" }, decided: "allow" },
+        }),
+        block("tool", "rm -rf dist", {
+          tool: { callId: "e2", name: "Bash", title: "rm -rf dist", status: "completed" },
+          approval: { requestId: 2, name: "Bash", input: { command: "rm -rf dist" }, decided: "deny" },
+        }),
+        block("tool", "npm test", {
+          tool: { callId: "e3", name: "Bash", title: "npm test", status: "completed" },
+          approval: { requestId: 3, name: "Bash", input: { command: "npm test" }, decided: "always" },
+        }),
+        block("tool", "ls", { tool: { callId: "e4", name: "Bash", title: "ls", status: "completed" } }),
+        block("assistant", "done", { at: 5_000, usage: { durationMs: 4_000 } }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "decision", "message", "footer"]);
+  });
+
+  it("keeps a decided plan and an answered question out of the fold, as cards", () => {
+    const rows = foldTurns(
+      groupRows([
+        block("user", "clean up", { at: 1_000 }),
+        block("tool", "Read a.rs", { tool: { callId: "c1", name: "Read", title: "Read a.rs", status: "completed" } }),
+        block("approval", "Plan", { approval: { requestId: 1, name: "ExitPlanMode", input: { plan: "1. Do it." }, decided: "allow" } }),
+        block("tool", "ls", { tool: { callId: "c3", name: "Bash", title: "ls", status: "completed" } }),
+        block("question", "Name", {
+          question: { requestId: 2, questions: [{ question: "Which?", header: "Name", multiSelect: false, options: [] }], answers: { "Which?": "crew" } },
+        }),
+        block("tool", "ls -a", { tool: { callId: "c4", name: "Bash", title: "ls -a", status: "completed" } }),
+        block("assistant", "done", { at: 5_000, usage: { durationMs: 4_000 } }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "decision", "decision", "message", "footer"]);
+  });
+
   const turn = () => [
     block("user", "fix it", { at: 1_000 }),
     block("tool", "npm test", { tool: { callId: "c1", name: "Bash", title: "npm test", status: "completed" } }),

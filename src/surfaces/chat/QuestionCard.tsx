@@ -4,6 +4,7 @@ import { RadioGroup } from "@base-ui/react/radio-group";
 import { ArrowLeftIcon, ArrowRightIcon, MessageCircleQuestionIcon } from "lucide-react";
 import { Button } from "../../chrome/kit";
 import { Kbd } from "../../chrome/Kbd";
+import { SETTLED_TILE } from "./approvalIcon";
 import { useEffect, useRef, useState } from "react";
 import type { Answers, Block, Question } from "../../lib/blocks";
 
@@ -117,14 +118,7 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
   const many = questions.length > 1;
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none">
-      <div className="flex items-center gap-2.5">
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-info/12 text-info">
-          <MessageCircleQuestionIcon className="size-4" />
-        </span>
-        <span className="min-w-0 flex-1 truncate font-medium">{many ? "Questions" : "Question"}</span>
-        {current.multiSelect ? <span className="shrink-0 text-[12px] text-text-muted">Pick any</span> : null}
-      </div>
-      <p className="text-[length:calc(var(--chat-text)+0.5px)] leading-[21px]">{current.question}</p>
+      <QuestionHead question={current} />
       <div className="crew-options flex flex-col">
         <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
         <label className={CHOICE}>
@@ -240,5 +234,91 @@ function OptionLabel({ option }: { option: Question["options"][number] }) {
       <span>{option.label}</span>
       {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
     </span>
+  );
+}
+
+/** Which of a question's options an answer names, and what it said besides them ("Other"). */
+function picked(question: Question, answer: string | undefined): { chosen: Set<string>; other: string } {
+  if (!answer) return { chosen: new Set(), other: "" };
+  const labels = question.options.map((option) => option.label);
+  if (labels.includes(answer)) return { chosen: new Set([answer]), other: "" };
+  const parts = answer.split(", ");
+  const chosen = new Set(parts.filter((part) => labels.includes(part)));
+  return { chosen, other: parts.filter((part) => !labels.includes(part)).join(", ") };
+}
+
+/**
+ * A question already answered, as the card it was: every question at once,
+ * the choices that went back filled, nothing left to press. Skipped, nothing
+ * is filled and the head says so.
+ */
+export function AnsweredQuestions({ block }: { block: Block }) {
+  const ask = block.question;
+  if (!ask) return null;
+  const skipped = ask.dismissed === true;
+  // One question is the card's title. Several share one head, "Questions", and each is a line over its choices, drawn tighter.
+  const many = ask.questions.length > 1;
+  return (
+    <div className="crew-card my-2" data-answered-card>
+      {many ? (
+        <div className="flex items-center gap-2.5">
+          <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${SETTLED_TILE}`}>
+            <MessageCircleQuestionIcon className="size-4" />
+          </span>
+          <span className="min-w-0 flex-1 font-medium">Questions</span>
+          {skipped ? <span className="shrink-0 text-[12.5px] text-text-muted">Skipped</span> : null}
+        </div>
+      ) : null}
+      {ask.questions.map((question) => {
+        const { chosen, other } = picked(question, skipped ? undefined : ask.answers?.[question.question]);
+        return (
+          <div key={question.question} className={`flex flex-col ${many ? "gap-1.5" : "gap-3"}`}>
+            {many ? (
+              <p className="flex items-baseline gap-2 text-[13.5px] leading-[19px]">
+                <span className="min-w-0">{question.question}</span>
+                {question.multiSelect ? <span className="shrink-0 text-[12px] text-text-muted">Multiple</span> : null}
+              </p>
+            ) : (
+              <QuestionHead question={question} settled {...(skipped ? { note: "Skipped" } : {})} />
+            )}
+            <div className="crew-options flex flex-col" {...(many ? { "data-compact": "" } : {})}>
+              {question.options.map((option, index) => (
+                <label key={option.label} data-static {...(chosen.has(option.label) ? {} : { "data-dim": "" })} className={CHOICE}>
+                  <span className="crew-keycap" {...(chosen.has(option.label) ? { "data-checked": "" } : {})}>
+                    {LETTERS[index] ?? "·"}
+                  </span>
+                  <OptionLabel option={option} />
+                </label>
+              ))}
+              {other ? (
+                <label data-static className={CHOICE}>
+                  <span className="crew-keycap" data-checked="">
+                    {LETTERS[question.options.length] ?? "·"}
+                  </span>
+                  <span className="min-w-0">{other}</span>
+                </label>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The question is the card's title: no "Question" above it to say what it
+ * plainly is. "Multiple" when it takes more than one choice.
+ */
+function QuestionHead({ question, note, settled = false }: { question: Question; note?: string; settled?: boolean }) {
+  const aside = note ?? (question.multiSelect ? "Multiple" : undefined);
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${settled ? SETTLED_TILE : "bg-info/12 text-info"}`}>
+        <MessageCircleQuestionIcon className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1 pt-1 font-medium">{question.question}</span>
+      {aside ? <span className="shrink-0 pt-1 text-[12.5px] text-text-muted">{aside}</span> : null}
+    </div>
   );
 }

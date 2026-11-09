@@ -12,8 +12,20 @@ installWindowTrace();
 installComposedRangesShim();
 bootChatText();
 
+// DEV ONLY: `?widgets` shows the transcript's widgets alone (src/surfaces/chat/Gallery.tsx).
+const Gallery =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).has("widgets")
+    ? React.lazy(() => import("./surfaces/chat/Gallery"))
+    : null;
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    {Gallery ? (
+      <React.Suspense fallback={null}>
+        <Gallery />
+      </React.Suspense>
+    ) : (
+      <App />
+    )}
   </React.StrictMode>,
 );

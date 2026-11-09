@@ -1,8 +1,10 @@
-import { lazy, memo, Suspense, useContext, useEffect, useRef } from "react";
-import { ShieldCheckIcon } from "lucide-react";
+import { lazy, memo, Suspense, useContext, useEffect, useMemo, useRef } from "react";
 import { Button } from "../../chrome/kit";
 import { Kbd } from "../../chrome/Kbd";
+import { describeApproval } from "../../lib/approvals";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
+import { approvalIcon } from "./approvalIcon";
+import { ApprovalTitle } from "./ApprovalTitle";
 import { AlwaysAllow } from "./context";
 
 /** The diff renderer is ~300 kB and most turns never raise a card; it loads with the first one. */
@@ -15,14 +17,6 @@ type Props = {
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 };
 
-const EDIT = /^(edit|multiedit|write|notebookedit)$/i;
-
-
-function str(input: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = input?.[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 /**
  * The call, shown as what it will do: a diff for an edit, the command for a
  * shell call, the raw input for anything else. Allow is the default action.
@@ -34,6 +28,8 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   const input = approval?.input;
   const card = useRef<HTMLDivElement>(null);
   const always = useContext(AlwaysAllow);
+  const view = useMemo(() => describeApproval(name, input, block.text), [name, input, block.text]);
+  const Icon = approvalIcon(view);
 
   useEffect(() => {
     if (hot) card.current?.focus();
@@ -64,38 +60,34 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
 
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none" data-approval-card>
+      {/* The answer sits beside the question, as a page's header holds its button. */}
       <div className="flex items-center gap-2.5">
         <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
-          <ShieldCheckIcon className="size-4" />
+          <Icon className="size-4" />
         </span>
-        <span className="min-w-0 flex-1 truncate font-medium">{headline(name, input, block.text)}</span>
+        <ApprovalTitle view={view} />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <Button className="h-7 px-2.5" {...(hot ? { keys: "esc" } : {})} onClick={() => onApprove(requestId, "deny")}>
+            Deny
+          </Button>
+          <Button variant="primary" className="h-7 px-2.5" onClick={() => onApprove(requestId, "allow")}>
+            Allow {hot && <Kbd keys="↵" className="border-white/20 bg-white/10 text-current! opacity-80" />}
+          </Button>
+        </span>
       </div>
       <Suspense fallback={null}>
-        <ApprovalBody name={name} input={input} />
+        <ApprovalBody name={name} input={input} title={block.text} />
       </Suspense>
-      <div className="flex items-center gap-1.5">
-        {always && (
-          <Button variant="ghost" className="h-7 px-2.5" onClick={() => onApprove(requestId, "always")}>
-            Always allow {name}
-          </Button>
-        )}
-        <span className="flex-1" />
-        <Button className="h-7 px-2.5" {...(hot ? { keys: "esc" } : {})} onClick={() => onApprove(requestId, "deny")}>
-          Deny
-        </Button>
-        <Button variant="primary" className="h-7 px-2.5" onClick={() => onApprove(requestId, "allow")}>
-          Allow {hot && <Kbd keys="↵" className="border-white/20 bg-white/10 text-current! opacity-80" />}
-        </Button>
-      </div>
+      {/* A quiet link under what it would allow: a rule for every call after this one is not the default answer. */}
+      {always && (
+        <button
+          type="button"
+          onClick={() => onApprove(requestId, "always")}
+          className="-mt-1 self-start text-[12px] text-text-muted transition-colors hover:text-text"
+        >
+          Always allow
+        </button>
+      )}
     </div>
   );
 });
-
-function headline(name: string, input: Record<string, unknown> | undefined, title: string): string {
-  const path = str(input, "file_path") ?? str(input, "path");
-  const leaf = path?.split("/").pop();
-  if (EDIT.test(name)) return leaf ? `Edit ${leaf}?` : "Edit this file?";
-  if (/^bash$/i.test(name)) return "Run this command?";
-  if (/^read$/i.test(name)) return leaf ? `Read ${leaf}?` : "Read this file?";
-  return `Use ${name}: ${title}?`;
-}

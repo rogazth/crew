@@ -350,11 +350,12 @@ html[data-sidebar-resize="active"] * {
   background: color-mix(in srgb, var(--color-canvas) 26%, transparent);
 }
 
-/* A card is the one thing in the log that waits for the user: no box inside a
-   box. One raised surface; its options are fills, never outlines, and every
-   inner radius is the outer one minus the padding. */
+/* A card is the one thing in the log that waits for the user: one flat fill,
+   as the Connectors page draws its tiles, and nothing boxed inside it. Every
+   card the same width, whatever it holds: a long command or a wide diff
+   scrolls inside it. The same 12px on every side. */
 .crew-card {
-  --card-r: 18px;
+  --card-r: 14px;
   --card-p: 12px;
   display: flex;
   flex-direction: column;
@@ -362,23 +363,39 @@ html[data-sidebar-resize="active"] * {
   padding: var(--card-p);
   border: 0;
   border-radius: var(--card-r);
-  background: var(--color-surface);
-  box-shadow:
-    0 0 0 1px var(--color-hairline),
-    0 1px 2px oklch(0% 0 0 / 0.04),
-    0 10px 28px -14px oklch(0% 0 0 / 0.18);
-  /* As wide as what it asks, never the column: a short question sits inline
-     like a message, a long command stops at 560px and scrolls. */
+  background: var(--color-card);
   align-self: flex-start;
-  width: fit-content;
-  min-width: min(100%, 380px);
-  max-width: min(100%, 560px);
+  width: min(100%, 560px);
   font-size: 14px;
   line-height: 20px;
   letter-spacing: -0.1px;
 }
-.crew-card .crew-code {
+/* A card already answered: the same place, settled to one quiet line that opens. */
+.crew-settled {
+  width: min(100%, 560px);
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--color-card);
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.1px;
+}
+/* The command or the diff a card holds sits on it, not in a box of its own with a head. */
+:is(.crew-card, .crew-settled) .crew-code {
   margin: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-canvas);
+}
+:is(.crew-card, .crew-settled) .crew-code-head {
+  display: none;
+}
+:is(.crew-card, .crew-settled) .crew-code-body {
+  padding: 10px 12px;
+}
+:is(.crew-card, .crew-settled) .crew-diff {
+  border: 0;
+  border-radius: 8px;
 }
 .crew-field {
   height: 28px;
@@ -720,7 +737,9 @@ html:has(body > :not(#root) :is([role="dialog"], [role="alertdialog"], [role="me
 }
 .crew-md-row:hover .crew-copy-aside,
 .crew-copy-aside:focus-visible,
-.crew-copy-aside[data-done] {
+.crew-copy-aside:focus-within,
+.crew-copy-aside[data-done],
+.crew-copy-aside:has([data-done]) {
   opacity: 1;
 }
 /* Headings with nothing under them caption the block that follows. */
@@ -1581,10 +1600,6 @@ button:not(:disabled):active {
   width: fit-content;
   max-width: min(100%, 560px);
 }
-.crew-card > :first-child,
-.crew-card > p {
-  padding-inline: 4px;
-}
 .crew-options {
   gap: 6px;
 }
@@ -1601,6 +1616,93 @@ button:not(:disabled):active {
 }
 .crew-options label:active {
   transform: scale(0.99);
+}
+/* What a card holds never outgrows it: a long command or diff scrolls inside its box. */
+:is(.crew-card, .crew-settled) .crew-code-body {
+  max-height: 240px;
+  overflow: auto;
+}
+:is(.crew-card, .crew-settled) .crew-diff {
+  max-height: 360px;
+  overflow: auto;
+}
+/* A plan in a card reads at the card's size: its headings are bold lines, not page titles. */
+.crew-approval-plan .crew-md {
+  font-size: inherit;
+}
+.crew-approval-plan :is(h1, h2, h3, h4, h5, h6) {
+  margin: 12px 0 2px !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  font-weight: 600 !important;
+  color: var(--color-text);
+}
+.crew-approval-plan :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0 !important;
+}
+.crew-approval-plan li {
+  padding-block: 1px;
+}
+.crew-approval-plan[data-long] {
+  mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+}
+/* A card's choices: fills on its fill, the picked one outlined in ink, its letter a round mark. */
+.crew-card .crew-options label {
+  border-radius: 10px;
+  background: var(--color-canvas);
+}
+.crew-card .crew-options label:hover {
+  background: color-mix(in srgb, var(--color-canvas) 70%, var(--color-hover));
+}
+.crew-card .crew-options label:has([data-checked]) {
+  background: var(--color-canvas);
+  box-shadow: inset 0 0 0 1.5px var(--color-text);
+}
+.crew-card .crew-keycap {
+  border-radius: 999px;
+}
+/* A reply's code and diffs take the same flat fill as the cards, no outline; a diff's rows take it too. */
+.crew-md .crew-code {
+  border: 0;
+  background: var(--color-card);
+}
+.crew-md .crew-code-head {
+  background: transparent;
+}
+.crew-md .crew-diff {
+  border: 0;
+}
+.crew-md .crew-code .crew-diff {
+  --diffs-bg-context-override: transparent;
+  --diffs-bg-context-gutter-override: transparent;
+  --diffs-bg-buffer-override: transparent;
+  --diffs-bg-separator-override: transparent;
+  --diffs-light-bg: transparent;
+  --diffs-dark-bg: transparent;
+  background: transparent;
+}
+.crew-card .crew-md .crew-code {
+  background: var(--color-canvas);
+}
+/* An answered card's choices: what was picked, not something to press; the rest step back. */
+.crew-options label[data-static] {
+  pointer-events: none;
+}
+.crew-options label[data-dim] {
+  opacity: 0.45;
+}
+.crew-options[data-compact] {
+  gap: 4px;
+}
+.crew-options[data-compact] label {
+  padding-block: 5px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.crew-options[data-compact] .crew-keycap {
+  min-width: 18px;
+  height: 18px;
+  font-size: 10px;
 }
 .crew-options label:has([data-checked]) {
   background: color-mix(in oklab, var(--color-accent) 10%, transparent);

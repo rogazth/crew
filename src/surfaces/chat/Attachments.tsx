@@ -16,7 +16,7 @@ type Props = {
   onDismissUpload?: (id: number) => void;
   /** Inside the ink bubble chips are a lighter ink, not a darker card. */
   onInk?: boolean;
-  /** The user's own message: its images as small squares, at the bubble's side. */
+  /** The user's own message: every file a small square at the bubble's side, an image cropped, anything else its type's icon. */
   tiles?: boolean;
 };
 
@@ -47,8 +47,10 @@ const PILL = "inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-full px
 
 /**
  * One strip for the composer and the sent turn. In the composer every file is
- * the same pill, in one row that scrolls; once sent, an image shows as an image.
- * Every one of them opens: an image in the viewer, anything else in a tab.
+ * the same pill, in one row that scrolls. In your own message every file is a
+ * small square: an image cropped, anything else its type's icon and its name.
+ * An image a tool showed is drawn at size. Every one of them opens: an image
+ * in the viewer, anything else in a tab.
  */
 export function AttachmentStrip({ files, onRemove, onInk, tiles = false, uploads = [], onDismissUpload }: Props) {
   const images = files.filter(isImage);
@@ -60,12 +62,25 @@ export function AttachmentStrip({ files, onRemove, onInk, tiles = false, uploads
   if (files.length === 0 && uploads.length === 0) return null;
   return (
     <div ref={strip} {...(inComposer ? { "data-composer-strip": "" } : {})} className={`flex flex-wrap items-center gap-2 ${tiles ? "justify-end" : ""}`}>
-      {onRemove
+      {tiles
+        ? files.map((file) =>
+            isImage(file) ? (
+              <Tile key={file.path} file={file} onOpen={() => setOpen(images.indexOf(file))} />
+            ) : (
+              <FileTile key={file.path} file={file} onOpen={() => openPath(file.path)} />
+            ),
+          )
+        : inComposer
         ? files.map((file) => (
-            <FilePill key={file.path} file={file} onRemove={() => onRemove(file.path)} onOpen={() => (isImage(file) ? setOpen(images.indexOf(file)) : openPath(file.path))} />
+            <FilePill
+              key={file.path}
+              file={file}
+              {...(onRemove ? { onRemove: () => onRemove(file.path) } : {})}
+              onOpen={() => (isImage(file) ? setOpen(images.indexOf(file)) : openPath(file.path))}
+            />
           ))
         : [
-            ...images.map((file, index) => (tiles ? <Tile key={file.path} file={file} onOpen={() => setOpen(index)} /> : <Thumbnail key={file.path} file={file} onOpen={() => setOpen(index)} />)),
+            ...images.map((file, index) => <Thumbnail key={file.path} file={file} onOpen={() => setOpen(index)} />),
             ...others.map((file) => <FilePill key={file.path} file={file} onOpen={() => openPath(file.path)} onInk={onInk === true} />),
           ]}
       {uploads.map((upload) => (
@@ -78,12 +93,32 @@ export function AttachmentStrip({ files, onRemove, onInk, tiles = false, uploads
   );
 }
 
-/** The image in the user's own message: a small square, cropped. */
+const TILE =
+  "size-[72px] shrink-0 overflow-hidden rounded-xl bg-card shadow-[inset_0_0_0_1px_var(--color-hairline)] focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none";
+
+/** An image in the user's own message: a small square, cropped. */
 function Tile({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) {
   const src = useImageSrc(file.path);
   return (
-    <button type="button" onClick={onOpen} title={file.name} aria-label={`Open ${file.name}`} className="size-[72px] overflow-hidden rounded-xl bg-card shadow-[inset_0_0_0_1px_var(--color-hairline)] focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none">
+    <button type="button" onClick={onOpen} title={file.name} aria-label={`Open ${file.name}`} className={TILE}>
       {src && <img src={src} alt={file.name} className="size-full object-cover" />}
+    </button>
+  );
+}
+
+/** Any other file in the user's own message: the same square, its type's icon and its name. */
+function FileTile({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={file.path}
+      aria-label={`Open ${file.name}`}
+      data-file-chip
+      className={`${TILE} flex flex-col items-center justify-center gap-1.5 px-1.5 transition-colors hover:bg-selected`}
+    >
+      <FileTypeIcon name={file.name} className="size-6" />
+      <span className="w-full truncate text-center text-[10.5px] leading-3 text-text-muted">{file.name}</span>
     </button>
   );
 }

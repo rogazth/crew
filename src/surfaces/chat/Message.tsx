@@ -1,5 +1,5 @@
-import { Tooltip } from "../../chrome/kit";
-import { GitBranchIcon, ImagesIcon, InfoIcon } from "lucide-react";
+import { Button } from "../../chrome/kit";
+import { GitBranchIcon, ImagesIcon, InfoIcon, KeyRoundIcon } from "lucide-react";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState, type ReactNode } from "react";
@@ -43,7 +43,10 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
               <MentionText text={body} agents={agents} />
             </p>
           </div>
-          <CopyButton text={body} className="crew-copy crew-copy-aside" />
+          <span className="crew-copy-aside flex items-center gap-2">
+            {block.at !== undefined ? <span className="text-[11.5px] leading-4 text-text-muted tabular-nums">{clock(block.at)}</span> : null}
+            <CopyButton text={body} className="crew-copy" />
+          </span>
         </div>
       ) : null}
       {block.files && block.files.length > 0 ? (
@@ -177,8 +180,9 @@ export const Note = memo(function Note({ block }: { block: Block }) {
 });
 
 /**
- * A turn that stopped because the CLI is signed out. One line, and the login
- * that fixes it. The CLI's own sentence stays on the line, for the hover.
+ * A turn that stopped because the CLI is signed out: nothing ran, and the
+ * session waits on a login. A card, not a quiet line, so it reads as the
+ * thing to do next. The CLI's own sentence stays on the card, for the hover.
  */
 export const AuthNote = memo(function AuthNote({ block, session }: { block: Block; session: ChatSession }) {
   const { openLogin } = useChatActions();
@@ -186,21 +190,22 @@ export const AuthNote = memo(function AuthNote({ block, session }: { block: Bloc
   const command = loginArgv(session.provider, remote);
   const label = providerOf(session.provider)?.label ?? session.provider;
   return (
-    <p className="flex items-start gap-2 text-[13px] leading-[19px] text-text-muted">
-      <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-icon" />
-      <span className="min-w-0" title={block.text}>
-        {label} needs you to sign in again.
-      </span>
-      {command && (
-        <button
-          type="button"
-          onClick={() => openLogin(session.id, session.provider, command)}
-          className="flex h-6 shrink-0 items-center rounded-md px-2 text-[11.5px] text-text ring-1 ring-hairline hover:bg-selected"
-        >
-          Sign in
-        </button>
-      )}
-    </p>
+    <div className="crew-card" data-auth-card>
+      <div className="flex items-center gap-2.5">
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
+          <KeyRoundIcon className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1" title={block.text}>
+          <p className="truncate font-medium">{label} is signed out</p>
+          <p className="truncate text-[12px] leading-4 text-text-muted">Sign in and send your message again to continue.</p>
+        </div>
+        {command && (
+          <Button variant="primary" className="h-7 shrink-0 px-2.5" onClick={() => openLogin(session.id, session.provider, command)}>
+            Sign in
+          </Button>
+        )}
+      </div>
+    </div>
   );
 });
 
@@ -211,7 +216,7 @@ export function SystemLine({ block, signedIn = false }: { block: Block; signedIn
   return <Note block={block} />;
 }
 
-/** A day turning over: a hairline with the date on it, as chat apps mark one. */
+/** A day turning over: a hairline with the day on it, as chat apps mark one. The time of each message waits on its hover. */
 export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
   return (
     <p className="flex items-center gap-3 text-[11px] leading-4 font-medium text-text-muted">
@@ -223,9 +228,8 @@ export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
 });
 
 /**
- * Closes a turn: how long it took, when. Tokens and cost wait in the tooltip.
- * Memoised because every footer above the live turn would otherwise rebuild its
- * tooltip on each streamed token.
+ * Closes a turn: how long it took, when. Memoised because every footer above
+ * the live turn would otherwise rebuild on each streamed token.
  */
 export const TurnFooter = memo(function TurnFooter({
   usage,
@@ -239,39 +243,14 @@ export const TurnFooter = memo(function TurnFooter({
   /** The fold above already says how long the turn took. */
   folded?: boolean;
 }) {
-  const worked = usage.durationMs !== undefined && !folded ? `Worked ${duration(usage.durationMs)}` : null;
+  const worked = usage.durationMs !== undefined && !folded ? `Worked for ${duration(usage.durationMs)}` : null;
   const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
   if (parts.length === 0 && !text) return null;
-  const detail = usageDetail(usage);
-  const line = (
-    <span className="cursor-default text-[11.5px] leading-4 text-text-muted tabular-nums">{parts.join(" · ")}</span>
-  );
-  // The reply's actions, as ChatGPT sets them under an answer: copy first, then what it cost.
+  // The reply's actions, as ChatGPT sets them under an answer: copy first, then how long it took.
   return (
-    <div className="-ml-1 flex items-center gap-1.5">
+    <div className="-ml-1 flex items-center gap-2.5">
       {text ? <CopyButton text={text.trim()} className="crew-copy" /> : null}
-      {detail ? (
-        <Tooltip content={detail} side="top" align="start" delay={300} render={<span />}>
-          {line}
-        </Tooltip>
-      ) : (
-        line
-      )}
+      <span className="cursor-default text-[11.5px] leading-4 text-text-muted tabular-nums">{parts.join(" · ")}</span>
     </div>
   );
 });
-
-function usageDetail(usage: TurnUsage): string | null {
-  const parts: string[] = [];
-  if (usage.inputTokens !== undefined || usage.outputTokens !== undefined) {
-    parts.push(`${compact(usage.inputTokens ?? 0)} in · ${compact(usage.outputTokens ?? 0)} out`);
-  }
-  if (usage.costUsd !== undefined) parts.push(`$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`);
-  return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
-  return String(n);
-}

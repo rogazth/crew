@@ -10,9 +10,17 @@ import { allFailed, type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, isSteering, isWaiting, letterIdOf } from "./letters";
 import { controlOf, isReportLetter, nativeReportAt, startedOf, startNoteTarget } from "./orchestration";
 import { agentDetail } from "./subagent";
+import { isAuthFailure } from "./auth";
+import { describeApproval, type ApprovalKind } from "./approvals";
 
 /** A gap this long between messages gets a date line, like a chat app. */
-const DATE_BREAK_MS = 30 * 60_000;
+/** Whether two moments fall on different days, where the transcript marks a new one. */
+function newDay(at: number, last: number | undefined): boolean {
+  if (last === undefined) return true;
+  const a = new Date(at);
+  const b = new Date(last);
+  return a.getFullYear() !== b.getFullYear() || a.getMonth() !== b.getMonth() || a.getDate() !== b.getDate();
+}
 
 const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 
@@ -43,7 +51,9 @@ export type Row =
   /** A Crew subagent's report letter, drawn where it arrived. */
   | { kind: "report"; block: Block }
   /** Files the agent sent the user (`SendUserFile`): shown like a reply, never folded away. */
-  | { kind: "shared"; block: Block };
+  | { kind: "shared"; block: Block }
+  /** An approval the user decided or a question they answered: the card stays, settled, out of any fold. */
+  | { kind: "decision"; block: Block };
 
 export type Speaker = "user" | "agent" | "meta";
 
@@ -55,7 +65,8 @@ export function speaker(row: Row): Speaker {
     row.kind === "subagent" ||
     row.kind === "started" ||
     row.kind === "control" ||
-    row.kind === "shared"
+    row.kind === "shared" ||
+    row.kind === "decision"
   ) {
     return "agent";
   }
@@ -153,7 +164,7 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       if (block.hidden) continue;
       flush();
       if (block.role === "user" && block.at !== undefined) {
-        if (lastAt === undefined || block.at - lastAt > DATE_BREAK_MS) {
+        if (newDay(block.at, lastAt)) {
           rows.push({ kind: "date", id: `date-${block.id}`, at: block.at });
         }
       }
@@ -179,6 +190,13 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       rows.push({ kind: "background", block });
       continue;
     }
+    // A card the user settled stays where it was asked, as the card it was: never in a group's summary or a fold.
+    if (settled(block)) {
+      flush();
+      rows.push({ kind: "decision", block });
+      if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
+      continue;
+    }
     if (ACTIVITY_ROLES.has(block.role)) {
       activity.push(block);
       // The turn ended here: whatever comes next is another turn's work.
@@ -192,7 +210,7 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
     if (block.hidden) continue;
     flush();
     if (block.role === "user" && block.at !== undefined) {
-      if (lastAt === undefined || block.at - lastAt > DATE_BREAK_MS) {
+      if (newDay(block.at, lastAt)) {
         rows.push({ kind: "date", id: `date-${block.id}`, at: block.at });
       }
     }
@@ -204,6 +222,25 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
   flushQueued();
   return withNativeReports(rows, blocks);
 }
+
+/**
+ * A decision that outlasts its call, so it keeps a card once made: an answer,
+ * a plan, more access or work outside the project, and any "always allow",
+ * which sets a rule for every call after it. A one-off yes or no to an edit,
+ * a read, a command is already in that call's line in the trace, and folds
+ * with the rest of the turn: a user asked at every step would otherwise get
+ * a card per step.
+ */
+export function settled(block: Block): boolean {
+  const approval = block.approval;
+  if (approval?.decided) {
+    if (approval.decided === "always") return true;
+    return LASTING.has(describeApproval(approval.name, approval.input, block.tool?.title ?? block.text).kind);
+  }
+  return block.role === "question" && block.question != null && (block.question.answers != null || block.question.dismissed === true);
+}
+
+const LASTING = new Set<ApprovalKind>(["plan", "permissions", "outside"]);
 
 /** The last moment a row covers, so a report can be placed after what came before it. */
 function rowEndAt(row: Row): number | undefined {
@@ -245,13 +282,21 @@ export function splitQueued(rows: Row[]): { rows: Row[]; queued: Block[] } {
 }
 
 function footerFor(block: Block, usage: TurnUsage): Row {
+  // A turn the CLI refused for want of a login did no work: no "Worked" under it.
+  const idle = block.role === "system" && isAuthFailure(block.text);
   return {
     kind: "footer",
     id: `footer-${block.id}`,
-    usage,
+    usage: idle ? withoutDuration(usage) : usage,
     ...(block.at !== undefined ? { at: block.at } : {}),
     ...(block.role === "assistant" && block.text.trim() ? { text: block.text } : {}),
   };
+}
+
+function withoutDuration(usage: TurnUsage): TurnUsage {
+  const out = { ...usage };
+  delete out.durationMs;
+  return out;
 }
 
 /** Same speaker 10, a change of speaker 28, meta 16; the footer hugs its reply. */
@@ -295,7 +340,8 @@ function staysOut(row: Row): boolean {
     row.kind === "subagent" ||
     row.kind === "started" ||
     row.kind === "control" ||
-    row.kind === "shared"
+    row.kind === "shared" ||
+    row.kind === "decision"
   );
 }
 
@@ -310,7 +356,8 @@ export function rowBlocks(row: Row): Block[] {
     row.kind === "subagent" ||
     row.kind === "started" ||
     row.kind === "control" ||
-    row.kind === "shared"
+    row.kind === "shared" ||
+    row.kind === "decision"
   ) {
     return [row.block];
   }
@@ -441,6 +488,10 @@ export function threadRows(rows: readonly Row[], working: boolean): Row[] {
       case "background":
         work.push(row);
         return;
+      case "decision":
+        flush();
+        out.push(row);
+        return;
       case "message": {
         if (row.block.role !== "assistant") {
           flush();
@@ -479,7 +530,8 @@ function rowId(row: Row): string {
     row.kind === "subagent" ||
     row.kind === "started" ||
     row.kind === "control" ||
-    row.kind === "shared"
+    row.kind === "shared" ||
+    row.kind === "decision"
     ? row.block.id
     : row.id;
 }

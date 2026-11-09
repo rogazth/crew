@@ -2,7 +2,7 @@ import { Collapsible } from "@base-ui/react/collapsible";
 import { ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
-import { duration, dayLabel } from "../../lib/time";
+import { duration, dayName } from "../../lib/time";
 import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
@@ -11,6 +11,7 @@ import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedR
 import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter } from "./Message";
 import { SIGNED_IN_NOTE } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
+import { SettledCard } from "./SettledCard";
 
 type Props = {
   rows: Row[];
@@ -69,7 +70,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
       case "date":
         return (
           <div key={row.id} className={className}>
-            <DateBreak label={dayLabel(row.at)} />
+            <DateBreak label={dayName(row.at)} />
           </div>
         );
       case "letter":
@@ -122,6 +123,12 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
         return (
           <div key={row.block.id} data-block={row.block.id} className={className}>
             <SharedFiles block={row.block} />
+          </div>
+        );
+      case "decision":
+        return (
+          <div key={row.block.id} className={className}>
+            <SettledCard block={row.block} marked={focusId} />
           </div>
         );
       case "queued":
