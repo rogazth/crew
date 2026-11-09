@@ -102,9 +102,6 @@ pub struct SessionTools {
     on_created: Made,
     /// `worktree::add`, as an argument so a test puts worktrees elsewhere.
     make_worktree: MakeWorktree,
-    /// The workspace's processes, for a parent deciding a process its child
-    /// defined under ask autonomy.
-    processes: Option<crate::process::ProcessHost>,
     /// Start requests being made right now, by caller and `request_id`, so a
     /// retry that overlaps its first call does not start everything twice.
     in_flight: Mutex<HashSet<String>>,
@@ -136,17 +133,9 @@ impl SessionTools {
             turns,
             on_created,
             make_worktree,
-            processes: None,
             in_flight: Mutex::new(HashSet::new()),
             retirement: OnceLock::new(),
         }
-    }
-
-    /// With the process host: a parent's decision can accept or reject a
-    /// process its child proposed.
-    pub fn with_processes(mut self, processes: crate::process::ProcessHost) -> Self {
-        self.processes = Some(processes);
-        self
     }
 
     /// With what the daemon does to retire a session (see [`Retirement`]).
@@ -702,8 +691,6 @@ impl SessionTools {
                 .or_else(|| request.get("tool").and_then(Value::as_str))
                 .unwrap_or("its request")
                 .to_string()
-        } else if let Some(process) = self.proposed_process(target)? {
-            format!("the process \"{}\"", process.spec.name)
         } else {
             return Err(format!(
                 "{} is not waiting on an approval: it was already answered (the user may have decided it in Crew), or \
@@ -729,11 +716,11 @@ impl SessionTools {
         }))
     }
 
-    /// `send_message` with a decision: allow or deny what a child is waiting
-    /// on, through the same door the window's card uses, so the first answer
-    /// wins. A live approval first; otherwise a process it proposed. Allowing
-    /// is only for a parent that could do it itself; denying gives nothing
-    /// away, so any parent may. `text`, if any, follows as a message.
+    /// `send_message` with a decision: allow or deny the approval a child is
+    /// waiting on, through the same door the window's card uses, so the first
+    /// answer wins. Allowing is only for a parent that could do it itself;
+    /// denying gives nothing away, so any parent may. `text`, if any, follows
+    /// as a message.
     fn decide(&self, caller: &Caller, target: &Session, decision: ApprovalDecision, note: Option<&str>) -> Result<Value, String> {
         let drives = matches!(caller, Caller::User { .. }) || caller.session_id() == target.parent_id.as_deref();
         if target.kind != "child" || !drives {
@@ -780,18 +767,6 @@ impl SessionTools {
             })?;
             self.saw(caller, target, target.cursor);
             title
-        } else if let Some(process) = self.proposed_process(target)? {
-            if allow && !self.may_decide(caller, target, &json!({ "kind": "process" })) {
-                return Err(refused("a process"));
-            }
-            let host = self.processes.as_ref().ok_or("Processes are not available here")?;
-            if allow {
-                host.approve(&process.workspace_id, &process.id, process.revision)?;
-            } else {
-                host.reject(&process.workspace_id, &process.id)?;
-            }
-            let _ = mailbox::dispose_approvals(&self.store, target.parent_id.as_deref().unwrap_or_default(), &target.id);
-            format!("the process \"{}\"", process.spec.name)
         } else {
             return Err(format!(
                 "{} is not waiting on an approval: it was already answered (the user may have decided it in Crew), or \
@@ -818,18 +793,6 @@ impl SessionTools {
         }
         out["note"] = json!(text);
         Ok(out)
-    }
-
-    /// The oldest process `row` defined or proposed a change to that still
-    /// waits for approval.
-    fn proposed_process(&self, row: &Session) -> Result<Option<crew_protocol::Process>, String> {
-        let Some(host) = &self.processes else {
-            return Ok(None);
-        };
-        Ok(host.list(&row.workspace_id)?.into_iter().find(|process| {
-            let asker = process.requested_by.as_deref().or(process.created_by.as_deref());
-            asker == Some(row.id.as_str()) && (!process.approved || process.proposed.is_some())
-        }))
     }
 
     /// `delegate` and `start_session`, which share everything up to the row
@@ -2217,7 +2180,7 @@ pub fn catalog() -> Vec<Tool> {
                     "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." },
                     "steer": { "type": "boolean", "description": "Into its running turn, read at its next step (Claude and Codex). Only to correct course; otherwise it is queued." },
                     "answers": { "type": "array", "items": { "type": "string" }, "description": "To a subagent waiting on several questions: one answer per question, in the order asked." },
-                    "decision": { "type": "string", "enum": ["allow", "deny", "ask_user"], "description": "To a subagent you started that waits on an approval (a command, an edit, a process it defined): allow it, only if you could do it yourself without asking; deny it; or ask_user, to have the user decide it in Crew." }
+                    "decision": { "type": "string", "enum": ["allow", "deny", "ask_user"], "description": "To a subagent you started that waits on an approval (a command, an edit): allow it, only if you could do it yourself without asking; deny it; or ask_user, to have the user decide it in Crew." }
                 },
                 "required": ["to"]
             }),
@@ -6809,59 +6772,6 @@ time.sleep(600)
         let out = w.call(&shell, "send_message", json!({ "to": id, "decision": "allow" })).expect("allow");
         assert_eq!(out["delivery"], "answered", "{out}");
         w.settle(&id);
-    }
-
-    /// A process an ask child defines is an approval like any other: it
-    /// wakes a full bot parent, whose decision accepts it as the user's card
-    /// would.
-    #[test]
-    fn a_process_an_ask_child_defines_is_decided_by_its_parent() {
-        let w = world();
-        let pty = crate::pty::PtyHost::new();
-        let processes = crate::process::ProcessHost::with_config(
-            w.turns.store().clone(),
-            pty.clone(),
-            &w.dir,
-            crate::process::ProcessConfig::default(),
-        );
-        let tools = SessionTools::new(w.turns.clone(), Arc::new(|_: &Session| {})).with_processes(processes.clone());
-        let family =
-            crate::process_tools::ProcessTools::new(processes.clone(), w.turns.store().clone()).with_turns(w.turns.clone());
-        let bot = w.session("bot", "Lead", "full");
-        let me = bot.session_id().unwrap().to_string();
-        let started =
-            w.call(&bot, "delegate", json!({ "provider": "opencode", "prompt": "x", "autonomy": "ask" })).expect("start");
-        let id = started["id"].as_str().unwrap().to_string();
-        w.settle(&id);
-        w.heard(&me, &id);
-        w.settle(&me);
-        let child = Caller::from_session(w.row(&id));
-        let saved = match family.run(&child, "save_process", &json!({ "name": "web", "command": "npm run dev" })).expect("save") {
-            ToolOutput::Value(value) => value,
-            ToolOutput::Content(_) => panic!("content"),
-        };
-        assert!(saved["pending_approval"].as_str().unwrap().contains("Lead"), "{saved}");
-        for _ in 0..200 {
-            if prompts(&w).iter().any(|p| p.contains("## Approval from session")) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let woke = prompts(&w).into_iter().find(|p| p.contains("## Approval from session")).expect("the bot was never asked");
-        assert!(woke.contains("It defined the process \"web\"") && woke.contains("command: npm run dev"), "{woke}");
-        w.settle(&me);
-        let run = |caller: &Caller, args: Value| match tools.run(caller, "send_message", &args) {
-            Ok(ToolOutput::Value(value)) => Ok(value),
-            Ok(ToolOutput::Content(_)) => Err("content".to_string()),
-            Err(error) => Err(error),
-        };
-        let decided = run(&bot, json!({ "to": id, "decision": "allow" })).expect("allow");
-        assert_eq!(decided["delivery"], "answered", "{decided}");
-        assert!(processes.get(&w.workspace, "web").unwrap().approved);
-        let again = run(&bot, json!({ "to": id, "decision": "allow" }));
-        assert!(again.is_err_and(|e| e.contains("not waiting on an approval")));
-        processes.shutdown();
-        pty.kill_all();
     }
 
     /// A parent waiting on its child with wait: true is handed the approval

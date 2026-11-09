@@ -689,22 +689,16 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
     let toolbox = turns.toolbox();
     let (exit_tx, exit_rx) = std_mpsc::channel();
     let made = hub.clone();
-    let children = Arc::new(
-        SessionTools::new(
-            turns.clone(),
-            Arc::new(move |created: &crew_core::session::Session| {
-                // A terminal it makes is a handoff (`start_session` with owner
-                // user): the window opens its tab and starts its CLI on the prompt.
-                made.emit(
-                    "session-created",
-                    SessionCreated { session: proto_session(created), open: created.kind == "terminal" },
-                );
-            }),
-        )
-        .with_processes(config.processes.clone()),
-    );
+    let children = Arc::new(SessionTools::new(
+        turns.clone(),
+        Arc::new(move |created: &crew_core::session::Session| {
+            // A terminal it makes is a handoff (`start_session` with owner
+            // user): the window opens its tab and starts its CLI on the prompt.
+            made.emit("session-created", SessionCreated { session: proto_session(created), open: created.kind == "terminal" });
+        }),
+    ));
     toolbox.register(children.clone());
-    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone())));
+    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
     toolbox.register(Arc::new(browser.clone()));
     // `gws`, for Google's apps, and the link to a vault elsewhere are kept in the data dir.
     let data_dir = config.vault.as_ref().and_then(|at| at.file.parent()).map(|dir| dir.to_path_buf());
@@ -2540,7 +2534,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
 }
 
 /// The window's side of the process manager. It is the user at the keyboard:
-/// nothing it writes waits for approval, and `created_by` stays empty.
+/// `created_by` stays empty.
 async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     let host = hosts.processes.clone();
     match method {
@@ -2552,12 +2546,12 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_restart } = parse(params)?;
             let spec =
                 proto::ProcessSpec { name, command, cwd: cwd.unwrap_or_default(), env: env.unwrap_or_default(), auto_restart };
-            json(block(move || host.create(&workspace_id, spec, None, false)).await?)
+            json(block(move || host.create(&workspace_id, spec, None)).await?)
         }
         "process_update" => {
             let proto::ProcessUpdate { workspace_id, id, name, command, cwd, env, auto_restart } = parse(params)?;
             let patch = ProcessPatch { name, command, cwd, env, auto_restart };
-            json(block(move || host.update(&workspace_id, &id, patch, None, false)).await?)
+            json(block(move || host.update(&workspace_id, &id, patch)).await?)
         }
         "process_reorder" => {
             let proto::ProcessReorder { workspace_id, ids } = parse(params)?;
@@ -2567,10 +2561,6 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
         "process_log_tail" => {
             let proto::ProcessLogTail { workspace_id, id, worktree, max_bytes } = parse(params)?;
             json(block(move || host.log_tail_raw(&workspace_id, &id, worktree.as_deref(), max_bytes)).await?)
-        }
-        "process_approve" => {
-            let proto::ProcessApprove { workspace_id, id, revision } = parse(params)?;
-            json(block(move || host.approve(&workspace_id, &id, revision)).await?)
         }
         // The window is the user: what it starts, nobody's session started.
         "process_start" | "process_restart" => {
@@ -2590,7 +2580,6 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
                 "process_stop" => json(host.stop(&workspace_id, &id, worktree.as_deref())?),
                 "process_pause" => json(host.pause(&workspace_id, &id, worktree.as_deref())?),
                 "process_resume" => json(host.resume(&workspace_id, &id, worktree.as_deref())?),
-                "process_reject" => json(host.reject(&workspace_id, &id)?),
                 other => Err(format!("Unknown method: {other}")),
             })
             .await
@@ -4218,7 +4207,7 @@ elif args[:2] == ["mcp", "enable"]:
             assert_eq!(rows[0]["created_by"], "the user", "{reply}");
         }
 
-        // The bot's autonomy is ask: what it writes waits for the user.
+        // The bot's autonomy is ask, and what it writes is the workspace's at once.
         let reply = unix_call(
             &socket,
             &serde_json::json!({
@@ -4228,7 +4217,9 @@ elif args[:2] == ["mcp", "enable"]:
             }),
         );
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains("waiting for the user to approve it"), "{reply}");
+        let saved: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+        assert_eq!(saved["name"], "api", "{reply}");
+        assert!(saved.get("pending_approval").is_none(), "{reply}");
         handle.shutdown();
     }
 

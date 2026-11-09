@@ -269,14 +269,16 @@ test("T3: a session drives the browser and processes with its own token, gated b
     `echo "== evaluate"; '${CREW}' tabs eval 1+1; echo "exit=$?"`,
     `echo "== snapshot"; '${CREW}' tabs snapshot >/dev/null && echo snapshot-ok`,
     `echo "== input"; '${CREW}' processes input ticker x; echo "exit=$?"`,
-    `echo "== create"; '${CREW}' processes add proposed -- echo hi`,
-    `echo "== start"; '${CREW}' processes start proposed; echo "exit=$?"`,
+    `echo "== create"; '${CREW}' processes add written -- echo hi; echo "exit=$?"`,
+    `echo "== start"; '${CREW}' processes start ticker; echo "exit=$?"`,
   ]);
   assert.match(ask, /== evaluate\n[\s\S]*autonomy[\s\S]*exit=1/, ask);
   assert.match(ask, /snapshot-ok/, ask);
   assert.match(ask, /== input\n[\s\S]*autonomy[\s\S]*exit=1/, ask);
-  assert.match(ask, /pending/i, ask);
-  assert.match(ask, /== start\n[\s\S]*exit=1/, ask);
+  // Below full autonomy an agent runs the workspace's services but cannot define what runs: a new one would run as the user's.
+  assert.doesNotMatch(ask, /pending/i, ask);
+  assert.match(ask, /== create\n[\s\S]*full autonomy[\s\S]*exit=1/, ask);
+  assert.match(ask, /== start\n[\s\S]*exit=0/, ask);
 });
 
 test("T4: crew mcp speaks MCP on stdio and lists every tool, the browser's included", async (t) => {

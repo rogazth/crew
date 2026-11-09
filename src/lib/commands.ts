@@ -88,9 +88,9 @@ export const COMMANDS = {
   // ⌘⇧R is the page's hard reload; Routines is one click away in the sidebar.
   "open-routines": { label: "Routines" },
   // The workspace's dev servers and watchers, run per worktree.
-  "open-commands": { label: "Commands" },
-  "start-all-commands": { label: "Start all commands" },
-  "stop-all-commands": { label: "Stop all commands" },
+  "open-commands": { label: "Services" },
+  "start-all-commands": { label: "Start all services" },
+  "stop-all-commands": { label: "Stop all services" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "open-browser-settings": { label: "Browser settings" },
   "save-file": { label: "Save file", keys: "Mod+S" },

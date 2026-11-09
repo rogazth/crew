@@ -4,7 +4,6 @@ import type { StubKind } from "../lib/types";
 const NOTES: Record<StubKind, string> = {
   terminal: "A shell in the workspace. Not wired yet.",
   history: "Every page the browser has shown.",
-  commands: "The workspace's dev servers and watchers.",
 };
 
 export function StubView({ stub, title }: { stub: StubKind; title: string }) {

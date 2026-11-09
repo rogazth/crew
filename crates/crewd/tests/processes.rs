@@ -84,6 +84,7 @@ async fn processes_answer_the_json_the_renderer_sends() {
     assert_eq!(created["autoRestart"], true);
     assert_eq!(created["runs"], json!([]));
     assert_eq!(created["createdBy"], Value::Null);
+    assert!(["approved", "proposed", "requestedBy"].iter().all(|key| created.get(key).is_none()), "{created}");
     let id = created["id"].as_str().unwrap().to_string();
     let target = json!({ "workspaceId": workspace_id, "id": id });
 
@@ -191,41 +192,6 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     let attached = call(&mut ws, &mut seen, 6, "pty_attach", json!({ "id": pty, "from": 0 })).await.expect("reattach");
     assert!(attached["start"].as_u64().unwrap() > 0, "the ring wrapped: {attached}");
     call(&mut ws, &mut seen, 7, "process_stop", target).await.expect("stop");
-    handle.shutdown();
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-/// Approving names the revision the user read, as the renderer sends it.
-#[tokio::test(flavor = "multi_thread")]
-async fn approve_carries_the_revision() {
-    let (handle, dir) = daemon("approve");
-    let mut ws = connect(&handle).await;
-    let mut seen = Vec::new();
-    let workspace =
-        call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir })).await.expect("workspace");
-    let workspace_id = workspace["id"].as_str().unwrap().to_string();
-
-    // An agent's request, written beside the daemon on the same database.
-    let agent = ProcessHost::new(Store::open(dir.join("crew.sqlite3")).expect("store"), PtyHost::new(), &dir);
-    let spec = crew_protocol::ProcessSpec {
-        name: "dev".into(),
-        command: "echo hi".into(),
-        cwd: String::new(),
-        env: Default::default(),
-        auto_restart: false,
-    };
-    let asked = agent.create(&workspace_id, spec, Some("session-1".into()), true).expect("create");
-    let target = json!({ "workspaceId": workspace_id, "id": asked.id });
-
-    let missing = call(&mut ws, &mut seen, 2, "process_approve", target).await.unwrap_err();
-    assert!(missing.contains("revision"), "{missing}");
-    let stale = json!({ "workspaceId": workspace_id, "id": asked.id, "revision": asked.revision + 1 });
-    let refused = call(&mut ws, &mut seen, 3, "process_approve", stale).await.unwrap_err();
-    assert!(refused.contains("review it again"), "{refused}");
-    let read = json!({ "workspaceId": workspace_id, "id": asked.id, "revision": asked.revision });
-    let approved = call(&mut ws, &mut seen, 4, "process_approve", read).await.expect("approve");
-    assert_eq!((approved["approved"].clone(), approved["runs"].clone()), (json!(true), json!([])));
-
     handle.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }

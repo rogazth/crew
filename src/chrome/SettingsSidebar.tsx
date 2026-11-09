@@ -9,6 +9,7 @@ import type { SettingsSectionId } from "../lib/settings";
 import { NAV_GROUPS, PAGES, PENDING, settingsIndex, type IndexEntry } from "../surfaces/settings/pages";
 import { useSectionRequests } from "../surfaces/settings/route";
 import { requestJump } from "../surfaces/settings/ui";
+import { useConnectorsAlert } from "../surfaces/settings/integrations/alert";
 
 type Props = {
   section: SettingsSectionId;
@@ -76,7 +77,7 @@ export function SettingsSidebar({ section, onSelect }: Props) {
         />
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-[11px] pb-3">
+      <nav aria-label="Settings" className="min-h-0 flex-1 overflow-y-auto px-[11px] pb-3">
         {text ? (
           <Results results={results} active={active} query={text} onHover={setActive} onPick={go} raw={query} />
         ) : (
@@ -146,6 +147,7 @@ function UpdatePill({ onOpen }: { onOpen: () => void }) {
 
 function Groups({ section, onSelect }: { section: SettingsSectionId; onSelect: (id: SettingsSectionId) => void }) {
   const attention = useProviderAttention();
+  const connectorsAlert = useConnectorsAlert();
   return (
     <div className="flex flex-col gap-4">
       {NAV_GROUPS.map((group, gi) => (
@@ -160,7 +162,18 @@ function Groups({ section, onSelect }: { section: SettingsSectionId; onSelect: (
                 key={id}
                 label={page.label}
                 active={on}
-                icon={<Glyph className={`size-4 ${on ? "text-text" : "text-icon"}`} />}
+                icon={
+                  // Connectors' dot on its icon, as on the rail's.
+                  <span className="relative grid size-4 shrink-0 place-items-center">
+                    <Glyph className={`size-4 ${on ? "text-text" : "text-icon"}`} />
+                    {id === "connectors" && connectorsAlert && (
+                      <span
+                        aria-label="Needs you"
+                        className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-warning ring-2 ring-sidebar"
+                      />
+                    )}
+                  </span>
+                }
                 end={id === "providers" && attention.count > 0 ? <AttentionBadge attention={attention} /> : undefined}
                 onClick={() => {
                   requestJump(null);

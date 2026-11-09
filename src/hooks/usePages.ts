@@ -1,10 +1,11 @@
 import { useCallback, useState } from "react";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "../lib/settings";
 import { newRoutineDraft } from "../lib/routines";
+import type { ServiceOpen } from "../surfaces/ServicesView";
 import type { Page } from "../surfaces/Pages";
 
 /**
- * The page over the workspace, and the four ways it changes. Kept out of the
+ * The page over the workspace, and the ways it changes. Kept out of the
  * shell so `App` holds tabs and sessions, not a fifth kind of navigation.
  */
 export function usePages() {
@@ -20,6 +21,8 @@ export function usePages() {
     (section: SettingsSectionId = SETTINGS_DEFAULT) => setPage({ kind: "settings", section }),
     [],
   );
+  /** The Services page, on its list or on what covers it: a service, a run's output, a new one. */
+  const openServices = useCallback((view: ServiceOpen | null = null) => setPage({ kind: "services", ...(view && { view }) }), []);
   /** From a bot's drawer: the routines page, already editing a new one. */
   const openRoutines = useCallback(
     (sessionId?: string) =>
@@ -37,10 +40,10 @@ export function usePages() {
     settings: page.kind === "settings" ? page.section : null,
     isWorkspace: page.kind === "workspace",
     isRoutines: page.kind === "routines",
-    isIntegrations: page.kind === "integrations",
     close,
     toggle,
     openSettings,
+    openServices,
     openRoutines,
     openRoutine,
   };

@@ -5,10 +5,10 @@ import { IconButton, PageHeadingContext, PageTrailContext, Tooltip, type Crumb, 
 import { TOGGLE_RESERVE } from "../lib/chrome";
 import { commandKeys } from "../lib/commands";
 import type { RoutineDraft } from "../lib/routines";
+import type { ServiceOpen } from "./ServicesView";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import { RoutinesView } from "./RoutinesView";
-import { IntegrationsPage } from "./settings/integrations/IntegrationsPage";
 import { useIntegrationsTrail } from "./settings/integrations/lib";
 import { SettingsView } from "./SettingsView";
 
@@ -17,7 +17,10 @@ export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
   | { kind: "routines"; draft: RoutineDraft | null; editId?: string }
-  | { kind: "integrations" };
+  /** The workspace's services; `view`, what covers their list. */
+  | { kind: "services"; view?: ServiceOpen }
+  /** The workspace's settings, the sidebar's Settings. */
+  | { kind: "customize" };
 
 type Props = {
   page: Page;
@@ -29,6 +32,10 @@ type Props = {
   /** The sidebar is closed: the strip leaves room for its toggle, as the tabs do. */
   inset: boolean;
   onClose: () => void;
+  /** What the Services page shows: the shell holds the services. */
+  renderServices?: () => ReactNode;
+  /** What the workspace's Settings page shows. */
+  renderCustomize?: () => ReactNode;
 };
 
 /**
@@ -44,6 +51,8 @@ export function Pages({
   onOpenTerminal,
   inset,
   onClose,
+  renderServices,
+  renderCustomize,
 }: Props) {
   const bots = sessions.filter((session) => session.kind === "bot");
   const integrations = useIntegrationsTrail();
@@ -54,7 +63,7 @@ export function Pages({
   // and its strip stands where the tabs were, so the sheet does not jump.
   const sheet = (children: ReactNode) => (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageStrip trail={deeper ?? (page.kind === "integrations" ? integrations : trail(page))} heading={heading} inset={inset} onClose={onClose} />
+      <PageStrip trail={deeper ?? trail(page, integrations)} heading={heading} inset={inset} onClose={onClose} />
       <div data-sheet="page" className="min-h-0 flex-1">
         <PageHeadingContext.Provider value={setHeading}>
           <PageTrailContext.Provider value={setDeeper}>{children}</PageTrailContext.Provider>
@@ -63,13 +72,7 @@ export function Pages({
     </div>
   );
   if (page.kind === "settings") {
-    return sheet(
-      <SettingsView
-        section={page.section}
-        workspaces={workspaces}
-        onOpenTerminal={onOpenTerminal}
-      />,
-    );
+    return sheet(<SettingsView section={page.section} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />);
   }
   if (page.kind === "routines" && activeWorkspace) {
     return sheet(
@@ -86,19 +89,21 @@ export function Pages({
       />,
     );
   }
-  if (page.kind === "integrations")
-    return sheet(<IntegrationsPage workspaces={workspaces} />);
+  if (page.kind === "services" && renderServices) return sheet(<div className="h-full overflow-y-auto">{renderServices()}</div>);
+  if (page.kind === "customize" && renderCustomize) return sheet(renderCustomize());
   return null;
 }
 
 /**
  * Where the page is. Settings swaps the sidebar for its sections, so the strip
- * says whose they are and which is on screen; Routines and Integrations already
- * head the sheet with their own name, so the strip leaves it out until a routine
- * is open.
+ * says whose they are and which is on screen, and on Connectors how deep in it
+ * (a connector's page, the directory); Routines and Services already head the
+ * sheet with their own name, so the strip leaves it out until a routine is open.
  */
-function trail(page: Page): Crumb[] {
-  return page.kind === "settings" ? ["Settings", settingsSection(page.section).label] : [];
+function trail(page: Page, connectors: Crumb[]): Crumb[] {
+  if (page.kind !== "settings") return [];
+  if (page.section === "connectors" && connectors.length > 0) return ["Settings", ...connectors];
+  return ["Settings", settingsSection(page.section).label];
 }
 
 /**

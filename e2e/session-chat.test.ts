@@ -8,7 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, type Crew, turnOver } from "./harness.ts";
+import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, workspaceRail, type Crew, turnOver } from "./harness.ts";
 
 let crew: Crew;
 
@@ -545,7 +545,8 @@ test("a session's connectors show under the prompt, a dot says one needs the use
     await chip.click();
     await chip.waitFor({ state: "hidden" });
     assert.equal(await crew.window.locator("[data-connectors-sheet]").count(), 0, "no sheet with nothing in it");
-    await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
+    await crew.window.getByRole("heading", { name: "Connectors", level: 1 }).waitFor();
+    await workspaceRail(crew).getByRole("button", { name: "Settings", exact: true }).click();
     await chip.waitFor();
     await send("which servers");
     await said("Reply 1: which servers").waitFor();
@@ -593,7 +594,8 @@ test("a session's connectors show under the prompt, a dot says one needs the use
     await sheet.getByRole("button", { name: "Manage" }).click();
     await chip.waitFor({ state: "hidden" });
     assert.equal(await sheet.count(), 0, "the sheet closed");
-    await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
+    await crew.window.getByRole("heading", { name: "Connectors", level: 1 }).waitFor();
+    await workspaceRail(crew).getByRole("button", { name: "Settings", exact: true }).click();
     await chip.waitFor();
     await idle(session);
   } finally {

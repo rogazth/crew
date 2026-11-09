@@ -1,6 +1,7 @@
 import { ArrowDownAZIcon, BanIcon, CircleCheckIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, BellIcon, BetweenHorizontalEndIcon, BetweenHorizontalStartIcon, BetweenVerticalEndIcon, BetweenVerticalStartIcon, CodeIcon, CopyPlusIcon, TextAlignCenterIcon, TextAlignEndIcon, TextAlignStartIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { POPOVER } from "./kit";
 import { COPY_PATH, SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
 
 const ICONS: Record<MenuIcon, Icon> = {
@@ -96,18 +97,29 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
   const [name, setName] = useState(rename?.initial ?? "");
   const runnable = actions.filter((entry): entry is MenuAction => entry !== SEPARATOR && !entry.disabled);
   const [cursor, setCursor] = useState(-1);
+  // Opens like kit's popovers: the first frame holds the starting style, the next lets it scale in.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   useLayoutEffect(() => {
     const el = surface.current;
     if (!el || !point) return;
     const { innerWidth, innerHeight } = window;
-    const rect = el.getBoundingClientRect();
-    let left = point.x;
+    // Its laid-out size, not its box on screen: the first frame is scaled down for the opening, and a menu measured
+    // then would sit past the edge it is aligned to.
+    const width = el.offsetWidth;
+    const height = el.offsetHeight;
+    let left = point.align === "end" ? point.x - width : point.x;
     let top = point.y;
-    if (left + rect.width > innerWidth - 8) left = Math.max(8, innerWidth - rect.width - 8);
-    if (top + rect.height > innerHeight - 8) top = Math.max(8, point.y - rect.height);
+    if (left + width > innerWidth - 8) left = Math.max(8, innerWidth - width - 8);
+    if (top + height > innerHeight - 8) top = Math.max(8, point.y - height);
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
+    // It scales in from the corner at the cursor, wherever the menu had to flip.
+    el.style.transformOrigin = `${left < point.x || point.align === "end" ? "right" : "left"} ${top < point.y ? "bottom" : "top"}`;
   }, [point]);
 
   useEffect(() => {
@@ -171,6 +183,43 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
     }
   }
 
+  function row(entry: MenuAction) {
+    const Glyph = ICONS[entry.icon];
+    const lit = runnable[cursor]?.id === entry.id;
+    return (
+      <button
+        key={entry.id}
+        type="button"
+        role={entry.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+        aria-checked={entry.checked}
+        disabled={entry.disabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onMouseMove={() => setCursor(runnable.indexOf(entry))}
+        onClick={() => onPick(entry.id)}
+        className={`flex w-full cursor-default items-center gap-2 ${entry.hint ? "py-1.5" : "h-8"} rounded-lg px-2 text-left select-none ${
+          entry.disabled
+            ? "text-placeholder"
+            : entry.danger
+              ? `text-danger ${lit ? "bg-danger/10" : ""}`
+              : lit
+                ? "bg-hover"
+                : ""
+        }`}
+      >
+        <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-icon"}`} />
+        {entry.hint ? (
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate">{entry.label}</span>
+            <span className="text-[11px] leading-snug text-text-muted">{entry.hint}</span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+        )}
+        {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
+      </button>
+    );
+  }
+
   return createPortal(
     <div
       ref={surface}
@@ -179,73 +228,38 @@ export function ActionMenu({ point, actions: given, onPick: pick, onClose, title
       aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 ${compact ? "min-w-28 max-w-60" : "min-w-40 max-w-80"} rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
-        rename || path ? "w-60" : "w-max"
-      }`}
+      {...(!entered && { "data-starting-style": "" })}
+      className={`fixed z-50 ${compact ? "min-w-28 max-w-60" : "min-w-40 max-w-80"} p-1 ${POPOVER} ${rename || path ? "w-60" : "w-max"}`}
       style={{ left: point.x, top: point.y }}
     >
-      {/* Zero intrinsic width: a long title or path is cut to the menu, it never makes the menu wider. */}
-      {title && (
-        <div className={`w-0 min-w-full truncate px-2 pt-1.5 ${path ? "text-[12px] font-medium text-text" : "pb-1 text-[11px] text-text-muted"}`}>
-          {title}
-        </div>
-      )}
-      {path && (
-        <div title={path} className={`w-0 min-w-full truncate px-2 pb-1.5 text-[11px] text-text-muted ${title ? "" : "pt-1.5"}`}>
-          {pathTail(path)}
-        </div>
-      )}
-      {rename && (
-        <input
-          ref={input}
-          autoFocus
-          value={name}
-          aria-label="Rename"
-          spellCheck={false}
-          onChange={(event) => setName(event.target.value)}
-          onBlur={() => {
-            if (!skipCommit.current) commitRename();
-          }}
-          className="mb-1 h-8 w-full rounded-md bg-canvas px-2.5 font-medium text-text ring ring-border outline-none focus:ring-[1.5px] focus:ring-focus/50"
-        />
-      )}
-      {actions.map((entry, index) => {
-        if (entry === SEPARATOR) return <div key={`separator-${index}`} role="separator" className="mx-2 my-1 h-px bg-border" />;
-        const Glyph = ICONS[entry.icon];
-        const lit = runnable[cursor]?.id === entry.id;
-        return (
-          <button
-            key={entry.id}
-            type="button"
-            role={entry.checked === undefined ? "menuitem" : "menuitemcheckbox"}
-            aria-checked={entry.checked}
-            disabled={entry.disabled}
-            onMouseDown={(event) => event.preventDefault()}
-            onMouseMove={() => setCursor(runnable.indexOf(entry))}
-            onClick={() => onPick(entry.id)}
-            className={`flex w-full items-center gap-2 ${entry.hint ? "py-1.5" : "h-8"} rounded-md px-2 text-left ${
-              entry.disabled
-                ? "text-placeholder"
-                : entry.danger
-                  ? `text-danger ${lit ? "bg-danger/10" : ""}`
-                  : lit
-                    ? "bg-hover"
-                    : ""
-            }`}
-          >
-            <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-icon"}`} />
-            {entry.hint ? (
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">{entry.label}</span>
-                <span className="text-[11px] leading-snug text-text-muted">{entry.hint}</span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-            )}
-            {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
-          </button>
-        );
-      })}
+        {/* Zero intrinsic width: a long title or path is cut to the menu, it never makes the menu wider. */}
+        {title && (
+          <div className={`w-0 min-w-full truncate px-2 pt-1.5 ${path ? "text-[12px] font-medium text-text" : "pb-1 text-[11px] text-text-muted"}`}>
+            {title}
+          </div>
+        )}
+        {path && (
+          <div title={path} className={`w-0 min-w-full truncate px-2 pb-1.5 text-[11px] text-text-muted ${title ? "" : "pt-1.5"}`}>
+            {pathTail(path)}
+          </div>
+        )}
+        {rename && (
+          <input
+            ref={input}
+            autoFocus
+            value={name}
+            aria-label="Rename"
+            spellCheck={false}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={() => {
+              if (!skipCommit.current) commitRename();
+            }}
+            className="mb-1 h-8 w-full rounded-md bg-canvas px-2.5 font-medium text-text ring ring-border outline-none focus:ring-[1.5px] focus:ring-focus/50"
+          />
+        )}
+        {actions.map((entry, index) =>
+          entry === SEPARATOR ? <div key={`separator-${index}`} role="separator" className="mx-2 my-1 h-px bg-border" /> : row(entry),
+        )}
     </div>,
     document.body,
   );

@@ -1,22 +1,21 @@
 // W9, the sidebar's refresh: a worktree git made and sessions crewd made or
 // deleted, none of which the window heard about, reach the panel from the
-// Refresh button on its Worktrees line, without the window losing focus. A
+// Refresh at the foot of its view menu, without the window losing focus. A
 // worktree whose folder was deleted without git leaves, and git forgets it.
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { gitWorktrees, launchCrew, sessionRow, worktreeHeader } from "./harness.ts";
+import { gitWorktrees, launchCrew, refreshSidebar, sessionRow, worktreeHeader } from "./harness.ts";
 
 test("W9: Refresh reads worktrees and sessions made or removed outside the window", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [app] = crew.workspaces;
   assert.ok(app);
-  const panel = crew.window.locator("[data-sidebar-panel]");
-  const refresh = panel.getByRole("button", { name: "Refresh", exact: true });
-  await refresh.waitFor();
+  await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Customize sidebar" }).waitFor();
+  const refresh = { click: () => refreshSidebar(crew) };
 
   // Git and crewd directly: no focus event, no session-created.
   await crew.git(app.path, "worktree", "add", "-b", "feat/outside", path.join(crew.root, "outside"));

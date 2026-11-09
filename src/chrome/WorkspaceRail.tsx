@@ -1,9 +1,7 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { PlugIcon, PlusIcon, SettingsIcon, UnplugIcon, type LucideIcon as Icon } from "lucide-react";
-import { RoutinesIcon } from "./RoutinesIcon";
+import { PlusIcon, SettingsIcon, UnplugIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ActionMenu } from "./ActionMenu";
 import { CrewGlyph } from "./CrewGlyph";
 import { Tooltip } from "./kit";
 import { SortableItem, SortableList } from "./SortableList";
@@ -13,11 +11,11 @@ import { UsageButton } from "./UsageButton";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
-import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { STATUS_ORDER, statusLabel } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
+import { useWorkspaceFace, useWorkspaceFaces } from "./workspaceProfile";
 
 type Props = {
   /** The projects, home aside. */
@@ -28,27 +26,20 @@ type Props = {
   /** Every workspace's sessions, so a workspace out of sight can still call for attention. */
   sessions: Session[];
   settingsOpen: boolean;
-  routinesOpen: boolean;
-  integrationsOpen: boolean;
-  /** A connector or a CLI's server waits on the person: the Connectors icon wears a dot. */
-  integrationsAlert: boolean;
+  /** A connector or a CLI's server waits on the person: the gear wears a dot, as Settings' Connectors does. */
+  settingsAlert: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
-  onRename: (id: string, name: string) => void;
-  /** "Rename" in a mark's menu: the name is renamed where the sidebar shows it. */
+  /** F2 on a mark: the name is renamed where the sidebar shows it. */
   onRequestRename: (id: string) => void;
   onRemove: (workspace: Workspace) => void;
   onReorder: (ids: string[]) => void;
-  onOpenRoutines: () => void;
-  onOpenIntegrations: () => void;
   onOpenSettings: () => void;
   /** Opens Settings on Usage. */
   onOpenUsage: () => void;
   /** The machine a workspace lives on, for the corner badge. Null on this Mac. */
   remoteOf?: (workspace: Workspace) => EnvLink | null;
 };
-
-type Menu = { point: MenuPoint; workspace: Workspace };
 
 /** The marks slide along the rail only, and never past its ends. */
 const RAIL_MODIFIERS = [
@@ -83,7 +74,10 @@ function loudest(sessions: Session[], current: boolean): SessionStatus | null {
  * dragging, switched by ⌘1‥9 or the arrows. Routines and settings sit at its foot.
  */
 export function WorkspaceRail(props: Props) {
-  const [menu, setMenu] = useState<Menu | null>(null);
+  useWorkspaceFaces(
+    props.workspaces,
+    props.workspaces.find((workspace) => workspace.id === props.activeId),
+  );
   // A mark held still under the pointer for a beat says which workspace it is and where it lives.
   const [peek, setPeek] = useState<{ id: string; anchor: WorkspacePeekAnchor } | null>(null);
   const peekTimer = useRef<number | undefined>(undefined);
@@ -135,9 +129,10 @@ export function WorkspaceRail(props: Props) {
                 current={workspace.id === props.activeId}
                 status={loudest(byWorkspace.get(workspace.id) ?? [], workspace.id === props.activeId)}
                 onSelect={() => props.onSelect(workspace.id)}
-                onMenu={(point) => {
+                onRename={() => {
                   onPeek(workspace.id, null);
-                  setMenu({ point, workspace });
+                  props.onSelect(workspace.id);
+                  props.onRequestRename(workspace.id);
                 }}
                 onPeek={(el) => onPeek(workspace.id, el)}
                 onRemove={() => props.onRemove(workspace)}
@@ -165,53 +160,20 @@ export function WorkspaceRail(props: Props) {
       {/* The foot sits under a short rule, apart from the marks. */}
       <span aria-hidden className="h-px w-5 shrink-0 bg-border-strong" />
       <RailButton
-        icon={RoutinesIcon}
-        label="Routines"
-        active={props.routinesOpen}
-        onClick={props.onOpenRoutines}
-      />
-      <RailButton
-        icon={PlugIcon}
-        label="Connectors"
-        active={props.integrationsOpen}
-        alert={props.integrationsAlert}
-        onClick={props.onOpenIntegrations}
-      />
-      <RailButton
         icon={SettingsIcon}
         label="Settings"
         keys={commandKeys("open-settings")}
         active={props.settingsOpen}
+        alert={props.settingsAlert}
         onClick={props.onOpenSettings}
       />
 
-      {peek && peeked && !menu && (
+      {peek && peeked && (
         <WorkspacePeek
           workspace={peeked}
           sessions={byWorkspace.get(peeked.id) ?? []}
           keys={jumpKeys(props.workspaces.indexOf(peeked))}
           anchor={peek.anchor}
-        />
-      )}
-
-      {menu && (
-        <ActionMenu
-          key={menu.workspace.id}
-          point={menu.point}
-          title={menu.workspace.name}
-          path={menu.workspace.path}
-          // Rename opens the name in the sidebar's header.
-          actions={[RENAME, SEPARATOR, { ...DELETE, label: "Remove workspace…" }]}
-          onPick={(id) => {
-            const workspace = menu.workspace;
-            setMenu(null);
-            if (id === "rename") {
-              props.onSelect(workspace.id);
-              props.onRequestRename(workspace.id);
-            }
-            if (id === "delete") props.onRemove(workspace);
-          }}
-          onClose={() => setMenu(null)}
         />
       )}
     </nav>
@@ -281,7 +243,7 @@ function Mark({
   current,
   status,
   onSelect,
-  onMenu,
+  onRename,
   onRemove,
   onPeek,
   remote,
@@ -293,17 +255,18 @@ function Mark({
   current: boolean;
   status: SessionStatus | null;
   onSelect: () => void;
-  onMenu: (point: MenuPoint) => void;
+  /** F2: the workspace's name, wherever it is changed. */
+  onRename: () => void;
   onRemove: () => void;
   /** The mark under the pointer, or null once it leaves or is pressed. */
   onPeek: (el: HTMLElement | null) => void;
   remote: EnvLink | null;
 }) {
+  const faceUrl = useWorkspaceFace(workspace);
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (event.key === "F2" || event.key === "ContextMenu") {
+    if (event.key === "F2") {
       event.preventDefault();
-      const rect = event.currentTarget.getBoundingClientRect();
-      onMenu({ x: rect.right + 4, y: rect.top });
+      onRename();
       return;
     }
     if (isDeleteChord(event)) {
@@ -323,7 +286,8 @@ function Mark({
       onMouseEnter={(event) => onPeek(event.currentTarget)}
       onMouseLeave={() => onPeek(null)}
       onPointerDown={() => onPeek(null)}
-      onContextMenu={(event) => onMenu(menuFromEvent(event))}
+      // No menu on a mark: the workspace's options are in the sidebar's header.
+      onContextMenu={(event) => event.preventDefault()}
       onKeyDown={onKeyDown}
       className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
     >
@@ -336,8 +300,14 @@ function Mark({
       />
       <span
         aria-hidden
-        className={`grid size-9 place-items-center text-[12px] font-semibold tracking-wide transition-[border-radius,background-color] duration-150 ${
-          current ? "rounded-xl bg-accent text-inverse" : "rounded-[18px] bg-fill text-text group-hover:rounded-xl group-hover:bg-selected"
+        className={`grid size-9 place-items-center overflow-hidden text-[12px] font-semibold tracking-wide transition-[border-radius,background-color] duration-150 ${
+          faceUrl
+            ? current
+              ? "rounded-xl"
+              : "rounded-[18px] group-hover:rounded-xl"
+            : current
+              ? "rounded-xl bg-accent text-inverse"
+              : "rounded-[18px] bg-fill text-text group-hover:rounded-xl group-hover:bg-selected"
         } ${
           !remote
             ? ""
@@ -348,7 +318,7 @@ function Mark({
                 : ""
         }`}
       >
-        {workspaceMark(workspace.name)}
+        {faceUrl ? <img src={faceUrl} alt="" draggable={false} className="size-full object-contain" /> : workspaceMark(workspace.name)}
       </span>
       {remote && (
         // Online says nothing: the unplugged badge shows only while the machine is out of

@@ -7,7 +7,7 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import { useRoutines, type RoutineEntry } from "../hooks/useRoutines";
 import { newRoutineDraft, toDraft, type RoutineDraft } from "../lib/routines";
 import { nextSort, sortRoutines, type Sort } from "../lib/routineSort";
-import { removeRoutine, runRoutineNow, saveRoutine } from "../lib/scheduler";
+import { removeRoutine, saveRoutine } from "../lib/scheduler";
 import type { Session, Workspace } from "../lib/types";
 import { RoutineEditor } from "./RoutineEditor";
 
@@ -114,7 +114,6 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
           setOpen({ kind: "edit", id });
         }}
         onDelete={null}
-        onRunNow={null}
         onBack={() => setOpen(null)}
       />
     );
@@ -132,7 +131,6 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
           await saveRoutine(draft);
         }}
         onDelete={() => confirmDelete(editing)}
-        onRunNow={() => runRoutineNow(editing.routine.id)}
         onBack={() => setOpen(null)}
       />
     );
@@ -174,13 +172,17 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
                 value={workspaceFilter}
                 neutral="all"
                 options={workspaceOptions}
+                // Searched, as the bots are: the popup as wide as the names, within bounds, however many workspaces;
+                // opened from its right edge, the filters sitting at the line's right end.
+                searchable
+                align="end"
                 onChange={(next) => {
                   setWorkspaceFilter(next);
                   setBotFilter("all");
                 }}
               />
             )}
-            <FilterChip label="Bot" value={botFilter} neutral="all" options={botOptions} onChange={setBotFilter} />
+            <FilterChip label="Bot" value={botFilter} neutral="all" options={botOptions} onChange={setBotFilter} searchable align="end" />
           </div>
         </>
       )}

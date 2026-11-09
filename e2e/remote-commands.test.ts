@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, remoteRequest, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openServices, pressChord, remoteRequest, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
 
 const ASK = String.raw`
 process.stdin.setRawMode(true);
@@ -42,8 +42,11 @@ test("a command on another machine shows its output and hears the terminal while
     const ask = await remoteRequest<Process>(remote, "process_create", { workspaceId: workspace.id, name: "ask", command: "node ask.cjs" });
     await remoteRequest(remote, "process_start", { workspaceId: workspace.id, id: ask.id });
 
-    await window.locator("[data-sidebar-panel]").getByRole("button", { name: /^Commands: 1 running/ }).click();
-    await window.getByRole("region", { name: "ask" }).getByRole("button", { name: /^Logs of ask/ }).click();
+    await window.getByRole("navigation", { name: "Workspace", exact: true }).getByRole("button", { name: "Services (1)", exact: true }).waitFor();
+    await openServices(crew);
+    // Its one run has no pill: the service's own ⋯ opens its output.
+    await window.getByRole("region", { name: "ask" }).getByRole("button", { name: "More for ask", exact: true }).click();
+    await window.getByRole("menuitem", { name: "View output" }).click();
 
     const heard = await waitFor(() => readFile(path.join(api, "heard.txt"), "utf8").catch(() => null), {
       message: "the terminal answers the command on its machine",

@@ -57,7 +57,8 @@ pub fn in_session(env: &Env) -> bool {
 
 /// A session's own environment wins, because a shell inside a session that
 /// acted as the user would reach past what the session was allowed: the user
-/// skips process approval and can stop the daemon under every other session.
+/// is held to no session's autonomy and can stop the daemon under every other
+/// session.
 /// Only `--as-user` gets out, and it says what it does. Naming a data dir does
 /// not: an agent reaches for `--data-dir` to find its daemon, not to become
 /// someone else. `CREW_DATA_DIR` is not a way out either: crewd exports its
@@ -210,7 +211,7 @@ mod tests {
     }
 
     /// It used to: `crew --data-dir <the app's> …` made an agent the user,
-    /// which skips process approval.
+    /// which is held to no session's autonomy.
     #[test]
     fn naming_a_data_dir_does_not_make_a_session_the_user() {
         let global = Global { data_dir: Some("/other".into()), ..Global::default() };

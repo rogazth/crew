@@ -800,6 +800,31 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
 }
 
 /**
+ * The sidebar's Refresh, at the foot of its view menu: git and crewd read again, for what changed outside the window.
+ * The menu stays open on it, so Escape closes it after.
+ */
+export async function refreshSidebar(crew: Crew): Promise<void> {
+  await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Customize sidebar" }).click();
+  await crew.window.getByRole("menuitem", { name: "Refresh" }).click();
+  await crew.window.keyboard.press("Escape");
+}
+
+/** Settings › Connectors, from the rail's gear: the app's connectors live among its settings. */
+export async function openConnectorSettings(crew: Crew): Promise<void> {
+  await workspaceRail(crew).getByRole("button", { name: "Settings", exact: true }).click();
+  await crew.window.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Connectors" }).click();
+  await crew.window.getByRole("heading", { name: "Connectors", level: 1 }).waitFor();
+}
+
+/**
+ * The workspace's Services page, from its row under the workspace's name in the sidebar.
+ */
+export async function openServices(crew: Crew): Promise<void> {
+  await crew.window.getByRole("navigation", { name: "Workspace", exact: true }).getByRole("button", { name: /^Services/ }).click();
+  await crew.window.getByRole("heading", { name: "Services", level: 1 }).waitFor();
+}
+
+/**
  * A session with no message yet, opened in the window. ⌘N and the sidebar "+"
  * open a start screen and make the session on its first send, so a blank one
  * is made in crewd, as the app would, then read and opened from its row.
@@ -824,7 +849,7 @@ export async function newSession(crew: Crew, workspaceId: string, worktree: stri
   await waitFor(
     async () => {
       if ((await row.count()) === 0) {
-        await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Refresh", exact: true }).click();
+        await refreshSidebar(crew);
       }
       return (await row.count()) > 0;
     },

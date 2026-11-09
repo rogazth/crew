@@ -113,7 +113,7 @@ export function useIntegrations(): State {
 /** An account that waits on the person: signed out, short of a permission, or refused. A sign-in never finished is not one. */
 const NEEDS_YOU: ReadonlySet<AccountState> = new Set(["expired", "needs-scope", "failed"]);
 
-/** Whether a connector has an account that needs the person: the rail's Connectors icon wears a dot. */
+/** Whether a connector has an account that needs the person: Settings' Connectors wears a dot. */
 export const accountsNeedYou = (s: State) => s.connectors.some((c) => c.accounts.some((a) => NEEDS_YOU.has(a.state)));
 
 /** Follows the connectors, loading them the first time, for a view that reads only a part of them. */

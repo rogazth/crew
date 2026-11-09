@@ -1,5 +1,5 @@
 /*
- * Orchestration, sessions and commands: the Work sheet, and the Commands page with its runs. Unlayered on purpose, so it beats Tailwind's utilities without
+ * Orchestration, sessions and commands: the Work sheet, and a run's tab. Unlayered on purpose, so it beats Tailwind's utilities without
  * !important, and loaded after index.css so it wins ties with its rules.
  * Hooks are data attributes on the real components (data-run-state,
  * data-process-dot…), never Tailwind class names.
@@ -161,74 +161,6 @@ button.crew-peer:hover {
   background: linear-gradient(to right, var(--color-warning) 0 2.5px, transparent 2.5px 4.5px, var(--color-warning) 4.5px 7px);
 }
 
-/* A command is a soft card; its runs are rows inside it that fill on hover. */
-[data-command] {
-  --tw-ring-shadow: 0 0 #0000;
-  box-shadow: none;
-  border-radius: 16px;
-  background: var(--color-card);
-}
-[data-command] > header {
-  padding: 12px 10px 10px 14px;
-}
-[data-command] > ul {
-  gap: 2px;
-  margin: 0 4px 4px;
-  padding: 4px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--color-canvas);
-  box-shadow: 0 0 0 1px var(--color-hairline);
-}
-[data-run] {
-  height: 38px;
-  padding-inline: 8px 4px;
-  border-radius: 9px;
-  transition: background-color 120ms var(--ease-out);
-}
-[data-run]:hover {
-  background: var(--color-hover);
-}
-[data-command] > header button:not([aria-label]),
-[data-process-header] button:not([aria-label]) {
-  border-radius: 999px;
-}
-
-/* What an agent asks to run: amber ground, no outline, the same card radius. */
-[data-process-approval] {
-  --tw-ring-shadow: 0 0 #0000;
-  box-shadow: none;
-  border-radius: 16px;
-  background: color-mix(in oklab, var(--color-warning) 9%, var(--color-canvas));
-}
-[data-process-approval] dl {
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--color-canvas);
-  box-shadow: 0 0 0 1px var(--color-hairline);
-}
-
-/* A run's tab: the header is the sheet's top, no line under it; the notice
-   that it waits on approval is a soft amber band inset in the sheet. */
-[data-process-header] {
-  min-height: 56px;
-  padding: 10px 12px 10px 16px;
-  border-bottom-color: transparent;
-}
-[data-process-header] h1 {
-  font-size: 14px;
-  letter-spacing: -0.01em;
-}
-[data-process-header] [data-run-state] {
-  align-self: center;
-}
-[data-process-notice] {
-  margin: 0 12px 6px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--color-warning) 11%, transparent);
-}
 /* Nothing yet: a soft card, still. */
 .ds-empty {
   display: flex;
@@ -262,38 +194,4 @@ button.crew-peer:hover {
   display: none;
 }
 
-/* In a run's tab the state is a chip and the worktree a tag of its own. */
-[data-process-header] [data-run-state] > [data-sep] {
-  display: none;
-}
-[data-process-header] [data-place] {
-  display: inline-flex;
-  height: 20px;
-  align-self: center;
-  align-items: center;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: var(--color-card);
-  color: var(--color-text-muted);
-  font-size: 11.5px;
-}
-[data-process-header] > div > div:first-child {
-  align-items: center;
-}
 
-/* The chip says the state: the leading dot would say it twice. */
-[data-process-header] > [data-process-dot],
-[data-run] > [data-process-dot] {
-  display: none;
-}
-
-/* Left running by a session that is gone: a warning chip like the others. */
-[data-orphan] {
-  display: inline-flex;
-  height: 20px;
-  align-items: center;
-  padding: 0 8px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
-}

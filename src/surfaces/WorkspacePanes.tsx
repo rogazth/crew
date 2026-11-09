@@ -46,7 +46,6 @@ type Props = {
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
   renderProcess: (tab: ProcessTabOf) => ReactNode;
-  renderCommands: () => ReactNode;
   /** The workspace's commands: a chat lists the runs its session started. */
   processes: readonly Process[];
   onOpenProcessRun: (process: Process, worktree: string | null) => void;
@@ -81,7 +80,6 @@ export function WorkspacePanes({
   onOpenHistory,
   onConfirm,
   renderProcess,
-  renderCommands,
   processes,
   onOpenProcessRun,
   onOpenConnectors,
@@ -165,7 +163,6 @@ export function WorkspacePanes({
           onOpenHistory={onOpenHistory}
           onConfirm={onConfirm}
           renderProcess={renderProcess}
-          renderCommands={renderCommands}
         />
       </DiffsPool>
       <Terminals panes={mounted} onOpenFile={onOpenFile} {...(onClearTerminalInput && { onInputSent: onClearTerminalInput })} />

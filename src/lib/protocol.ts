@@ -1021,27 +1021,12 @@ export type Process = { id: string, workspaceId: string,
  */
 createdBy: string | null, 
 /**
- * False until the user accepts what an agent created. It cannot start before.
- */
-approved: boolean, 
-/**
- * A change an agent asked for, waiting on the user. What runs meanwhile
- * is `spec`, the definition already accepted.
- */
-proposed: ProcessSpec | null, 
-/**
- * Who is asking: the creator of an unapproved process, or the proposer.
- */
-requestedBy: string | null, 
-/**
  * One per worktree it was started in since the daemon came up, the main
  * checkout first. A run that ended stays, so its exit can be read.
  */
 runs: Array<ProcessRun>, 
 /**
- * Bumped by every change to the definition or to what waits on the
- * user. An approval names the one the user read, so a change that
- * lands while they read it is not what they approve.
+ * Bumped by every change to the definition.
  */
 revision: number, name: string, command: string, 
 /**
@@ -1049,11 +1034,6 @@ revision: number, name: string, command: string,
  * before worktrees may hold an absolute path, which runs there from any.
  */
 cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
-
-/**
- * The user accepts a process, or a change to it, as it stood at `revision`.
- */
-export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
 
 export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoRestart: boolean, };
 
@@ -1068,7 +1048,7 @@ export type ProcessLogTail = { workspaceId: string, id: string, worktree?: strin
 export type ProcessRef = { workspaceId: string, id: string, 
 /**
  * The run's worktree; absent is the main checkout. Ignored by the
- * commands that act on the definition (delete, reject).
+ * commands that act on the definition (delete).
  */
 worktree?: string, };
 
@@ -1123,7 +1103,7 @@ env: { [key in string]: string },
 url: string | null, };
 
 /**
- * What a process runs: the part an agent may only propose.
+ * What a process runs.
  */
 export type ProcessSpec = { name: string, command: string, 
 /**

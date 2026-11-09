@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Alert, Button, Footer } from "./kit";
+import { Alert, Button } from "./kit";
 import { settle } from "../lib/confirm";
 
 export type Confirm = {
@@ -57,14 +57,15 @@ export function ConfirmDialog({ confirm, onAsk, onClose }: Props) {
         go();
       }}
     >
-      <Footer>
-        <Button variant="ghost" className="text-[12px]" disabled={pending} onClick={dismiss}>
+      {/* No rule over the buttons, and the text's own inset: they answer the question, not a bar under it. */}
+      <div className="flex justify-end gap-2 px-4 pt-1 pb-3.5">
+        <Button variant="ghost" disabled={pending} onClick={dismiss}>
           Cancel
         </Button>
-        <Button ref={action} variant="danger" loading={pending} className="text-[12px]" onClick={go}>
+        <Button ref={action} variant="danger" loading={pending} onClick={go}>
           {confirm?.action}
         </Button>
-      </Footer>
+      </div>
     </Alert>
   );
 }

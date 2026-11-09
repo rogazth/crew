@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import * as api from "../lib/api";
 import { client } from "../lib/client";
-import { isLive, liveRuns, replayEvents, rerunEnv, runIn, startableIn, type Process, type ProcessEvent } from "../lib/processes";
+import { isLive, liveRuns, replayEvents, rerunEnv, runIn, runKey, startableIn, type Process, type ProcessEvent } from "../lib/processes";
 import type { ProcessRemoved } from "../lib/protocol";
+
+/** How long a restart reads "Restarting…" at least: a fast one would otherwise never show it. */
+const RESTART_SHOWN_MS = 800;
 
 /**
  * The workspace's processes, kept current by the daemon's events: a process
@@ -13,7 +16,8 @@ import type { ProcessRemoved } from "../lib/protocol";
 export function useProcesses(workspaceId: string | null) {
   const [loaded, setLoaded] = useState<{ workspaceId: string; list: Process[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reloads, setReloads] = useState(0);
+  /** Runs restarted by a press here, by `runKey`, held until the restart has had its time on screen. */
+  const [restarting, setRestarting] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -57,9 +61,24 @@ export function useProcesses(workspaceId: string | null) {
       offRemoved();
       offReconnect();
     };
-  }, [workspaceId, reloads]);
+  }, [workspaceId]);
 
-  const processes = loaded && loaded.workspaceId === workspaceId ? loaded.list : null;
+  const processes = useMemo(() => {
+    const list = loaded && loaded.workspaceId === workspaceId ? loaded.list : null;
+    if (!list || restarting.size === 0) return list;
+    return list.map((process) =>
+      process.runs.some((run) => restarting.has(runKey(process.id, run.worktree)))
+        ? {
+            ...process,
+            runs: process.runs.map((run) =>
+              restarting.has(runKey(process.id, run.worktree))
+                ? { ...run, state: "starting" as const, restarts: Math.max(1, run.restarts), url: null }
+                : run,
+            ),
+          }
+        : process,
+    );
+  }, [loaded, workspaceId, restarting]);
 
   /**
    * Acts on one run: `worktree` null is the main checkout. A failure is kept
@@ -68,16 +87,26 @@ export function useProcesses(workspaceId: string | null) {
   const run = useCallback(
     async (command: api.RunCommand, process: Process, worktree: string | null, env?: Record<string, string>) => {
       setError(null);
+      const key = runKey(process.id, worktree);
+      if (command === "restart") setRestarting((prev) => new Set(prev).add(key));
       try {
-        await api.runCommand(command, process.workspaceId, process.id, worktree, env);
+        const done = api.runCommand(command, process.workspaceId, process.id, worktree, env);
+        await (command === "restart" ? Promise.all([done, new Promise((wait) => setTimeout(wait, RESTART_SHOWN_MS))]) : done);
       } catch (failure) {
         setError(String(failure).replace(/^Error:\s*/, ""));
+      } finally {
+        if (command === "restart")
+          setRestarting((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
       }
     },
     [],
   );
 
-  /** Every approved command not up in `worktree`, started there, each with the env its run had. */
+  /** Every command not up in `worktree`, started there, each with the env its run had. */
   const startAll = useCallback(
     async (worktree: string | null) => {
       const list = processes ?? [];
@@ -93,22 +122,6 @@ export function useProcesses(workspaceId: string | null) {
     await Promise.all(liveRuns(processes ?? []).map(({ process, run: up }) => run("stop", process, up.worktree)));
   }, [processes, run]);
 
-  /**
-   * The user's answer to what an agent wrote. An approval names the revision
-   * the user read; refused because the process changed meanwhile, the list
-   * is read again for them to review.
-   */
-  const decide = useCallback(async (answer: "approve" | "reject", process: Process) => {
-    setError(null);
-    try {
-      if (answer === "approve") await api.approveProcess(process.workspaceId, process.id, process.revision);
-      else await api.rejectProcess(process.workspaceId, process.id);
-    } catch (failure) {
-      setError(String(failure).replace(/^Error:\s*/, ""));
-      if (answer === "approve") setReloads((n) => n + 1);
-    }
-  }, []);
-
   const reorder = useCallback(
     (ids: string[]) => {
       if (!workspaceId) return;
@@ -122,7 +135,7 @@ export function useProcesses(workspaceId: string | null) {
     [workspaceId],
   );
 
-  return { processes, error, clearError: () => setError(null), run, startAll, stopAll, decide, reorder };
+  return { processes, error, clearError: () => setError(null), run, startAll, stopAll, reorder };
 }
 
 export type Processes = ReturnType<typeof useProcesses>;

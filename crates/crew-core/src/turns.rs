@@ -144,7 +144,7 @@ const STDERR_TAIL: usize = 12;
 /// Whether a session running with `autonomy` would do what `request` asks
 /// without asking anyone: what a parent may decide for its child. Full does
 /// anything; edits (and auto, whose reviewer Crew cannot speak for) only
-/// file edits; ask nothing. A process runs a command, so it takes full.
+/// file edits; ask nothing.
 pub(crate) fn may_decide(autonomy: &Autonomy, request: &Value) -> bool {
     match autonomy {
         Autonomy::Full => true,
@@ -1989,33 +1989,6 @@ impl TurnHost {
             }
         }
         Ok(())
-    }
-
-    /// A child under ask autonomy defined a process, or proposed a change to
-    /// one: like any other approval, it wakes a bot parent that could do the
-    /// same itself. Returns whether a letter went.
-    pub fn process_proposed(&self, child: &crate::session::Session, process: &crew_protocol::Process) -> bool {
-        if child.kind != "child" || (process.approved && process.proposed.is_none()) {
-            return false;
-        }
-        let Some(parent) = child.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten()) else {
-            return false;
-        };
-        let mut body = mailbox::process_approval_text(process);
-        if !may_decide(&self.autonomy(&parent), &json!({ "kind": "process" })) {
-            body.push_str(mailbox::BEYOND_AUTONOMY);
-        }
-        let from = crew_protocol::BotRef { id: child.id.clone(), name: child.name.clone(), kind: Some("session".into()) };
-        let letter = mailbox::Letter::new(&parent.id, &from, &body, mailbox::APPROVAL, None);
-        if mailbox::put(&self.store, letter).is_err() {
-            return false;
-        }
-        if self.is_stalled(&parent.id) {
-            let text = format!("{} wants to run: the process \"{}\"", child.name, process.spec.name);
-            self.store.user_asked(&parent.id, &child.id, "approval", &text);
-        }
-        self.wake(&parent.id);
-        true
     }
 
     /// Whether letters no longer start a turn in `session_id`: it has had its

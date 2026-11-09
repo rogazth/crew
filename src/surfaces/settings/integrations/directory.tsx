@@ -3,7 +3,6 @@
 // before you install it, and a custom connector for a remote server the
 // directory doesn't list, by its URL.
 import {
-  ArrowLeftIcon,
   BadgeCheckIcon,
   CheckIcon,
   GlobeIcon,
@@ -12,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { openLink } from '../../../lib/external';
-import { Button, EmptyState, Field, IconButton, PAGE_TITLE, SearchField, TextInput, Tooltip } from '../../../chrome/kit';
+import { BackLink, Button, EmptyState, Field, PAGE_TITLE, SearchField, TextInput, Tooltip } from '../../../chrome/kit';
 import type { RegistryServer } from '../../../lib/protocol';
 import { SettingsPage } from '../ui';
 import { Dialog, DialogFooter, DialogGroup, DialogHeader, DialogRow } from './dialog';
@@ -57,13 +56,15 @@ export function DirectoryPage() {
   useEscape(sheet ? noop : home);
   return (
     <SettingsPage title="Browse connectors" hideHeader>
-      <header className="flex items-center gap-2 px-1">
-        <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-ml-1.5 size-8" onClick={home} />
-        <h1 className={`min-w-0 flex-1 truncate ${PAGE_TITLE}`}>Browse connectors</h1>
-        <Button icon={PlusIcon} onClick={() => ui.open({ kind: 'custom' })}>
-          Custom
-        </Button>
-      </header>
+      <div className="flex flex-col gap-4">
+        <BackLink onClick={home} />
+        <header className="flex items-center gap-2 px-1">
+          <h1 className={`min-w-0 flex-1 truncate ${PAGE_TITLE}`}>Browse connectors</h1>
+          <Button icon={PlusIcon} onClick={() => ui.open({ kind: 'custom' })}>
+            Custom
+          </Button>
+        </header>
+      </div>
       <div className="flex flex-col gap-3">
         <SearchField autoFocus value={query} label="Search" onChange={setQuery} />
         <BuiltinRows query={query} />

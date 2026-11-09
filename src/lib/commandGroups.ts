@@ -40,7 +40,7 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
     entries: ["new-bot", "new-session", "open-routines"],
   },
   {
-    title: "Commands",
+    title: "Services",
     entries: ["open-commands", "start-all-commands", "stop-all-commands"],
   },
   {

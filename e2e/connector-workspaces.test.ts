@@ -11,7 +11,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { launchCrew, sessions, startChat, waitFor, workspaceMark, type Crew } from "./harness.ts";
+import { launchCrew, openConnectorSettings, sessions, startChat, waitFor, workspaceMark, type Crew } from "./harness.ts";
 import type { Connector } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
 
@@ -62,7 +62,7 @@ test("an account reaches only the workspaces it's for", async () => {
   await crew.request("connector_add", { registryName: null, builtin: null, url: mcpUrl, name: "Fake" });
 
   const page = crew.window;
-  await page.getByRole("button", { name: "Connectors", exact: true }).click();
+  await openConnectorSettings(crew);
   await page.getByRole("button", { name: /^Fake/ }).click();
   await page.getByRole("button", { name: "Add an account" }).click();
 
@@ -87,7 +87,7 @@ test("an account reaches only the workspaces it's for", async () => {
   assert.deepEqual(await serversOf(await chatIn("site", "hello from site")), ["crew", "fake"]);
 
   // From its ⋯, to every workspace.
-  await page.getByRole("button", { name: "Connectors", exact: true }).click();
+  await openConnectorSettings(crew);
   await page.getByRole("button", { name: /^Fake/ }).click();
   await page.getByRole("button", { name: `More for ${account.label}` }).click();
   await page.getByRole("menuitem", { name: "Workspaces" }).click();

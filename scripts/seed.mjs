@@ -1009,7 +1009,7 @@ const conductorBlocks = [
   {
     ...tool("mcp__crew__save_process", "Save process Tunnel", {
       kind: "output",
-      text: "Tunnel is waiting for the user's approval: cloudflared tunnel --url http://localhost:5173",
+      text: "Saved Tunnel: cloudflared tunnel --url http://localhost:5173",
     }),
     ago: 12 * MIN,
   },
@@ -1229,8 +1229,8 @@ background(payments.id, [
   { id: "bg-billing-tests", command: "npx vitest --watch src/billing", kind: "shell", startedAt: now - 19 * MIN, state: "running", toolCallId: migrationWatch.tool.callId, activity: "✓ 42 tests", stoppable: true, output: " ✓ src/billing/ledger.test.ts (42 tests) 31ms\n\n Waiting for file changes..." },
 ]);
 
-// Conductor asked for Tunnel; the user has not approved it yet.
-sql.push(`UPDATE processes SET approved = 0, created_by = ${q(conductor.id)}, requested_by = ${q(conductor.id)} WHERE id = ${q(tunnel.id)};`);
+// Conductor wrote Tunnel itself: the Commands page says so.
+sql.push(`UPDATE processes SET created_by = ${q(conductor.id)} WHERE id = ${q(tunnel.id)};`);
 
 // ---------- orchestration at volume, from a session: spendo's Ledger rewrite ----------
 

@@ -1,9 +1,8 @@
-import { Menu } from "@base-ui/react/menu";
-import { BotIcon, EllipsisIcon, LoaderCircleIcon, PlayIcon, PowerIcon, Trash2Icon } from "lucide-react";
+import { BotIcon, PowerIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BotPicker } from "../chrome/BotPicker";
 import { CardHead, PaneCard, PaneRow, PaneSentence } from "../chrome/BotPaneParts";
-import { Button, IconButton, PANEL, ROW, Switch, usePageTrail, PAGE_TITLE } from "../chrome/kit";
+import { BackLink, Button, IconButton, Switch, usePageTrail, PAGE_TITLE } from "../chrome/kit";
 import { RunMark } from "../chrome/RoutineCard";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
@@ -20,7 +19,6 @@ type Props = {
   runs: RoutineRun[];
   onSave: (draft: RoutineDraft) => Promise<void>;
   onDelete: (() => void) | null;
-  onRunNow: (() => Promise<void>) | null;
   onBack: () => void;
 };
 
@@ -32,14 +30,11 @@ export function RoutineEditor({
   runs,
   onSave,
   onDelete,
-  onRunNow,
   onBack,
 }: Props) {
   const [draft, setDraft] = useState(initial);
   const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
   // Where it is goes in the strip above the sheet, as Settings says where it is.
   usePageTrail([{ label: "Routines", onClick: onBack }, draft.name.trim() || "New routine"]);
 
@@ -76,76 +71,38 @@ export function RoutineEditor({
     }
   }
 
-  async function run() {
-    if (!onRunNow || running) return;
-    setRunning(true);
-    setRunError(null);
-    try {
-      await onRunNow();
-    } catch (error) {
-      setRunError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRunning(false);
-    }
-  }
-
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* PageFrame's measure, so the name sits where the Routines title was. */}
         <div className="mx-auto flex max-w-[720px] flex-col gap-7 px-10 pt-12 pb-8">
-          <header className="flex items-center gap-4 px-1">
-            {/* The name is the page's title, typed in place: no box, nothing that shifts as it is edited. */}
-            <input
-              autoFocus={!draft.name}
-              spellCheck={false}
-              aria-label="Name"
-              value={draft.name}
-              placeholder="Routine name"
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-              }}
-              className={`h-7 min-w-0 flex-1 truncate bg-transparent ${PAGE_TITLE} outline-none placeholder:text-placeholder`}
-            />
-            {(onRunNow || onDelete) && (
-              <Menu.Root modal={false}>
-                <Menu.Trigger
-                  render={
-                    <IconButton
-                      icon={running ? LoaderCircleIcon : EllipsisIcon}
-                      label="More actions"
-                      className={`data-popup-open:bg-hover data-popup-open:text-text ${running ? "[&_svg]:animate-spin" : ""}`}
-                    />
-                  }
+          <div className="flex flex-col gap-4">
+            <BackLink onClick={onBack} />
+            <header className="flex items-center gap-4 px-1">
+              {/* The name is the page's title, typed in place: no box, nothing that shifts as it is edited. */}
+              <input
+                autoFocus={!draft.name}
+                spellCheck={false}
+                aria-label="Name"
+                value={draft.name}
+                placeholder="Routine name"
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                className={`h-7 min-w-0 flex-1 truncate bg-transparent ${PAGE_TITLE} outline-none placeholder:text-placeholder`}
+              />
+              {onDelete && (
+                <IconButton
+                  icon={Trash2Icon}
+                  label="Delete routine"
+                  title="Delete routine"
+                  className="hover:bg-danger/10 hover:text-danger"
+                  onClick={onDelete}
                 />
-                <Menu.Portal>
-                  <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-                    <Menu.Popup className={PANEL}>
-                      {onRunNow && (
-                        <Menu.Item className={ROW} disabled={running} onClick={() => void run()}>
-                          <PlayIcon className="size-4 shrink-0 text-icon" />
-                          <span className="min-w-0 flex-1 truncate">Run now</span>
-                        </Menu.Item>
-                      )}
-                      {onDelete && (
-                        <Menu.Item className={`${ROW} text-danger data-highlighted:bg-danger/10`} onClick={onDelete}>
-                          <Trash2Icon className="size-4 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate">Delete routine</span>
-                        </Menu.Item>
-                      )}
-                    </Menu.Popup>
-                  </Menu.Positioner>
-                </Menu.Portal>
-              </Menu.Root>
-            )}
-          </header>
-
-          {runError && (
-            <p className="-mt-4 px-1 text-[13px] text-danger" role="alert">
-              {runError}
-            </p>
-          )}
+              )}
+            </header>
+          </div>
 
           <div className="flex flex-col gap-3">
             <PaneCard label="Instructions">

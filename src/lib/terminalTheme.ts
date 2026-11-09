@@ -11,10 +11,40 @@ function cssColor(expr: string, fallback: string): string {
   return rgbToHex(color || fallback);
 }
 
-/** The terminal is the canvas: same background, same text colour, ANSI tuned to it. */
-export function palette() {
+/** What a probe computes `expr` to, as the browser would paint it. */
+function computed(expr: string): string {
+  const probe = document.createElement("span");
+  probe.style.color = expr;
+  document.body.appendChild(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  return color;
+}
+
+/**
+ * Translucent `layers` painted over one another, as one opaque colour: a fill
+ * like the card's is a tint of what is under it, and xterm wants it solid.
+ */
+function composite(layers: string[], fallback: string): string {
+  const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  if (!context) return fallback;
+  for (const layer of layers) {
+    context.fillStyle = computed(layer);
+    context.fillRect(0, 0, 1, 1);
+  }
+  const [r = 0, g = 0, b = 0] = context.getImageData(0, 0, 1, 1).data;
+  return `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * The terminal is the canvas: same background, same text colour, ANSI tuned to
+ * it. `ground` lays another surface over the canvas, for a terminal set in a
+ * filled block (the card's tint).
+ */
+export function palette(ground?: string) {
   const dark = DARK_SCHEME.matches;
-  const background = cssColor("var(--color-canvas)", dark ? "#1a1a1a" : "#ffffff");
+  const canvas = dark ? "#1a1a1a" : "#ffffff";
+  const background = ground ? composite(["var(--color-canvas)", ground], canvas) : cssColor("var(--color-canvas)", canvas);
   const foreground = cssColor("var(--color-text)", dark ? "#e8eef2" : "#2e2e2e");
   return {
     background,

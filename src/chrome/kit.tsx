@@ -1,10 +1,11 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
+import { Popover } from "@base-ui/react/popover";
 import { Select as BaseSelect } from "@base-ui/react/select";
 import { Switch as BaseSwitch } from "@base-ui/react/switch";
 import { Tabs } from "@base-ui/react/tabs";
 import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
-import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, LoaderCircleIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, LoaderCircleIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -15,7 +16,7 @@ import type {
   RefObject,
   TextareaHTMLAttributes,
 } from "react";
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Kbd } from "./Kbd";
 import { useSlidingPill } from "./useSlidingPill";
@@ -437,6 +438,35 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * Actions on one thing, side by side in one pill, the composer's model | effort
+ * shape: a hairline between each two, gone either side of the one hovered.
+ * Every one is a glyph and a word, so none outranks another.
+ */
+export function ButtonGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex h-[30px] shrink-0 items-center gap-px rounded-full bg-card p-0.5">
+      {children}
+    </div>
+  );
+}
+
+const GROUP_RULE =
+  "[button+&]:before:absolute [button+&]:before:inset-y-[7px] [button+&]:before:-left-px [button+&]:before:w-px [button+&]:before:bg-hairline [button+&]:before:transition-opacity [button+&]:before:content-[''] [button+&]:hover:before:opacity-0 [button:hover+&]:before:opacity-0";
+
+export function GroupButton({ icon: Glyph, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: Icon }) {
+  return (
+    <button
+      type="button"
+      {...rest}
+      className={`relative flex h-[26px] items-center gap-1.5 rounded-full px-[9px] text-[12px] text-text outline-none transition-colors duration-100 hover:bg-hover focus-visible:shadow-[inset_0_0_0_1.5px_var(--color-focus)] disabled:opacity-40 ${GROUP_RULE}`}
+    >
+      <Glyph aria-hidden className="size-3.5 text-icon" />
+      {children}
+    </button>
+  );
+}
+
 /** A card of settings rows, hairlines between them. */
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`rounded-xl bg-card px-4 [&>*+*]:border-t [&>*+*]:border-hairline ${className}`}>{children}</div>;
@@ -529,6 +559,20 @@ export function Footer({ hints = [], children }: { hints?: [string, string][]; c
 /** A quiet heading over a group of rows in a list surface. */
 export function GroupHeader({ children }: { children: ReactNode }) {
   return <div data-group-header className="px-2.5 pt-2 pb-1 text-[11px] text-text-muted">{children}</div>;
+}
+
+/** A page's way back above its title: "← Go back", quiet until hovered. Set it a step clear of the title. */
+export function BackLink({ onClick, label = "Go back", className = "" }: { onClick: () => void; label?: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`-ml-0.5 flex items-center gap-1 self-start rounded px-1 text-[12.5px] text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 ${className}`}
+    >
+      <ArrowLeftIcon aria-hidden className="size-3.5 shrink-0" />
+      {label}
+    </button>
+  );
 }
 
 /** A button that is only its glyph; `label` is its name, since there is no text to read. */
@@ -750,6 +794,7 @@ export function FilterChip<T extends string>({
   icon: Glyph,
   neutral,
   align = "start",
+  searchable = false,
 }: {
   value: T;
   options: Option<T>[];
@@ -760,23 +805,30 @@ export function FilterChip<T extends string>({
   neutral?: T;
   /** "end" for a chip at the right end of its line. */
   align?: "start" | "end";
+  /** A search field over a long list (bots), the popup as wide as its labels. */
+  searchable?: boolean;
 }) {
   const current = options.find((option) => option.value === value);
   const lit = neutral !== undefined && value !== neutral;
-  return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label={label}
-        data-filter-chip
-        {...(lit ? { "data-lit": "" } : {})}
-        className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
-          lit ? "text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
-        }`}
-      >
+  const trigger = {
+    "aria-label": label,
+    "data-filter-chip": "",
+    ...(lit ? { "data-lit": "" } : {}),
+    className: `flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium outline-none ring-1 transition-colors focus-visible:ring-focus/50 data-popup-open:bg-hover ${
+      lit ? "text-text ring-border-strong" : "text-text-muted ring-hairline hover:bg-hover hover:text-text"
+    }`,
+    children: (
+      <>
         {current?.icon ?? (Glyph && <Glyph className="size-3.5 text-icon" />)}
         <span className="max-w-40 truncate">{current?.label ?? label}</span>
         <ChevronDownIcon className="size-3 opacity-60" />
-      </Menu.Trigger>
+      </>
+    ),
+  };
+  if (searchable) return <SearchFilterChip trigger={trigger} value={value} options={options} onChange={onChange} label={label} align={align} />;
+  return (
+    <Menu.Root>
+      <Menu.Trigger {...trigger} />
       <Menu.Portal>
         <Menu.Positioner side="bottom" align={align} sideOffset={6} className="z-50">
           <Menu.Popup className={PANEL}>
@@ -795,6 +847,134 @@ export function FilterChip<T extends string>({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
+  );
+}
+
+/** FilterChip's popup with a search field: ↑↓ walk what matches, Enter picks, Esc clears the search and then closes. */
+function SearchFilterChip<T extends string>({
+  trigger,
+  value,
+  options,
+  onChange,
+  label,
+  align,
+}: {
+  trigger: ButtonHTMLAttributes<HTMLButtonElement>;
+  value: T;
+  options: Option<T>[];
+  onChange: (value: T) => void;
+  label: string;
+  align: "start" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const search = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const needle = query.trim().toLowerCase();
+  const shown = needle ? options.filter((option) => option.label.toLowerCase().includes(needle)) : options;
+  const active = shown.length === 0 ? -1 : Math.min(cursor, shown.length - 1);
+
+  useEffect(() => {
+    if (open && active >= 0) list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const reset = () => {
+    setQuery("");
+    setCursor(Math.max(0, options.findIndex((option) => option.value === value)));
+  };
+  const pick = (option: Option<T>) => {
+    if (option.disabled) return;
+    onChange(option.value);
+    setOpen(false);
+  };
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (next) reset();
+        setOpen(next);
+      }}
+      modal={false}
+    >
+      <Popover.Trigger {...trigger} />
+      <Popover.Portal>
+        <Popover.Positioner side="bottom" align={align} sideOffset={6} className="z-50">
+          <Popover.Popup
+            initialFocus={search}
+            onKeyDown={(event: KeyboardEvent<HTMLDivElement> & { preventBaseUIHandler?: () => void }) => {
+              if (event.key === "Escape" && query) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.preventBaseUIHandler?.();
+                return reset();
+              }
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                setCursor(Math.max(0, Math.min(shown.length - 1, (active < 0 ? 0 : active) + step)));
+                return;
+              }
+              if (event.key === "Enter" && active >= 0) {
+                event.preventDefault();
+                const option = shown[active];
+                if (option) pick(option);
+              }
+            }}
+            className={`flex max-h-[min(420px,var(--available-height))] w-max min-w-28 max-w-60 flex-col overflow-hidden ${POPOVER}`}
+          >
+            {/* Zero intrinsic width: the labels size the popup, the field fills it. */}
+            <div className="w-0 min-w-full">
+              <PopupSearch
+                ref={search}
+                value={query}
+                placeholder="Search"
+                aria-label={`Search ${label.toLowerCase()}`}
+                role="combobox"
+                aria-expanded
+                aria-controls={listId}
+                aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setCursor(0);
+                }}
+                onClear={() => {
+                  reset();
+                  search.current?.focus();
+                }}
+              />
+            </div>
+            <div ref={list} id={listId} role="listbox" aria-label={label} className="min-h-0 flex-1 overflow-y-auto p-1">
+              {shown.length === 0 ? (
+                <p className="px-2 py-4 text-center whitespace-nowrap text-placeholder">No matches</p>
+              ) : (
+                shown.map((option, at) => (
+                  <div
+                    key={option.value}
+                    id={`${listId}-${at}`}
+                    role="option"
+                    aria-selected={option.value === value}
+                    aria-disabled={option.disabled}
+                    data-index={at}
+                    onMouseMove={() => setCursor(at)}
+                    onClick={() => pick(option)}
+                    className={`${ROW} ${at === active ? "bg-hover" : ""} ${option.disabled ? "opacity-50" : ""}`}
+                  >
+                    {option.icon}
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    <span className="grid size-4 shrink-0 place-items-center">
+                      {option.value === value && <CheckIcon className="size-4" />}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -850,7 +1030,7 @@ export function FilterTabs<T extends string>({
           label: (
             <>
               {option.label}
-              <span className="tabular-nums opacity-60">{option.count}</span>
+              <span className="text-[12px] tabular-nums opacity-60">({option.count})</span>
             </>
           ),
         }))}

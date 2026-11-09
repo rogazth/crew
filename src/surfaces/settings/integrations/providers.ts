@@ -183,7 +183,7 @@ export function subscribeServers(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Whether a CLI's server on a machine whose lists this window has waits on a sign-in: the rail's Connectors icon wears a dot. */
+/** Whether a CLI's server on a machine whose lists this window has waits on a sign-in: Settings' Connectors wears a dot. */
 export function serversNeedYou(): boolean {
   return Object.values(state.machines).some((m) => m.inventory.some((i) => i.servers.some((x) => !isOff(x) && !isBundled(x) && x.state === "needs_auth")));
 }

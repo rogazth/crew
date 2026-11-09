@@ -9,6 +9,7 @@ import {
   GlobeIcon,
   InfoIcon,
   KeyboardIcon,
+  PlugIcon,
   ServerIcon,
   SlidersHorizontalIcon,
   type LucideIcon,
@@ -42,6 +43,12 @@ export const PAGES: Record<SettingsSectionId, PageMeta> = {
     label: "Providers",
     description: "Coding agents and permissions.",
     icon: BotIcon,
+  },
+  connectors: {
+    id: "connectors",
+    label: "Connectors",
+    description: "Accounts and servers your agents reach.",
+    icon: PlugIcon,
   },
   usage: {
     id: "usage",
@@ -80,7 +87,7 @@ type NavGroup = { title: string | null; pages: SettingsSectionId[] };
 
 const GROUPS: NavGroup[] = [
   { title: "App", pages: ["general", "notifications", "keybindings", "browser"] },
-  { title: "Agents", pages: ["providers", "usage", "environments"] },
+  { title: "Agents", pages: ["providers", "connectors", "environments", "usage"] },
   { title: null, pages: ["about"] },
 ];
 

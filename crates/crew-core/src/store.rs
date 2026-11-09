@@ -595,6 +595,13 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (49, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 50 {
+        let tx = conn.unchecked_transaction()?;
+        // Agents manage processes without asking: nothing waits on the user.
+        tx.execute_batch(crate::process::MIGRATION_V50)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (50, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

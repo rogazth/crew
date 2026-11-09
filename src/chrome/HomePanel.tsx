@@ -1,26 +1,5 @@
-import { BotIcon, FolderPlusIcon, SquarePenIcon, XIcon } from "lucide-react";
-import { commandKeys } from "../lib/commands";
+import { XIcon } from "lucide-react";
 import type { Step } from "../lib/gettingStarted";
-import { SidebarRow } from "./SidebarRow";
-
-/** Home's ways to start, over its sessions: there are no worktrees to add one to. */
-export function HomeActions({
-  onNewSession,
-  onNewBot,
-  onOpenFolder,
-}: {
-  onNewSession: () => void;
-  onNewBot: () => void;
-  onOpenFolder: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <SidebarRow icon={SquarePenIcon} label="New session" keys={commandKeys("new-session")} onClick={onNewSession} />
-      <SidebarRow icon={BotIcon} label="New bot" keys={commandKeys("new-bot")} onClick={onNewBot} />
-      <SidebarRow icon={FolderPlusIcon} label="Open a project folder" keys={commandKeys("open-workspace")} onClick={onOpenFolder} />
-    </div>
-  );
-}
 
 /** The tour, folded into the panel's foot: how far along, and what comes next. */
 export function TourFoot({ steps, onDismiss }: { steps: Step[]; onDismiss: () => void }) {

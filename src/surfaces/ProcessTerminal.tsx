@@ -24,7 +24,11 @@ type Props = {
   worktree: string | null;
   /** Absent until it has run there since the daemon came up; its log may still hold an older run's end. */
   run: ProcessRun | undefined;
+  /** "card": set in a filled block, the terminal takes its ground. */
+  surface?: "canvas" | "card";
 };
+
+const GROUND = { canvas: undefined, card: "var(--color-card)" };
 
 /**
  * One run's terminal. While it runs, xterm watches its PTY: typed keys go to
@@ -32,7 +36,9 @@ type Props = {
  * exited server still shows why. Closing the view never touches the process;
  * that is what makes it a process and not a terminal.
  */
-export function ProcessTerminal({ process, worktree, run }: Props) {
+export function ProcessTerminal({ process, worktree, run, surface = "canvas" }: Props) {
+  // Read once, when the terminal is made: a block's ground does not change under it.
+  const ground = useRef(GROUND[surface]);
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -49,7 +55,7 @@ export function ProcessTerminal({ process, worktree, run }: Props) {
       macOptionIsMeta: false,
       allowProposedApi: true,
       linkHandler: { activate: (event, uri) => openLink(uri, event) },
-      theme: palette(),
+      theme: palette(ground.current),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -66,7 +72,7 @@ export function ProcessTerminal({ process, worktree, run }: Props) {
     term.loadAddon(new WebLinksAddon((event, uri) => openLink(uri, event)));
     termRef.current = term;
     fitRef.current = fit;
-    const onScheme = () => (term.options.theme = palette());
+    const onScheme = () => (term.options.theme = palette(ground.current));
     DARK_SCHEME.addEventListener("change", onScheme);
     return () => {
       DARK_SCHEME.removeEventListener("change", onScheme);
@@ -174,7 +180,7 @@ export function ProcessTerminal({ process, worktree, run }: Props) {
   }, [workspaceId, id, worktree, ptyId, streamId]);
 
   return (
-    <div className="crew-terminal h-full min-h-0 w-full min-w-0 bg-canvas p-3">
+    <div className={`crew-terminal h-full min-h-0 w-full min-w-0 p-3 ${surface === "card" ? "bg-card" : "bg-canvas"}`}>
       <div ref={hostRef} className="h-full min-h-0 w-full min-w-0 overflow-hidden" />
     </div>
   );

@@ -28,8 +28,6 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
   /** What a command's tab shows: the shell holds the commands, not the panes. */
   renderProcess: (tab: ProcessTabOf) => ReactNode;
-  /** The workspace's commands, in a tab of the strip they were opened from. */
-  renderCommands: () => ReactNode;
 };
 
 /** Routes the active tab to whatever fills the pane. Turn chats and terminals stay mounted in their overlays. */
@@ -45,7 +43,6 @@ export function Surface({
   onOpenHistory,
   onConfirm,
   renderProcess,
-  renderCommands,
 }: Props) {
   // Before the first file tab, so it does not wait out Suspense's reveal
   // throttle. ⌘P asks too, for a file opened before the window is idle.
@@ -68,7 +65,6 @@ export function Surface({
   if (tab.kind === "stub") {
     if (tab.stub === "terminal") return null;
     if (tab.stub === "history") return <HistoryView onOpen={onOpenHistory} onConfirm={onConfirm} />;
-    if (tab.stub === "commands") return renderCommands();
     return <StubView stub={tab.stub} title={tab.title} />;
   }
   // Mounted only while on screen: a command runs on in the daemon, and its

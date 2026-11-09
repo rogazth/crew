@@ -19,7 +19,7 @@ pub enum ProcessState {
     Crashed,
 }
 
-/// What a process runs: the part an agent may only propose.
+/// What a process runs.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -45,19 +45,10 @@ pub struct Process {
     pub spec: ProcessSpec,
     /// The session that wrote it; `None` is the user.
     pub created_by: Option<String>,
-    /// False until the user accepts what an agent created. It cannot start before.
-    pub approved: bool,
-    /// A change an agent asked for, waiting on the user. What runs meanwhile
-    /// is `spec`, the definition already accepted.
-    pub proposed: Option<ProcessSpec>,
-    /// Who is asking: the creator of an unapproved process, or the proposer.
-    pub requested_by: Option<String>,
     /// One per worktree it was started in since the daemon came up, the main
     /// checkout first. A run that ended stays, so its exit can be read.
     pub runs: Vec<ProcessRun>,
-    /// Bumped by every change to the definition or to what waits on the
-    /// user. An approval names the one the user read, so a change that
-    /// lands while they read it is not what they approve.
+    /// Bumped by every change to the definition.
     #[ts(type = "number")]
     pub revision: u64,
 }
@@ -152,7 +143,7 @@ pub struct ProcessRef {
     pub workspace_id: String,
     pub id: String,
     /// The run's worktree; absent is the main checkout. Ignored by the
-    /// commands that act on the definition (delete, reject).
+    /// commands that act on the definition (delete).
     #[serde(default)]
     #[ts(optional)]
     pub worktree: Option<String>,
@@ -172,17 +163,6 @@ pub struct ProcessStart {
     #[serde(default)]
     #[ts(optional)]
     pub env: Option<BTreeMap<String, String>>,
-}
-
-/// The user accepts a process, or a change to it, as it stood at `revision`.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct ProcessApprove {
-    pub workspace_id: String,
-    pub id: String,
-    #[ts(type = "number")]
-    pub revision: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

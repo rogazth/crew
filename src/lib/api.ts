@@ -609,17 +609,6 @@ export const runCommand = (
 export const deleteProcess = (workspaceId: string, id: string): Promise<null> =>
   client.request("process_delete", { workspaceId, id });
 
-/** A command an agent wrote is deleted; a change it proposed is dropped. */
-export const rejectProcess = (workspaceId: string, id: string): Promise<Process | null> =>
-  client.request("process_reject", { workspaceId, id });
-
-/**
- * Accepts what an agent wrote, as it stood at `revision`: the one the user
- * read. The daemon refuses it if anything changed since.
- */
-export const approveProcess = (workspaceId: string, id: string, revision: number): Promise<Process> =>
-  client.request("process_approve", { workspaceId, id, revision });
-
 export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<void> =>
   client.request("process_reorder", { workspaceId, ids });
 

@@ -67,7 +67,8 @@ export function tidy(entries: MenuEntry[]): MenuEntry[] {
   return out;
 }
 
-export type MenuPoint = { x: number; y: number };
+/** Where a menu opens; with `align: "end"`, `x` is its right edge, for a menu dropped under a button. */
+export type MenuPoint = { x: number; y: number; align?: "end" };
 
 export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit" };
 export const EDIT: MenuAction = { id: "edit", label: "Bot settings", icon: "settings" };

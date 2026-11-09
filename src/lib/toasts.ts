@@ -54,11 +54,6 @@ export function closeToast(key: string): void {
   sink?.close((candidate) => candidate === key);
 }
 
-/** Every toast whose key starts with `prefix`. */
-export function closeToasts(prefix: string): void {
-  sink?.close((candidate) => candidate.startsWith(prefix));
-}
-
 /** Its session has been seen, so its news comes down. */
 export function closeSessionToast(sessionId: string): void {
   closeToast(sessionId);

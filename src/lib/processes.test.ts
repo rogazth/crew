@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { SEPARATOR, type MenuAction, type MenuEntry } from "./menu";
+import type { Session } from "./types";
 import {
-  awaitsUser,
   formatEnv,
   isOrphan,
   liveRuns,
+  originOf,
   parseEnv,
   processActions,
   removeProcess,
   replayEvents,
   rerunEnv,
   runActions,
+  runKey,
+  runSeen,
   runIn,
   servedUrl,
-  specChanges,
-  specOf,
+  shownRuns,
   startableIn,
   stateLabel,
   stateTone,
@@ -53,9 +55,6 @@ function process(patch: Partial<Process> = {}): Process {
     env: {},
     autoRestart: false,
     createdBy: null,
-    approved: true,
-    proposed: null,
-    requestedBy: null,
     runs: [],
     revision: 0,
     ...patch,
@@ -125,17 +124,17 @@ describe("processes", () => {
     expect(isOrphan(run({ startedBy: "s2", state: "exited" }), alive)).toBe(false);
   });
 
-  it("offers what fits, and the pending decision first", () => {
-    expect(ids(processActions(process()))).toEqual(["edit", "copy-command", "|", "delete"]);
-    const pending = process({ approved: false, createdBy: "s1" });
-    expect(awaitsUser(pending)).toBe(true);
-    expect(ids(processActions(pending))).toEqual(["approve", "reject", "|", "edit", "copy-command", "|", "delete"]);
-
-    expect(ids(runActions(process(), undefined))).toEqual(["start", "|", "logs"]);
-    expect(ids(runActions(process(), run()))).toEqual(["stop", "restart", "|", "logs"]);
-    expect(ids(runActions(process(), run({ state: "paused" })))).toEqual(["stop", "restart", "resume", "|", "logs"]);
-    // Not approved means it cannot start: no Start to offer.
-    expect(ids(runActions(pending, undefined))).toEqual(["logs"]);
+  it("offers what a command's menu holds", () => {
+    expect(ids(processActions())).toEqual(["edit", "delete"]);
+    expect(ids(processActions(run()))).toEqual(["restart", "output", "edit", "delete"]);
+    expect(ids(processActions(run({ state: "exited", exitCode: 0 })))).toEqual(["edit", "delete"]);
+    // A failed one keeps its output, to read why it stopped.
+    expect(ids(processActions(run({ state: "crashed" })))).toEqual(["output", "edit", "delete"]);
+    expect(ids(processActions(run({ state: "exited", exitCode: 1 })))).toEqual(["output", "edit", "delete"]);
+    expect(ids(runActions(run()))).toEqual(["restart", "output", "stop"]);
+    expect(ids(runActions(run({ state: "exited" })))).toEqual(["output", "dismiss"]);
+    expect(ids(runActions(run({ url: "http://localhost:5173" })))).toEqual(["restart", "output", "browser", "stop"]);
+    expect(ids(runActions(run({ url: "https://example.com" })))).toEqual(["restart", "output", "stop"]);
   });
 
   it("reads and writes an environment as NAME=value lines", () => {
@@ -149,25 +148,44 @@ describe("processes", () => {
     expect(formatEnv({ A: "1", B: "two" })).toBe("A=1\nB=two");
   });
 
-  it("lists what a proposal would change and nothing else", () => {
-    const current = process({ env: { PORT: "3000" } });
-    const proposed = { ...specOf(current), command: "npm run dev -- --host", env: { PORT: "4000" }, autoRestart: true };
-    expect(specChanges(specOf(current), proposed)).toEqual([
-      { field: "Command", before: "npm run dev", after: "npm run dev -- --host" },
-      { field: "Environment", before: "PORT=3000", after: "PORT=4000" },
-      { field: "Restart on crash", before: "Off", after: "On" },
-    ]);
+  it("tells a command the user wrote from one a session wrote", () => {
+    const bot = { id: "s1", name: "Conductor" } as Session;
+    expect(originOf(process(), [bot])).toEqual({ kind: "user" });
+    expect(originOf(process({ createdBy: "s1" }), [bot])).toEqual({ kind: "session", id: "s1", session: bot });
+    expect(originOf(process({ createdBy: "gone" }), [bot])).toEqual({ kind: "session", id: "gone", session: null });
+  });
+});
+
+describe("pills", () => {
+  it("shows what is up, just asked for, or failed, until its pill is taken away", () => {
+    const web = process({
+      id: "web",
+      runs: [
+        run({ worktree: null, startedAt: 1 }),
+        run({ worktree: "/a", state: "stopped", startedAt: 2 }),
+        run({ worktree: "/b", state: "exited", exitCode: 0, startedAt: 3 }),
+        run({ worktree: "/c", state: "crashed", startedAt: 4 }),
+      ],
+    });
+    const none = new Set<string>();
+    expect(shownRuns(web, none, none).map((r) => r.worktree)).toEqual([null, "/c"]);
+    const gone = new Set([runSeen("web", web.runs[0]!), runSeen("web", web.runs[3]!)]);
+    expect(shownRuns(web, none, gone)).toEqual([]);
+    // Run again where it was taken away: it is back, from the press on.
+    expect(shownRuns(web, new Set([runKey("web", "/c")]), gone).map((r) => r.worktree)).toEqual(["/c"]);
+    // A new start is a new pill.
+    expect(shownRuns({ ...web, runs: [run({ worktree: null, startedAt: 9 })] }, none, gone)).toHaveLength(1);
   });
 });
 
 describe("start and stop all", () => {
-  it("starts every approved command not already up in the worktree", () => {
+  it("starts every command not already up in the worktree", () => {
     const up = process({ id: "up", runs: [run({ worktree: "/t" })] });
     const elsewhere = process({ id: "elsewhere", runs: [run({ worktree: null })] });
     const crashed = process({ id: "crashed", runs: [run({ worktree: "/t", state: "crashed" })] });
-    const unapproved = process({ id: "new", approved: false });
-    const ids = startableIn([up, elsewhere, crashed, unapproved], "/t").map((p) => p.id);
-    expect(ids).toEqual(["elsewhere", "crashed"]);
+    const stopped = process({ id: "new" });
+    const ids = startableIn([up, elsewhere, crashed, stopped], "/t").map((p) => p.id);
+    expect(ids).toEqual(["elsewhere", "crashed", "new"]);
   });
 
   it("starts a run again with the env it set over the command's, and none otherwise", () => {

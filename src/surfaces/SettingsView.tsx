@@ -12,6 +12,7 @@ import { ProvidersPage } from "./settings/ProvidersPage";
 import { SettingsPage, Toasts } from "./settings/ui";
 import { UsagePage } from "./settings/UsagePage";
 import { NotificationSettings } from "./NotificationSettings";
+import { IntegrationsPage } from "./settings/integrations/IntegrationsPage";
 
 type Props = {
   section: SettingsSectionId;
@@ -67,6 +68,8 @@ function Page({ section, workspaces, onOpenTerminal }: Props) {
       return <AboutPage />;
     case "usage":
       return <UsagePage />;
+    case "connectors":
+      return <IntegrationsPage workspaces={workspaces} />;
   }
 }
 

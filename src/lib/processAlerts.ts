@@ -2,7 +2,7 @@ import * as api from "./api";
 import { client } from "./client";
 import { dispatchNotification } from "./notifications";
 import type { Process, ProcessRun, ProcessState } from "./protocol";
-import { closeToast, closeToasts } from "./toasts";
+import { closeToast } from "./toasts";
 
 /**
  * A command that fails on its own is news: one that exits with an error, or
@@ -25,12 +25,12 @@ const runKey = (process: Process, run: ProcessRun) => `${process.id}\0${run.work
 /** What a run's crash toast is filed under, so seeing the run or a restart takes it down. */
 const toastKey = (processId: string, worktree: string | null) => `process:${processId}\0${worktree ?? ""}`;
 
-/** The command on screen: one run's output, or with `worktree` undefined its page, which lists every run. */
-export type SeenProcess = { processId: string; worktree?: string | null | undefined };
+/** The run on screen: its output, in its own tab or on the Services page. */
+export type SeenProcess = { processId: string; worktree: string | null };
 let visible: SeenProcess | null = null;
 
 const shows = (seen: SeenProcess | null, processId: string, worktree: string | null) =>
-  seen !== null && seen.processId === processId && (seen.worktree === undefined || seen.worktree === worktree);
+  seen !== null && seen.processId === processId && seen.worktree === worktree;
 
 /**
  * What the user is looking at: its crash toasts come down, and while the
@@ -38,9 +38,7 @@ const shows = (seen: SeenProcess | null, processId: string, worktree: string | n
  */
 export function setVisibleProcess(next: SeenProcess | null): void {
   visible = next;
-  if (!next) return;
-  if (next.worktree === undefined) closeToasts(`process:${next.processId}\0`);
-  else closeToast(toastKey(next.processId, next.worktree));
+  if (next) closeToast(toastKey(next.processId, next.worktree));
 }
 
 function hear(process: Process) {

@@ -33,10 +33,9 @@ pub const REPORT: &str = "report";
 /// A child stopped on a question (its question tool) for the bot that
 /// started it, which answers with `send_message`.
 pub const QUESTION: &str = "question";
-/// A child under ask autonomy waits on an approval (a command, an edit, a
-/// process it defined) that its bot parent may decide, with `send_message`
-/// and a `decision`; a parent that could not do the same itself denies it or
-/// asks the user.
+/// A child under ask autonomy waits on an approval (a command, an edit) that
+/// its bot parent may decide, with `send_message` and a `decision`; a parent
+/// that could not do the same itself denies it or asks the user.
 pub const APPROVAL: &str = "approval";
 
 /// About how much letter text one turn is handed, in characters. A turn always
@@ -382,39 +381,6 @@ pub fn approval_text(request: &serde_json::Value) -> String {
         out.push_str(&format!("\nInput: {clipped}{}", if clipped.len() < raw.len() { "…" } else { "" }));
     }
     out
-}
-
-/// A process a child defined or wants changed under ask autonomy, as its
-/// parent reads it: what would run once it is accepted.
-pub fn process_approval_text(process: &crew_protocol::Process) -> String {
-    let describe = |spec: &crew_protocol::ProcessSpec| {
-        let mut lines = vec![format!("  command: {}", spec.command)];
-        if !spec.cwd.is_empty() {
-            lines.push(format!("  cwd: {}", spec.cwd));
-        }
-        if !spec.env.is_empty() {
-            let env: Vec<String> = spec.env.iter().map(|(key, value)| format!("{key}={value}")).collect();
-            lines.push(format!("  env: {}", env.join(" ")));
-        }
-        if spec.auto_restart {
-            lines.push("  auto_restart: true".into());
-        }
-        lines.join("\n")
-    };
-    match (&process.proposed, process.approved) {
-        (_, false) => format!(
-            "It defined the process \"{}\", which cannot start until it is accepted:\n{}",
-            process.spec.name,
-            describe(&process.spec)
-        ),
-        (Some(proposed), true) => format!(
-            "It wants to change the process \"{}\". Now:\n{}\nProposed:\n{}",
-            process.spec.name,
-            describe(&process.spec),
-            describe(proposed)
-        ),
-        (None, true) => format!("Its change to the process \"{}\" has already been decided.", process.spec.name),
-    }
 }
 
 /// A letter as the model reads it, by its kind. `parent` is the reader's

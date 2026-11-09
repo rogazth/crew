@@ -47,7 +47,7 @@ export function ConnectorsSegment({
       <StatusSegment
         ref={trigger}
         data-connectors-trigger
-        // The rail has a Connectors too; this one is what this session has.
+        // Settings has a Connectors too; this one is what this session has.
         aria-label="This session's connectors"
         icon={PlugIcon}
         label="Connectors"

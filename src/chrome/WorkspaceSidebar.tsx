@@ -1,8 +1,8 @@
 // The workspace's sidebar, worktrees and sessions in one scroll. It has the
 // search, view menu, selection, drag, keys and menus:
 //
-//   header    the workspace's name, renamed in place; its commands as a pill
-//             beside it, since they belong to the workspace; its menu, with the path
+//   header    the workspace's name, renamed in place (F2 on its rail mark)
+//   places    its Services, Routines and Settings, each filling the main panel
 //   bots      faces in a grid, status on the corner; the sessions' view menu
 //             never touches them
 //   sessions  grouped as the view menu says, and each line says only what its
@@ -16,17 +16,16 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   EllipsisIcon,
-  PencilIcon,
   FolderIcon,
   GitBranchIcon,
   PlusIcon,
-  RotateCwIcon,
   SearchIcon,
-  LayersIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
+import { WorkspaceTile } from "./WorkspaceTile";
+import { WorkspacePlaces, type WorkspacePlacesProps } from "./WorkspacePlaces";
 import { BotAvatar } from "./BotAvatar";
 import { ProviderIcon } from "./ProviderIcon";
 import { RenameRow } from "./RenameRow";
@@ -66,7 +65,6 @@ export type WorkspaceSidebarProps = {
   onSelect: (session: Session) => void;
   onNewBot: (worktree?: string) => void;
   onNewSession: (worktree?: string) => void;
-  onNewWorktree: () => void;
   onRemoveWorktree: (tree: Worktree) => void;
   onEdit: (session: Session) => void;
   onRename: (session: Session, name: string) => void;
@@ -77,18 +75,12 @@ export type WorkspaceSidebarProps = {
   /** The workspace whose name the rail asked to rename; it opens the field, then `onRenameSettled`. */
   renameWanted: string | null;
   onRenameSettled: () => void;
-  onRemoveWorkspace: () => void;
-  /** The workspace's commands, for the pill under its name. */
-  commands: { live: number; asking: number; orphans: number; open: boolean; onToggle: () => void };
-  /** The names of the commands running in each worktree, by its path. */
-  running?: ReadonlyMap<string, string[]>;
-  /** Reads the worktrees and sessions again, for changes made outside this window. */
+  /** The workspace's places under its name: Services, Routines, Settings. */
+  nav: WorkspacePlacesProps;
+  /** Reads the worktrees and sessions again, for changes made outside this window; the view menu's Refresh. */
   onRefresh: () => Promise<void>;
-  /**
-   * Home's panel: no path and no worktrees, its sessions in one list under
-   * `actions`, and `foot` where a project keeps its commands.
-   */
-  home?: { actions: ReactNode; foot: ReactNode } | undefined;
+  /** Home's panel: no path, no worktrees and no places, its sessions in one list, and `foot` under them. */
+  home?: { foot: ReactNode } | undefined;
 };
 
 const NO_TREES: string[] = [];
@@ -134,8 +126,6 @@ const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New session he
 const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New bot here", icon: "bot" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy branch", icon: "branch" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove worktree" };
-const NEW_WORKTREE: MenuAction = { id: "new-worktree", label: "New worktree…", icon: "branch" };
-const REMOVE_WORKSPACE: MenuAction = { ...DELETE, label: "Remove workspace…" };
 
 function sessionActions(session: Session): MenuEntry[] {
   if (session.kind === "bot") return [EDIT, DELETE];
@@ -156,8 +146,7 @@ function worktreeActions(tree: Worktree): MenuEntry[] {
 
 type Menu =
   | { kind: "session"; point: MenuPoint; session: Session }
-  | { kind: "worktree"; point: MenuPoint; tree: Worktree }
-  | { kind: "workspace"; point: MenuPoint };
+  | { kind: "worktree"; point: MenuPoint; tree: Worktree };
 
 function pointOf(element: HTMLElement): MenuPoint {
   const rect = element.getBoundingClientRect();
@@ -182,6 +171,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
+
   const [refreshing, setRefreshing] = useState(false);
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -377,20 +367,15 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-        <WorkspaceHeader
-          name={props.home ? "Home" : props.workspace.name}
-          path={props.workspace.path}
-          editable={!props.home}
-          naming={naming || wanted}
-          onNaming={setNamingOrSettle}
-          onRename={props.onRenameWorkspace}
-          onMenu={(point) => setMenu({ kind: "workspace", point })}
-          commands={
-            !props.home ? <CommandsPill {...props.commands} running={props.running} worktrees={props.worktrees} /> : null
-          }
-        />
+        {props.home ? (
+          <div className="flex h-12 items-center pr-2 pl-3">
+            <span className={`${NAME_TYPE} min-w-0 truncate`}>Home</span>
+          </div>
+        ) : (
+          <WorkspaceBanner workspace={props.workspace} naming={naming || wanted} onNaming={setNamingOrSettle} onRename={props.onRenameWorkspace} />
+        )}
 
-        {props.home && <div className="px-2 pb-1">{props.home.actions}</div>}
+        {!props.home && <WorkspacePlaces {...props.nav} />}
 
         {/* Bots, as they are today. */}
         {prefs && !(filtering && bots.length === 0) && (
@@ -427,7 +412,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           </div>
         )}
 
-        {/* Sessions: search, refresh, the view menu and a new one, then the groups. */}
+        {/* Sessions: search, the view menu and a new one, then the groups. */}
         <div className="px-2">
           <div className={`${STICKY} -mx-2 px-2`}>
             {searching ? (
@@ -447,7 +432,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
             ) : (
               <div className="flex h-8 items-center gap-0.5 pl-2">
                 <span className="min-w-0 flex-1 truncate text-text-muted">Sessions</span>
-                <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
                 <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
                 {prefs && (
                   <SidebarViewMenu
@@ -455,6 +439,8 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                     onChange={setPrefs}
                     grouping={mode}
                     worktrees={props.home ? [] : props.worktrees}
+                    refreshing={refreshing}
+                    onRefresh={refresh}
                   />
                 )}
                 <HeaderButton icon={PlusIcon} label={`New session ${commandKeys("new-session")}`} onClick={() => props.onNewSession()} />
@@ -569,21 +555,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           onClose={() => setMenu(null)}
         />
       )}
-      {menu?.kind === "workspace" && (
-        <ActionMenu
-          point={menu.point}
-          title={props.workspace.name}
-          path={props.workspace.path}
-          actions={[RENAME, NEW_WORKTREE, SEPARATOR, REMOVE_WORKSPACE]}
-          onPick={(id) => {
-            setMenu(null);
-            if (id === "rename") queueMicrotask(() => setNaming(true));
-            if (id === "new-worktree") props.onNewWorktree();
-            if (id === "delete") props.onRemoveWorkspace();
-          }}
-          onClose={() => setMenu(null)}
-        />
-      )}
     </div>
   );
 }
@@ -591,59 +562,33 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 // ── The header ──────────────────────────────────────────────────────────────
 
 /**
- * The workspace's name, in its own type, renamed where it stands: a click on
- * it, on the pencil that shows beside it on hover, or ⋯ › Rename turns the name itself into the field. Its commands and the
- * menu sit beside it; the menu holds the path and copies it.
+ * The workspace at the top of the panel: its tile, small (the rail shows it large), and its name, centred on the
+ * places' icons under it, the name starting where their labels do. F2 on its rail mark turns the name into the field.
  */
-function WorkspaceHeader({
-  name,
-  path,
-  editable,
+function WorkspaceBanner({
+  workspace,
   naming,
   onNaming,
   onRename,
-  onMenu,
-  commands,
 }: {
-  name: string;
-  path: string;
-  editable: boolean;
+  workspace: Workspace;
   naming: boolean;
   onNaming: (naming: boolean) => void;
   onRename: (name: string) => void;
-  onMenu: (point: MenuPoint) => void;
-  commands: ReactNode;
 }) {
   return (
-    <div className="flex h-12 items-center gap-1 pr-2 pl-3">
+    <div data-banner title={naming ? undefined : workspace.path} className="flex h-12 items-center gap-2 px-3.5">
+      <WorkspaceTile workspace={workspace} size="sm" />
       {naming ? (
         <NameField
-          initial={name}
+          initial={workspace.name}
           onDone={(next) => {
             onNaming(false);
-            if (next && next !== name) onRename(next);
+            if (next && next !== workspace.name) onRename(next);
           }}
         />
       ) : (
-        <div className="flex min-w-0 flex-1 items-center">
-          {/* One target: the name and the pencil beside it rename alike. */}
-          <button
-            type="button"
-            title={editable ? `${path}\nClick to rename` : path}
-            onClick={() => editable && onNaming(true)}
-            onContextMenu={(event) => editable && onMenu(menuFromEvent(event))}
-            className={`group/title flex min-w-0 items-center gap-1.5 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-border-strong ${editable ? "cursor-text" : "cursor-default"}`}
-          >
-            <span className={`${NAME_TYPE} min-w-0 truncate`}>{name}</span>
-            {editable && (
-              <PencilIcon aria-hidden className="size-3 shrink-0 text-icon opacity-0 transition-opacity group-hover/title:opacity-100" />
-            )}
-          </button>
-        </div>
-      )}
-      {commands}
-      {editable && (
-        <HeaderButton icon={EllipsisIcon} label="Workspace" onClick={(event) => onMenu(pointOf(event.currentTarget))} />
+        <span className={`${NAME_TYPE} min-w-0 flex-1 truncate`}>{workspace.name}</span>
       )}
     </div>
   );
@@ -686,64 +631,6 @@ function NameField({ initial, onDone }: { initial: string; onDone: (name: string
   );
 }
 
-// ── Commands ────────────────────────────────────────────────────────────────
-
-/**
- * The workspace's commands, beside its name: they belong to the workspace, as
- * its name does. A quiet button like the ⋯ beside it, its glyph and, while any
- * run, how many; a dot when one waits on your review. The names run in its title.
- */
-function CommandsPill({
-  live,
-  asking,
-  orphans,
-  open,
-  onToggle,
-  running,
-  worktrees,
-}: {
-  live: number;
-  asking: number;
-  orphans: number;
-  open: boolean;
-  onToggle: () => void;
-  running?: ReadonlyMap<string, string[]> | undefined;
-  worktrees: Worktree[];
-}) {
-  const names = [...(running ?? new Map<string, string[]>())].flatMap(([path, list]) => {
-    const tree = worktrees.find((t) => t.path === path);
-    return list.map((name) => (worktrees.length > 1 && tree ? `${name} · ${worktreeLabel(tree)}` : name));
-  });
-  const said = [
-    live > 0 ? `${live} running` : "None running",
-    orphans > 0 ? `${orphans} left running with no session to answer for ${orphans === 1 ? "it" : "them"}` : null,
-    asking > 0 ? `${asking} to review` : null,
-    ...names,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  return (
-    <button
-      type="button"
-      data-nav
-      aria-current={open ? "page" : undefined}
-      aria-label={`Commands: ${said}`}
-      title={`Commands\n${said}`}
-      onClick={onToggle}
-      data-tauri-drag-region="false"
-      className={`flex h-6 shrink-0 items-center gap-1 rounded-md text-[12px] outline-none transition-colors focus-visible:bg-hover ${live > 0 ? "pr-1.5 pl-1" : "w-6 justify-center"} ${
-        open ? "bg-selected text-text" : orphans > 0 ? "text-warning hover:bg-hover" : "text-icon hover:bg-hover hover:text-text"
-      }`}
-    >
-      <span className="relative grid place-items-center">
-        <LayersIcon className="size-4 shrink-0" />
-        {asking > 0 && <span aria-hidden className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-warning ring-2 ring-sidebar" />}
-      </span>
-      {live > 0 && <span className="tabular-nums">{live}</span>}
-    </button>
-  );
-}
-
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
 const STICKY = "sticky top-0 z-10 bg-sidebar";
@@ -751,13 +638,11 @@ const STICKY = "sticky top-0 z-10 bg-sidebar";
 function HeaderButton({
   icon: Glyph,
   label,
-  spinning = false,
   onClick,
   className = "",
 }: {
   icon: Icon;
   label: string;
-  spinning?: boolean;
   onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 }) {
@@ -770,7 +655,7 @@ function HeaderButton({
       onClick={onClick}
       className={`grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-[color,background-color,opacity] hover:bg-hover hover:text-text focus-visible:bg-hover ${className}`}
     >
-      <Glyph className={`size-4 ${spinning ? "animate-spin" : ""}`} />
+      <Glyph className="size-4" />
     </button>
   );
 }
@@ -1025,7 +910,11 @@ function Tile({ session, active, selected, failed, onSelect, onMenu, onClearSele
   );
 }
 
-const BADGE: Partial<Record<SessionStatus, string>> = { "needs-input": "bg-warning", done: "bg-info", error: "bg-danger" };
+const BADGE: Partial<Record<SessionStatus, string>> = {
+  "needs-input": "bg-warning",
+  done: "bg-info",
+  error: "bg-danger",
+};
 
 function Badge({ status }: { status: SessionStatus }) {
   if (status === "idle" || status === "exited") return null;

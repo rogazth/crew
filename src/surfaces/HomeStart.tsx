@@ -41,7 +41,7 @@ export function HomeStart({ firstRun, cwd, onAsk, onOpenFolder, onNewBot, onOpen
       }
       ways={
         <>
-          <WayCard icon={FolderPlusIcon} title="Open a project folder" hint="Code, worktrees and commands" onClick={onOpenFolder} />
+          <WayCard icon={FolderPlusIcon} title="Open a project folder" hint="Code, worktrees and services" onClick={onOpenFolder} />
           <WayCard icon={BotIcon} title={firstRun ? "Meet your first bot" : "Make a bot"} hint="A named agent with its own history" onClick={onNewBot} />
           <WayCard icon={GlobeIcon} title="Open a browser tab" hint="Let agents browse, fill forms and capture pages" onClick={onOpenBrowser} />
         </>

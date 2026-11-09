@@ -194,7 +194,7 @@ export function RowMenu({ label, actions: entries, onPick }: { label: string; ac
         onClick={(event) => {
           // Under the button, its right edges lined up with the row's.
           const rect = event.currentTarget.getBoundingClientRect();
-          setPoint({ x: rect.right - 144, y: rect.bottom + 4 });
+          setPoint({ x: rect.right, y: rect.bottom + 4, align: "end" });
         }}
       />
       {point && (

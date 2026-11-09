@@ -1,5 +1,6 @@
-import { DELETE, SEPARATOR, tidy, type MenuAction, type MenuEntry } from "./menu";
+import { DELETE, type MenuAction } from "./menu";
 import type { Process, ProcessRun, ProcessSpec, ProcessState } from "./protocol";
+import type { Session } from "./types";
 
 export type { Process, ProcessRun, ProcessSpec } from "./protocol";
 
@@ -7,11 +8,17 @@ export type { Process, ProcessRun, ProcessSpec } from "./protocol";
 export const isLive = (run: ProcessRun | undefined): boolean =>
   run !== undefined && (run.state === "running" || run.state === "paused" || run.state === "starting");
 
-/** An agent wrote it or wants to change it, and the user has not said yes. */
-export const awaitsUser = (process: Process): boolean => !process.approved || process.proposed !== null;
-
 /** The local address a run printed, while it is up to answer there. */
 export const servedUrl = (run: ProcessRun | undefined): string | null => (run && isLive(run) ? run.url : null);
+
+/** An address on this machine: what a dev server prints, and what a browser here can open. */
+const LOCAL_URL = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i;
+
+/** What a run serves, when a Crew browser tab here can open it. */
+export function localUrl(run: ProcessRun | undefined): string | null {
+  const url = servedUrl(run);
+  return url !== null && LOCAL_URL.test(url) ? url : null;
+}
 
 /** An address as short as it reads: `localhost:5173`, its path only when it has one. */
 export function urlLabel(url: string): string {
@@ -26,9 +33,9 @@ export const runIn = (process: Process, worktree: string | null): ProcessRun | u
 export const liveRuns = (processes: Process[]): { process: Process; run: ProcessRun }[] =>
   processes.flatMap((process) => process.runs.flatMap((run) => (isLive(run) ? [{ process, run }] : [])));
 
-/** What Start all starts in `worktree`: every approved command not already up there. */
+/** What Start all starts in `worktree`: every command not already up there. */
 export const startableIn = (processes: Process[], worktree: string | null): Process[] =>
-  processes.filter((process) => process.approved && !isLive(runIn(process, worktree)));
+  processes.filter((process) => !isLive(runIn(process, worktree)));
 
 /**
  * The env a run starts again with: a run that set its own over the command's
@@ -112,37 +119,57 @@ export function stateTone(run: ProcessRun | undefined): Tone {
   }
 }
 
-const START: MenuAction = { id: "start", label: "Start", icon: "play" };
-const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop" };
-const RESTART: MenuAction = { id: "restart", label: "Restart", icon: "reopen" };
-const RESUME: MenuAction = { id: "resume", label: "Resume", icon: "play" };
-const LOGS: MenuAction = { id: "logs", label: "Open logs", icon: "terminal" };
-const APPROVE: MenuAction = { id: "approve", label: "Approve", icon: "read" };
-const REJECT: MenuAction = { id: "reject", label: "Reject", icon: "close" };
-const EDIT_PROCESS: MenuAction = { id: "edit", label: "Edit…", icon: "edit" };
-const COPY_COMMAND: MenuAction = { id: "copy-command", label: "Copy command", icon: "copy" };
+const EDIT_PROCESS: MenuAction = { id: "edit", label: "Edit", icon: "edit" };
 
-/** What a right-click on a command offers: the decision it waits on first, then the definition. */
-export function processActions(process: Process): MenuEntry[] {
-  return tidy([
-    ...(awaitsUser(process) ? [APPROVE, REJECT, SEPARATOR] : []),
-    EDIT_PROCESS,
-    COPY_COMMAND,
-    SEPARATOR,
-    DELETE,
-  ]);
+/**
+ * What a command's ⋯ offers: its definition. In a workspace of one worktree,
+ * where no pill stands for the run, `run` puts the run's own actions first.
+ */
+export function processActions(run?: ProcessRun): MenuAction[] {
+  // One list, no rules: few enough to read at a glance.
+  return [...(run ? soloActions(run) : []), EDIT_PROCESS, DELETE];
 }
 
-/** What one run offers, by how it stands. Pausing is left to agents; one they paused, the user can still wake. */
-export function runActions(process: Process, run: ProcessRun | undefined): MenuEntry[] {
-  const live = isLive(run);
-  return tidy([
-    ...(live ? [STOP] : process.approved ? [START] : []),
-    ...(run?.state === "running" || run?.state === "paused" ? [RESTART] : []),
-    ...(run?.state === "paused" ? [RESUME] : []),
-    SEPARATOR,
-    LOGS,
-  ]);
+/**
+ * What a run's ⋯ (or a right-click on it) offers, by how it stands: its
+ * output, what it serves here, and stopping it; one that failed is dismissed
+ * from here. Starting it again is Start's.
+ */
+export function runActions(run: ProcessRun): MenuAction[] {
+  return [
+    // First while it is up: the press most often wanted.
+    ...(run.state === "running" || run.state === "paused" ? [{ id: "restart", label: "Restart", icon: "reopen" } as MenuAction] : []),
+    { id: "output", label: "View output", icon: "terminal" },
+    ...(localUrl(run) !== null ? [{ id: "browser", label: "Open in browser", icon: "open" } as MenuAction] : []),
+    ...(isLive(run) ? [{ id: "stop", label: "Stop", icon: "stop" } as MenuAction] : [{ id: "dismiss", label: "Dismiss", icon: "close" } as MenuAction]),
+  ];
+}
+
+/**
+ * A run's actions with no pill to hold them, as one group: Start/Stop is the button and there is nothing to dismiss.
+ * Its output is worth opening while it runs, and after it failed, to read why; not after a clean stop.
+ */
+const soloActions = (run: ProcessRun): MenuAction[] =>
+  isLive(run) ? runActions(run).filter((entry) => entry.id !== "stop" && entry.id !== "dismiss")
+  : failed(run) ? [{ id: "output", label: "View output", icon: "terminal" }]
+  : [];
+
+const failed = (run: ProcessRun) => run.state === "crashed" || (run.state === "exited" && run.exitCode !== 0);
+
+/** One run, as one start of it: a pill taken away stays away until it is started again. */
+export const runSeen = (processId: string, run: ProcessRun) =>
+  `${processId}\u0000${run.worktree ?? ""}\u0000${run.startedAt ?? run.runCursor}`;
+
+/**
+ * The runs worth a pill: one up, one just asked for, and one that failed,
+ * until its pill is taken away. One stopped or ended cleanly has nothing to say.
+ */
+export function shownRuns(process: Process, pending: ReadonlySet<string>, dismissed: ReadonlySet<string>): ProcessRun[] {
+  return withPending(process, pending).filter((run) => {
+    if (pending.has(runKey(process.id, run.worktree))) return true;
+    if (dismissed.has(runSeen(process.id, run))) return false;
+    return isLive(run) || failed(run);
+  });
 }
 
 /** `KEY=value` a line, the way a `.env` reads. */
@@ -174,31 +201,6 @@ export function parseEnv(text: string): ParsedEnv {
   return { env, error: null };
 }
 
-export type SpecChange = { field: string; before: string; after: string };
-
-const FIELDS: { key: keyof ProcessSpec; label: string }[] = [
-  { key: "name", label: "Name" },
-  { key: "command", label: "Command" },
-  { key: "cwd", label: "Folder" },
-  { key: "env", label: "Environment" },
-  { key: "autoRestart", label: "Restart on crash" },
-];
-
-function show(value: ProcessSpec[keyof ProcessSpec]): string {
-  if (typeof value === "boolean") return value ? "On" : "Off";
-  if (typeof value === "string") return value;
-  return formatEnv(value as Record<string, string>);
-}
-
-/** What an agent's proposal would change, field by field, for the user to read before saying yes. */
-export function specChanges(current: ProcessSpec, proposed: ProcessSpec): SpecChange[] {
-  return FIELDS.flatMap(({ key, label }) => {
-    const before = show(current[key]);
-    const after = show(proposed[key]);
-    return before === after ? [] : [{ field: label, before, after }];
-  });
-}
-
 export function specOf(process: Process): ProcessSpec {
   return {
     name: process.name,
@@ -207,4 +209,61 @@ export function specOf(process: Process): ProcessSpec {
     env: process.env,
     autoRestart: process.autoRestart,
   };
+}
+
+/** Who wrote a command: the user, a session still here, or one since gone. */
+export type Origin = { kind: "user" } | { kind: "session"; id: string; session: Session | null };
+
+export function originOf(process: Process, sessions: Session[]): Origin {
+  if (process.createdBy === null) return { kind: "user" };
+  return { kind: "session", id: process.createdBy, session: sessions.find((session) => session.id === process.createdBy) ?? null };
+}
+
+/** A worktree a command can run in: `worktree` null is the main checkout. */
+export type Place = { worktree: string | null; label: string };
+
+/** A run asked for and not yet answered, by command and worktree. */
+export const runKey = (processId: string, worktree: string | null) => `${processId}\u0000${worktree ?? ""}`;
+
+/**
+ * Its runs, with the ones just asked for already starting: the press shows at
+ * once, before the daemon's answer, in a row of its own if it never ran there.
+ */
+export function withPending(process: Process, pending: ReadonlySet<string>): ProcessRun[] {
+  const asked = (worktree: string | null) => pending.has(runKey(process.id, worktree));
+  const runs = process.runs.map((run) => (asked(run.worktree) && !isLive(run) ? { ...run, state: "starting" as const, restarts: 0, url: null } : run));
+  for (const key of pending) {
+    const [id, path] = key.split("\u0000") as [string, string];
+    const worktree = path === "" ? null : path;
+    if (id === process.id && !runs.some((run) => run.worktree === worktree)) runs.push(ghostRun(worktree));
+  }
+  return runs;
+}
+
+function ghostRun(worktree: string | null): ProcessRun {
+  return {
+    worktree,
+    state: "starting",
+    pid: null,
+    streamId: null,
+    startedAt: null,
+    exitCode: null,
+    restarts: 0,
+    ptyId: "",
+    logCursor: 0,
+    runCursor: 0,
+    startedBy: null,
+    env: {},
+    url: null,
+  };
+}
+
+/** A worktree git no longer lists still has a name: the end of its path. */
+export function placeOf(places: Place[], worktree: string | null): Place {
+  return (
+    places.find((place) => place.worktree === worktree) ?? {
+      worktree,
+      label: worktree?.split("/").pop() ?? "main",
+    }
+  );
 }

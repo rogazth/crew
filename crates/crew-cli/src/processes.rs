@@ -45,7 +45,7 @@ pub fn ps(ctx: &Ctx) -> Result<ExitCode, CliError> {
 }
 
 /// A line per run of a process, its definition's fields beside each; one
-/// that runs nowhere gets a line of its own, stopped or waiting to be approved.
+/// that runs nowhere gets a line of its own, stopped.
 fn by_run(row: &Value) -> Vec<Value> {
     let runs = row.get("runs").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut base = row.clone();
@@ -53,9 +53,8 @@ fn by_run(row: &Value) -> Vec<Value> {
         object.remove("runs");
     }
     if runs.is_empty() {
-        let state = if row.get("pending_approval").is_some() { "pending-approval" } else { "stopped" };
         if let Some(object) = base.as_object_mut() {
-            object.entry("state").or_insert(json!(state));
+            object.entry("state").or_insert(json!("stopped"));
         }
         return vec![base];
     }
@@ -106,8 +105,7 @@ pub fn summary(value: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|runs| runs.iter().find(|run| run.get("here").is_some()))
         .unwrap_or(value);
-    let fallback = if value.get("pending_approval").is_some() { "pending-approval" } else { "stopped" };
-    let state = run.get("state").or_else(|| run.get("status")).and_then(Value::as_str).unwrap_or(fallback);
+    let state = run.get("state").or_else(|| run.get("status")).and_then(Value::as_str).unwrap_or("stopped");
     let mut line = format!("{name}  {state}");
     if let Some(tree) = run.get("worktree").and_then(Value::as_str) {
         line.push_str(&format!("  {tree}"));

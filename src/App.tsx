@@ -45,9 +45,9 @@ import { Pages } from "./surfaces/Pages";
 import { useConnectorsAlert } from "./surfaces/settings/integrations/alert";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
-import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
+import { liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
-import { CommandsView, type Place } from "./surfaces/CommandsView";
+import { ServicesView, type Place } from "./surfaces/ServicesView";
 import { showToast } from "./lib/toasts";
 import { GLOBAL_KEYS } from "./lib/settingsEngine/defs";
 import { onSettingSaveFailed, startSettings } from "./lib/settingsEngine/store";
@@ -56,13 +56,15 @@ import { unlockNotificationAudio } from "./lib/notificationSound";
 import { setVisibleProcess, watchProcesses } from "./lib/processAlerts";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
-import { HomeActions, TourFoot } from "./chrome/HomePanel";
+import { TourFoot } from "./chrome/HomePanel";
 import { useTour } from "./hooks/useTour";
 import { useUpdateWiring } from "./hooks/useUpdate";
 import type { Process } from "./lib/processes";
 import { PanePlaceContext } from "./surfaces/chat/panePlace";
 import { WorkspaceStart, focusWorkspaceStart } from "./surfaces/WorkspaceStart";
 import type { AgentChoice } from "./lib/providers";
+import type { NavPlace } from "./chrome/WorkspacePlaces";
+import { WorkspaceSettingsPage } from "./surfaces/WorkspaceSettingsPage";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
 const NO_PROCESSES: Process[] = [];
@@ -123,6 +125,14 @@ export function App() {
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
+  // A turn that ends may have made or removed a worktree: git is read again then, not only when the window comes back.
+  const working = sessions.filter((session) => session.status === "working").length;
+  const { reread: rereadTrees } = worktrees;
+  const wasWorking = useRef(working);
+  useEffect(() => {
+    if (working < wasWorking.current) void rereadTrees().catch(() => {});
+    wasWorking.current = working;
+  }, [working, rereadTrees]);
   const tour = useTour(workspaces.home, workspaces.projects, all);
   // A page opened anywhere ticks the tour's last step.
   const { triedBrowser } = tour;
@@ -184,16 +194,17 @@ export function App() {
     settings,
     isWorkspace,
     isRoutines,
-    isIntegrations,
     close: closePage,
     toggle: togglePage,
     openSettings,
+    openServices: showServices,
     openRoutines,
     openRoutine,
   } = usePages();
   useUpdateWiring(openSettings);
   const connectorsAlert = useConnectorsAlert();
-  const openConnectors = useCallback(() => togglePage({ kind: "integrations" }), [togglePage]);
+  // A session's Connectors chip: the app's Connectors, in Settings.
+  const openConnectors = useCallback(() => openSettings("connectors"), [openSettings]);
   const openUsage = useCallback(() => openSettings("usage"), [openSettings]);
   // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
   // Adjusted while rendering, on the page opening or closing, not on a toggle while it is open.
@@ -217,8 +228,8 @@ export function App() {
     closePage,
   });
 
-  // Where each command can run, the main checkout first, and what runs where:
-  // the sidebar marks a worktree with a server up, and counts what waits on the user.
+  // Where each service can run, the main checkout first, and what runs where: removing a worktree says what it
+  // stops, and the sidebar counts the services up.
   const places = useMemo<Place[]>(
     () =>
       worktrees.list.map((tree) => ({
@@ -230,7 +241,6 @@ export function App() {
   const commandCounts = useMemo(() => {
     const list = processes.processes ?? [];
     const live = liveRuns(list);
-    const alive = new Set(all.map((session) => session.id));
     const running = new Map<string, string[]>();
     for (const { process, run } of live) {
       const path = run.worktree ?? active?.path ?? "";
@@ -239,14 +249,23 @@ export function App() {
     return {
       running,
       live: live.length,
-      orphans: live.filter(({ run }) => isOrphan(run, alive)).length,
-      asking: list.filter(awaitsUser).length,
+      // The services with a run up, as the page's Running tab counts them: one running in two worktrees is one.
+      up: new Set(live.map(({ process }) => process.id)).size,
     };
-  }, [active?.path, all, processes.processes]);
-  // The worktree on screen: where a Commands tab opens, and where Start all starts.
+  }, [active?.path, processes.processes]);
+  // The worktree on screen: where Start all starts.
   const here = places.find((place) => place.worktree === work.placeIn) ?? places[0] ?? { worktree: null, label: "main" };
-  const { openStub } = nav;
-  const openCommands = useCallback(() => openStub("commands", "Commands"), [openStub]);
+  const servicesOpen = page.kind === "services";
+  // To the Services list, from the palette or a run's tab; already there, it stays as it is.
+  const openServices = useCallback(() => !servicesOpen && showServices(), [servicesOpen, showServices]);
+  // The workspace's place the main panel shows, and going to one; a session or a bot picked goes back to the tabs.
+  const navPlace: NavPlace = servicesOpen ? "services" : isRoutines ? "routines" : page.kind === "customize" ? "customize" : "tabs";
+  const pickPlace = (place: NavPlace) => {
+    if (place === navPlace) return;
+    if (place === "customize") togglePage({ kind: "customize" });
+    if (place === "services") togglePage({ kind: "services" });
+    if (place === "routines") togglePage({ kind: "routines", draft: null });
+  };
   // A file dropped on the strip opens as ⌘P would open it: one in the worktree
   // keeps its path there, one from elsewhere resolves against its own folder.
   const { openFile } = nav;
@@ -260,7 +279,6 @@ export function App() {
     },
     [openFile, treePath],
   );
-  const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
   const appRoot = useRef<HTMLDivElement>(null);
   useRecede(appRoot, sheet.sheet !== null);
@@ -281,9 +299,15 @@ export function App() {
 
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
-  // The command on screen: a run's own tab.
-  const seenProcessId = isWorkspace && tabs.active?.kind === "process" ? tabs.active.processId : null;
-  const seenWorktree = tabs.active?.kind === "process" ? tabs.active.worktree : undefined;
+  // The run on screen, whose crash needs no toast: one's output on the Services page, else a run's own tab. A
+  // service's editor shows no run, so it counts as none.
+  const servicesView = page.kind === "services" ? page.view : undefined;
+  const seen =
+    servicesView?.kind === "output" ? { processId: servicesView.id, worktree: servicesView.worktree }
+    : isWorkspace && tabs.active?.kind === "process" ? { processId: tabs.active.processId, worktree: tabs.active.worktree }
+    : null;
+  const seenProcessId = seen?.processId ?? null;
+  const seenWorktree = seen?.worktree ?? null;
   useEffect(() => {
     setVisibleProcess(seenProcessId ? { processId: seenProcessId, worktree: seenWorktree } : null);
   }, [seenProcessId, seenWorktree]);
@@ -340,7 +364,7 @@ export function App() {
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
     openWorkspace: envs.openWorkspace,
     openHistory: () => nav.openStub("history", "History"),
-    openCommands,
+    openCommands: openServices,
     startAllCommands: startableIn(processes.processes ?? [], here.worktree).length > 0 ? () => void processes.startAll(here.worktree) : null,
     stopAllCommands: commandCounts.live > 0 ? () => void processes.stopAll() : null,
     zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active) ? null : (delta) => void zoomApp(delta),
@@ -417,9 +441,7 @@ export function App() {
             activeId: active.id,
             sessions: all,
             settingsOpen: settings !== null,
-            routinesOpen: isRoutines,
-            integrationsOpen: isIntegrations,
-            integrationsAlert: connectorsAlert,
+            settingsAlert: connectorsAlert,
             // Picking a workspace is going back to it, out from under any page.
             onSelect: (id) => {
               closePage();
@@ -428,12 +450,9 @@ export function App() {
             },
             onCreate: envs.openWorkspace,
             remoteOf: envs.remoteOf,
-            onRename: workspaces.rename,
             onRequestRename: setRenameWanted,
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
-            onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
-            onOpenIntegrations: () => togglePage({ kind: "integrations" }),
             onOpenSettings: () => (settings ? closePage() : openSettings()),
             onOpenUsage: () => openSettings("usage"),
           }}
@@ -441,13 +460,14 @@ export function App() {
             workspace: active,
             worktrees: worktrees.list,
             sessions: listed,
-            activeSessionId,
+            // Under a page no session is on screen, so none is marked.
+            activeSessionId: isWorkspace ? activeSessionId : null,
+            nav: { current: navPlace, running: commandCounts.up, onPick: pickPlace },
             onSelect: nav.openSession,
             // The main checkout is stored as null, so it asks for no worktree.
             onNewBot: (path) => sheet.newBot(path === undefined || path === active.path ? undefined : path),
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) => startSession(undefined, path),
-            onNewWorktree: () => setDialog("new-worktree"),
             onRemoveWorktree: (tree) =>
               confirms.askWorktree(
                 tree,
@@ -460,30 +480,10 @@ export function App() {
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
             onReorder: reorder,
-            home: isHome
-              ? {
-                  actions: (
-                    <HomeActions
-                      onNewSession={() => startSession()}
-                      onNewBot={() => sheet.newBot()}
-                      onOpenFolder={envs.openWorkspace}
-                    />
-                  ),
-                  foot: tour.shown ? <TourFoot steps={tour.steps} onDismiss={tour.dismiss} /> : null,
-                }
-              : undefined,
-            running: commandCounts.running,
+            home: isHome ? { foot: tour.shown ? <TourFoot steps={tour.steps} onDismiss={tour.dismiss} /> : null } : undefined,
             onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
             renameWanted,
             onRenameSettled: () => setRenameWanted(null),
-            onRemoveWorkspace: () => confirms.askWorkspace(active, tabs.unsavedIn(active.id)),
-            commands: {
-              live: commandCounts.live,
-              asking: commandCounts.asking,
-              orphans: commandCounts.orphans,
-              open: isWorkspace && commandsOpen,
-              onToggle: openCommands,
-            },
             // A refusal from either still lets the other land; the button stops spinning either way.
             onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
@@ -500,6 +500,35 @@ export function App() {
           onOpenTerminal={envs.openTerminalOn}
           inset={!sidebarOpen}
           onClose={closePage}
+          renderCustomize={() =>
+            active && (
+              <WorkspaceSettingsPage
+                key={active.id}
+                workspace={active}
+                workspaces={workspaces.workspaces}
+                sessions={all}
+                remote={envs.remoteOf(active)}
+                onRename={(name) => void workspaces.rename(active.id, name)}
+                onRemove={() => confirms.askWorkspace(active, tabs.unsavedIn(active.id))}
+                onManageConnectors={() => openSettings("connectors")}
+              />
+            )
+          }
+          renderServices={() =>
+            active && (
+              <ServicesView
+                key={active.id}
+                workspaceId={active.id}
+                processes={processes}
+                places={places}
+                sessions={all}
+                onOpenBrowser={(url) => nav.openBrowser(url)}
+                onConfirm={confirms.ask}
+                open={servicesView ?? null}
+                onOpen={showServices}
+              />
+            )
+          }
         />
         {/* Hidden, not unmounted: bot and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
@@ -599,23 +628,10 @@ export function App() {
                   worktree={tab.worktree}
                   place={places.find((place) => place.worktree === tab.worktree)?.label ?? tab.worktree ?? "main"}
                   processes={processes}
-                  onOpenCommands={openCommands}
+                  onBack={openServices}
+                  backLabel="All services"
                 />
               )}
-              renderCommands={() =>
-                active && (
-                  <CommandsView
-                    key={active.id}
-                    workspaceId={active.id}
-                    processes={processes}
-                    places={places}
-                    here={here}
-                    sessions={all}
-                    onOpenRun={nav.openProcessRun}
-                    onConfirm={confirms.ask}
-                  />
-                )
-              }
               // Chrome's way: the entry loads where History was, so the tab turns into the page.
               onOpenHistory={(url) => {
                 const history = tabs.active;

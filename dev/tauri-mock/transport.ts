@@ -965,7 +965,116 @@ function mockUsage() {
   };
 }
 
+/** Crew's commands: two of the user's, one running in two worktrees, and one an agent wrote. */
+function mockRun(worktree: string | null, state: string, startedBy: string | null, extra: Row = {}): Row {
+  return {
+    worktree,
+    state,
+    pid: state === "running" ? 4242 : null,
+    streamId: null,
+    startedAt: state === "running" ? now - 18 * 6e4 : null,
+    exitCode: state === "exited" ? 1 : null,
+    restarts: 0,
+    ptyId: "",
+    logCursor: 0,
+    runCursor: 0,
+    startedBy,
+    env: {},
+    url: null,
+    ...extra,
+  };
+}
+const processes: Row[] = [
+  {
+    id: "p1",
+    workspaceId: "w1",
+    name: "Dev server",
+    command: "npm run dev",
+    cwd: "",
+    env: { PORT: "5173" },
+    autoRestart: false,
+    createdBy: null,
+    revision: 1,
+    runs: [
+      mockRun(null, "running", null, { env: { PORT: "5173" }, url: "http://localhost:5173/" }),
+      mockRun(AVATARS, "running", "s2", { env: { PORT: "5174" }, url: "http://localhost:5174/" }),
+    ],
+  },
+  {
+    id: "p2",
+    workspaceId: "w1",
+    name: "Daemon",
+    command: "cargo run -p crewd -- --data-dir ./tmp/dev",
+    cwd: "",
+    env: {},
+    autoRestart: true,
+    createdBy: null,
+    revision: 1,
+    runs: [],
+  },
+  {
+    id: "p3",
+    workspaceId: "w1",
+    name: "Storybook",
+    command: "npx storybook dev -p 6006",
+    cwd: "packages/ui",
+    env: {},
+    autoRestart: false,
+    createdBy: "s1",
+    revision: 1,
+    runs: [mockRun(SOCKET_REPLAY, "exited", "s1")],
+  },
+  {
+    id: "p4",
+    workspaceId: "w1",
+    name: "Type check",
+    command: "npx tsc --noEmit --watch",
+    cwd: "",
+    env: {},
+    autoRestart: false,
+    createdBy: "s7",
+    revision: 1,
+    runs: [],
+  },
+];
+function processChanged(row: Row): Row {
+  emit("process-changed", row);
+  return row;
+}
+function processRun(args: Row, state: string): Row {
+  const row = processes.find((p) => p.id === args.id);
+  if (!row) throw new Error("Process not found");
+  const worktree = (args.worktree as string | undefined) ?? null;
+  const runs = (row.runs as Row[]).filter((run) => run.worktree !== worktree);
+  const run = mockRun(worktree, state, null, args.env ? { env: args.env } : {});
+  row.runs = [...runs, run].sort((a, b) => (a.worktree === null ? -1 : b.worktree === null ? 1 : 0));
+  return processChanged(row);
+}
+
 const commands: Record<string, (args: Row) => unknown> = {
+  process_list: ({ workspaceId }) => processes.filter((p) => p.workspaceId === workspaceId),
+  process_create: (args) => {
+    const row = { cwd: "", env: {}, autoRestart: false, ...args, id: `p${Date.now()}`, createdBy: null, revision: 1, runs: [] };
+    processes.push(row);
+    return processChanged(row);
+  },
+  process_update: (args) => {
+    const row = processes.find((p) => p.id === args.id);
+    if (!row) throw new Error("Process not found");
+    Object.assign(row, args, { revision: (row.revision as number) + 1 });
+    return processChanged(row);
+  },
+  process_start: (args) => new Promise((resolve) => setTimeout(() => resolve(processRun(args, "running")), 600)),
+  process_restart: (args) => processRun(args, "running"),
+  process_stop: (args) => processRun(args, "stopped"),
+  process_resume: (args) => processRun(args, "running"),
+  process_delete: ({ workspaceId, id }) => {
+    processes.splice(processes.findIndex((p) => p.id === id) >>> 0, 1);
+    emit("process-removed", { workspaceId, id });
+    return null;
+  },
+  process_reorder: () => undefined,
+  process_log_tail: () => ({ text: "", start: 0, cursor: 0, skipped: 0 }),
   connectors_list: () => structuredClone(connectors),
   builtin_list: () => structuredClone(BUILTINS),
   // One machine, the vault: nothing else uses it in the mock.

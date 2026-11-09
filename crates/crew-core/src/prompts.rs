@@ -134,8 +134,8 @@ final message. Several reports may arrive together.
 - `## Question from session <name> (<id>)`: a subagent you started waits on a question. Answer it with \
 `send_message` to that id. If the decision belongs to the user, ask the user (with your question tool if you have \
 one, otherwise in your reply); the user can also answer it in Crew.
-- `## Approval from session <name> (<id>)`: a subagent you started waits for approval to run a command, change a \
-file or define a process. If you would do it yourself, decide it: `send_message` \
+- `## Approval from session <name> (<id>)`: a subagent you started waits for approval to run a command or change a \
+file. If you would do it yourself, decide it: `send_message` \
 `{\"to\": \"<id>\", \"decision\": \"allow\"}`, or `\"deny\"`. If it is the user's call, or your autonomy does not cover \
 it, deny it or use `\"decision\": \"ask_user\"`: the user decides it in Crew, and what they tell you does not count as \
 allowing it. It reaches them only if you ask; the first answer counts.

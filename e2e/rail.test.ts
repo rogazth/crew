@@ -136,9 +136,9 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   await pressChord(crew, `${MOD}+3`);
   await shows(beta);
 
-  // Renamed from its mark's menu, in the name at the top of the sidebar.
-  await mark(crew, "beta").click({ button: "right" });
-  await page().getByRole("menu").getByRole("menuitem", { name: "Rename" }).click();
+  // Renamed with F2 on its mark, in the name at the top of the sidebar.
+  await mark(crew, "beta").click();
+  await mark(crew, "beta").press("F2");
   const field = page().getByRole("textbox", { name: "Workspace name" });
   await field.fill("Backend");
   await field.press("Enter");
@@ -154,10 +154,12 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   assert.deepEqual(await railNames(crew), ["gamma", "alpha", "Backend"]);
   await shows(beta);
 
-  // Removed from its mark's menu: gone from crewd with its sessions, its folder untouched.
+  // Removed from its Settings page: gone from crewd with its sessions, its folder untouched.
   const head = await crew.git(alpha.path, "rev-parse", "HEAD");
-  await mark(crew, "alpha").click({ button: "right" });
-  await page().getByRole("menu").getByRole("menuitem", { name: "Remove workspace…" }).click();
+  await mark(crew, "alpha").click();
+  await shows(alpha);
+  await page().getByRole("navigation", { name: "Workspace", exact: true }).getByRole("button", { name: "Settings", exact: true }).click();
+  await page().getByRole("button", { name: "Remove workspace" }).click();
   const alert = page().getByRole("alertdialog");
   await alert.getByText('Remove workspace "alpha"?').waitFor();
   await alert.getByRole("button", { name: "Remove" }).click();
@@ -165,7 +167,6 @@ test("R1: the rail switches, reorders, renames and removes workspaces, and crewd
   await sameOrder(crew, [gamma.id, beta.id], "crewd no longer lists alpha");
   assert.deepEqual(await sessions(crew, alpha.id), [], "alpha's sessions went with it");
   assert.deepEqual(await railNames(crew), ["gamma", "Backend"]);
-  await shows(beta);
   assert.equal(await readFile(path.join(alpha.path, "README.md"), "utf8"), "# alpha\n");
   assert.equal(await crew.git(alpha.path, "rev-parse", "HEAD"), head);
   assert.equal(await crew.git(alpha.path, "status", "--porcelain"), "", "nothing in the folder changed");

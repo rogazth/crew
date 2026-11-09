@@ -6,11 +6,11 @@
 // session gets, with pills to pick the account when there are several. A server's page has
 // its copy in each CLI on its machine.
 // Escape and the arrow above the mark go back to the connectors.
-import { ArrowLeftIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
 import { EnvGlyph } from "../../../chrome/EnvBits";
-import { Card, IconButton, PAGE_TITLE } from "../../../chrome/kit";
+import { BackLink, Card, IconButton, PAGE_TITLE } from "../../../chrome/kit";
 import { useEnvLinks } from "../../../hooks/useEnvLinks";
 import { LOCAL } from "../../../lib/client/registry";
 import type { ConnectorTool } from "../../../lib/protocol";
@@ -40,9 +40,9 @@ export function DetailPage({ detail }: { detail: Detail }) {
 /** Back above, then mark, name and one line lined up with the page's edge; removing it all is the trash at the end. */
 function Header({ mark, title, subtitle, action }: { mark: ReactNode; title: string; subtitle: string; action?: ReactNode }) {
   return (
-    <header className="-mt-6 flex flex-col gap-3 px-1">
-      <IconButton icon={ArrowLeftIcon} label="Back to Connectors" className="-ml-2 size-8 self-start" onClick={home} />
-      <div className="flex items-center gap-3">
+    <header className="flex flex-col gap-4">
+      <BackLink onClick={home} />
+      <div className="flex items-center gap-3 px-1">
         {mark}
         <div className="flex min-w-0 flex-1 flex-col pr-6">
           <h1 className={`truncate ${PAGE_TITLE}`}>{title}</h1>
