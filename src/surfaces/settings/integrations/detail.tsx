@@ -21,7 +21,6 @@ import { hostOf, startAddAccount, ui, useEscape, useUi, type Detail } from "./li
 import { AccountRow } from "./manage";
 import { brandOf } from "./brand";
 import { ServiceMark } from "./mark";
-import { OutsideGroup } from "./outside";
 import { UnofficialNote, vendorOf } from "./builtin";
 import { useProviderServers } from "./providers";
 import { groupsOf, providerName, serverLine } from "./servers";
@@ -145,7 +144,6 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
           <ToolsGroup account={account} />
         </>
       )}
-      {!builtin && <OutsideGroup connector={connector} />}
       <Group title="About">
         <Row label="Publisher">
           <span className="text-text-muted">{connector.publisher}</span>

@@ -9,8 +9,6 @@ import { ACCOUNT_PROBLEM, ACCOUNT_TONE, TONE_BG, TONE_SOFT, TONE_TEXT, accountsL
 import { brandOf, brandOfServer, type Brand } from "./brand";
 import { ServiceMark } from "./mark";
 import { useRegistry } from "./registry";
-import { conflictsOf, useCopies, useWatchMachines } from "./copies";
-import { listJoin, providerName } from "./servers";
 import { flowLine, refusalOf, useIntegrations, type Account } from "./store";
 import { machineName, useVault } from "./vault";
 import { LOCAL } from "../../../lib/client/route";
@@ -203,16 +201,9 @@ const RANK: Account["state"][] = ["expired", "needs-scope", "failed", "pending",
 export function Installed() {
   const s = useIntegrations();
   const u = useUi();
-  useWatchMachines();
-  const { copies } = useCopies();
   const shown = s.connectors.filter((c) => !u.hidden.includes(c.id));
   const worstOf = (accounts: Account[]) => RANK.find((state) => accounts.some((a) => a.state === state)) ?? "connected";
-  // A conflict ranks with the problems, after an account that needs the person.
-  const rankOf = (c: (typeof shown)[number]) => {
-    const at = RANK.indexOf(worstOf(c.accounts));
-    return at === RANK.indexOf("connected") && conflictsOf(c, copies).length > 0 ? at - 0.5 : at;
-  };
-  const connectors = [...shown].sort((a, b) => rankOf(a) - rankOf(b));
+  const connectors = [...shown].sort((a, b) => RANK.indexOf(worstOf(a.accounts)) - RANK.indexOf(worstOf(b.accounts)));
   if (s.loaded && s.connectors.length === 0) {
     if (!s.error)
       return (
@@ -240,17 +231,13 @@ export function Installed() {
         const word = ACCOUNT_PROBLEM[worst];
         // With several accounts, say which one: "Work · Needs authentication".
         const account = word && (mine.length > 1 && bad.length < mine.length ? `${bad.map((a) => a.label).join(", ")} · ${word}` : word);
-        // Its page lists the copies that clash, and the fix for each.
-        const clashing = [...new Set(conflictsOf(connector, copies).map((c) => providerName(c.provider)))];
-        const conflict = clashing.length > 0 ? `Conflict · also in ${listJoin(clashing)}` : undefined;
-        const problem = account ?? conflict;
         return (
           <Tile
             key={connector.id}
             marks={[brandOf(connector)]}
-            tone={busy ? "info" : !account && conflict ? "warning" : ACCOUNT_TONE[worst]}
+            tone={busy ? "info" : ACCOUNT_TONE[worst]}
             title={connector.name}
-            subtitle={busy ? flowLine(running) : (problem ?? accountsLine(mine))}
+            subtitle={busy ? flowLine(running) : (account ?? accountsLine(mine))}
             subtitleTone={busy ? "info" : undefined}
             onOpen={() => openConnector(connector.id)}
           />

@@ -183,20 +183,12 @@ export function subscribeServers(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/**
- * Whether a CLI's server on a machine whose lists this window has waits on a
- * sign-in, or is still loaded in Crew's sessions beside one of Crew's
- * connectors (`clashWith`, their URLs): the rail's Connectors icon wears a dot.
- */
-export function serversNeedYou(clashWith: readonly string[], same: (a: string, b: string) => boolean): boolean {
-  return Object.values(state.machines).some((m) =>
-    m.inventory.some((i) =>
-      i.servers.some((x) => !isOff(x) && !isBundled(x) && (x.state === "needs_auth" || clashWith.some((url) => same(url, x.target)))),
-    ),
-  );
+/** Whether a CLI's server on a machine whose lists this window has waits on a sign-in: the rail's Connectors icon wears a dot. */
+export function serversNeedYou(): boolean {
+  return Object.values(state.machines).some((m) => m.inventory.some((i) => i.servers.some((x) => !isOff(x) && !isBundled(x) && x.state === "needs_auth")));
 }
 
-/** Every machine's lists this window has, and what it is doing to their servers: a connector's copies are read from these. */
+/** Every machine's lists this window has, and what it is doing to their servers. */
 export function useAllMachines(): { machines: Record<string, MachineServers>; busy: (envId: string, server: Server) => Busy } {
   const s = useSyncExternalStore(
     (listener) => {
@@ -211,9 +203,6 @@ export function useAllMachines(): { machines: Record<string, MachineServers>; bu
     busy: (envId, server) => s.work.find((w) => w.envId === envId && w.key === serverKey(server))?.busy ?? null,
   };
 }
-
-/** Reads a machine's lists as the page's first look does, for a view that shows its servers without the page. */
-export const watchMachine = (envId: string) => ensure(envId);
 
 /** A machine's lists as it has them now, after a change made to them. */
 export const reloadMachine = (envId: string) => load(envId, false);

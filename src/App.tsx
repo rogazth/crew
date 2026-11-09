@@ -42,7 +42,7 @@ import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
 import { worktreeLabel, worktreeOf } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
-import { useConnectorsAlert } from "./surfaces/settings/integrations/copies";
+import { useConnectorsAlert } from "./surfaces/settings/integrations/alert";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
