@@ -53,7 +53,7 @@ import { GLOBAL_KEYS } from "./lib/settingsEngine/defs";
 import { onSettingSaveFailed, startSettings } from "./lib/settingsEngine/store";
 import { boot } from "./lib/turnRuntime";
 import { unlockNotificationAudio } from "./lib/notificationSound";
-import { watchProcesses } from "./lib/processAlerts";
+import { setVisibleProcess, watchProcesses } from "./lib/processAlerts";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
@@ -282,6 +282,12 @@ export function App() {
 
   useDockBadge(all);
   useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
+  // The command on screen: a run's own tab.
+  const seenProcessId = isWorkspace && tabs.active?.kind === "process" ? tabs.active.processId : null;
+  const seenWorktree = tabs.active?.kind === "process" ? tabs.active.worktree : undefined;
+  useEffect(() => {
+    setVisibleProcess(seenProcessId ? { processId: seenProcessId, worktree: seenWorktree } : null);
+  }, [seenProcessId, seenWorktree]);
 
   // The worktree the sidebar's + asked the start screen to start in, until a tab comes up.
   const { setStartIn } = work;

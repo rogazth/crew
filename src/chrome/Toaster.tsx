@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { toast, Toaster as Sonner, useSonner } from "sonner";
 import type { NotificationSource } from "../lib/notifications";
 import type { NotificationTarget } from "../lib/notify";
-import { attachToasts, type ToastNews } from "../lib/toasts";
+import { attachToasts, TOAST_MS, type ToastNews } from "../lib/toasts";
 import type { Session } from "../lib/types";
 import { BotAvatar } from "./BotAvatar";
 import { ProviderIcon } from "./ProviderIcon";
@@ -44,8 +44,10 @@ const rowOf = (target: EventTarget) => (target instanceof Element ? target.close
 /**
  * News of another session while Crew is in front, on sonner: it owns the stack,
  * the fan-out on hover, the newest three showing, the older ones moving up, and
- * the swipe left or right that dismisses one. Nothing leaves on a timer. A click
- * opens the session; Clear all, under the stack, dismisses every one.
+ * the swipe left or right that dismisses one, and the timer that pauses while
+ * the stack is hovered. News of the same thing replaces the last, and comes down
+ * once that thing is seen. A click opens the session; Clear all, under the
+ * stack, dismisses every one.
  */
 export function Toaster({ onOpen, sessions }: { onOpen: (target: NotificationTarget) => void; sessions: Session[] }) {
   const { toasts } = useSonner();
@@ -88,17 +90,18 @@ export function Toaster({ onOpen, sessions }: { onOpen: (target: NotificationTar
   }, []);
 
   useEffect(() => {
-    const bySession = new Map<string, string>();
+    const byKey = new Map<string, string>();
     let serial = 0;
     return attachToasts({
       show: (news) => {
         const id = `toast-${++serial}`;
         const sessionId = news.target?.sessionId;
-        if (sessionId) {
-          // One per session: news of it replaces the last and comes to the front.
-          const last = bySession.get(sessionId);
+        const key = news.key ?? sessionId;
+        if (key) {
+          // One per thing it is news of: the latest replaces the last and comes to the front.
+          const last = byKey.get(key);
           if (last) toast.dismiss(last);
-          bySession.set(sessionId, id);
+          byKey.set(key, id);
         }
         targets.current.set(id, news.target);
         const session = latest.current.sessions.find((candidate) => candidate.id === sessionId);
@@ -108,14 +111,24 @@ export function Toaster({ onOpen, sessions }: { onOpen: (target: NotificationTar
           testId: id,
           ...(news.body ? { description: news.body } : { className: "toast-title-only" }),
           icon: <Face news={news} session={session} />,
-          duration: Infinity,
+          duration: news.duration ?? TOAST_MS[news.source],
+          onDismiss: () => forget(key, id),
+          onAutoClose: () => forget(key, id),
         });
       },
-      closeSession: (sessionId) => {
-        const id = bySession.get(sessionId);
-        if (id) toast.dismiss(id);
+      close: (match) => {
+        for (const [key, id] of byKey) {
+          if (!match(key)) continue;
+          byKey.delete(key);
+          toast.dismiss(id);
+        }
       },
     });
+
+    function forget(key: string | undefined, id: string) {
+      targets.current.delete(id);
+      if (key && byKey.get(key) === id) byKey.delete(key);
+    }
   }, []);
 
   const open = (row: Element | null) => {

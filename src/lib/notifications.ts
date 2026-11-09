@@ -21,6 +21,11 @@ export type NotificationEvent = {
   session?: { id: string; workspaceId: string; notifications: boolean } | undefined;
   /** What counts as the same news for the cooldown. Defaults to the session, else the title. */
   key?: string;
+  /**
+   * What its toast is news of: later news of the same replaces it, and
+   * closing it takes it down. Defaults to the session.
+   */
+  group?: string;
 };
 
 /** Why a notification was not shown. */
@@ -122,7 +127,7 @@ export async function dispatchNotification(event: NotificationEvent): Promise<Di
   const banner = test || !focused;
   // In front, the window says it itself, where a banner would have.
   const toast = !banner && prefs.toasts;
-  if (toast) showToast({ title: event.title, body: event.body, source: event.source, target });
+  if (toast) showToast({ title: event.title, body: event.body, source: event.source, target, key: event.group });
   if (!banner) {
     // No banner to answer for macOS: its last word on notifications decides the sound.
     const blocked = (await notificationStatus().catch(() => "unknown")) === "blocked";

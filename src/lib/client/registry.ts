@@ -324,10 +324,12 @@ function wire(conn: Connection) {
           title: name,
           body: "Lost the connection. Crew keeps trying.",
           key: `${conn.envId}:offline`,
+          group: `connection:${conn.envId}`,
         });
       }
       if (now === "online" && dropped.delete(conn.envId)) {
-        void dispatchNotification({ source: "connection", title: name, body: "Back online", key: `${conn.envId}:online` });
+        // Replaces the toast that said it was lost.
+        void dispatchNotification({ source: "connection", title: name, body: "Back online", key: `${conn.envId}:online`, group: `connection:${conn.envId}` });
       }
     }
     if (conn.envId !== LOCAL && now === "offline") revive(conn);

@@ -2,6 +2,7 @@ import * as api from "./api";
 import { client } from "./client";
 import { dispatchNotification } from "./notifications";
 import type { Process, ProcessRun, ProcessState } from "./protocol";
+import { closeToast, closeToasts } from "./toasts";
 
 /**
  * A command that fails on its own is news: one that exits with an error, or
@@ -21,18 +22,42 @@ const seeded = new Set<string>();
 let booted = false;
 
 const runKey = (process: Process, run: ProcessRun) => `${process.id}\0${run.worktree ?? ""}`;
+/** What a run's crash toast is filed under, so seeing the run or a restart takes it down. */
+const toastKey = (processId: string, worktree: string | null) => `process:${processId}\0${worktree ?? ""}`;
+
+/** The command on screen: one run's output, or with `worktree` undefined its page, which lists every run. */
+export type SeenProcess = { processId: string; worktree?: string | null | undefined };
+let visible: SeenProcess | null = null;
+
+const shows = (seen: SeenProcess | null, processId: string, worktree: string | null) =>
+  seen !== null && seen.processId === processId && (seen.worktree === undefined || seen.worktree === worktree);
+
+/**
+ * What the user is looking at: its crash toasts come down, and while the
+ * window is in front a crash of it needs none, the output says it already.
+ */
+export function setVisibleProcess(next: SeenProcess | null): void {
+  visible = next;
+  if (!next) return;
+  if (next.worktree === undefined) closeToasts(`process:${next.processId}\0`);
+  else closeToast(toastKey(next.processId, next.worktree));
+}
 
 function hear(process: Process) {
   for (const run of process.runs) {
     const key = runKey(process, run);
     const news = crashNews(states.get(key), run);
     states.set(key, run.state);
+    // Up again: the crash is old news.
+    if (run.state === "starting" || run.state === "running") closeToast(toastKey(process.id, run.worktree));
     if (!news) continue;
+    if (shows(visible, process.id, run.worktree) && document.hasFocus()) continue;
     void dispatchNotification({
       source: "process",
       title: process.name,
       body: run.worktree ? `${news} in ${run.worktree.split("/").pop()}` : news,
       key: `process:${key}`,
+      group: toastKey(process.id, run.worktree),
     });
   }
 }
