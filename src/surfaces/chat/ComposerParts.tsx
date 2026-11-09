@@ -66,7 +66,7 @@ function Disc({ tone, icon: Glyph, size = 18 }: { tone: Tone; icon: LucideIcon; 
 }
 
 /** The one word that does something about a row. */
-export function ActionWord({ children, onClick, disabled = false }: { children: ReactNode; onClick: () => void; disabled?: boolean }) {
+export function ActionWord({ children, onClick, disabled = false, plain = false }: { children: ReactNode; onClick: () => void; disabled?: boolean; /** No underline on hover. */ plain?: boolean }) {
   return (
     <button
       type="button"
@@ -75,7 +75,7 @@ export function ActionWord({ children, onClick, disabled = false }: { children: 
         event.stopPropagation();
         onClick();
       }}
-      className="flex h-7 shrink-0 items-center rounded-md px-2 text-[12.5px] font-medium whitespace-nowrap text-info hover:underline disabled:opacity-50"
+      className={`flex h-7 shrink-0 items-center rounded-md px-2 text-[12.5px] font-medium whitespace-nowrap text-info disabled:opacity-50 ${plain ? "" : "hover:underline"}`}
     >
       {children}
     </button>

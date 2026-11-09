@@ -5,6 +5,7 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
+import { scrollShadow } from "../../lib/scrollShadow";
 import { foldTurns, groupRows, speaker, splitQueued, threadRows, turnStart, underway } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
@@ -45,14 +46,6 @@ type Props = {
 /** A card the agent is stopped on: the time is the reader's, not the agent's. */
 function waiting(blocks: Block[]): boolean {
   return blocks.some(awaitsUser);
-}
-
-/** The fade at an edge there is more content past: a flag the stylesheet reads, flipped only when it changes. */
-function scrollShadow(el: HTMLElement) {
-  const top = el.scrollTop > 1;
-  const bottom = el.scrollHeight - el.scrollTop - el.clientHeight > 1;
-  if (el.hasAttribute("data-fade-top") !== top) el.toggleAttribute("data-fade-top", top);
-  if (el.hasAttribute("data-fade-bottom") !== bottom) el.toggleAttribute("data-fade-bottom", bottom);
 }
 
 /** Where the reader is: the first row on screen, and how far below the top edge it sits. */

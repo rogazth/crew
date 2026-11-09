@@ -557,18 +557,25 @@ test("a session's connectors show under the prompt, a dot says one needs the use
     await chip.click();
     const sheet = crew.window.locator("[data-connectors-sheet]:visible");
     const row = (name: string) => sheet.locator(`[data-server="${name}"]`);
-    // All alike, what needs the user first: no action on any, no switch, and the page's button under them.
+    // What needs the user first, to read: no action on any, no switch, and the way to the page in the header.
     assert.deepEqual(await sheet.locator("[data-server]").evaluateAll((all) => all.map((one) => one.getAttribute("data-server"))), ["sentry", "broken", "docs", "context7", "chrome-devtools", "figma", "a-server-with-a-rather-long-name"]);
-    assert.deepEqual(await sheet.getByRole("button").allInnerTexts(), ["Manage connectors"]);
+    assert.deepEqual(await sheet.getByRole("button").allInnerTexts(), ["Manage"]);
     assert.equal(await sheet.getByRole("switch").count(), 0, "switching one off is the page's");
     assert.equal(await row("off").count(), 0, "one switched off is the page's too");
     assert.equal(await row("sentry").locator("[data-server-dot]").count(), 1);
-    assert.equal(await row("docs").locator("[data-server-dot]").count(), 0);
+    assert.equal(await row("broken").locator("[data-server-dot]").count(), 1);
+    assert.equal(await row("docs").locator("[data-server-dot]").count(), 0, "one that is simply on has no dot");
     assert.equal(await row("broken").getAttribute("title"), "broken: Failed: ENOENT: no such file or directory");
     const list = await row("sentry").boundingBox();
-    const manage = await sheet.getByRole("button", { name: "Manage connectors" }).boundingBox();
-    assert.ok(list && manage && manage.y > list.y, "Manage is under the list");
-    assert.ok(((await sheet.boundingBox())?.height ?? 999) < 200, "the sheet stays small");
+    const manage = await sheet.getByRole("button", { name: "Manage" }).boundingBox();
+    assert.ok(list && manage && manage.y < list.y, "Manage is over the list, in the header");
+    const beside = await row("broken").boundingBox();
+    assert.ok(list && beside && beside.y === list.y && beside.x > list.x, "they sit side by side");
+    const docs = await row("docs").boundingBox();
+    const devtools = await row("chrome-devtools").boundingBox();
+    assert.ok(docs && devtools && docs.width < devtools.width, "each as wide as its name");
+    assert.equal(await sheet.locator("[data-connectors-list]").getAttribute("data-fade-bottom"), null, "all of them fit: no fade");
+    assert.ok(((await sheet.boundingBox())?.height ?? 999) < 240, "the sheet stays small");
     if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "connectors-sheet.png") });
 
     // Esc hands the keyboard back to the segment that opened it from the keyboard.
@@ -583,11 +590,44 @@ test("a session's connectors show under the prompt, a dot says one needs the use
 
     // Manage goes to the page.
     await chip.click();
-    await sheet.getByRole("button", { name: "Manage connectors" }).click();
+    await sheet.getByRole("button", { name: "Manage" }).click();
     await chip.waitFor({ state: "hidden" });
     assert.equal(await sheet.count(), 0, "the sheet closed");
     await crew.window.getByRole("button", { name: "Connectors", exact: true }).click();
     await chip.waitFor();
+    await idle(session);
+  } finally {
+    await rm(servers, { force: true });
+  }
+});
+
+test("more connectors than fit scroll, fading at the edge with more past it", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const servers = path.join(crew.home, "fake-claude-mcp.json");
+  await writeFile(servers, JSON.stringify(Array.from({ length: 40 }, (_, at) => ({ name: `server-${at}`, status: "connected" }))));
+  try {
+    const session = await newChat(workspace.id);
+    await send("so many servers");
+    await said("Reply 1: so many servers").waitFor();
+    await crew.window.locator("[data-status-line]:visible [data-connectors-trigger]").click();
+    const sheet = crew.window.locator("[data-connectors-sheet]:visible");
+    await sheet.locator('[data-server="server-39"]').waitFor({ state: "attached" });
+    const list = sheet.locator("[data-connectors-list]");
+    const fades = () => list.evaluate((el) => [el.hasAttribute("data-fade-top"), el.hasAttribute("data-fade-bottom")]);
+    assert.deepEqual(await fades(), [false, true], "at the top: only the bottom fades");
+    await list.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await waitFor(async () => (await fades())[0], { message: "the top fades once scrolled" });
+    assert.deepEqual(await fades(), [true, false], "at the end: only the top fades");
+    if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "connectors-sheet-scrolled.png") });
+    await list.evaluate((el) => {
+      el.scrollTop = 40;
+    });
+    await waitFor(async () => (await fades())[1], { message: "the bottom fades again" });
+    if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "connectors-sheet-middle.png") });
+    await crew.window.keyboard.press("Escape");
     await idle(session);
   } finally {
     await rm(servers, { force: true });

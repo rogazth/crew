@@ -1,27 +1,20 @@
 import { PlugIcon } from "lucide-react";
-import { useCallback } from "react";
-import { Button } from "../../chrome/kit";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { activeServers, chipLabel, stateLabel } from "../../lib/mcp";
 import type { McpServer } from "../../lib/protocol";
+import { scrollShadow } from "../../lib/scrollShadow";
 import type { Session } from "../../lib/types";
+import { brandOfName, serverLabel } from "../settings/integrations/brand";
 import { ServiceMark } from "../settings/integrations/mark";
-import { StatusSegment, StatusSheet, useStatusSheet } from "./ComposerParts";
+import { ActionWord, StatusSegment, StatusSheet, useStatusSheet } from "./ComposerParts";
 import { useChatActions } from "./context";
 import { useSessionServers } from "./useSessionServers";
 
-/** Where a known server's favicon comes from; the rest draw a monogram. */
-const PUBLISHERS: Record<string, string> = { sentry: "sentry.io", linear: "linear.app", context7: "context7.com", figma: "figma.com" };
-const niceName = (name: string) => name.replace(/^claude\.ai\s+/, "");
-const brandOf = (name: string) => {
-  const nice = niceName(name);
-  return { id: nice, name: nice, publisher: PUBLISHERS[nice.toLowerCase()] ?? nice, logo: null };
-};
-
 /**
- * The status line's "Connectors", and the sheet it opens over the composer: the
- * session's MCP servers (known before its CLI runs, from what that CLI has on
- * the machine), all alike, and under them the way to the Connectors page, which
- * is where anything is done about them. With none, it goes straight to that
+ * The status line's "Connectors", and the sheet it opens over the composer: a
+ * list to read of the session's MCP servers (known before its CLI runs, from what
+ * that CLI has on the machine), and in its header the way to the Connectors page,
+ * which is where anything is done about them. With none, it goes straight to that
  * page. The label never changes: a dot says something needs the user. The
  * composer owns whether it is open: only one sheet is open at a time.
  */
@@ -69,31 +62,55 @@ export function ConnectorsSegment({
         }}
       />
       {shown && (
-        <StatusSheet ref={box} data-connectors-sheet title="Connectors">
-          <div className="flex max-h-[76px] shrink-0 flex-wrap gap-x-3 gap-y-1 overflow-y-auto px-2 py-1">
-            {servers.map((server) => (
-              <ServerItem key={server.name} server={server} />
-            ))}
-          </div>
-          <Button data-connectors-manage onClick={manage} className="mt-1 w-full shrink-0">
-            Manage connectors
-          </Button>
+        <StatusSheet ref={box} data-connectors-sheet title="Connectors" action={<ActionWord plain onClick={manage}>Manage</ActionWord>}>
+          <ServerList servers={servers} />
         </StatusSheet>
       )}
     </>
   );
 }
 
-/** One server: a small mark, with a dot when something is wrong, and its name. How it stands is its tooltip. */
-function ServerItem({ server }: { server: McpServer }) {
-  const dot = server.state === "failed" ? "bg-danger" : server.state === "needs_auth" ? "bg-warning" : null;
+/**
+ * The servers as pills in reading order, wrapped to the sheet. Past a few lines it
+ * scrolls, fading at an edge with more beyond it as the transcript does; how many
+ * fit a line moves that edge, so a resize measures too.
+ */
+function ServerList({ servers }: { servers: McpServer[] }) {
+  const list = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    if (list.current) scrollShadow(list.current);
+  }, [servers.length]);
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => scrollShadow(el));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <span data-server={server.name} title={`${niceName(server.name)}: ${stateLabel(server)}`} className="inline-flex h-5 max-w-[160px] items-center gap-1.5 text-[12px] text-text-muted">
+    <ul
+      ref={list}
+      data-connectors-list
+      onScroll={(event) => scrollShadow(event.currentTarget)}
+      className="crew-scroll-shadow flex max-h-[168px] flex-wrap content-start gap-1.5 overflow-y-auto overscroll-contain px-2 py-1"
+    >
+      {servers.map((server) => (
+        <ServerItem key={server.name} server={server} />
+      ))}
+    </ul>
+  );
+}
+
+/** One server, as wide as its name, to read and not to press: a dot when it needs the user. How it stands, error included, is its tooltip. */
+function ServerItem({ server }: { server: McpServer }) {
+  const wrong = server.state === "needs_auth" || server.state === "failed";
+  return (
+    <li data-server={server.name} title={`${serverLabel(server.name)}: ${stateLabel(server)}`} className="inline-flex h-6 max-w-[200px] min-w-0 items-center gap-1.5 rounded-full bg-fill pr-2.5 pl-1.5 text-[12px]">
       <span className="relative shrink-0">
-        <ServiceMark brand={brandOf(server.name)} size={14} />
-        {dot && <span data-server-dot className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-surface ${dot}`} />}
+        <ServiceMark brand={brandOfName(server.name)} size={14} />
+        {wrong && <span data-server-dot className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-warning ring-1 ring-fill" />}
       </span>
-      <span className="min-w-0 truncate">{niceName(server.name)}</span>
-    </span>
+      <span className="min-w-0 truncate">{serverLabel(server.name)}</span>
+    </li>
   );
 }

@@ -27,3 +27,15 @@ export const brandOfServer = (server: RegistryServer): Brand => ({
   publisher: server.publisher,
   logo: server.iconUrl,
 });
+
+/** Where a known server's favicon comes from; the rest draw a monogram. */
+const PUBLISHERS: Record<string, string> = { sentry: "sentry.io", linear: "linear.app", context7: "context7.com", figma: "figma.com" };
+
+/** A session's server as the user knows it: Claude prefixes the ones it has from claude.ai. */
+export const serverLabel = (name: string) => name.replace(/^claude\.ai\s+/, "");
+
+/** The brand of a server known only by the name its session gives it. */
+export const brandOfName = (name: string): Brand => {
+  const nice = serverLabel(name);
+  return { id: nice, name: nice, publisher: PUBLISHERS[nice.toLowerCase()] ?? nice, logo: null };
+};
