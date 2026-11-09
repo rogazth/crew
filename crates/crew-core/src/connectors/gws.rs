@@ -29,10 +29,30 @@ use super::google::App;
 /// The `gws` Crew runs, and each platform's archive with its sha256.
 pub const VERSION: &str = "0.22.5";
 const ASSETS: &[(&str, &str, &str, &str)] = &[
-    ("macos", "aarch64", "google-workspace-cli-aarch64-apple-darwin.tar.gz", "1d2a9ffd5bc9b2c2c4b48630daf082fad13d9e57d741988a2c248eed562f7dac"),
-    ("macos", "x86_64", "google-workspace-cli-x86_64-apple-darwin.tar.gz", "51f9bd731404d4bba26c36e2e30dd68c56dccd1f834c01252cb0b14d6a6544b2"),
-    ("linux", "x86_64", "google-workspace-cli-x86_64-unknown-linux-gnu.tar.gz", "de78ecdbd2f1a84cca0063a7ecbc440240fc14b6ebccbb17f4646b792a8c5c1f"),
-    ("linux", "aarch64", "google-workspace-cli-aarch64-unknown-linux-gnu.tar.gz", "94490295d9580e1e88574e715a0a162991747d12d62f8c7b8dcc8268b6c1cea0"),
+    (
+        "macos",
+        "aarch64",
+        "google-workspace-cli-aarch64-apple-darwin.tar.gz",
+        "1d2a9ffd5bc9b2c2c4b48630daf082fad13d9e57d741988a2c248eed562f7dac",
+    ),
+    (
+        "macos",
+        "x86_64",
+        "google-workspace-cli-x86_64-apple-darwin.tar.gz",
+        "51f9bd731404d4bba26c36e2e30dd68c56dccd1f834c01252cb0b14d6a6544b2",
+    ),
+    (
+        "linux",
+        "x86_64",
+        "google-workspace-cli-x86_64-unknown-linux-gnu.tar.gz",
+        "de78ecdbd2f1a84cca0063a7ecbc440240fc14b6ebccbb17f4646b792a8c5c1f",
+    ),
+    (
+        "linux",
+        "aarch64",
+        "google-workspace-cli-aarch64-unknown-linux-gnu.tar.gz",
+        "94490295d9580e1e88574e715a0a162991747d12d62f8c7b8dcc8268b6c1cea0",
+    ),
 ];
 
 /// One call may take this long: `gws` has a connect timeout but none overall.
@@ -123,15 +143,11 @@ fn fetch(dir: &Path, bin: &Path) -> Result<(), GwsError> {
         if got != *sha {
             return Err(setup(format!("gws {VERSION} didn't match its checksum; it was not used")));
         }
-        let ok = std::process::Command::new("tar")
-            .arg("-xzf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&work)
-            .arg("gws")
-            .status()
-            .is_ok_and(|s| s.success());
-        if !ok {
+        // The whole archive: its entries are `./gws` and the like, which GNU
+        // tar doesn't match to a member named `gws` (bsdtar does).
+        let ok =
+            std::process::Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&work).status().is_ok_and(|s| s.success());
+        if !ok || !work.join("gws").is_file() {
             return Err(setup(format!("Couldn't unpack gws {VERSION}")));
         }
         let parent = bin.parent().ok_or_else(|| setup("gws has no folder".into()))?;
@@ -225,7 +241,10 @@ fn error_of(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> GwsError {
 
 /// Runs a tool of `app` for a session, with `token`. Its answer is MCP's.
 pub async fn call(gws: &Gws, app: App, name: &str, args: &Value, token: &str) -> Result<Value, GwsError> {
-    let tool = tools(app).iter().find(|t| t.name == name).ok_or_else(|| GwsError::Call(format!("{name} is not a tool of {}", app.name())))?;
+    let tool = tools(app)
+        .iter()
+        .find(|t| t.name == name)
+        .ok_or_else(|| GwsError::Call(format!("{name} is not a tool of {}", app.name())))?;
     let bin = gws.binary().await?;
     let config = gws.config_dir();
     let folder = std::env::temp_dir().join(format!("crew-gws-{}", uuid::Uuid::new_v4()));
@@ -256,7 +275,14 @@ pub struct Tool {
     pub schema: fn() -> Value,
 }
 
-const fn tool(name: &'static str, title: &'static str, description: &'static str, read_only: bool, destructive: bool, schema: fn() -> Value) -> Tool {
+const fn tool(
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    read_only: bool,
+    destructive: bool,
+    schema: fn() -> Value,
+) -> Tool {
     Tool { name, title, description, read_only, destructive, schema }
 }
 
@@ -363,73 +389,107 @@ fn when() -> Value {
 }
 
 const CALENDAR: &[Tool] = &[
-    tool("list_events", "List events", "List a calendar's events in a range, soonest first; from now on when no range is given.", true, false, || {
-        object(json!({
-            "calendar_id": { "type": "string", "default": "primary" },
-            "time_min": { "type": "string", "description": "RFC 3339; now by default." },
-            "time_max": { "type": "string", "description": "RFC 3339." },
-            "query": { "type": "string", "description": "Words to find in the events." },
-            "max_results": { "type": "integer", "minimum": 1, "maximum": 250, "default": 25 }
-        }), &[])
-    }),
-    tool("find_free_time", "Find free time", "Answer the busy blocks of one or more calendars in a range; the time between them is free.", true, false, || {
-        object(json!({
-            "time_min": { "type": "string", "description": "RFC 3339." },
-            "time_max": { "type": "string", "description": "RFC 3339." },
-            "calendars": { "type": "array", "items": { "type": "string" }, "description": "Calendar ids or people's addresses; primary by default." },
-            "time_zone": { "type": "string", "description": "IANA zone for the answer, like America/Santiago." }
-        }), &["time_min", "time_max"])
-    }),
+    tool(
+        "list_events",
+        "List events",
+        "List a calendar's events in a range, soonest first; from now on when no range is given.",
+        true,
+        false,
+        || {
+            object(
+                json!({
+                    "calendar_id": { "type": "string", "default": "primary" },
+                    "time_min": { "type": "string", "description": "RFC 3339; now by default." },
+                    "time_max": { "type": "string", "description": "RFC 3339." },
+                    "query": { "type": "string", "description": "Words to find in the events." },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 250, "default": 25 }
+                }),
+                &[],
+            )
+        },
+    ),
+    tool(
+        "find_free_time",
+        "Find free time",
+        "Answer the busy blocks of one or more calendars in a range; the time between them is free.",
+        true,
+        false,
+        || {
+            object(
+                json!({
+                    "time_min": { "type": "string", "description": "RFC 3339." },
+                    "time_max": { "type": "string", "description": "RFC 3339." },
+                    "calendars": { "type": "array", "items": { "type": "string" }, "description": "Calendar ids or people's addresses; primary by default." },
+                    "time_zone": { "type": "string", "description": "IANA zone for the answer, like America/Santiago." }
+                }),
+                &["time_min", "time_max"],
+            )
+        },
+    ),
     tool("create_event", "Create event", "Add an event. Attendees are emailed only when notify is on.", false, false, || {
-        object(json!({
-            "summary": { "type": "string" },
-            "start": when(),
-            "end": when(),
-            "time_zone": { "type": "string", "description": "IANA zone, like America/Santiago." },
-            "description": { "type": "string" },
-            "location": { "type": "string" },
-            "attendees": { "type": "array", "items": { "type": "string" } },
-            "calendar_id": { "type": "string", "default": "primary" },
-            "notify": { "type": "boolean", "default": false }
-        }), &["summary", "start", "end"])
+        object(
+            json!({
+                "summary": { "type": "string" },
+                "start": when(),
+                "end": when(),
+                "time_zone": { "type": "string", "description": "IANA zone, like America/Santiago." },
+                "description": { "type": "string" },
+                "location": { "type": "string" },
+                "attendees": { "type": "array", "items": { "type": "string" } },
+                "calendar_id": { "type": "string", "default": "primary" },
+                "notify": { "type": "boolean", "default": false }
+            }),
+            &["summary", "start", "end"],
+        )
     }),
     tool("update_event", "Update event", "Change an event: only the fields given change.", false, false, || {
-        object(json!({
-            "event_id": { "type": "string" },
-            "calendar_id": { "type": "string", "default": "primary" },
-            "summary": { "type": "string" },
-            "start": when(),
-            "end": when(),
-            "time_zone": { "type": "string" },
-            "description": { "type": "string" },
-            "location": { "type": "string" },
-            "attendees": { "type": "array", "items": { "type": "string" }, "description": "The whole new list." },
-            "notify": { "type": "boolean", "default": false }
-        }), &["event_id"])
+        object(
+            json!({
+                "event_id": { "type": "string" },
+                "calendar_id": { "type": "string", "default": "primary" },
+                "summary": { "type": "string" },
+                "start": when(),
+                "end": when(),
+                "time_zone": { "type": "string" },
+                "description": { "type": "string" },
+                "location": { "type": "string" },
+                "attendees": { "type": "array", "items": { "type": "string" }, "description": "The whole new list." },
+                "notify": { "type": "boolean", "default": false }
+            }),
+            &["event_id"],
+        )
     }),
     tool("delete_event", "Delete event", "Delete an event.", false, true, || {
-        object(json!({
-            "event_id": { "type": "string" },
-            "calendar_id": { "type": "string", "default": "primary" },
-            "notify": { "type": "boolean", "default": false }
-        }), &["event_id"])
+        object(
+            json!({
+                "event_id": { "type": "string" },
+                "calendar_id": { "type": "string", "default": "primary" },
+                "notify": { "type": "boolean", "default": false }
+            }),
+            &["event_id"],
+        )
     }),
 ];
 
 const DOCS: &[Tool] = &[
-    tool("read_document", "Read document", "Read a document's title and text.", true, false, || object(json!({ "document_id": { "type": "string" } }), &["document_id"])),
+    tool("read_document", "Read document", "Read a document's title and text.", true, false, || {
+        object(json!({ "document_id": { "type": "string" } }), &["document_id"])
+    }),
     tool("create_document", "Create document", "Make a document, with text when given.", false, false, || {
         object(json!({ "title": { "type": "string" }, "text": { "type": "string" } }), &["title"])
     }),
     tool("edit_document", "Edit document", "Replace text throughout a document, and add text at its end.", false, false, || {
-        object(json!({
-            "document_id": { "type": "string" },
-            "replace": {
-                "type": "array",
-                "items": object(json!({ "find": { "type": "string" }, "with": { "type": "string" }, "match_case": { "type": "boolean", "default": true } }), &["find", "with"]),
-            },
-            "append": { "type": "string", "description": "Text to add at the end." }
-        }), &["document_id"])
+        object(
+            json!({
+                "document_id": { "type": "string" },
+                "replace": {
+                    "type": "array",
+                    "items": object(json!({ "find": { "type": "string" }, "with": { "type": "string" }, "match_case": { "type": "boolean", "default": true } }), &["find", "with"]),
+                },
+                "append": { "type": "string", "description": "Text to add at the end." }
+            }),
+            &["document_id"],
+        )
     }),
 ];
 
@@ -439,20 +499,36 @@ fn range() -> Value {
 }
 
 const SHEETS: &[Tool] = &[
-    tool("read_range", "Read range", "Read a range's values.", true, false, || object(json!({ "spreadsheet_id": { "type": "string" }, "range": range() }), &["spreadsheet_id", "range"])),
-    tool("list_sheets", "List sheets", "List a spreadsheet's title and sheets, with each one's size.", true, false, || object(json!({ "spreadsheet_id": { "type": "string" } }), &["spreadsheet_id"])),
+    tool("read_range", "Read range", "Read a range's values.", true, false, || {
+        object(json!({ "spreadsheet_id": { "type": "string" }, "range": range() }), &["spreadsheet_id", "range"])
+    }),
+    tool("list_sheets", "List sheets", "List a spreadsheet's title and sheets, with each one's size.", true, false, || {
+        object(json!({ "spreadsheet_id": { "type": "string" } }), &["spreadsheet_id"])
+    }),
     tool("create_spreadsheet", "Create spreadsheet", "Make a spreadsheet, with sheets named as given.", false, false, || {
         object(json!({ "title": { "type": "string" }, "sheets": { "type": "array", "items": { "type": "string" } } }), &["title"])
     }),
-    tool("write_range", "Write range", "Write rows of values to a range. Formulas and dates are read as typed, unless raw is on.", false, false, || {
-        object(json!({
-            "spreadsheet_id": { "type": "string" },
-            "range": range(),
-            "values": { "type": "array", "items": { "type": "array", "items": {} } },
-            "raw": { "type": "boolean", "default": false }
-        }), &["spreadsheet_id", "range", "values"])
+    tool(
+        "write_range",
+        "Write range",
+        "Write rows of values to a range. Formulas and dates are read as typed, unless raw is on.",
+        false,
+        false,
+        || {
+            object(
+                json!({
+                    "spreadsheet_id": { "type": "string" },
+                    "range": range(),
+                    "values": { "type": "array", "items": { "type": "array", "items": {} } },
+                    "raw": { "type": "boolean", "default": false }
+                }),
+                &["spreadsheet_id", "range", "values"],
+            )
+        },
+    ),
+    tool("clear_range", "Clear range", "Clear a range's values.", false, true, || {
+        object(json!({ "spreadsheet_id": { "type": "string" }, "range": range() }), &["spreadsheet_id", "range"])
     }),
-    tool("clear_range", "Clear range", "Clear a range's values.", false, true, || object(json!({ "spreadsheet_id": { "type": "string" }, "range": range() }), &["spreadsheet_id", "range"])),
 ];
 
 /* ── What each tool runs ──────────────────────────────────────────────── */
@@ -528,7 +604,12 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
         }
         "list_labels" => {
             let labels = run.json(&["gmail", "users", "labels", "list", "--params", r#"{"userId":"me"}"#]).await?;
-            Ok(json!(labels["labels"].as_array().into_iter().flatten().map(|l| json!({ "id": l["id"], "name": l["name"], "type": l["type"] })).collect::<Vec<_>>()))
+            Ok(json!(labels["labels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|l| json!({ "id": l["id"], "name": l["name"], "type": l["type"] }))
+                .collect::<Vec<_>>()))
         }
         "create_draft" | "send_message" => {
             let body = need(args, "body")?;
@@ -585,7 +666,8 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
         }
         "read_file" => read_file(run, need(args, "file_id")?).await,
         "upload_file" => {
-            let content = args.get("content").and_then(Value::as_str).ok_or_else(|| GwsError::Call("content is required".into()))?;
+            let content =
+                args.get("content").and_then(Value::as_str).ok_or_else(|| GwsError::Call("content is required".into()))?;
             std::fs::write(run.file("upload"), content).map_err(|e| GwsError::Setup(e.to_string()))?;
             let mut meta = json!({ "name": need(args, "name")? });
             if let Some(folder) = text(args, "folder_id") {
@@ -593,7 +675,20 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
             }
             let p = params(json!({ "fields": "id,name,mimeType,webViewLink", "supportsAllDrives": true }));
             let mime = text(args, "mime_type").unwrap_or("text/plain");
-            run.json(&["drive", "files", "create", "--params", &p, "--json", &meta.to_string(), "--upload", "upload", "--upload-content-type", mime]).await
+            run.json(&[
+                "drive",
+                "files",
+                "create",
+                "--params",
+                &p,
+                "--json",
+                &meta.to_string(),
+                "--upload",
+                "upload",
+                "--upload-content-type",
+                mime,
+            ])
+            .await
         }
         "create_folder" => {
             let mut meta = json!({ "name": need(args, "name")?, "mimeType": "application/vnd.google-apps.folder" });
@@ -608,7 +703,9 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
             if !["reader", "commenter", "writer"].contains(&role) {
                 return Err(GwsError::Call("role is reader, commenter or writer".into()));
             }
-            let p = params(json!({ "fileId": need(args, "file_id")?, "sendNotificationEmail": flag(args, "notify", true), "supportsAllDrives": true }));
+            let p = params(
+                json!({ "fileId": need(args, "file_id")?, "sendNotificationEmail": flag(args, "notify", true), "supportsAllDrives": true }),
+            );
             let body = json!({ "type": "user", "role": role, "emailAddress": need(args, "email")? }).to_string();
             run.json(&["drive", "permissions", "create", "--params", &p, "--json", &body]).await
         }
@@ -669,7 +766,10 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
                 }
             }
             if args.contains_key("attendees") {
-                event.insert("attendees".into(), json!(strings(args, "attendees").iter().map(|e| json!({ "email": e })).collect::<Vec<_>>()));
+                event.insert(
+                    "attendees".into(),
+                    json!(strings(args, "attendees").iter().map(|e| json!({ "email": e })).collect::<Vec<_>>()),
+                );
             }
             let calendar = text(args, "calendar_id").unwrap_or("primary");
             let body = Value::Object(event).to_string();
@@ -680,10 +780,13 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
                 let p = params(json!({ "calendarId": calendar, "sendUpdates": updates(args) }));
                 run.json(&["calendar", "events", "insert", "--params", &p, "--json", &body]).await?
             } else {
-                let p = params(json!({ "calendarId": calendar, "eventId": need(args, "event_id")?, "sendUpdates": updates(args) }));
+                let p =
+                    params(json!({ "calendarId": calendar, "eventId": need(args, "event_id")?, "sendUpdates": updates(args) }));
                 run.json(&["calendar", "events", "patch", "--params", &p, "--json", &body]).await?
             };
-            Ok(json!({ "id": made["id"], "summary": made["summary"], "start": made["start"], "end": made["end"], "link": made["htmlLink"] }))
+            Ok(
+                json!({ "id": made["id"], "summary": made["summary"], "start": made["start"], "end": made["end"], "link": made["htmlLink"] }),
+            )
         }
         "delete_event" => {
             let p = params(json!({
@@ -700,13 +803,27 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
             Ok(json!({ "title": doc["title"], "text": clip(&document_text(&doc["body"]["content"])) }))
         }
         "create_document" => {
-            let doc = run.json(&["docs", "documents", "create", "--json", &json!({ "title": need(args, "title")? }).to_string()]).await?;
+            let doc = run
+                .json(&["docs", "documents", "create", "--json", &json!({ "title": need(args, "title")? }).to_string()])
+                .await?;
             let id = doc["documentId"].as_str().unwrap_or_default().to_string();
             if let Some(body) = args.get("text").and_then(Value::as_str).filter(|t| !t.is_empty()) {
-                let requests = json!({ "requests": [{ "insertText": { "location": { "index": 1 }, "text": body } }] }).to_string();
-                run.json(&["docs", "documents", "batchUpdate", "--params", &params(json!({ "documentId": id })), "--json", &requests]).await?;
+                let requests =
+                    json!({ "requests": [{ "insertText": { "location": { "index": 1 }, "text": body } }] }).to_string();
+                run.json(&[
+                    "docs",
+                    "documents",
+                    "batchUpdate",
+                    "--params",
+                    &params(json!({ "documentId": id })),
+                    "--json",
+                    &requests,
+                ])
+                .await?;
             }
-            Ok(json!({ "documentId": id, "title": doc["title"], "link": format!("https://docs.google.com/document/d/{id}/edit") }))
+            Ok(
+                json!({ "documentId": id, "title": doc["title"], "link": format!("https://docs.google.com/document/d/{id}/edit") }),
+            )
         }
         "edit_document" => {
             let id = need(args, "document_id")?;
@@ -730,7 +847,15 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
                 return Err(GwsError::Call("Give replace or append".into()));
             }
             let done = run
-                .json(&["docs", "documents", "batchUpdate", "--params", &params(json!({ "documentId": id })), "--json", &json!({ "requests": requests }).to_string()])
+                .json(&[
+                    "docs",
+                    "documents",
+                    "batchUpdate",
+                    "--params",
+                    &params(json!({ "documentId": id })),
+                    "--json",
+                    &json!({ "requests": requests }).to_string(),
+                ])
                 .await?;
             let replaced: Vec<Value> = done["replies"]
                 .as_array()
@@ -747,7 +872,9 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
             run.json(&["sheets", "spreadsheets", "values", "get", "--params", &p]).await
         }
         "list_sheets" => {
-            let p = params(json!({ "spreadsheetId": need(args, "spreadsheet_id")?, "fields": "properties.title,sheets.properties(sheetId,title,gridProperties)" }));
+            let p = params(
+                json!({ "spreadsheetId": need(args, "spreadsheet_id")?, "fields": "properties.title,sheets.properties(sheetId,title,gridProperties)" }),
+            );
             run.json(&["sheets", "spreadsheets", "get", "--params", &p]).await
         }
         "create_spreadsheet" => {
@@ -760,10 +887,23 @@ async fn run_tool(run: &Run<'_>, name: &str, args: &Args) -> Result<Value, GwsEr
             Ok(json!({ "spreadsheetId": made["spreadsheetId"], "link": made["spreadsheetUrl"] }))
         }
         "write_range" => {
-            let values = args.get("values").filter(|v| v.is_array()).ok_or_else(|| GwsError::Call("values is required".into()))?;
+            let values =
+                args.get("values").filter(|v| v.is_array()).ok_or_else(|| GwsError::Call("values is required".into()))?;
             let input = if flag(args, "raw", false) { "RAW" } else { "USER_ENTERED" };
-            let p = params(json!({ "spreadsheetId": need(args, "spreadsheet_id")?, "range": need(args, "range")?, "valueInputOption": input }));
-            run.json(&["sheets", "spreadsheets", "values", "update", "--params", &p, "--json", &json!({ "values": values }).to_string()]).await
+            let p = params(
+                json!({ "spreadsheetId": need(args, "spreadsheet_id")?, "range": need(args, "range")?, "valueInputOption": input }),
+            );
+            run.json(&[
+                "sheets",
+                "spreadsheets",
+                "values",
+                "update",
+                "--params",
+                &p,
+                "--json",
+                &json!({ "values": values }).to_string(),
+            ])
+            .await
         }
         "clear_range" => {
             let p = params(json!({ "spreadsheetId": need(args, "spreadsheet_id")?, "range": need(args, "range")? }));
@@ -866,7 +1006,12 @@ fn strip_html(html: &str) -> String {
             }
             '>' if in_tag => {
                 in_tag = false;
-                let name = tag.trim_start_matches('/').split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or_default().to_ascii_lowercase();
+                let name = tag
+                    .trim_start_matches('/')
+                    .split(|c: char| c.is_whitespace() || c == '/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
                 if ["br", "p", "div", "tr", "li", "h1", "h2", "h3"].contains(&name.as_str()) {
                     out.push('\n');
                 }
@@ -875,7 +1020,13 @@ fn strip_html(html: &str) -> String {
             c => out.push(c),
         }
     }
-    let out = out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'");
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
     out.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n")
 }
 
@@ -889,7 +1040,12 @@ fn document_text(content: &Value) -> String {
             }
         }
         for row in element["table"]["tableRows"].as_array().into_iter().flatten() {
-            let cells: Vec<String> = row["tableCells"].as_array().into_iter().flatten().map(|c| document_text(&c["content"]).trim().replace('\n', " ")).collect();
+            let cells: Vec<String> = row["tableCells"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| document_text(&c["content"]).trim().replace('\n', " "))
+                .collect();
             out.push_str(&format!("| {} |\n", cells.join(" | ")));
         }
     }
@@ -943,7 +1099,8 @@ mod tests {
     async fn a_tool_runs_gws_with_the_token_and_nothing_of_the_persons() {
         let dir = scratch();
         let gws = fake(&dir, r#"{"threads":[{"id":"t1","snippet":"hi"}]}"#, 0);
-        let answer = call(&gws, App::Gmail, "search_threads", &json!({ "query": "is:unread", "max_results": 500 }), "at-1").await.unwrap();
+        let answer =
+            call(&gws, App::Gmail, "search_threads", &json!({ "query": "is:unread", "max_results": 500 }), "at-1").await.unwrap();
         assert!(answer["content"][0]["text"].as_str().unwrap().contains("t1"));
         let args = std::fs::read_to_string(dir.join("args")).unwrap();
         let lines: Vec<&str> = args.lines().collect();
@@ -964,9 +1121,14 @@ mod tests {
     #[tokio::test]
     async fn googles_401_asks_for_a_new_token_and_a_403_is_an_answer() {
         let dir = scratch();
-        let gws = fake(&dir, r#"{"error":{"code":401,"message":"Request had invalid authentication credentials.","reason":"authError"}}"#, 1);
+        let gws = fake(
+            &dir,
+            r#"{"error":{"code":401,"message":"Request had invalid authentication credentials.","reason":"authError"}}"#,
+            1,
+        );
         assert_eq!(call(&gws, App::Drive, "trash_file", &json!({ "file_id": "f" }), "x").await, Err(GwsError::Unauthorized));
-        let gws = fake(&dir, r#"{"error":{"code":403,"message":"Insufficient Permission","reason":"insufficientPermissions"}}"#, 1);
+        let gws =
+            fake(&dir, r#"{"error":{"code":403,"message":"Insufficient Permission","reason":"insufficientPermissions"}}"#, 1);
         assert_eq!(
             call(&gws, App::Drive, "trash_file", &json!({ "file_id": "f" }), "x").await,
             Err(GwsError::Forbidden("Google refused: Insufficient Permission".into()))
@@ -979,9 +1141,14 @@ mod tests {
     async fn a_reply_and_a_draft_go_through_gws_helpers() {
         let dir = scratch();
         let gws = fake(&dir, "{}", 0);
-        call(&gws, App::Gmail, "create_draft", &json!({ "reply_to_message_id": "m1", "body": "Thanks", "cc": "b@x.dev" }), "t").await.unwrap();
+        call(&gws, App::Gmail, "create_draft", &json!({ "reply_to_message_id": "m1", "body": "Thanks", "cc": "b@x.dev" }), "t")
+            .await
+            .unwrap();
         let args = std::fs::read_to_string(dir.join("args")).unwrap();
-        assert_eq!(args.lines().collect::<Vec<_>>(), ["gmail", "+reply", "--message-id", "m1", "--body", "Thanks", "--cc", "b@x.dev", "--draft"]);
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            ["gmail", "+reply", "--message-id", "m1", "--body", "Thanks", "--cc", "b@x.dev", "--draft"]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
