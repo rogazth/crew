@@ -1,6 +1,6 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { PlugIcon, PlusIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { PlugIcon, PlusIcon, SettingsIcon, UnplugIcon, type LucideIcon as Icon } from "lucide-react";
 import { RoutinesIcon } from "./RoutinesIcon";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
@@ -14,7 +14,7 @@ import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
 import { DELETE, RENAME, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
-import { STATUS_ORDER } from "../lib/status";
+import { STATUS_ORDER, statusLabel } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
@@ -63,7 +63,7 @@ function jumpKeys(index: number): string {
   return index < 9 ? commandKeys(`workspace-${index + 1}` as CommandId) : "";
 }
 
-const IN_PROGRESS: SessionStatus[] = ["working", "starting", "background"];
+const IN_PROGRESS: SessionStatus[] = ["working", "starting"];
 
 /**
  * What a workspace has to say: the loudest status among its sessions, idle and read ones aside.
@@ -267,9 +267,7 @@ function HomeMark({
           <CrewGlyph className="size-7" />
         </span>
         {status && (
-          <span className="absolute -right-1 -bottom-1 grid place-items-center rounded-full bg-sidebar p-0.5">
-            <StatusDot status={status} className="size-3" />
-          </span>
+          <RailStatus status={status} />
         )}
       </Tooltip>
       <span aria-hidden className="h-px w-5 bg-border-strong" />
@@ -340,29 +338,34 @@ function Mark({
         aria-hidden
         className={`grid size-9 place-items-center text-[12px] font-semibold tracking-wide transition-[border-radius,background-color] duration-150 ${
           current ? "rounded-xl bg-accent text-inverse" : "rounded-[18px] bg-fill text-text group-hover:rounded-xl group-hover:bg-selected"
-        } ${remote && (remote.status === "offline" || remote.mismatch) ? "opacity-35! grayscale" : ""}`}
+        } ${
+          !remote
+            ? ""
+            : remote.mismatch || remote.status === "offline"
+              ? "opacity-35! grayscale"
+              : remote.status === "connecting"
+                ? "animate-pulse"
+                : ""
+        }`}
       >
         {workspaceMark(workspace.name)}
       </span>
       {remote && (
+        // Online says nothing: the unplugged badge shows only while the machine is out of
+        // reach — the mark itself pulses while it reconnects. It stays in the tree, hidden,
+        // so its state can still be read.
         <span
           aria-hidden
           data-remote-badge={remote.mismatch ? "offline" : remote.status}
-          className={`absolute -top-1 -right-1 grid size-4 place-items-center rounded-full text-inverse ring-2 ring-sidebar ${
-            remote.mismatch || remote.status === "offline"
-              ? "bg-danger"
-              : remote.status === "connecting"
-                ? "animate-pulse bg-warning"
-                : "bg-accent"
+          className={`absolute -top-1 -right-1 grid size-4 place-items-center rounded-full bg-fill text-text-muted ring-2 ring-sidebar ${
+            remote.status === "online" && !remote.mismatch ? "hidden" : ""
           }`}
         >
-          <ServerIcon className="size-2.5" strokeWidth={2.5} />
+          <UnplugIcon className="size-2.5" strokeWidth={2.5} />
         </span>
       )}
       {status && (
-        <span className="absolute -right-1 -bottom-1 grid place-items-center rounded-full bg-sidebar p-0.5">
-          <StatusDot status={status} className="size-3" />
-        </span>
+        <RailStatus status={status} />
       )}
     </button>
   );
@@ -450,3 +453,24 @@ function RailScroll({ activeId, children }: { activeId: string; children: ReactN
 
 /** The fade's height, and the margin under it at either end of the list. */
 const FADE = 12;
+
+/**
+ * A mark's status, cut out of its corner. A turn running spins rather than
+ * typing: the three dots are wider than the corner has room for.
+ */
+function RailStatus({ status }: { status: SessionStatus }) {
+  return (
+    <span className="absolute -right-0.5 -bottom-0.5 grid size-3.5 place-items-center rounded-full bg-sidebar">
+      {status === "working" || status === "starting" ? (
+        <span
+          role="img"
+          aria-label={statusLabel(status)}
+          title={statusLabel(status)}
+          className="size-2 animate-spin rounded-full border-[1.5px] border-text-muted border-t-transparent motion-reduce:animate-none"
+        />
+      ) : (
+        <StatusDot status={status} />
+      )}
+    </span>
+  );
+}

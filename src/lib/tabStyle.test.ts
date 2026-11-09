@@ -9,7 +9,7 @@ describe("toneOf", () => {
   });
 
   it("stays quiet for work that wants nothing, idle, and tabs without a session", () => {
-    for (const status of ["working", "background", "idle", null] as const) {
+    for (const status of ["working", "idle", null] as const) {
       expect(toneOf(status)).toEqual({ bold: false });
     }
   });

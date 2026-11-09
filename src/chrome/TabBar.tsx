@@ -555,7 +555,7 @@ const PinnedPill = memo(function PinnedPill({
 const NO_EXPAND = () => {};
 
 /** What a folded worktree says of its sessions: the one most in need of you. */
-const URGENCY: SessionStatus[] = ["needs-input", "error", "done", "working", "background"];
+const URGENCY: SessionStatus[] = ["needs-input", "error", "done", "working"];
 
 function groupStatus(tabs: Tab[], sessions: Session[]): SessionStatus | null {
   const statuses = new Set(tabs.map((tab) => tabStatus(tab, sessions)));

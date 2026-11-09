@@ -2,7 +2,7 @@ import { statusLabel } from "../lib/status";
 import type { SessionStatus } from "../lib/types";
 
 const DOT: Partial<Record<SessionStatus, string>> = {
-  "needs-input": "bg-warning",
+  "needs-input": "bg-info",
   done: "bg-info",
   error: "bg-danger",
 };
@@ -11,10 +11,10 @@ const DOT: Partial<Record<SessionStatus, string>> = {
  * The one signal that tells a live session from a parked one. A session that has
  * nothing to report — never answered, or already read — draws nothing at all.
  *
- * Colour is kept for what wants you: amber waits on you, blue finished out of
- * sight, red failed. Work that wants nothing is ink: three dots rising in turn
- * while a turn runs, the one thing in the chrome that moves, and a hollow dot,
- * still, once the turn is over with its work running on in the background.
+ * Colour is kept for what wants you: blue is something waiting for you — a
+ * question, an approval, a finished turn you have not read — and red failed.
+ * Work that wants nothing is ink: three dots rising in turn while an agent
+ * works, the one thing in the chrome that moves.
  */
 export function StatusDot({ status, className = "" }: { status: SessionStatus; className?: string }) {
   // An exited session has nothing more to say than an idle one.
@@ -28,8 +28,6 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
     >
       {status === "working" || status === "starting" ? (
         <TypingDots />
-      ) : status === "background" ? (
-        <span className="size-2 rounded-full border-[1.5px] border-text-muted" />
       ) : (
         <span className={`size-2 rounded-full ${DOT[status]}`} />
       )}

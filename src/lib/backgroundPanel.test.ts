@@ -265,7 +265,7 @@ describe("panelEntries kinds", () => {
 
     expect(entryOf("idle")).toMatchObject({ state: "done", endedAt: 90, stoppable: false });
     expect(entryOf("done")).toMatchObject({ state: "done", endedAt: 90, stoppable: false });
-    for (const status of ["starting", "working", "background", "needs-input"] as const) {
+    for (const status of ["starting", "working", "needs-input"] as const) {
       expect(entryOf(status)).toMatchObject({ state: "running", stoppable: true });
     }
     expect(entryOf("error")).toMatchObject({ state: "failed" });

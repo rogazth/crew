@@ -100,7 +100,7 @@ const NO_TREES: string[] = [];
 
 // ── Reading a session's state ───────────────────────────────────────────────
 
-const running = (s: Session) => s.status === "working" || s.status === "starting" || s.status === "background";
+const running = (s: Session) => s.status === "working" || s.status === "starting";
 /** What waits on you: a question, a failure, a pause. */
 const urgent = (s: Session) => Boolean(s.paused) || s.status === "needs-input" || s.status === "error" || failedUnseen(s);
 /** Finished, and you have not looked. */
@@ -822,7 +822,7 @@ function NewSessionRow({ onClick }: { onClick: () => void }) {
 
 function loudest(sessions: Session[], activeId: string | null): SessionStatus {
   const dots = sessions.map((s) => dotOf(s, activeId));
-  for (const status of ["needs-input", "error", "working", "starting", "background", "done"] as const) if (dots.includes(status)) return status;
+  for (const status of ["needs-input", "error", "working", "starting", "done"] as const) if (dots.includes(status)) return status;
   return "idle";
 }
 
@@ -1028,7 +1028,7 @@ function Badge({ status }: { status: SessionStatus }) {
       aria-label={statusLabel(status)}
       className={`absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar ${status === "working" ? "opacity-0 motion-reduce:opacity-100" : ""}`}
     >
-      {status === "working" || status === "starting" || status === "background" ? (
+      {status === "working" || status === "starting" ? (
         <StatusDot status={status} className="size-3" />
       ) : (
         <span className={`size-2.5 rounded-full ${BADGE[status]}`} />

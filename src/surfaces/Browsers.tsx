@@ -34,7 +34,7 @@ type Props = {
 const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind === "browser";
 
 /** A session still at it, or waiting on the person mid-task: its workspace's pages are in use. */
-const AT_WORK: ReadonlySet<SessionStatus> = new Set(["starting", "working", "background", "needs-input"]);
+const AT_WORK: ReadonlySet<SessionStatus> = new Set(["starting", "working", "needs-input"]);
 
 /**
  * Every open page stays mounted, shown or not, like the terminals: a guest
