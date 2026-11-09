@@ -209,7 +209,14 @@ export function TabBar({
     return place ? groups!.labelOf(place) : null;
   };
 
-  useCommand("open-launcher", () => setLauncher((value) => !value));
+  // ⌘T with the plus scrolled out of view would anchor the launcher off the window's
+  // edge, and focusing its field would scroll the whole window after it. The strip
+  // brings its end, and the plus, into view first.
+  useCommand("open-launcher", () => {
+    const scroller = ref.current;
+    if (!launcher && scroller) scroller.scrollLeft = scroller.scrollWidth;
+    setLauncher(!launcher);
+  });
 
   // Selecting from the launcher or the sidebar can land on a tab that scrolled out of view.
   // Brought in sideways only: the strip never scrolls up or down, whatever a tab's height.
