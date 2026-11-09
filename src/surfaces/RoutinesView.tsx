@@ -10,6 +10,7 @@ import { nextSort, sortRoutines, type Sort } from "../lib/routineSort";
 import { removeRoutine, saveRoutine } from "../lib/scheduler";
 import type { Session, Workspace } from "../lib/types";
 import { RoutineEditor } from "./RoutineEditor";
+import { useRoutinesScope } from "../hooks/useRoutinesScope";
 
 type Props = {
   /** Set when the page opens straight into a new routine, e.g. from a bot's drawer. */
@@ -35,7 +36,11 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
-  const [workspaceFilter, setWorkspaceFilter] = useState("all");
+  // The workspace narrowed to: what was picked here, else what the last pick asked for next time, the one on
+  // screen or all of them (useRoutinesScope).
+  const [scope, setScope] = useRoutinesScope();
+  const [pickedWorkspace, setPickedWorkspace] = useState<string | null>(null);
+  const workspaceFilter = pickedWorkspace ?? (scope === "current" && activeWorkspaceId ? activeWorkspaceId : "all");
   const [botFilter, setBotFilter] = useState("all");
   const [sort, setSort] = useState<Sort>(null);
 
@@ -61,14 +66,15 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
     [narrowed, filter, sort],
   );
 
-  // Only workspaces and bots that have a routine; the bots follow the workspace picked.
+  // Only workspaces and bots that have a routine, and the one on screen, which it opens on; the bots follow the workspace picked.
   const workspaceOptions = useMemo<Option<string>[]>(() => {
     const ids = new Set((entries ?? []).map((entry) => entry.session.workspaceId));
+    if (activeWorkspaceId) ids.add(activeWorkspaceId);
     return [
       { value: "all", label: "All workspaces" },
       ...workspaces.filter((w) => ids.has(w.id)).map((w) => ({ value: w.id, label: w.name })),
     ];
-  }, [entries, workspaces]);
+  }, [entries, workspaces, activeWorkspaceId]);
 
   const botOptions = useMemo<Option<string>[]>(() => {
     const seen = new Map<string, Session>();
@@ -166,7 +172,8 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
               ]}
             />
             <span className="flex-1" />
-            {workspaceOptions.length > 2 && (
+            {/* Narrowed, it always shows, so the way back to every workspace is there. */}
+            {(workspaceOptions.length > 2 || workspaceFilter !== "all") && (
               <FilterChip
                 label="Workspace"
                 value={workspaceFilter}
@@ -177,7 +184,8 @@ export function RoutinesView({ draft, editId, workspaces, activeWorkspaceId, bot
                 searchable
                 align="end"
                 onChange={(next) => {
-                  setWorkspaceFilter(next);
+                  setPickedWorkspace(next);
+                  setScope(next === "all" ? "all" : "current");
                   setBotFilter("all");
                 }}
               />

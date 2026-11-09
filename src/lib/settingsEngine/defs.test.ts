@@ -24,6 +24,7 @@ const WINDOW_MEMORY = [
   "src/hooks/useExplorerRoot.ts",
   "src/hooks/useOutlinePref.ts",
   "src/hooks/useProviderJobs.ts",
+  "src/hooks/useRoutinesScope.ts",
   "src/hooks/useSidebarPrefs.ts",
   "src/hooks/useSidebarWidth.ts",
   "src/hooks/useTabs.ts",
