@@ -2085,8 +2085,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
-            // Cursor, Codex, OpenCode and Grok list their models; Claude keeps Crew's own list.
             let models = match provider.as_str() {
+                "claude" => block(|| Ok::<_, String>(provider_session::claude_models())).await?,
                 "cursor" => block(|| Ok::<_, String>(provider_session::cursor_models())).await?,
                 "codex" => block(|| Ok::<_, String>(provider_session::codex_models())).await?,
                 "opencode" => block(|| Ok::<_, String>(provider_session::opencode_models())).await?,

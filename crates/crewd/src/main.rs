@@ -228,10 +228,7 @@ fn start_daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
 /// ad-hoc signed and would be a new app to the keychain on every rebuild, and
 /// not the e2e sandbox, whose HOME has no login keychain.
 fn keychain_vault(served: bool) -> bool {
-    cfg!(target_os = "macos")
-        && !cfg!(debug_assertions)
-        && !served
-        && std::env::var_os("CREW_SANDBOX").is_none()
+    cfg!(target_os = "macos") && !cfg!(debug_assertions) && !served && std::env::var_os("CREW_SANDBOX").is_none()
 }
 
 fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -> Result<(), Failure> {
@@ -350,6 +347,7 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen, owner: Option<i32>) -
 /// Everything after the bridge: the hosts, the database, the WebSocket.
 fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
     crew_core::shell_path::prewarm();
+    crew_core::provider_session::prewarm_claude_models();
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
     crew_core::provider_session::prewarm_opencode_models();

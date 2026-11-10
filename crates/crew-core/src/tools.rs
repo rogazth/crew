@@ -13,6 +13,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
     (
         "claude",
         &[
+            "claude-fable-5-2",
             "claude-fable-5-1",
             "claude-opus-5-5",
             "claude-sonnet-5-5",
@@ -491,6 +492,7 @@ fn with_listed(provider: &str, models: &[&str]) -> Vec<String> {
 #[cfg(not(test))]
 fn listed_models(provider: &str) -> Vec<String> {
     match provider {
+        "claude" => crate::provider_session::claude_models().into_iter().map(|m| m.id).collect(),
         "cursor" => crate::provider_session::cursor_models().into_iter().map(|m| m.id).collect(),
         "grok" => crate::provider_session::grok_models().into_iter().map(|m| m.id).collect(),
         _ => Vec::new(),

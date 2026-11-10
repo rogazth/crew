@@ -87,10 +87,14 @@ export const PROVIDERS: ProviderDef[] = [
       full: ["--dangerously-skip-permissions"],
     },
     efforts: ["low", "medium", "high", "xhigh", "max"],
+    // The CLI's `initialize` answer replaces this list, so a new model shows
+    // up once the CLI is updated (`loadListedModels`).
+    listsModels: true,
     defaultModel: "claude-opus-5-5",
     defaultEffort: "high",
     models: [
-      { id: "claude-fable-5-1", label: "Fable 5.1", note: "Toughest" },
+      { id: "claude-fable-5-2", label: "Fable 5.2", note: "Toughest" },
+      { id: "claude-fable-5-1", label: "Fable 5.1" },
       { id: "claude-opus-5-5", label: "Opus 5.5", note: "Most capable" },
       { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "Balanced" },
       { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "Fastest" },
@@ -703,6 +707,11 @@ export const listedModelsVersion = () => listedVersion;
 export function setListedModels(providerId: string, rows: ListedModel[]): void {
   const models = groupListed(rows);
   if (models.length === 0) return;
+  const own = new Map(providerOf(providerId)?.models.map((model) => [model.id, model]));
+  for (const model of models) {
+    const note = own.get(model.id)?.note;
+    if (note && !model.note) model.note = note;
+  }
   listed.set(providerId, models);
   listedVersion += 1;
   for (const listener of listeners) listener();

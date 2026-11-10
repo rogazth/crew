@@ -1182,23 +1182,130 @@ fn initialize_for_fast_mode(
     stdin: &mut ChildStdin,
     lines: &mpsc::Receiver<String>,
 ) -> Result<(Option<String>, Option<String>), String> {
+    let response = initialize_answer(stdin, lines, "claude fast mode")?;
+    let text = |key: &str| response.get(key).and_then(Value::as_str).map(str::to_string);
+    Ok((text("fast_mode_state"), text("fast_mode_disabled_reason")))
+}
+
+static CLAUDE_MODELS: Mutex<Option<(Instant, Vec<ListedModel>)>> = Mutex::new(None);
+static CLAUDE_LISTING: Mutex<()> = Mutex::new(());
+static CLAUDE_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Lists Claude's models off the caller's thread when its CLI is installed,
+/// so the first model picker opened already has them.
+pub fn prewarm_claude_models() {
+    thread::spawn(|| {
+        if shell_path::resolve("claude").is_some() {
+            claude_models();
+        }
+    });
+}
+
+/// Every model the installed Claude CLI offers this account, as its
+/// `initialize` answer lists them: a new model shows up once the CLI is
+/// updated, without a release of Crew. Past `MODELS_TTL` the last answer is
+/// returned while a new one is read behind it. Empty when the CLI is missing
+/// or fails, and then asked again next time.
+pub fn claude_models() -> Vec<ListedModel> {
+    if let Some((at, models)) = cached_claude_models() {
+        if at.elapsed() >= MODELS_TTL && !CLAUDE_REFRESHING.swap(true, Ordering::SeqCst) {
+            thread::spawn(|| {
+                refresh_claude_models();
+                CLAUDE_REFRESHING.store(false, Ordering::SeqCst);
+            });
+        }
+        return models;
+    }
+    let _listing = CLAUDE_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    match cached_claude_models() {
+        Some((_, models)) => models,
+        None => refresh_claude_models(),
+    }
+}
+
+fn cached_claude_models() -> Option<(Instant, Vec<ListedModel>)> {
+    CLAUDE_MODELS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn refresh_claude_models() -> Vec<ListedModel> {
+    let models = list_claude_models().unwrap_or_else(|err| {
+        tracing::warn!(error = %crate::trace::error_text(&err.to_string()), "models.read_failed");
+        Vec::new()
+    });
+    if !models.is_empty() {
+        *CLAUDE_MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), models.clone()));
+    }
+    models
+}
+
+/// Asks a Claude CLI for its `initialize` answer, which starts no turn and
+/// costs nothing, and reads its `models`. It is stopped once it has answered.
+fn list_claude_models() -> Result<Vec<ListedModel>, String> {
+    let binary = shell_path::resolve("claude").ok_or_else(|| "`claude` was not found on your PATH.".to_string())?;
+    let (mut child, mut stdin, lines) = spawn_claude_control(
+        &binary,
+        &[
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--setting-sources=project,local",
+            "--strict-mcp-config",
+        ],
+        &home().unwrap_or_else(std::env::temp_dir),
+        "claude models",
+    )?;
+    let outcome = initialize_answer(&mut stdin, &lines, "claude models");
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(parse_claude_models(&outcome?))
+}
+
+fn initialize_answer(stdin: &mut ChildStdin, lines: &mpsc::Receiver<String>, what: &str) -> Result<Value, String> {
     let request = build_control_request("1", json!({ "subtype": "initialize" }));
-    writeln!(stdin, "{request}").and_then(|_| stdin.flush()).map_err(|e| format!("claude fast mode: {e}"))?;
+    writeln!(stdin, "{request}").and_then(|_| stdin.flush()).map_err(|e| format!("{what}: {e}"))?;
     let deadline = Instant::now() + MODELS_TIMEOUT;
     loop {
         let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).map_err(|e| match e {
-            mpsc::RecvTimeoutError::Timeout => "claude fast mode did not answer".to_string(),
-            mpsc::RecvTimeoutError::Disconnected => "claude fast mode exited before answering".to_string(),
+            mpsc::RecvTimeoutError::Timeout => format!("{what} did not answer"),
+            mpsc::RecvTimeoutError::Disconnected => format!("{what} exited before answering"),
         })?;
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
         let Some((id, answer)) = parse_control_response(&record) else { continue };
-        if id != "1" {
+        if id == "1" {
+            return answer;
+        }
+    }
+}
+
+/// The `models` of an `initialize` answer. Each row's id is the model it runs
+/// (`resolvedModel`), so an alias (`default`, `opus`) and the model it names
+/// are one row; the first spelling wins, and the `default` alias is skipped
+/// for the model it stands for.
+fn parse_claude_models(answer: &Value) -> Vec<ListedModel> {
+    let rows = answer.get("models").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    let mut models = Vec::new();
+    for row in rows.iter().filter(|row| row.get("value").and_then(Value::as_str) != Some("default")) {
+        let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+        let Some(id) = text("resolvedModel").or_else(|| text("value")) else { continue };
+        if !seen.insert(id.to_string()) {
             continue;
         }
-        let response = answer?;
-        let text = |key: &str| response.get(key).and_then(Value::as_str).map(str::to_string);
-        return Ok((text("fast_mode_state"), text("fast_mode_disabled_reason")));
+        let efforts = row
+            .get("supportedEffortLevels")
+            .and_then(Value::as_array)
+            .map(|levels| levels.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+            .filter(|levels| !levels.is_empty());
+        models.push(ListedModel {
+            id: id.to_string(),
+            label: text("displayName").unwrap_or(id).to_string(),
+            efforts,
+            ..Default::default()
+        });
     }
+    models
 }
 
 /// A Claude CLI started to be asked over its control channel, with the lines
@@ -1820,6 +1927,26 @@ fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claude_models_are_the_initialize_answer_one_row_per_model() {
+        let answer = json!({ "models": [
+            { "value": "default", "resolvedModel": "claude-sonnet-5-5", "displayName": "Default (recommended)" },
+            { "value": "fable", "resolvedModel": "claude-fable-5-2", "displayName": "Fable 5.2",
+              "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"] },
+            { "value": "sonnet", "resolvedModel": "claude-sonnet-5-5", "displayName": "Sonnet 5.5" },
+            { "value": "claude-fable-5-2", "resolvedModel": "claude-fable-5-2", "displayName": "Fable 5.2 again" },
+            { "value": "claude-haiku-4-5-20251001", "displayName": "Haiku 4.5" },
+        ]});
+        let models = parse_claude_models(&answer);
+        let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["claude-fable-5-2", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]);
+        assert_eq!(models[0].label, "Fable 5.2");
+        assert_eq!(models[0].efforts.as_deref().map(<[String]>::len), Some(5));
+        assert_eq!(models[1].label, "Sonnet 5.5");
+        assert_eq!(models[2].efforts, None);
+        assert!(parse_claude_models(&json!({})).is_empty());
+    }
+
     use super::*;
     use crew_protocol::{ListedModel, ListedTier};
 
