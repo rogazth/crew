@@ -349,12 +349,7 @@ impl ClaudeDecoder {
         match rec.get("subtype").and_then(Value::as_str) {
             Some("turn_duration") => {
                 out.event(HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage {
-                        input_tokens: None,
-                        output_tokens: None,
-                        cost_usd: None,
-                        duration_ms: rec.get("durationMs").and_then(Value::as_u64),
-                    }),
+                    usage: Some(TurnUsage { duration_ms: rec.get("durationMs").and_then(Value::as_u64), ..TurnUsage::default() }),
                 });
                 out.turn_ended();
             }

@@ -275,9 +275,12 @@ pub fn add_usage(prev: Option<&TurnUsage>, step: &Value) -> TurnUsage {
     let input = count(tokens, "input") + count(cache, "read") + count(cache, "write");
     let output = count(tokens, "output") + count(tokens, "reasoning");
     let cost = finite_number(step.get("cost")).unwrap_or(0.0);
+    let sum = |field: fn(&TurnUsage) -> Option<u64>, add: u64| Some(prev.and_then(field).unwrap_or(0) + add);
     TurnUsage {
-        input_tokens: Some(prev.and_then(|prev| prev.input_tokens).unwrap_or(0) + input),
-        output_tokens: Some(prev.and_then(|prev| prev.output_tokens).unwrap_or(0) + output),
+        input_tokens: sum(|usage| usage.input_tokens, input),
+        cache_read_tokens: sum(|usage| usage.cache_read_tokens, count(cache, "read")),
+        cache_write_tokens: sum(|usage| usage.cache_write_tokens, count(cache, "write")),
+        output_tokens: sum(|usage| usage.output_tokens, output),
         cost_usd: Some(prev.and_then(|prev| prev.cost_usd).unwrap_or(0.0) + cost),
         duration_ms: None,
     }

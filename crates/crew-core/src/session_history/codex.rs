@@ -529,12 +529,8 @@ impl CodexDecoder {
                 } else {
                     let duration_ms = payload.get("duration_ms").and_then(Value::as_u64);
                     out.event(HarnessEvent::TurnCompleted {
-                        usage: duration_ms.map(|duration_ms| TurnUsage {
-                            input_tokens: None,
-                            output_tokens: None,
-                            cost_usd: None,
-                            duration_ms: Some(duration_ms),
-                        }),
+                        usage: duration_ms
+                            .map(|duration_ms| TurnUsage { duration_ms: Some(duration_ms), ..TurnUsage::default() }),
                     });
                 }
                 out.turn_ended();

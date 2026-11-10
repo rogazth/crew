@@ -20,8 +20,8 @@ pub struct ClaudeSpawn {
     /// `--effort`: low, medium, high, xhigh or max; `None` is the CLI's own.
     pub effort: Option<String>,
     pub session_id: Option<String>,
-    /// A conversation to carry on (`--resume`), for a child session; a bot's
-    /// turns never resume, they start clean with the tail (`session_id`).
+    /// A conversation to carry on (`--resume`): a child's, or a bot's while
+    /// its episode lasts; a bot's new episode starts clean with the tail (`session_id`).
     pub resume: Option<String>,
     /// Have Claude echo each user message as it takes it in. A message
     /// written mid-turn (a steer) is read at its next step, not when it
@@ -661,14 +661,16 @@ fn result_text(value: Option<&Value>) -> String {
 
 pub fn turn_usage(rec: &Map<String, Value>) -> TurnUsage {
     let usage = rec.get("usage").and_then(as_record);
-    let cached = finite_number(usage.and_then(|u| u.get("cache_read_input_tokens"))).unwrap_or(0.0)
-        + finite_number(usage.and_then(|u| u.get("cache_creation_input_tokens"))).unwrap_or(0.0);
+    let read = finite_number(usage.and_then(|u| u.get("cache_read_input_tokens"))).unwrap_or(0.0);
+    let written = finite_number(usage.and_then(|u| u.get("cache_creation_input_tokens"))).unwrap_or(0.0);
     let input = finite_number(usage.and_then(|u| u.get("input_tokens")));
     let output = finite_number(usage.and_then(|u| u.get("output_tokens")));
     let cost = finite_number(rec.get("total_cost_usd"));
     let duration = finite_number(rec.get("duration_ms"));
     TurnUsage {
-        input_tokens: input.map(|n| (n + cached) as u64),
+        input_tokens: input.map(|n| (n + read + written) as u64),
+        cache_read_tokens: input.map(|_| read as u64),
+        cache_write_tokens: input.map(|_| written as u64),
         output_tokens: output.map(|n| n as u64),
         cost_usd: cost,
         duration_ms: duration.map(|n| n as u64),
@@ -1582,7 +1584,10 @@ mod tests {
         assert_eq!(request["subtype"], "mcp_set_servers");
         assert_eq!(request["servers"], launched["mcpServers"]);
         let none = mcp_set_servers_request("/app/crewd", &["--mcp".into()], &[]);
-        assert_eq!(none["servers"].as_object().map(|servers| servers.keys().collect::<Vec<_>>()), Some(vec![&"crew".to_string()]));
+        assert_eq!(
+            none["servers"].as_object().map(|servers| servers.keys().collect::<Vec<_>>()),
+            Some(vec![&"crew".to_string()])
+        );
     }
 
     /// A bot keeps to the workspace's settings, so `~/.claude` cannot inject a

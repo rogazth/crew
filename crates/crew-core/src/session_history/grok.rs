@@ -190,7 +190,7 @@ fn stamp_ms(stamp: i64) -> i64 {
 }
 
 fn bare_usage() -> TurnUsage {
-    TurnUsage { input_tokens: None, output_tokens: None, cost_usd: None, duration_ms: None }
+    TurnUsage::default()
 }
 
 fn usage_of(update: &Map<String, Value>) -> TurnUsage {
@@ -198,6 +198,8 @@ fn usage_of(update: &Map<String, Value>) -> TurnUsage {
     let number = |key: &str| usage.and_then(|row| row.get(key)).and_then(Value::as_u64);
     TurnUsage {
         input_tokens: number("inputTokens"),
+        cache_read_tokens: number("cachedReadTokens"),
+        cache_write_tokens: number("cacheCreationTokens"),
         output_tokens: number("outputTokens"),
         cost_usd: number("costUsdTicks").map(|ticks| ticks as f64 / TICKS_PER_USD),
         duration_ms: update.get("elapsed_ms").and_then(Value::as_u64),

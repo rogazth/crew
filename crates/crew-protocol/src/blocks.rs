@@ -109,13 +109,22 @@ pub struct Question {
     pub options: Vec<QuestionOption>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct TurnUsage {
+    /// Everything the turn's requests read, the cache's share included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub input_tokens: Option<u64>,
+    /// Of `input_tokens`, what the provider's cache served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub cache_read_tokens: Option<u64>,
+    /// Of `input_tokens`, what was written to the provider's cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub cache_write_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub output_tokens: Option<u64>,

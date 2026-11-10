@@ -1969,7 +1969,19 @@ delivery?: "started" | "steered" | "queued",
  */
 letterId?: string, };
 
-export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
+export type TurnUsage = { 
+/**
+ * Everything the turn's requests read, the cache's share included.
+ */
+inputTokens?: number, 
+/**
+ * Of `input_tokens`, what the provider's cache served.
+ */
+cacheReadTokens?: number, 
+/**
+ * Of `input_tokens`, what was written to the provider's cache.
+ */
+cacheWriteTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
 
 /**
  * One piece of a file too big for a single message. `id` names the upload,

@@ -33,7 +33,7 @@ pub struct CursorDecoder {
 /// The file says nothing of tokens or cost; a turn closed with this still
 /// gets its footer, which is where the chat sees a turn end.
 fn closed() -> Option<TurnUsage> {
-    Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: None, duration_ms: None })
+    Some(TurnUsage::default())
 }
 
 impl Decoder for CursorDecoder {

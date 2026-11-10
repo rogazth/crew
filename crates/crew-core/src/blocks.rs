@@ -661,9 +661,7 @@ mod tests {
             vec![
                 user("hi"),
                 HarnessEvent::MessageDelta { text: text.into() },
-                HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: None, duration_ms: Some(1000) }),
-                },
+                HarnessEvent::TurnCompleted { usage: Some(TurnUsage { duration_ms: Some(1000), ..TurnUsage::default() }) },
                 HarnessEvent::SessionError { message: format!("{text}\n") },
             ],
             vec![],
@@ -715,9 +713,7 @@ mod tests {
         let blocks = run(
             vec![
                 HarnessEvent::MessageDelta { text: "ok".into() },
-                HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: Some(0.01), duration_ms: None }),
-                },
+                HarnessEvent::TurnCompleted { usage: Some(TurnUsage { cost_usd: Some(0.01), ..TurnUsage::default() }) },
             ],
             vec![new_block(BlockRole::User, "hi")],
         );
@@ -742,9 +738,7 @@ mod tests {
                     status: Some(ToolStatus::Completed),
                     detail: None,
                 },
-                HarnessEvent::TurnCompleted {
-                    usage: Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: Some(0.02), duration_ms: None }),
-                },
+                HarnessEvent::TurnCompleted { usage: Some(TurnUsage { cost_usd: Some(0.02), ..TurnUsage::default() }) },
             ],
             vec![new_block(BlockRole::User, "hi")],
         );
