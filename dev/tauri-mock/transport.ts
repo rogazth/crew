@@ -418,7 +418,7 @@ const repoIcons = new Map<string, { path: string; image: string }[]>([
 ]);
 type MockIcon = { choice: "auto" | "repo" | "upload" | "initials"; path: string | null; uploaded: string | null };
 const iconChoices = new Map<string, MockIcon>();
-function iconOf({ id, choices }: Row) {
+function iconOf({ id, choices, have }: Row) {
   const kept = iconChoices.get(String(id)) ?? { choice: "auto", path: null, uploaded: null };
   const found = repoIcons.get(String(id)) ?? [];
   const image =
@@ -427,10 +427,13 @@ function iconOf({ id, choices }: Row) {
       : kept.choice === "upload" && kept.uploaded
         ? kept.uploaded
         : ((kept.choice === "repo" ? found.find((file) => file.path === kept.path) : undefined) ?? found[0])?.image ?? null;
+  // As the daemon does: the image the window says it has comes back by its stamp alone.
+  const stamp = image ? `${image.length}:${image.slice(-24)}` : null;
   return {
     choice: kept.choice,
     path: kept.choice === "repo" ? kept.path : null,
-    image,
+    image: stamp !== null && stamp === have ? null : image,
+    stamp,
     found: choices ? found : [],
     uploaded: choices ? kept.uploaded : null,
   };

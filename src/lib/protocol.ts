@@ -2113,9 +2113,14 @@ export type WorkspaceIcon = { choice: IconChoice,
  */
 path: string | null, 
 /**
- * What it shows, as a data URL; none for its initials.
+ * What it shows, as a data URL; none for its initials, or when it is the
+ * image the window said it has (`have`), which `stamp` then names.
  */
 image: string | null, 
+/**
+ * What tells the image shown from another: a hash of its bytes; none for its initials.
+ */
+stamp: string | null, 
 /**
  * With `choices`: the repo's images, best first.
  */
@@ -2138,7 +2143,12 @@ look?: boolean,
  * With what there is to pick from (`found`, `uploaded`), for its settings;
  * without, only what it shows, for the rail.
  */
-choices?: boolean, };
+choices?: boolean, 
+/**
+ * The `stamp` of the image the window already draws: the same one again
+ * comes back without its bytes.
+ */
+have?: string, };
 
 /**
  * `workspace_icon_set`: the user's choice of icon. `repo` takes `path`;

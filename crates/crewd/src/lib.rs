@@ -572,13 +572,15 @@ fn workspace_profile(store: &Store, id: &str, save: Option<WorkspaceProfileSave>
 
 /// A workspace's icon as the window draws it. Its repo is looked at only when
 /// what it shows or what it offers needs it, and again only once what it
-/// found is old, unless `look`.
+/// found is old, unless `look`. The image the window says it has (`have`)
+/// is not sent again.
 fn workspace_icon_of(
     store: &Store,
     looks: &workspace_icon::Looks,
     id: &str,
     look: bool,
     choices: bool,
+    have: Option<&str>,
 ) -> Result<proto::WorkspaceIcon, String> {
     use workspace_icon::Choice;
     let row = workspace::get(store, id.to_string())?.ok_or_else(|| format!("No workspace {id}"))?;
@@ -587,15 +589,18 @@ fn workspace_icon_of(
     let upload = workspace_icon::upload_file(store, &row.id);
     let needs_repo = choices || look || workspace_icon::wants_repo(&kept) || (kept.choice == Choice::Upload && upload.is_none());
     let found = if needs_repo { looks.found(&row.id, root, look) } else { Vec::new() };
-    let image = workspace_icon::shown(store, &row.id, root, &found)?.and_then(|path| workspace_icon::data_url(&path));
+    let shown = workspace_icon::shown(store, &row.id, root, &found)?.and_then(|path| workspace_icon::read_image(&path));
+    let stamp = shown.as_ref().map(workspace_icon::Image::stamp);
+    let image = shown.filter(|_| have.is_none() || have != stamp.as_deref()).map(|image| image.data_url());
     let (found, uploaded) = if choices {
         let found = found
             .iter()
             .filter_map(|found| {
-                Some(proto::IconFile { path: found.path.clone(), image: workspace_icon::data_url(&root.join(&found.path))? })
+                let image = workspace_icon::repo_image(root, &found.path)?;
+                Some(proto::IconFile { path: found.path.clone(), image: image.data_url() })
             })
             .collect();
-        (found, upload.and_then(|path| workspace_icon::data_url(&path)))
+        (found, upload.and_then(|path| workspace_icon::read_image(&path)).map(|image| image.data_url()))
     } else {
         (Vec::new(), None)
     };
@@ -605,7 +610,7 @@ fn workspace_icon_of(
         Choice::Upload => proto::IconChoice::Upload,
         Choice::Initials => proto::IconChoice::Initials,
     };
-    Ok(proto::WorkspaceIcon { choice, path: (kept.choice == Choice::Repo).then_some(kept.path), image, found, uploaded })
+    Ok(proto::WorkspaceIcon { choice, path: (kept.choice == Choice::Repo).then_some(kept.path), image, stamp, found, uploaded })
 }
 
 /// The user's choice of icon: a new upload is kept and chosen; any other choice is kept as it is.
@@ -623,11 +628,15 @@ fn workspace_icon_set(
     };
     match set.upload {
         Some(upload) if choice == Choice::Upload => {
+            // Refused before it is decoded: base64 is four characters for three bytes.
+            if upload.data.len() > workspace_icon::MAX_UPLOAD / 3 * 4 + 8 {
+                return Err("The image is over 2 MB".into());
+            }
             workspace_icon::upload(store, &set.id, &upload.mime, &workspace_icon::decode(&upload.data)?)?
         }
         _ => workspace_icon::choose(store, &set.id, choice, set.path.as_deref())?,
     }
-    workspace_icon_of(store, looks, &set.id, false, true)
+    workspace_icon_of(store, looks, &set.id, false, true, None)
 }
 
 /// The user's edit of the rules, by id, whole or not at all. A rule removed
@@ -1648,10 +1657,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let processes = hosts.processes.clone();
             let turns = hosts.turns.clone();
+            let looks = hosts.icons.clone();
             block(move || {
                 // Its rows would go with the workspace, but not its processes,
-                // nor the CLIs its sessions keep between turns.
+                // nor the CLIs its sessions keep between turns, nor what its repo offered.
                 processes.forget_workspace(&id);
+                looks.forget(&id);
                 for session in session::list(&store, id.clone())? {
                     turns.release(&session.id);
                 }
@@ -1792,7 +1803,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let (store, looks) = (hosts.store.clone(), hosts.icons.clone());
             json(
                 block(move || {
-                    workspace_icon_of(&store, &looks, &get.id, get.look.unwrap_or(false), get.choices.unwrap_or(false))
+                    workspace_icon_of(
+                        &store,
+                        &looks,
+                        &get.id,
+                        get.look.unwrap_or(false),
+                        get.choices.unwrap_or(false),
+                        get.have.as_deref(),
+                    )
                 })
                 .await?,
             )
@@ -3465,6 +3483,23 @@ mod tests {
         let back: proto::WorkspaceIcon =
             serde_json::from_value(rpc(&mut ws, 8, "workspace_icon_set", back).await.result.unwrap()).unwrap();
         assert_eq!(back.image, uploaded.image, "the upload is kept to go back to");
+
+        // The rail says what it draws: the same image comes back by its stamp alone.
+        let stamp = back.stamp.clone().expect("a stamp");
+        let have = serde_json::json!({ "id": workspace.id, "have": stamp });
+        let same: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, 9, "workspace_icon_get", have).await.result.unwrap()).unwrap();
+        assert_eq!((same.image, same.stamp.as_deref()), (None, Some(stamp.as_str())));
+        let stale = serde_json::json!({ "id": workspace.id, "have": "0000" });
+        let fresh: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, 10, "workspace_icon_get", stale).await.result.unwrap()).unwrap();
+        assert_eq!(fresh.image, uploaded.image, "another stamp gets the image");
+
+        let missing = serde_json::json!({ "id": workspace.id, "choice": "repo", "path": "public/gone.png" });
+        assert!(rpc(&mut ws, 11, "workspace_icon_set", missing).await.error.is_some(), "only a file that is there");
+        let huge = "A".repeat(workspace_icon::MAX_UPLOAD / 3 * 4 + 16);
+        let huge = serde_json::json!({ "id": workspace.id, "choice": "upload", "upload": { "mime": "image/png", "data": huge } });
+        assert!(rpc(&mut ws, 12, "workspace_icon_set", huge).await.error.is_some(), "refused before it is decoded");
         handle.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -600,6 +600,11 @@ pub struct WorkspaceIconGet {
     #[serde(default)]
     #[ts(optional)]
     pub choices: Option<bool>,
+    /// The `stamp` of the image the window already draws: the same one again
+    /// comes back without its bytes.
+    #[serde(default)]
+    #[ts(optional)]
+    pub have: Option<String>,
 }
 
 /// A workspace's icon as the user chose it, and what it shows.
@@ -609,8 +614,11 @@ pub struct WorkspaceIcon {
     pub choice: IconChoice,
     /// The repo's file picked, relative to the workspace, when `choice` is `repo`.
     pub path: Option<String>,
-    /// What it shows, as a data URL; none for its initials.
+    /// What it shows, as a data URL; none for its initials, or when it is the
+    /// image the window said it has (`have`), which `stamp` then names.
     pub image: Option<String>,
+    /// What tells the image shown from another: a hash of its bytes; none for its initials.
+    pub stamp: Option<String>,
     /// With `choices`: the repo's images, best first.
     pub found: Vec<IconFile>,
     /// With `choices`: the image uploaded last, as a data URL, kept to go back to.

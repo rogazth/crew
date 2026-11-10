@@ -15,6 +15,13 @@ const icons = new Map<string, WorkspaceIcon>();
 const asking = new Map<string, Promise<WorkspaceIcon | null>>();
 /** What went wrong with the last choice or upload, for the picker to say. */
 const problems = new Map<string, string>();
+/**
+ * How many choices have been sent for each workspace. An answer to a question
+ * asked before the latest choice is older than what that choice answers with:
+ * the daemon answers them side by side, and a slow look in the repo can come
+ * back after the choice did.
+ */
+const choicesSent = new Map<string, number>();
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -51,10 +58,13 @@ export function refresh(workspaceId: string, opts: { look?: boolean; choices?: b
   const key = `${workspaceId}:${opts.look ? 1 : 0}:${opts.choices ? 1 : 0}`;
   const pending = asking.get(key);
   if (pending) return pending;
+  const sent = choicesSent.get(workspaceId) ?? 0;
+  // The image drawn now is not sent again: the rail asks each time the window comes back.
+  const have = opts.choices ? undefined : (icons.get(workspaceId)?.stamp ?? undefined);
   const ask = api
-    .getWorkspaceIcon(workspaceId, opts)
+    .getWorkspaceIcon(workspaceId, { ...opts, ...(have !== undefined && { have }) })
     .then((icon) => {
-      keep(workspaceId, icon, opts.choices ?? false);
+      if ((choicesSent.get(workspaceId) ?? 0) === sent) keep(workspaceId, icon, opts.choices ?? false);
       return icon;
     })
     .catch(() => null)
@@ -65,8 +75,11 @@ export function refresh(workspaceId: string, opts: { look?: boolean; choices?: b
 
 /** Keeps the user's choice through the daemon, and what it answers with. */
 export async function choose(workspaceId: string, choice: Omit<WorkspaceIconSet, "id">): Promise<WorkspaceIcon> {
+  const sent = (choicesSent.get(workspaceId) ?? 0) + 1;
+  choicesSent.set(workspaceId, sent);
   const icon = await api.setWorkspaceIcon(workspaceId, choice);
-  keep(workspaceId, icon, true);
+  // A choice made after this one has the last word.
+  if (choicesSent.get(workspaceId) === sent) keep(workspaceId, icon, true);
   return icon;
 }
 
@@ -90,9 +103,16 @@ export function upload(workspaceId: string, file: File): Promise<void> {
   return pick(workspaceId, async () => ({ choice: "upload", upload: await readUpload(file) }));
 }
 
-/** An answer without the choices keeps those read before; the same answer again draws nothing. */
-function keep(workspaceId: string, next: WorkspaceIcon, choices: boolean) {
+/**
+ * An answer without the choices keeps those read before; one that names the
+ * image drawn now by its stamp alone keeps that image; the same answer again
+ * draws nothing.
+ */
+function keep(workspaceId: string, answer: WorkspaceIcon, choices: boolean) {
   const before = icons.get(workspaceId);
+  const unsent = answer.image === null && answer.stamp !== null;
+  if (unsent && before?.stamp !== answer.stamp) return;
+  const next = unsent && before ? { ...answer, image: before.image } : answer;
   const merged = choices || !before ? next : { ...next, found: before.found, uploaded: before.uploaded };
   if (before && sameIcon(before, merged)) return;
   icons.set(workspaceId, merged);
@@ -104,6 +124,7 @@ export function sameIcon(a: WorkspaceIcon, b: WorkspaceIcon): boolean {
     a.choice === b.choice &&
     a.path === b.path &&
     a.image === b.image &&
+    a.stamp === b.stamp &&
     a.uploaded === b.uploaded &&
     a.found.length === b.found.length &&
     a.found.every((file, i) => file.path === b.found[i]?.path && file.image === b.found[i]?.image)
@@ -154,5 +175,6 @@ export function resetWorkspaceIcons() {
   icons.clear();
   asking.clear();
   problems.clear();
+  choicesSent.clear();
   version = 0;
 }

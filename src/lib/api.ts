@@ -181,7 +181,7 @@ export const saveWorkspaceProfile = (id: string, changes: Omit<WorkspaceProfileS
  * again now with `look`, else once what it found is old. `choices` adds what
  * there is to pick from, for its settings.
  */
-export const getWorkspaceIcon = (id: string, opts: { look?: boolean; choices?: boolean } = {}): Promise<WorkspaceIcon> =>
+export const getWorkspaceIcon = (id: string, opts: { look?: boolean; choices?: boolean; have?: string } = {}): Promise<WorkspaceIcon> =>
   client.request("workspace_icon_get", { id, ...opts });
 
 /** The user's choice of icon: a repo file by `path`, or an `upload` kept in the daemon's data dir. */

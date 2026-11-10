@@ -134,7 +134,14 @@ pub fn kept(store: &Store, id: &str) -> Result<Kept, String> {
 pub fn choose(store: &Store, id: &str, choice: Choice, path: Option<&str>) -> Result<(), String> {
     kept(store, id)?;
     let path = match choice {
-        Choice::Repo => path.map(str::trim).filter(|path| safe_relative(path)).ok_or("Pick an image in the repo")?.to_string(),
+        Choice::Repo => {
+            let path = path.map(str::trim).filter(|path| safe_relative(path)).ok_or("Pick an image in the repo")?;
+            let root = root_of(store, id)?;
+            if repo_image(&root, path).is_none() {
+                return Err(format!("{path} is no longer an image in the repo"));
+            }
+            path.to_string()
+        }
         _ => String::new(),
     };
     if choice == Choice::Upload && upload_file(store, id).is_none() {
@@ -159,11 +166,15 @@ pub fn upload(store: &Store, id: &str, mime: &str, bytes: &[u8]) -> Result<(), S
     kept(store, id)?;
     let dir = icons_dir(store)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    forget_upload(store, id);
     let name = format!("{}.{ext}", file_stem(id));
     let partial = dir.join(format!("{name}.partial"));
-    std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&partial, dir.join(&name)).map_err(|e| e.to_string())?;
+    // Written whole before the one before goes: a failed write keeps what was there.
+    let written = std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, dir.join(&name)));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&partial);
+        return Err(e.to_string());
+    }
+    forget_uploads_but(store, id, Some(ext));
     store
         .with(|conn| conn.execute("UPDATE workspaces SET icon = 'upload', icon_upload = ?2 WHERE id = ?1", params![id, name]))?;
     Ok(())
@@ -187,10 +198,17 @@ pub fn upload_file(store: &Store, id: &str) -> Option<PathBuf> {
 /// Removes what was uploaded for the workspace: before another upload, and
 /// when the workspace goes. By name, so it works once the row is gone.
 pub fn forget_upload(store: &Store, id: &str) {
+    forget_uploads_but(store, id, None);
+}
+
+/// Removes the workspace's uploads of every kind but `keep`: another kind
+/// uploaded at the same time is not left behind.
+fn forget_uploads_but(store: &Store, id: &str, keep: Option<&str>) {
     let Ok(dir) = icons_dir(store) else { return };
     let stem = file_stem(id);
-    for ext in ["svg", "png", "webp", "jpg", "ico"] {
+    for ext in ["svg", "png", "webp", "jpg", "ico"].into_iter().filter(|ext| Some(*ext) != keep) {
         let _ = std::fs::remove_file(dir.join(format!("{stem}.{ext}")));
+        let _ = std::fs::remove_file(dir.join(format!("{stem}.{ext}.partial")));
     }
 }
 
@@ -198,7 +216,8 @@ pub fn forget_upload(store: &Store, id: &str) {
 /// that is gone falls back to the best the repo offers.
 pub fn shown(store: &Store, id: &str, root: &Path, found: &[Found]) -> Result<Option<PathBuf>, String> {
     let kept = kept(store, id)?;
-    let best = || found.first().map(|found| root.join(&found.path));
+    // What was found may be minutes old: each file is checked again before it is read.
+    let best = || found.iter().map(|found| root.join(&found.path)).find(|path| inside(root, path));
     Ok(match kept.choice {
         Choice::Initials => None,
         Choice::Upload => upload_file(store, id).or_else(best),
@@ -210,6 +229,26 @@ pub fn shown(store: &Store, id: &str, root: &Path, found: &[Found]) -> Result<Op
 /// Whether the workspace's choice needs the repo looked at to be shown.
 pub fn wants_repo(kept: &Kept) -> bool {
     matches!(kept.choice, Choice::Auto | Choice::Repo)
+}
+
+/// The workspace's folder, as its row keeps it.
+fn root_of(store: &Store, id: &str) -> Result<PathBuf, String> {
+    store
+        .with(|conn| {
+            conn.query_row("SELECT path FROM workspaces WHERE id = ?1", params![id], |row| row.get::<_, String>(0)).optional()
+        })?
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("No workspace {id}"))
+}
+
+/// One of the repo's images by its path relative to the workspace: still in
+/// the repo (its links followed), and still the image its name says.
+pub fn repo_image(root: &Path, relative: &str) -> Option<Image> {
+    if !safe_relative(relative) {
+        return None;
+    }
+    let path = root.join(relative);
+    inside(root, &path).then(|| read_image(&path)).flatten()
 }
 
 fn icons_dir(store: &Store) -> Result<PathBuf, String> {
@@ -271,15 +310,34 @@ fn ext_of(path: &str) -> String {
     path.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
 }
 
-/// The image as a data URL, for the window to draw; none when it is too big or unreadable.
-pub fn data_url(path: &Path) -> Option<String> {
-    let size = std::fs::metadata(path).ok()?.len();
-    if size > MAX_UPLOAD as u64 {
+/// An image read for the window: its bytes and what they are.
+pub struct Image {
+    bytes: Vec<u8>,
+    mime: &'static str,
+}
+
+impl Image {
+    /// What tells this image from another without sending it: a hash of its bytes.
+    pub fn stamp(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&self.bytes);
+        digest[..8].iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// The image as a data URL, for the window to draw.
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.mime, base64::engine::general_purpose::STANDARD.encode(&self.bytes))
+    }
+}
+
+/// The image at `path`; none when it is too big, unreadable, or not the image its name says.
+pub fn read_image(path: &Path) -> Option<Image> {
+    if std::fs::metadata(path).ok()?.len() > MAX_UPLOAD as u64 {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
     let ext = ext_of(&path.to_string_lossy());
-    Some(format!("data:{};base64,{}", mime_of_ext(&ext), base64::engine::general_purpose::STANDARD.encode(bytes)))
+    looks_like(&bytes, &ext).then(|| Image { bytes, mime: mime_of_ext(&ext) })
 }
 
 /* ── What the repo offers ────────────────────────────────────────────── */
@@ -287,10 +345,7 @@ pub fn data_url(path: &Path) -> Option<String> {
 /// The images in the repo that could be its icon, best first: square-ish
 /// before not, SVG, PNG and WebP before JPEG before ICO, then the largest.
 pub fn detect(root: &Path) -> Vec<Found> {
-    let mut matched = Vec::new();
-    let mut seen = 0;
-    walk(root, root, 0, &mut seen, &mut matched);
-    let mut found: Vec<Found> = matched
+    let mut found: Vec<Found> = walk(root)
         .into_iter()
         .filter_map(|relative| {
             let path = root.join(&relative);
@@ -313,34 +368,44 @@ pub fn detect(root: &Path) -> Vec<Found> {
     found
 }
 
-fn walk(dir: &Path, root: &Path, depth: usize, seen: &mut usize, out: &mut Vec<String>) {
-    if depth > MAX_DEPTH || *seen >= MAX_ENTRIES || out.len() >= MAX_MATCHES {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        *seen += 1;
-        if *seen >= MAX_ENTRIES || out.len() >= MAX_MATCHES {
-            return;
-        }
-        // Not through links: they lead out of the repo, or round in circles.
-        let Ok(kind) = entry.file_type() else { continue };
-        let name = entry.file_name().to_string_lossy().to_string();
-        let path = entry.path();
-        if kind.is_dir() {
-            if !name.starts_with('.') && !SKIP.contains(&name.to_ascii_lowercase().as_str()) {
-                walk(&path, root, depth + 1, seen, out);
+/// Level by level, nearest the root first: a monorepo's deep packages do not
+/// spend the budget before `public/` or `src-tauri/` are read.
+fn walk(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = 0;
+    let mut level = vec![root.to_path_buf()];
+    for _depth in 0..=MAX_DEPTH {
+        let mut next = Vec::new();
+        for dir in level {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let mut entries: Vec<_> = entries.flatten().collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                seen += 1;
+                if seen >= MAX_ENTRIES || out.len() >= MAX_MATCHES {
+                    return out;
+                }
+                // Not through links: they lead out of the repo, or round in circles.
+                let Ok(kind) = entry.file_type() else { continue };
+                let name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                if kind.is_dir() {
+                    if !name.starts_with('.') && !SKIP.contains(&name.to_ascii_lowercase().as_str()) {
+                        next.push(path);
+                    }
+                } else if kind.is_file() {
+                    let Ok(relative) = path.strip_prefix(root) else { continue };
+                    let relative =
+                        relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                    if is_candidate(&relative) {
+                        out.push(relative);
+                    }
+                }
             }
-        } else if kind.is_file() {
-            let Ok(relative) = path.strip_prefix(root) else { continue };
-            let relative = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
-            if is_candidate(&relative) {
-                out.push(relative);
-            }
         }
+        level = next;
     }
+    out
 }
 
 /// Whether a file, by its path in the repo, is one of its icons: named as
@@ -356,7 +421,12 @@ pub fn is_candidate(relative: &str) -> bool {
     let file = parts.last().copied().unwrap_or_default();
     let stem = &file[..file.len() - ext.len() - 1];
     let parent = if parts.len() > 1 { parts[parts.len() - 2] } else { "" };
-    if parent.ends_with(".appiconset") || parent == "favicon" || parent == "favicons" || lower.starts_with("src-tauri/icons/") {
+    if parent.ends_with(".appiconset")
+        || parent == "favicon"
+        || parent == "favicons"
+        || lower.starts_with("src-tauri/icons/")
+        || lower.contains("/src-tauri/icons/")
+    {
         return true;
     }
     NAMES.iter().any(|name| {
@@ -372,7 +442,8 @@ pub fn is_candidate(relative: &str) -> bool {
 fn rank(found: &Found) -> (u8, u8, Reverse<u32>, usize, String) {
     let ext = ext_of(&found.path);
     let (long, short) = (found.width.max(found.height), found.width.min(found.height));
-    let square = if short > 0 && long * 4 <= short * 5 { 0 } else { 1 };
+    // In u64: a header can say any size, and four times one past u32::MAX / 4 does not fit.
+    let square = if short > 0 && u64::from(long) * 4 <= u64::from(short) * 5 { 0 } else { 1 };
     let kind = match ext.as_str() {
         "svg" | "png" | "webp" => 0,
         "jpg" | "jpeg" => 1,
@@ -408,6 +479,11 @@ impl Looks {
         let look = Look { root: root.to_path_buf(), at: Instant::now(), found: found.clone() };
         self.last.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), look);
         found
+    }
+
+    /// Drops what was found for a workspace that is gone.
+    pub fn forget(&self, id: &str) {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
     }
 }
 
@@ -633,6 +709,45 @@ mod tests {
     }
 
     #[test]
+    fn a_size_no_image_has_ranks_without_overflowing() {
+        let huge = Found { path: "logo.png".into(), width: u32::MAX, height: u32::MAX };
+        let wide = Found { path: "icon.png".into(), width: u32::MAX, height: 1 };
+        assert_eq!(rank(&huge).0, 0, "square");
+        assert_eq!(rank(&wide).0, 1, "not square");
+    }
+
+    #[test]
+    fn reads_the_root_s_folders_before_a_monorepo_s_deep_ones() {
+        let root = temp("crew-icon-levels");
+        // More matches deep in `apps/` than the walk weighs, sorted before `public/`.
+        for i in 0..MAX_MATCHES + 4 {
+            write(&root, &format!("apps/a/b/icon{i}.png"), &png(16, 16));
+        }
+        write(&root, "public/favicon.png", &png(512, 512));
+        write(&root, "packages/desktop/src-tauri/icons/128x128.png", &png(128, 128));
+        assert!(is_candidate("packages/desktop/src-tauri/icons/128x128.png"));
+        let found: Vec<String> = detect(&root).into_iter().map(|f| f.path).collect();
+        assert_eq!(found.first().map(String::as_str), Some("public/favicon.png"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repo_image_is_read_only_inside_the_repo_and_only_when_it_is_one() {
+        let root = temp("crew-icon-inside");
+        let outside = temp("crew-icon-outside");
+        write(&outside, "secret.png", b"not an image");
+        write(&root, "public/logo.png", &png(32, 32));
+        write(&root, "fake.png", b"plain text");
+        std::os::unix::fs::symlink(outside.join("secret.png"), root.join("favicon.png")).unwrap();
+        assert!(repo_image(&root, "public/logo.png").is_some());
+        assert!(repo_image(&root, "favicon.png").is_none(), "a link out of the repo");
+        assert!(repo_image(&root, "fake.png").is_none(), "not the image its name says");
+        assert!(repo_image(&root, "../crew-icon-outside/secret.png").is_none());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
     fn looks_again_only_when_asked_or_old() {
         let root = temp("crew-icon-looks");
         write(&root, "favicon.ico", &ico(&[32]));
@@ -663,6 +778,7 @@ mod tests {
         assert!(choose(&store, &ws.id, Choice::Repo, Some("../secret.png")).is_err(), "nothing out of the repo");
         assert!(choose(&store, &ws.id, Choice::Repo, Some("README.md")).is_err(), "only an image");
         assert!(choose(&store, &ws.id, Choice::Upload, None).is_err(), "nothing uploaded yet");
+        assert!(choose(&store, &ws.id, Choice::Repo, Some("gone.png")).is_err(), "only a file that is there");
 
         assert!(upload(&store, &ws.id, "image/png", b"plain text").is_err(), "not a PNG");
         assert!(upload(&store, &ws.id, "text/plain", &png(64, 64)).is_err(), "not an image kind");
@@ -676,7 +792,9 @@ mod tests {
         let after = kept(&store, &ws.id).unwrap();
         assert_eq!(after.choice, Choice::Upload);
         assert_eq!(shown(&store, &ws.id, &repo, &found).unwrap(), Some(file.clone()));
-        assert!(data_url(&file).unwrap().starts_with("data:image/png;base64,"));
+        let image = read_image(&file).unwrap();
+        assert!(image.data_url().starts_with("data:image/png;base64,"));
+        assert_eq!(image.stamp(), read_image(&file).unwrap().stamp(), "the same bytes, the same stamp");
 
         // Another upload, of another kind, takes its place.
         upload(&store, &ws.id, "image/svg+xml", &svg("0 0 10 10")).expect("svg");

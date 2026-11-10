@@ -3,14 +3,19 @@ import type { WorkspaceIcon } from "./protocol";
 
 const asked: { id: string; opts: object }[] = [];
 let answer: WorkspaceIcon;
+/** While set, a question waits on it, as a slow look in the repo would. */
+let slow: Promise<void> | null = null;
 vi.mock("./api", () => ({
-  getWorkspaceIcon: async (id: string, opts: object) => {
+  getWorkspaceIcon: async (id: string, opts: { have?: string }) => {
     asked.push({ id, opts });
-    return answer;
+    const said = answer;
+    if (slow) await slow;
+    // As the daemon does: the image the window has comes back by its stamp alone.
+    return opts.have !== undefined && opts.have === said.stamp ? { ...said, image: null } : said;
   },
   setWorkspaceIcon: async (_id: string, choice: { choice: WorkspaceIcon["choice"] }) => {
     if (choice.choice === "repo") throw new Error("Pick an image in the repo");
-    return { ...answer, choice: choice.choice, image: null };
+    return { ...answer, choice: choice.choice, image: null, stamp: null };
   },
 }));
 
@@ -22,6 +27,7 @@ const icon = (patch: Partial<WorkspaceIcon> = {}): WorkspaceIcon => ({
   choice: "auto",
   path: null,
   image: "data:image/png;base64,AAA",
+  stamp: "aaa",
   found: [],
   uploaded: null,
   ...patch,
@@ -49,9 +55,31 @@ describe("workspaceIcons", () => {
     const before = snapshot();
     await refresh("w");
     expect(snapshot()).toBe(before);
-    answer = icon({ image: "data:image/png;base64,BBB" });
+    answer = icon({ image: "data:image/png;base64,BBB", stamp: "bbb" });
     await refresh("w");
     expect(snapshot()).toBe(before + 1);
+  });
+
+  it("says which image it draws, and keeps it when the daemon answers with its stamp alone", async () => {
+    await refresh("w");
+    await refresh("w");
+    expect(asked.map((one) => one.opts)).toEqual([{}, { have: "aaa" }]);
+    expect(imageOf("w")).toBe("data:image/png;base64,AAA");
+    await refresh("w", { choices: true });
+    expect(asked.at(-1)?.opts).toEqual({ choices: true });
+  });
+
+  it("drops an answer to a question asked before a choice", async () => {
+    await refresh("w");
+    let release = () => {};
+    slow = new Promise((resolve) => (release = resolve));
+    const look = refresh("w", { look: true });
+    slow = null;
+    await choose("w", { choice: "initials" });
+    release();
+    await look;
+    expect(iconOf("w")?.choice).toBe("initials");
+    expect(imageOf("w")).toBeNull();
   });
 
   it("keeps the choices the settings read when the rail asks without them", async () => {
