@@ -60,7 +60,9 @@ pub async fn accept_socket_only(mut stream: TcpStream) -> Option<WebSocketStream
         return None;
     };
     let accept = derive_accept_key(key.as_bytes());
-    let reply = format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n");
+    let reply = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
     stream.write_all(reply.as_bytes()).await.ok()?;
     Some(WebSocketStream::from_partially_read(stream, rest, Role::Server, None).await)
 }

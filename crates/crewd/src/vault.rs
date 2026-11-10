@@ -118,7 +118,13 @@ impl VaultHost {
                 use std::io::Write;
                 use std::os::unix::fs::OpenOptionsExt;
                 let tmp = file.with_extension("json.tmp");
-                let mut out = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
+                let mut out = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp)
+                    .map_err(|e| e.to_string())?;
                 out.write_all(&serde_json::to_vec(config).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
                 std::fs::rename(&tmp, &file).map_err(|e| e.to_string())
             }
@@ -281,7 +287,8 @@ impl VaultHost {
         S: futures_util::Sink<Message> + Unpin,
         R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
     {
-        let hello = proto::event("hello", proto::Hello { protocol: proto::PROTOCOL, version: env!("CARGO_PKG_VERSION").to_string() });
+        let hello =
+            proto::event("hello", proto::Hello { protocol: proto::PROTOCOL, version: env!("CARGO_PKG_VERSION").to_string() });
         let Ok(hello) = hello.and_then(|event| serde_json::to_string(&event)) else { return };
         if sink.send(Message::Text(hello.into())).await.is_err() {
             return;
@@ -335,7 +342,8 @@ impl VaultHost {
     }
 
     fn still_known(&self, machine: &VaultMachine) -> bool {
-        self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none() && machines::is_known(&self.store, &machine.id).unwrap_or(false)
+        self.link.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+            && machines::is_known(&self.store, &machine.id).unwrap_or(false)
     }
 
     async fn peer_call(&self, machine: &VaultMachine, method: &str, params: Value) -> Result<Value, String> {
@@ -425,7 +433,6 @@ impl Peer {
             _ => Err(format!("{address} refused the token")),
         }
     }
-
 }
 
 /// A member's link to its vault: one connection kept open, the config copied
@@ -586,7 +593,8 @@ impl VaultLink for Link {
         // No one waits: the answer finds no waiter and is dropped.
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         if let Some(out) = self.out.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            let _ = out.send(json!({ "id": id, "method": "vault_tools_refresh", "params": { "accountId": account_id } }).to_string());
+            let _ =
+                out.send(json!({ "id": id, "method": "vault_tools_refresh", "params": { "accountId": account_id } }).to_string());
         }
     }
 
