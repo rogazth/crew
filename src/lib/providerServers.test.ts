@@ -1,7 +1,7 @@
 // The Connectors page's reading of the provider servers' lists
 // (surfaces/settings/integrations/servers.ts); here, where the tests run.
 import { describe, expect, it } from "vitest";
-import { brandOfServer, groupStatus, groupsOf, listJoin, rowStatus, scopeLine, serverLine } from "../surfaces/settings/integrations/servers";
+import { brandOfServer, copiesPhrase, drifted, groupStatus, groupsOf, listJoin, rowStatus, scopeLine, offlinePhrase, serverLine, serviceOn, servicesOf } from "../surfaces/settings/integrations/servers";
 import type { McpState, ProviderInventory, ProviderServer } from "./protocol";
 
 function server(provider: string, name: string, state: McpState, extra: Partial<ProviderServer> = {}): ProviderServer {
@@ -150,5 +150,54 @@ describe("brandOfServer", () => {
     expect(brandOfServer(server("codex", "context7", "connected"))).toMatchObject({ publisher: "mcp.context7.com", name: "context7" });
     expect(brandOfServer(server("claude", "claude.ai Notion", "connected", { transport: "claude.ai", scope: "claude.ai", target: "" }))).toMatchObject({ name: "Notion", publisher: "" });
     expect(brandOfServer(server("claude", "chrome-devtools", "connected", { transport: "stdio", target: "npx chrome-devtools-mcp" }))).toBeNull();
+  });
+});
+
+describe("services across machines", () => {
+  const studio: ProviderInventory[] = [
+    inv("claude", [server("claude", "context7", "connected", { offInCrew: true }), server("claude", "linear", "needs_auth", { target: "https://mcp.linear.app/mcp" })]),
+  ];
+  const services = servicesOf([
+    { envId: "local", inventory: MAC },
+    { envId: "studio", inventory: studio },
+  ]);
+
+  it("merges a server's groups from every machine, each machine with its own copies", () => {
+    const context7 = services.find((s) => s.key === "context7")!;
+    expect(context7.machines.map((m) => [m.envId, m.servers.map((x) => x.provider)])).toEqual([
+      ["local", ["claude", "codex", "cursor"]],
+      ["studio", ["claude"]],
+    ]);
+    expect(context7.servers).toHaveLength(4);
+    expect(services.find((s) => s.key === "linear")!.machines.map((m) => m.envId)).toEqual(["studio"]);
+  });
+
+  it("is on while any copy is, until the person chooses", () => {
+    const context7 = services.find((s) => s.key === "context7")!;
+    expect(serviceOn(context7, {})).toBe(true);
+    expect(serviceOn(context7, { context7: false })).toBe(false);
+  });
+
+  it("finds the copies whose switch doesn't follow the choice", () => {
+    const local = groupsOf(MAC).find((g) => g.key === "context7")!;
+    expect(drifted(local, false).map((x) => x.provider)).toEqual(["claude", "codex", "cursor"]);
+    expect(drifted(local, true)).toEqual([]);
+    const away = groupsOf(studio).find((g) => g.key === "context7")!;
+    expect(drifted(away, true).map((x) => x.provider)).toEqual(["claude"]);
+  });
+});
+
+describe("machines in a sentence", () => {
+  it("names two machines and counts more, by CLI", () => {
+    expect(copiesPhrase([{ cli: "Grok Build", machine: "Studio" }])).toBe("Grok Build on Studio");
+    expect(copiesPhrase([{ cli: "Cursor", machine: "this Mac" }, { cli: "Grok Build", machine: "Studio" }])).toBe("Cursor on this Mac and Grok Build on Studio");
+    const many = ["a", "b", "c", "d", "e"].map((machine) => ({ cli: "Grok Build", machine }));
+    expect(copiesPhrase([{ cli: "Cursor", machine: "this Mac" }, ...many])).toBe("Cursor on this Mac and Grok Build on 5 machines");
+  });
+
+  it("says machines away once", () => {
+    expect(offlinePhrase(["Studio"])).toBe("Studio is offline. Showing its last report.");
+    expect(offlinePhrase(["Studio", "box-a"])).toBe("Studio and box-a are offline. Showing their last report.");
+    expect(offlinePhrase(["a", "b", "c", "d", "e"])).toBe("5 machines are offline. Showing their last report.");
   });
 });

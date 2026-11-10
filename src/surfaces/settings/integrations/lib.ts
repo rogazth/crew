@@ -24,10 +24,8 @@ export type Sheet =
   /** An account's workspaces, from its ⋯ (workspaces.tsx). */
   | { kind: "account-workspaces"; accountId: string };
 
-/** What a detail page is about: one of Crew's connectors, or one provider server on one machine (by its name). */
-export type Detail =
-  | { kind: "connector"; id: string }
-  | { kind: "server"; envId: string; key: string; name: string };
+/** What a detail page is about: one of Crew's connectors, or one provider server on every machine that has it (by its name). */
+export type Detail = { kind: "connector"; id: string } | { kind: "server"; key: string; name: string };
 
 type Ui = {
   /** The page on screen: the connectors, the directory to add one from, or one connector's or server's own page. */
@@ -113,7 +111,7 @@ export function startAddAccount(s: State, connectorId: string, workspaces: strin
 
 /** A click on an installed connector, or on a provider server, opens its page. */
 export const openConnector = (connectorId: string) => ui.detail({ kind: "connector", id: connectorId });
-export const openServer = (envId: string, key: string, name: string) => ui.detail({ kind: "server", envId, key, name });
+export const openServer = (key: string, name: string) => ui.detail({ kind: "server", key, name });
 
 /* ── Reading the model the way the page shows it ─────────────────────── */
 

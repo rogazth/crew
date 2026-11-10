@@ -88,6 +88,64 @@ export function groupsOf(inventory: ProviderInventory[], registryOf: RegistryOf 
   return [...out.values()].sort((a, b) => rank(a) - rank(b) || b.servers.length - a.servers.length || a.name.localeCompare(b.name));
 }
 
+/** One machine's copies of a service. */
+export type Placement = { envId: string; servers: Server[] };
+
+/**
+ * One server across every machine: each machine's group of that key, merged.
+ * `servers` holds every copy, so a group's reading (its status, its CLIs)
+ * reads the whole service; `machines` says where each copy is.
+ */
+export type Service = Group & { machines: Placement[] };
+
+/**
+ * Every machine's servers as one list, a service per key however many
+ * machines have it, in `groupsOf`'s order. Machines keep the order given.
+ */
+export function servicesOf(machines: { envId: string; inventory: ProviderInventory[] }[], registryOf: RegistryOf = () => undefined): Service[] {
+  const out = new Map<string, Service>();
+  for (const { envId, inventory } of machines) {
+    for (const group of groupsOf(inventory, registryOf)) {
+      const service = out.get(group.key) ?? { ...group, servers: [], machines: [] };
+      service.servers.push(...group.servers);
+      service.machines.push({ envId, servers: group.servers });
+      out.set(group.key, service);
+    }
+  }
+  const has = (g: Group, state: Server["state"]) => g.servers.some((x) => !isOff(x) && x.state === state);
+  const rank = (g: Group) => (has(g, "needs_auth") ? 0 : has(g, "failed") ? 1 : 2);
+  return [...out.values()].sort((a, b) => rank(a) - rank(b) || b.machines.length - a.machines.length || b.servers.length - a.servers.length || a.name.localeCompare(b.name));
+}
+
+/** What the person chose for each service, by its key: on or off in Crew, on every machine. */
+export type Choices = Readonly<Record<string, boolean>>;
+
+/** On in Crew: what the person chose, else on while any copy is. */
+export const serviceOn = (group: Group, choices: Choices): boolean => choices[group.key] ?? group.servers.some((x) => !isOff(x));
+
+/** The copies whose switch in Crew doesn't say what the person chose for their service yet. */
+export const drifted = (group: Group, on: boolean): Server[] => group.servers.filter((x) => x.offInCrew === on);
+
+/** Machines in a sentence: two by name, more as a count. */
+export const machinesPhrase = (names: string[]): string => (names.length > 2 ? `${names.length} machines` : listJoin(names));
+
+/**
+ * Copies in a sentence, by CLI in the order given, each with its machines:
+ * "Cursor on this Mac and Grok Build on 5 machines".
+ */
+export function copiesPhrase(copies: { cli: string; machine: string }[]): string {
+  const byCli = new Map<string, string[]>();
+  for (const { cli, machine } of copies) {
+    const machines = byCli.get(cli) ?? [];
+    if (!machines.includes(machine)) machines.push(machine);
+    byCli.set(cli, machines);
+  }
+  return listJoin([...byCli].map(([cli, machines]) => `${cli} on ${machinesPhrase(machines)}`));
+}
+
+/** Machines away, said once: "Studio is offline", "5 machines are offline". */
+export const offlinePhrase = (names: string[]): string => `${machinesPhrase(names)} ${names.length === 1 ? "is" : "are"} offline. Showing ${names.length === 1 ? "its" : "their"} last report.`;
+
 /** Its CLIs, for a line: two by name, more as a count. */
 function whereOf(servers: Server[]): string {
   const clis = [...new Set(servers.map((x) => x.provider))];
@@ -109,6 +167,12 @@ export function groupStatus(group: Group, busy: (server: Server) => Busy): { ton
   const auth = on.find((x) => x.state === "needs_auth");
   if (auth) return { tone: "warning", text: `Sign in required · ${providerName(auth.provider)}` };
   return { tone: "success", text: whereOf(group.servers) };
+}
+
+/** The worst copy's status, over every machine: busy is asked of the copy's own machine. */
+export function serviceStatus(service: Service, busy: (envId: string, server: Server) => Busy) {
+  const where = new Map(service.machines.flatMap((m) => m.servers.map((x) => [x, m.envId] as const)));
+  return groupStatus(service, (server) => busy(where.get(server) ?? "local", server));
 }
 
 const SCOPE: Record<string, string> = {

@@ -4,26 +4,24 @@
 // (an account, a CLI's copy), with its fix there. Each account says how many
 // workspaces it's for, changed from its ⋯; below them, which of its tools a
 // session gets, with pills to pick the account when there are several. A server's page has
-// its copy in each CLI on its machine.
+// one switch for Crew on every machine beside its name, then a row per machine it's installed on.
 // Escape and the arrow above the mark go back to the connectors.
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog, type Confirm } from "../../../chrome/ConfirmDialog";
-import { EnvGlyph } from "../../../chrome/EnvBits";
-import { BackLink, Card, IconButton, PAGE_TITLE } from "../../../chrome/kit";
-import { useEnvLinks } from "../../../hooks/useEnvLinks";
+import { BackLink, IconButton, PAGE_TITLE, Switch } from "../../../chrome/kit";
 import { LOCAL } from "../../../lib/client/registry";
 import type { ConnectorTool } from "../../../lib/protocol";
 import { Group, Row, SettingsPage } from "../ui";
 import { Pills, RowAction, SwitchRow } from "./bits";
-import { CliRow, ServerMark } from "./clis";
+import { MachineRow, ServerMark } from "./clis";
 import { hostOf, startAddAccount, ui, useEscape, useUi, type Detail } from "./lib";
 import { AccountRow } from "./manage";
 import { brandOf } from "./brand";
 import { ServiceMark } from "./mark";
 import { UnofficialNote, vendorOf } from "./builtin";
-import { useProviderServers } from "./providers";
-import { groupsOf, providerName, serverLine } from "./servers";
+import { machineName, setServiceOn, useMachines, useServices } from "./providers";
+import { copiesPhrase, perSpawn, providerName, serverLine, serviceOn } from "./servers";
 import { actions, builtinOf, cancelFlow, connectorOf, flowLine, formatTokens, useIntegrations, waitsInBrowser, type Account } from "./store";
 
 const home = () => ui.go("home");
@@ -34,7 +32,7 @@ const noop = () => {};
 export function DetailPage({ detail }: { detail: Detail }) {
   const { sheet } = useUi();
   useEscape(sheet ? noop : home);
-  return detail.kind === "connector" ? <ConnectorPage connectorId={detail.id} /> : <ServerPage envId={detail.envId} groupKey={detail.key} />;
+  return detail.kind === "connector" ? <ConnectorPage connectorId={detail.id} /> : <ServerPage groupKey={detail.key} />;
 }
 
 /** Back above, then mark, name and one line lined up with the page's edge; removing it all is the trash at the end. */
@@ -171,57 +169,80 @@ function ConnectorPage({ connectorId }: { connectorId: string }) {
 
 /* ── One provider server ────────────────────────────────────────────── */
 
-/** The machine's copies, titled by the machine with its glyph: a laptop for this Mac, a server for a remote box. */
-function MachineGroup({ envId, children }: { envId: string; children: ReactNode }) {
-  const link = useEnvLinks().find((l) => l.id === envId);
-  // This Mac's daemon is the window's own; only a remote is ever away.
-  const online = !link || link.id === LOCAL || link.status === "online";
-  return (
-    <section className="flex flex-col gap-2">
-      <h2 className="flex min-h-6 items-center gap-1.5 px-2.5 text-[12px] font-medium text-text-muted">
-        <EnvGlyph link={link ?? null} className="size-3.5" />
-        {link ? (online ? link.name : `${link.name} · offline`) : envId}
-      </h2>
-      <Card>{children}</Card>
-    </section>
-  );
-}
-
-function ServerPage({ envId, groupKey }: { envId: string; groupKey: string }) {
-  const m = useProviderServers(envId);
-  const group = groupsOf(m.inventory, m.registryOf).find((g) => g.key === groupKey);
-  // Gone from every CLI (here, or from elsewhere), there's nothing left to show.
-  // A registry key only finds its group once the registry has answered.
-  const gone = m.settled && !group;
+/**
+ * A provider server's page: one switch for Crew on every machine beside its
+ * name, then where it's installed, a row per machine with the CLIs that have it there.
+ */
+function ServerPage({ groupKey }: { groupKey: string }) {
+  const { links, ids } = useMachines();
+  const v = useServices(ids);
+  const service = v.services.find((g) => g.key === groupKey);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  // Gone from every CLI on every machine (here, or from elsewhere), there's nothing left to show.
+  // A registry key only finds its service once the registry has answered.
+  const gone = v.settled && !service;
   useEffect(() => {
     if (gone) home();
   }, [gone]);
-  if (!group) return null;
-  const first = group.servers[0]!;
+  if (!service) return null;
+  const first = service.servers[0]!;
+  const on = serviceOn(service, v.choices);
+  // Cursor and Grok have no per-session way to leave a server out: off in Crew writes their own config.
+  const outside = service.machines.flatMap((m) =>
+    m.servers
+      .filter((x) => !perSpawn(x.provider) && !x.offInCrew)
+      .map((x) => ({ cli: providerName(x.provider), machine: m.envId === LOCAL ? "this Mac" : machineName(links.find((l) => l.id === m.envId), m.envId) })),
+  );
+  const toggle = (next: boolean) => {
+    if (next || outside.length === 0) return setServiceOn(service.key, next);
+    setConfirm({
+      title: `Disable ${service.name}?`,
+      description: `Turns it off in ${copiesPhrase(outside)}.`,
+      action: "Disable",
+      onConfirm: () => setServiceOn(service.key, false),
+    });
+  };
+  const several = service.machines.length > 1;
   // Where it runs, once when every copy says the same, else per CLI.
-  const targets = [...new Set(group.servers.map((x) => x.target).filter(Boolean))];
+  const targets = [...new Set(service.servers.map((x) => x.target).filter(Boolean))];
   const remote = /^https?:\/\//.test(first.target);
   return (
-    <SettingsPage title={group.name} hideHeader>
-      <Header mark={<ServerMark server={first} registry={group.registry} size={40} />} title={group.name} subtitle={serverLine(first)} />
-      <MachineGroup envId={envId}>
-        {group.servers.map((server) => (
-          <CliRow key={server.provider} envId={envId} server={server} m={m} />
+    <SettingsPage title={service.name} hideHeader>
+      <Header
+        mark={<ServerMark server={first} registry={service.registry} size={40} />}
+        title={service.name}
+        subtitle={on ? serverLine(first) : `Off in Crew${several ? " on every machine" : ""} · ${serverLine(first)}`}
+        action={<Switch label={`Use ${service.name} in Crew`} checked={on} onChange={toggle} />}
+      />
+      <ConfirmDialog confirm={confirm} onAsk={setConfirm} onClose={() => setConfirm(null)} />
+      <Group title="Installed on">
+        {service.machines.map((m) => (
+          <MachineRow key={m.envId} envId={m.envId} title={service.name} servers={m.servers} busy={(server) => v.busy(m.envId, server)} />
         ))}
-      </MachineGroup>
+      </Group>
       {targets.length > 0 && (
         <Group title="About">
           {targets.length === 1 ? (
             <Row label={remote ? "Server" : "Command"} description={<Target text={first.target} />} />
           ) : (
-            group.servers
-              .filter((x) => x.target)
-              .map((server) => <Row key={server.provider} label={providerName(server.provider)} description={<Target text={server.target} />} />)
+            uniqueBy(service.servers.filter((x) => x.target), (x) => `${x.provider}\u0000${x.target}`).map((server) => (
+              <Row key={`${server.provider}:${server.target}`} label={providerName(server.provider)} description={<Target text={server.target} />} />
+            ))
           )}
         </Group>
       )}
     </SettingsPage>
   );
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 /** A URL or a command line under its label, wrapping wherever it must: a long one is read whole, not cut. */

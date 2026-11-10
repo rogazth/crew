@@ -133,6 +133,20 @@ export function reconnect(envId: string) {
   connections.get(envId)?.wake();
 }
 
+/**
+ * A machine listed beside this Mac, online, with no socket of its own: the
+ * mock transport's stand-in remote, whose calls the mock answers itself.
+ */
+export function showStandIn(row: RemoteEnv) {
+  rows.set(row.id, row);
+  if (!connections.has(row.id)) {
+    const conn = new Connection(row.id, () => new Promise<never>(() => {}), true);
+    conn.status = "online";
+    connections.set(row.id, conn);
+  }
+  publish();
+}
+
 /** Opens a link to each machine in the address book, and drops the ones no longer in it. */
 export function refreshRemotes(): Promise<void> {
   booted = null;

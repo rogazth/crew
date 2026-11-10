@@ -3,10 +3,11 @@
  * (`CREW_MOCK=1 npm run dev`) where DevTools and screenshots work. Only the
  * shapes matter; nothing here persists.
  */
+import { showStandIn } from "../../src/lib/client/registry";
 import { defaultEffortOf, defaultModelOf } from "../../src/lib/providers";
 
 type Row = Record<string, unknown>;
-type Listener = (payload: unknown) => void;
+type Listener = (payload: unknown, env: string) => void;
 
 const listeners = new Map<string, Set<Listener>>();
 const streams = new Map<number, (bytes: Uint8Array) => void>();
@@ -16,9 +17,13 @@ const closed = new Set<number>();
 const BUFFER_MAX_BYTES = 256 * 1024;
 let nextStream = 1;
 
-function emit(event: string, payload: unknown) {
-  for (const listener of listeners.get(event) ?? []) listener(payload);
+/** `env` is the machine that sent it: this Mac, unless a stand-in remote's call caused it. */
+function emit(event: string, payload: unknown, env = "local") {
+  for (const listener of listeners.get(event) ?? []) listener(payload, env);
 }
+
+/** The machine the call being answered was sent to; handlers that care read it before any await. */
+let envNow = "local";
 
 function pushBytes(id: number, bytes: Uint8Array) {
   if (closed.has(id)) return;
@@ -820,6 +825,8 @@ const CONTEXT7 = "https://mcp.context7.com/mcp";
 const FIGMA = "https://mcp.figma.com/mcp";
 const DEVTOOLS = "npx -y chrome-devtools-mcp@latest";
 
+const LINEAR = "https://mcp.linear.app/mcp";
+
 const inventory: MockInventory[] = [
   {
     provider: "claude",
@@ -860,36 +867,77 @@ const inventory: MockInventory[] = [
   { provider: "grok", installed: true, servers: [], error: null, checkedAt: now - 6e5, checking: false },
   { provider: "opencode", installed: false, servers: [], error: null, checkedAt: now - 6e5, checking: false },
 ];
+/** A remote beside this Mac, so Connectors shows servers from two machines. */
+const STUDIO = "studio";
+const studioInventory: MockInventory[] = [
+  {
+    provider: "claude",
+    installed: true,
+    servers: [
+      mockServer("claude", "context7", "http", CONTEXT7, "user", "connected", 2),
+      mockServer("claude", "linear", "http", LINEAR, "user", "needs_auth", null),
+      mockServer("claude", "chrome-devtools", "stdio", DEVTOOLS, "user", "connected", 26),
+    ],
+    error: null,
+    checkedAt: now - 3e5,
+    checking: false,
+  },
+  {
+    provider: "codex",
+    installed: true,
+    servers: [mockServer("codex", "linear", "http", LINEAR, "user", "connected", 22)],
+    error: null,
+    checkedAt: now - 3e5,
+    checking: false,
+  },
+  {
+    provider: "grok",
+    installed: true,
+    servers: [mockServer("grok", "context7", "http", CONTEXT7, "user", "connected", 2)],
+    error: null,
+    checkedAt: now - 3e5,
+    checking: false,
+  },
+  { provider: "cursor", installed: false, servers: [], error: null, checkedAt: now - 3e5, checking: false },
+  { provider: "opencode", installed: false, servers: [], error: null, checkedAt: now - 3e5, checking: false },
+];
+const inventories: Record<string, MockInventory[]> = { local: inventory, [STUDIO]: studioInventory };
+const inventoryOf = (env: string) => inventories[env] ?? [];
+// After the registry module has finished loading: it is imported above, and this module is one of its importers.
+setTimeout(() => showStandIn({ id: STUDIO, name: "Studio", host: "100.64.0.7", port: 7456, user: "", ssh: "" }), 0);
+
 /** Provider-server sign-ins started and not yet called back, by state. */
-const serverSignIns = new Map<string, { provider: string; name: string }>();
+const serverSignIns = new Map<string, { env: string; provider: string; name: string }>();
 /** Each live session's servers switched off at runtime (`mcp_toggle`). */
 const toggledOff = new Map<string, Set<string>>();
 
-const emitInventory = () => emit("provider-servers", structuredClone(inventory));
-function needServer({ provider, name }: Row): MockServer {
-  const server = inventory.find((i) => i.provider === provider)?.servers.find((x) => x.name === name);
+const emitInventory = (env = "local") => emit("provider-servers", structuredClone(inventoryOf(env)), env);
+function needServer({ provider, name }: Row, env = envNow): MockServer {
+  const server = inventoryOf(env).find((i) => i.provider === provider)?.servers.find((x) => x.name === name);
   if (!server) throw new Error("mock: no such server");
   return server;
 }
 
 function listServers({ refresh }: Row) {
+  const env = envNow;
+  const list = inventoryOf(env);
   if (refresh) {
-    for (const entry of inventory) if (entry.installed) entry.checking = true;
+    for (const entry of list) if (entry.installed) entry.checking = true;
     setTimeout(() => {
-      for (const entry of inventory) {
+      for (const entry of list) {
         entry.checking = false;
         entry.checkedAt = Date.now();
       }
-      emitInventory();
+      emitInventory(env);
     }, 900);
   }
-  return structuredClone(inventory);
+  return structuredClone(list);
 }
 
 function signInServer(ref: Row) {
   const server = needServer(ref);
   const state = `mock-server-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-  serverSignIns.set(state, { provider: server.provider, name: server.name });
+  serverSignIns.set(state, { env: envNow, provider: server.provider, name: server.name });
   // Claude's sign-in comes back to Crew's own redirect; the other CLIs' to their own loopback listener.
   const redirectUri = server.provider === "claude" ? "http://127.0.0.1:17899/callback" : "http://127.0.0.1:60694/callback";
   const base = server.target.replace(/\/mcp\/?$/, "");
@@ -900,15 +948,15 @@ function serverCallback({ state, url }: Row) {
   const pending = serverSignIns.get(state as string);
   if (!pending || !String(url).includes(`state=${state as string}`)) throw new Error("mock: no sign-in for that state");
   serverSignIns.delete(state as string);
-  const server = needServer(pending);
+  const server = needServer(pending, pending.env);
   // The CLI starts the server again with its new credential: pending, then connected.
   server.state = "pending";
   server.error = null;
-  emitInventory();
+  emitInventory(pending.env);
   setTimeout(() => {
     server.state = "connected";
     server.tools = MOCK_TOOLS[server.name] ?? 4;
-    emitInventory();
+    emitInventory(pending.env);
   }, 700);
   return null;
 }
@@ -1102,15 +1150,17 @@ const commands: Record<string, (args: Row) => unknown> = {
   sign_in_cancel: cancelSignIn,
   provider_servers_list: listServers,
   provider_server_off: (args) => {
+    const env = envNow;
     needServer(args).offInCrew = args.off === true;
-    emitInventory();
+    emitInventory(env);
     return null;
   },
 
   provider_server_remove: (args) => {
+    const env = envNow;
     const gone = needServer(args);
-    for (const entry of inventory) entry.servers = entry.servers.filter((x) => x !== gone);
-    emitInventory();
+    for (const entry of inventoryOf(env)) entry.servers = entry.servers.filter((x) => x !== gone);
+    emitInventory(env);
     return null;
   },
   provider_server_sign_in: signInServer,
@@ -1997,10 +2047,15 @@ function mockRespond(sessionId: string, requestId: number, decision: string) {
   }, end);
 }
 
-async function request<T>(method: string, params: object = {}): Promise<T> {
+async function request<T>(method: string, params: object = {}, envId?: string): Promise<T> {
   const handler = commands[method];
   if (!handler) throw new Error(`mock: unknown method ${method}`);
-  return handler(params as Row) as T;
+  envNow = envId ?? "local";
+  try {
+    return handler(params as Row) as T;
+  } finally {
+    envNow = "local";
+  }
 }
 
 function on(event: string, listener: Listener): () => void {

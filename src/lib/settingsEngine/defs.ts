@@ -10,6 +10,7 @@ import { notificationPrefsSetting } from "../notificationPrefs";
 import { sessionAccess } from "../permissions";
 import { defaultAgentSetting, lastAgentsSetting } from "../providers";
 import { retention } from "../retention";
+import { serverChoicesSetting } from "../serverChoices";
 import { terminalPrefsSetting } from "../terminalPrefs";
 import { autoDownloadSetting } from "../updatePrefs";
 import { alertsSetting, ringsSetting } from "../usage";
@@ -27,6 +28,7 @@ export const ALL_SETTINGS: SettingDef<never>[] = [
   browserPrefsSetting,
   alertsSetting,
   ringsSetting,
+  serverChoicesSetting,
   // This computer's.
   autoDownloadSetting,
   keybindingsSetting,
