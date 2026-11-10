@@ -78,6 +78,13 @@ test("A bot's settings open in the dialog, and a rename, its instructions and a 
   const dialog = crew.window.getByRole("dialog", { name: "Bot settings" });
   await dialog.waitFor();
   assert.ok(await dialog.getByRole("tab", { name: "Routines" }).isVisible(), "a bot that exists has its routines beside General");
+  // Modal: the window under it takes no focus while it is up, and a Tab past its last control stays in it.
+  assert.equal(await crew.window.locator("[data-app]").evaluate((app) => (app as HTMLElement).inert), true);
+  await dialog.getByRole("button", { name: "Close" }).focus();
+  await crew.window.keyboard.press("Shift+Tab");
+  await crew.window.keyboard.press("Tab");
+  await crew.window.keyboard.press("Tab");
+  assert.equal(await crew.window.evaluate(() => document.querySelector("[data-app]")?.contains(document.activeElement)), false);
 
   const name = dialog.getByLabel("Name", { exact: true });
   await name.fill("Warden");
@@ -108,4 +115,5 @@ test("A bot's settings open in the dialog, and a rename, its instructions and a 
 
   await dialog.getByRole("button", { name: "Close" }).click();
   await dialog.waitFor({ state: "detached" });
+  assert.equal(await crew.window.locator("[data-app]").evaluate((app) => (app as HTMLElement).inert), false, "the window takes the focus again");
 });

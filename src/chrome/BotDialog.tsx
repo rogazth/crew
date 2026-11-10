@@ -112,8 +112,10 @@ function BotSettings({
         <FaceButton
           seed={seed}
           face={face}
+          picking={picking && page === "general"}
           onClick={() => {
-            setPicking((open) => !open);
+            // From another page it opens the picker on General, whatever it was left as.
+            setPicking((open) => page !== "general" || !open);
             setPage("general");
           }}
         />
@@ -204,7 +206,7 @@ function NewBot({ sheet, frame }: { sheet: Sheet; frame: Frame }) {
       <SettingsDialog
         label="New bot"
         heading={<DialogNameDraft inputRef={nameField} value={draft.name} placeholder="Bot name" onChange={(next) => update({ name: next })} />}
-        face={<FaceButton seed={seed} face={draft.face} onClick={() => setPicking((open) => !open)} />}
+        face={<FaceButton seed={seed} face={draft.face} picking={picking} onClick={() => setPicking((open) => !open)} />}
         leaving={frame.leaving}
         backdropRef={frame.backdrop}
         panelRef={frame.panel}
@@ -248,10 +250,10 @@ function NewBot({ sheet, frame }: { sheet: Sheet; frame: Frame }) {
 /* ── What it is made of ─────────────────────────────────────────────── */
 
 /** Its face beside its name, as the sidebar draws it; a press opens the face picker. */
-function FaceButton({ seed, face, onClick }: { seed: string; face: BotFace; onClick: () => void }) {
+function FaceButton({ seed, face, picking, onClick }: { seed: string; face: BotFace; picking: boolean; onClick: () => void }) {
   const { avatar } = useBotAvatar();
   return (
-    <EditableFace label="Change its face" size="size-12 rounded-[15px]" onClick={onClick}>
+    <EditableFace label="Change its face" size="size-12 rounded-[15px]" expanded={picking} onClick={onClick}>
       <span className="grid size-full place-items-center bg-card">
         <BotAvatar seed={seed} style={face.style ?? avatar} bare className="size-9" />
       </span>

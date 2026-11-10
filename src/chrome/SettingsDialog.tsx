@@ -51,6 +51,18 @@ export function SettingsDialog<K extends string>({
   footer?: ReactNode;
   renderPage: (page: K) => ReactNode;
 }) {
+  // Modal: the window under it takes no focus and no clicks while it is up, so Tab cannot leave it for
+  // what it covers; once it goes, the focus goes back to what had it. Before the panel takes the focus.
+  useEffect(() => {
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const app = document.querySelector<HTMLElement>("[data-app]");
+    const made = app !== null && !app.inert;
+    if (made) app.inert = true;
+    return () => {
+      if (made) app.inert = false;
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  }, []);
   useEffect(() => {
     const el = panel.current;
     if (el && !el.contains(document.activeElement)) el.focus();
@@ -102,7 +114,13 @@ export function SettingsDialog<K extends string>({
               />
             )}
           </header>
-          <div className="pt-4">{renderPage(page)}</div>
+          {pages.length > 1 ? (
+            <Tabs.Panel value={page} className="pt-4 outline-none">
+              {renderPage(page)}
+            </Tabs.Panel>
+          ) : (
+            <div className="pt-4">{renderPage(page)}</div>
+          )}
         </Tabs.Root>
         {/* No rule over it: what scrolls fades into it. */}
         {footer && (
@@ -154,6 +172,7 @@ export function EditableFace({
   label,
   size = "size-[72px] rounded-[22px]",
   over = false,
+  expanded,
   onClick,
   onDragOver,
   onDragLeave,
@@ -165,6 +184,8 @@ export function EditableFace({
   size?: string;
   /** Something is dragged over it. */
   over?: boolean;
+  /** What it opens is open: a picker shown under it. */
+  expanded?: boolean;
   onClick: () => void;
   onDragOver?: (event: DragEvent) => void;
   onDragLeave?: () => void;
@@ -176,6 +197,7 @@ export function EditableFace({
       type="button"
       aria-label={label}
       title={label}
+      aria-expanded={expanded}
       onClick={onClick}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}

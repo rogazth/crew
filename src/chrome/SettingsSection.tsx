@@ -46,6 +46,7 @@ export function Kept({
   placeholder,
   className,
   onEmpty,
+  onDiscard,
   onTyping,
   label,
 }: {
@@ -56,6 +57,8 @@ export function Kept({
   placeholder?: string;
   className: string;
   onEmpty?: () => void;
+  /** Escape let go of the edit: nothing was kept. */
+  onDiscard?: () => void;
   /** Each keystroke's text while it is edited, null once the edit ends. */
   onTyping?: (text: string | null) => void;
   /** What it is called to assistive tech, where nothing on screen names it. */
@@ -87,7 +90,7 @@ export function Kept({
         discard.current = false;
         setText(null);
         onTyping?.(null);
-        if (!keep) return;
+        if (!keep) return onDiscard?.();
         if (!next) return onEmpty?.();
         if (next !== value.trim()) onKeep(next);
       }}
@@ -146,6 +149,7 @@ export function RulesCard({ rules: { rows, error, commit } }: { rules: ReturnTyp
                   void commit([...rows, { ...newRuleRow(), text }]);
                 }}
                 onEmpty={() => setAdding(false)}
+                onDiscard={() => setAdding(false)}
                 className="w-full py-1 text-[13px] leading-[18px]"
               />
             </div>
