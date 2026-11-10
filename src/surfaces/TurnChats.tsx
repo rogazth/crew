@@ -39,15 +39,22 @@ export function TurnChats({ panes, sessions }: Props) {
   const [drawn, setDrawn] = useState(NONE);
   if (shown && !drawn.has(shown.id)) setDrawn(new Set(drawn).add(shown.id));
 
+  const byId = new Map(sessions.map((row) => [row.id, row]));
+
   // What a tab not drawn yet will show, read ahead: the runtime keeps it current from then on.
+  // Only once its session is listed: until then the window does not know which machine holds
+  // it, and a restored tab of a remote workspace would be read from this Mac's daemon, empty.
   const waiting = panes
-    .flatMap((pane) => (pane.tab.kind === 'session' && !drawn.has(pane.id) && !pane.visible ? [pane.tab.sessionId] : []))
+    .flatMap((pane) =>
+      pane.tab.kind === 'session' && !drawn.has(pane.id) && !pane.visible && byId.has(pane.tab.sessionId)
+        ? [pane.tab.sessionId]
+        : [],
+    )
     .join(' ');
   useEffect(() => {
     for (const id of waiting.split(' ')) if (id) void load(id);
   }, [waiting]);
 
-  const byId = new Map(sessions.map((row) => [row.id, row]));
   return panes.map((pane) => {
     const { tab, cwd, visible } = pane;
     if (tab.kind !== 'session' || !(visible || drawn.has(pane.id))) return null;

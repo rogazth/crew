@@ -5,6 +5,9 @@ const request = vi.fn();
 const on = vi.fn();
 const onReconnect = vi.fn();
 vi.mock("./client", () => ({ client: { request, on, onReconnect } }));
+/** Which machine the window believes holds a session. */
+const envOfSession = vi.fn((_id: string) => "local");
+vi.mock("./client/registry", () => ({ envOfSession: (id: string) => envOfSession(id) }));
 
 /** The one the bridge registered for "transcript-apply". */
 function remote(): (payload: unknown) => void {
@@ -45,6 +48,8 @@ beforeEach(() => {
   request.mockReset();
   on.mockReset();
   onReconnect.mockReset();
+  envOfSession.mockReset();
+  envOfSession.mockReturnValue("local");
   frames = [];
   // The store paints through window, and vitest runs this file in node.
   vi.stubGlobal("window", {
@@ -78,6 +83,33 @@ describe("transcript", () => {
     const transcript = await load("s1");
     await transcript.load("s1");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  // A restored tab of a remote workspace was read ahead before its session was
+  // listed: the call went to this Mac's daemon, which answered with nothing,
+  // and the chat stayed empty until a new message forced a resync.
+  it("reads a thread again once its session turns out to live on another machine", async () => {
+    request.mockResolvedValue(page([], 0));
+    const transcript = await load("s1");
+    expect(transcript.read("s1").blocks).toHaveLength(0);
+
+    envOfSession.mockReturnValue("falcon");
+    request.mockResolvedValue(page([said("from the remote")], 40));
+    await transcript.load("s1");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(transcript.read("s1").blocks[0]?.text).toBe("from the remote");
+
+    await transcript.load("s1");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks again on the next open when the first read failed", async () => {
+    request.mockRejectedValueOnce(new Error("machine down"));
+    const transcript = await load("s1");
+    expect(transcript.isReady("s1")).toBe(true);
+    request.mockResolvedValue(page([said("back")], 3));
+    await transcript.load("s1");
+    expect(transcript.read("s1").blocks[0]?.text).toBe("back");
   });
 
   it("keeps what it had when the daemon refuses", async () => {

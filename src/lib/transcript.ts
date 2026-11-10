@@ -1,4 +1,5 @@
 import { client } from "./client";
+import { envOfSession } from "./client/registry";
 import { applyEvent, type Block, type HarnessEvent } from "./blocks";
 import type { MessagePage, TranscriptApply } from "./protocol";
 
@@ -25,6 +26,8 @@ export type ThreadSnapshot = {
 type Thread = {
   blocks: Block[];
   ready: boolean;
+  /** The machine the page in hand came from; null until one did. */
+  env: string | null;
   working: boolean;
   seq: number;
   /** Position of `blocks[0]` in the daemon's transcript, 1-based. */
@@ -72,6 +75,7 @@ function thread(id: string): Thread {
     row = {
       blocks: [],
       ready: false,
+      env: null,
       working: false,
       seq: 0,
       fromPos: 0,
@@ -114,8 +118,11 @@ export function isReady(id: string): boolean {
 export function load(id: string): Promise<void> {
   ensureBridge();
   const row = thread(id);
-  if (row.ready) return Promise.resolve();
   if (row.loading) return row.loading;
+  // A page from another machine than the one now known to hold the session is
+  // not its transcript: it was read before the window knew where it lives, or
+  // the read failed. Either way, ask again.
+  if (row.ready && row.env === envOfSession(id)) return Promise.resolve();
   row.loading = reload(id);
   return row.loading;
 }
@@ -124,9 +131,11 @@ export async function reload(id: string): Promise<void> {
   ensureBridge();
   const row = thread(id);
   const held = row.fromPos;
+  const env = envOfSession(id);
   try {
     const page = await client.request<MessagePage>("transcript_tail", { sessionId: id, limit: PAGE });
     take(row, page);
+    row.env = env;
   } catch {
     /* keep whatever we already have */
   }
