@@ -106,8 +106,13 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
 /// works in it; empty when nothing.
 pub fn description(store: &Store, id: &str) -> Result<String, String> {
     store.with(|conn| {
-        conn.query_row("SELECT description FROM workspaces WHERE id = ?1", params![id], |row| row.get(0))
-            .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(String::new()) } else { Err(error) })
+        conn.query_row("SELECT description FROM workspaces WHERE id = ?1", params![id], |row| row.get(0)).or_else(|error| {
+            if error == rusqlite::Error::QueryReturnedNoRows {
+                Ok(String::new())
+            } else {
+                Err(error)
+            }
+        })
     })
 }
 
@@ -133,6 +138,7 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     for folder in folders {
         crate::bot_folder::remove(&folder);
     }
+    crate::workspace_icon::forget_upload(store, &id);
     Ok(())
 }
 

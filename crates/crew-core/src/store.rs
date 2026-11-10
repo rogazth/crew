@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -55,6 +55,8 @@ pub type Listener = Arc<dyn Fn(Changed<'_>) + Send + Sync>;
 pub struct Store {
     conn: Arc<Mutex<Connection>>,
     listener: Arc<Mutex<Option<Listener>>>,
+    /// The folder the database is in: Crew's data dir, where what is kept beside it goes.
+    dir: Option<PathBuf>,
 }
 
 /// A failed step of opening the database, written down before it is handed back as text.
@@ -68,7 +70,8 @@ fn failed(stage: &'static str) -> impl Fn(rusqlite::Error) -> String {
 
 impl Store {
     pub fn open(path: PathBuf) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
+        let dir = path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(Path::to_path_buf);
+        if let Some(parent) = &dir {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let conn = Connection::open(path).map_err(failed("open"))?;
@@ -97,7 +100,12 @@ impl Store {
         if !keep_status() {
             settle_open_turns(&conn).map_err(|e| e.to_string())?;
         }
-        Ok(Self { conn: Arc::new(Mutex::new(conn)), listener: Arc::new(Mutex::new(None)) })
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), listener: Arc::new(Mutex::new(None)), dir })
+    }
+
+    /// Crew's data dir, the database's folder.
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
     }
 
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T, String> {
@@ -604,6 +612,13 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
         // Rules without a cap, and a workspace's description and rules.
         crate::rules::migrate_v51(&tx)?;
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (51, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 52 {
+        let tx = conn.unchecked_transaction()?;
+        // A workspace's icon: what the user chose, the repo's file and the upload it names.
+        crate::workspace_icon::migrate_v52(&tx)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (52, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     Ok(())

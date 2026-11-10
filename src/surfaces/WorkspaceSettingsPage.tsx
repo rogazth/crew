@@ -1,7 +1,7 @@
 // A workspace's settings, the page its sidebar's Settings opens: its face and its name heading it (the name edited
 // in place), General and Connectors under them as pill tabs. General says where it lives and removes it; Connectors
 // switches the app's accounts on or off for it alone. General opens with the instructions and rules every bot and
-// session here reads; an icon of its own comes from workspaceProfile.ts, the initials until the daemon keeps one.
+// session here reads; a press on the face opens the card to change its icon over them (WorkspaceIcon.tsx).
 // Home has the same page with the rail's mark, its name fixed and no way to remove it.
 import { Tabs } from "@base-ui/react/tabs";
 import { CopyIcon, LaptopIcon, ServerIcon } from "lucide-react";
@@ -9,9 +9,8 @@ import { useState } from "react";
 import { Button, PillTabs } from "../chrome/kit";
 import { CrewGlyph } from "../chrome/CrewGlyph";
 import { DangerAction, Kept, Section } from "../chrome/SettingsSection";
-import { WorkspaceIconEditor } from "../chrome/workspaceProfile";
+import { WorkspaceIconButton, WorkspaceIconPicker } from "../chrome/WorkspaceIcon";
 import { WorkspaceProfileSections } from "../chrome/WorkspaceProfileSections";
-import { WorkspaceTile } from "../chrome/WorkspaceTile";
 import type { EnvLink } from "../lib/client/registry";
 import type { Workspace } from "../lib/types";
 import { WorkspaceConnectors } from "./settings/integrations/WorkspaceConnectors";
@@ -41,6 +40,7 @@ export function WorkspaceSettingsPage({
   onManageConnectors: () => void;
 }) {
   const [page, setPage] = useState<Page>("general");
+  const [picking, setPicking] = useState(false);
   return (
     <div className="h-full overflow-y-auto">
       <Tabs.Root value={page} onValueChange={(next) => setPage(next as Page)} className="mx-auto flex max-w-[720px] flex-col px-10 pt-12 pb-28">
@@ -50,10 +50,15 @@ export function WorkspaceSettingsPage({
               <span aria-hidden className="grid size-12 shrink-0 place-items-center rounded-[15px] bg-card ring-1 ring-border">
                 <CrewGlyph className="size-9" />
               </span>
-            ) : WorkspaceIconEditor ? (
-              <WorkspaceIconEditor workspace={workspace} />
             ) : (
-              <WorkspaceTile workspace={workspace} size="lg" />
+              <WorkspaceIconButton
+                workspace={workspace}
+                picking={picking}
+                onPicking={(open) => {
+                  setPicking(open);
+                  if (open) setPage("general");
+                }}
+              />
             )}
             {/* Home is the window's own: its name stays, and it cannot be removed. */}
             {workspace.home ? (
@@ -72,6 +77,11 @@ export function WorkspaceSettingsPage({
         <div className="pt-4">
           {page === "general" ? (
             <>
+              {picking && !workspace.home && (
+                <Section>
+                  <WorkspaceIconPicker workspace={workspace} />
+                </Section>
+              )}
               <WorkspaceProfileSections workspace={workspace} />
               <Location workspace={workspace} remote={remote} />
               {!workspace.home && <DangerAction onClick={onRemove}>Remove workspace</DangerAction>}

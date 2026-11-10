@@ -14,6 +14,8 @@ import type {
   BotRulesSave,
   WorkspaceProfile,
   WorkspaceProfileSave,
+  WorkspaceIcon,
+  WorkspaceIconSet,
   BrowserLeases,
   CommandCatalog,
   Connector,
@@ -173,6 +175,18 @@ export const getWorkspaceProfile = (id: string): Promise<WorkspaceProfile> => cl
 /** The user's edit of a workspace's profile: the description when given, the rules by id (`w3`). */
 export const saveWorkspaceProfile = (id: string, changes: Omit<WorkspaceProfileSave, "id">): Promise<WorkspaceProfile> =>
   client.request("workspace_profile_save", { id, ...changes });
+
+/**
+ * A workspace's icon, from the daemon that holds it, which looks in its repo:
+ * again now with `look`, else once what it found is old. `choices` adds what
+ * there is to pick from, for its settings.
+ */
+export const getWorkspaceIcon = (id: string, opts: { look?: boolean; choices?: boolean } = {}): Promise<WorkspaceIcon> =>
+  client.request("workspace_icon_get", { id, ...opts });
+
+/** The user's choice of icon: a repo file by `path`, or an `upload` kept in the daemon's data dir. */
+export const setWorkspaceIcon = (id: string, choice: Omit<WorkspaceIconSet, "id">): Promise<WorkspaceIcon> =>
+  client.request("workspace_icon_set", { id, ...choice });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });

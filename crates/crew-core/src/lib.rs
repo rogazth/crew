@@ -61,4 +61,5 @@ pub mod turns;
 pub mod usage;
 pub mod working_set;
 pub mod workspace;
+pub mod workspace_icon;
 pub mod worktree;

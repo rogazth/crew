@@ -673,6 +673,23 @@ export type HistoryTitle = { url: string, title: string, };
 
 export type HistoryVisit = { url: string, title: string, workspaceId?: string, };
 
+/**
+ * What a workspace's icon is: the best image its repo offers (`auto`), a
+ * file in the repo the user picked (`repo`), the image they uploaded
+ * (`upload`), or none, for its initials (`initials`).
+ */
+export type IconChoice = "auto" | "repo" | "upload" | "initials";
+
+/**
+ * One of the repo's images: its path relative to the workspace, and itself as a data URL.
+ */
+export type IconFile = { path: string, image: string, };
+
+/**
+ * An image the user uploaded: its type and its bytes in base64.
+ */
+export type IconUpload = { mime: string, data: string, };
+
 export type Id = { id: string, };
 
 export type IdBlocks = { id: string, blocksJson: string, };
@@ -2086,6 +2103,48 @@ export type Workspace = { id: string, name: string, path: string, createdAt: num
  * Home: the window's own workspace, not a project the user opened.
  */
 home: boolean, };
+
+/**
+ * A workspace's icon as the user chose it, and what it shows.
+ */
+export type WorkspaceIcon = { choice: IconChoice, 
+/**
+ * The repo's file picked, relative to the workspace, when `choice` is `repo`.
+ */
+path: string | null, 
+/**
+ * What it shows, as a data URL; none for its initials.
+ */
+image: string | null, 
+/**
+ * With `choices`: the repo's images, best first.
+ */
+found: Array<IconFile>, 
+/**
+ * With `choices`: the image uploaded last, as a data URL, kept to go back to.
+ */
+uploaded: string | null, };
+
+/**
+ * `workspace_icon_get`: a workspace's icon, asked of the daemon that holds
+ * the workspace, which looks in its repo.
+ */
+export type WorkspaceIconGet = { id: string, 
+/**
+ * Look in the repo again now, not only once what it found last is old.
+ */
+look?: boolean, 
+/**
+ * With what there is to pick from (`found`, `uploaded`), for its settings;
+ * without, only what it shows, for the rail.
+ */
+choices?: boolean, };
+
+/**
+ * `workspace_icon_set`: the user's choice of icon. `repo` takes `path`;
+ * `upload` takes `upload` for a new image, or none to go back to the last one.
+ */
+export type WorkspaceIconSet = { id: string, choice: IconChoice, path?: string, upload?: IconUpload, };
 
 export type WorkspaceId = { workspaceId: string, };
 

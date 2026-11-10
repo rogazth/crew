@@ -30,14 +30,15 @@ use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
+use crew_core::workspace_icon;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue,
-    ListProjectFiles, Name, NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached,
-    PtyKill, PtyResize, PtySpawn, PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate,
-    SessionCreated, SessionId, SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile,
-    TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorkspaceProfile,
-    WorkspaceProfileSave, WorktreeAdd, WorktreeRemove,
+    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name,
+    NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn,
+    PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate, SessionCreated, SessionId,
+    SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile, TranscriptApply, TranscriptTail,
+    TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorkspaceProfile, WorkspaceProfileSave, WorktreeAdd,
+    WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -90,6 +91,8 @@ struct Hosts {
     /// Installs, updates and sign-outs of this machine's agent CLIs, and the Codex device-code sign-in.
     provider_jobs: crew_core::provider_job::ProviderJobs,
     provider_logins: crew_core::provider_login::ProviderLogins,
+    /// What each workspace's repo offered as its icon when last looked at.
+    icons: Arc<workspace_icon::Looks>,
 }
 
 /// Where the daemon listens and the token a client has to bring.
@@ -567,6 +570,66 @@ fn workspace_profile(store: &Store, id: &str, save: Option<WorkspaceProfileSave>
     Ok(WorkspaceProfile { description: workspace::description(store, &row.id)?, rules: listed_rules(store, owner)? })
 }
 
+/// A workspace's icon as the window draws it. Its repo is looked at only when
+/// what it shows or what it offers needs it, and again only once what it
+/// found is old, unless `look`.
+fn workspace_icon_of(
+    store: &Store,
+    looks: &workspace_icon::Looks,
+    id: &str,
+    look: bool,
+    choices: bool,
+) -> Result<proto::WorkspaceIcon, String> {
+    use workspace_icon::Choice;
+    let row = workspace::get(store, id.to_string())?.ok_or_else(|| format!("No workspace {id}"))?;
+    let kept = workspace_icon::kept(store, &row.id)?;
+    let root = std::path::Path::new(&row.path);
+    let upload = workspace_icon::upload_file(store, &row.id);
+    let needs_repo = choices || look || workspace_icon::wants_repo(&kept) || (kept.choice == Choice::Upload && upload.is_none());
+    let found = if needs_repo { looks.found(&row.id, root, look) } else { Vec::new() };
+    let image = workspace_icon::shown(store, &row.id, root, &found)?.and_then(|path| workspace_icon::data_url(&path));
+    let (found, uploaded) = if choices {
+        let found = found
+            .iter()
+            .filter_map(|found| {
+                Some(proto::IconFile { path: found.path.clone(), image: workspace_icon::data_url(&root.join(&found.path))? })
+            })
+            .collect();
+        (found, upload.and_then(|path| workspace_icon::data_url(&path)))
+    } else {
+        (Vec::new(), None)
+    };
+    let choice = match kept.choice {
+        Choice::Auto => proto::IconChoice::Auto,
+        Choice::Repo => proto::IconChoice::Repo,
+        Choice::Upload => proto::IconChoice::Upload,
+        Choice::Initials => proto::IconChoice::Initials,
+    };
+    Ok(proto::WorkspaceIcon { choice, path: (kept.choice == Choice::Repo).then_some(kept.path), image, found, uploaded })
+}
+
+/// The user's choice of icon: a new upload is kept and chosen; any other choice is kept as it is.
+fn workspace_icon_set(
+    store: &Store,
+    looks: &workspace_icon::Looks,
+    set: proto::WorkspaceIconSet,
+) -> Result<proto::WorkspaceIcon, String> {
+    use workspace_icon::Choice;
+    let choice = match set.choice {
+        proto::IconChoice::Auto => Choice::Auto,
+        proto::IconChoice::Repo => Choice::Repo,
+        proto::IconChoice::Upload => Choice::Upload,
+        proto::IconChoice::Initials => Choice::Initials,
+    };
+    match set.upload {
+        Some(upload) if choice == Choice::Upload => {
+            workspace_icon::upload(store, &set.id, &upload.mime, &workspace_icon::decode(&upload.data)?)?
+        }
+        _ => workspace_icon::choose(store, &set.id, choice, set.path.as_deref())?,
+    }
+    workspace_icon_of(store, looks, &set.id, false, true)
+}
+
 /// The user's edit of the rules, by id, whole or not at all. A rule removed
 /// meanwhile (by the bot, or in another window) is not the user's to edit or
 /// remove any more; nor is an id that names no rule.
@@ -800,6 +863,7 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
         vault: vault_host,
         provider_jobs,
         provider_logins,
+        icons: Arc::new(workspace_icon::Looks::default()),
     };
     // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
@@ -1347,6 +1411,7 @@ const HOT_METHODS: &[&str] = &[
     "dir_list",
     "list_project_files",
     "search_files",
+    "workspace_icon_get",
     "browser_pages_list",
     "browser_leases_list",
     "browser_ack",
@@ -1721,6 +1786,21 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let id = save.id.clone();
             json(block(move || bot_rules(&store, &id, Some(save))).await?)
+        }
+        "workspace_icon_get" => {
+            let get: proto::WorkspaceIconGet = parse(params)?;
+            let (store, looks) = (hosts.store.clone(), hosts.icons.clone());
+            json(
+                block(move || {
+                    workspace_icon_of(&store, &looks, &get.id, get.look.unwrap_or(false), get.choices.unwrap_or(false))
+                })
+                .await?,
+            )
+        }
+        "workspace_icon_set" => {
+            let set: proto::WorkspaceIconSet = parse(params)?;
+            let (store, looks) = (hosts.store.clone(), hosts.icons.clone());
+            json(block(move || workspace_icon_set(&store, &looks, set)).await?)
         }
         "workspace_profile_get" => {
             let Id { id } = parse(params)?;
@@ -3291,7 +3371,8 @@ mod tests {
         let dir = test_dir("workspace-profile");
         let (handle, _bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
-        let created = rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_str().unwrap() })).await;
+        let created =
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_str().unwrap() })).await;
         let workspace: proto::Workspace = serde_json::from_value(created.result.expect("workspace")).unwrap();
         let empty = rpc(&mut ws, 2, "workspace_profile_get", serde_json::json!({ "id": workspace.id })).await;
         let empty: WorkspaceProfile = serde_json::from_value(empty.result.expect("profile")).unwrap();
@@ -3308,12 +3389,84 @@ mod tests {
         let ids: Vec<&str> = saved.rules.iter().map(|rule| rule.id.as_str()).collect();
         assert_eq!(ids, ["w1", "w2"]);
 
-        let edit = serde_json::json!({ "id": workspace.id, "edit": [{ "id": "w2", "body": "Never push to main" }], "remove": ["w1"] });
+        let edit =
+            serde_json::json!({ "id": workspace.id, "edit": [{ "id": "w2", "body": "Never push to main" }], "remove": ["w1"] });
         let edited: WorkspaceProfile =
             serde_json::from_value(rpc(&mut ws, 4, "workspace_profile_save", edit).await.result.expect("edited")).unwrap();
         assert_eq!(edited.description, "The client's site.", "a save without a description keeps it");
         assert_eq!(edited.rules, [proto::Rule { id: "w2".into(), body: "Never push to main".into() }]);
         handle.shutdown();
+    }
+
+    /// A workspace's icon: the repo's best image unless the user picks another
+    /// file, uploads one (kept in the data dir, not the repo) or wants the
+    /// initials; the choice is read back as it was written.
+    #[tokio::test]
+    async fn a_workspaces_icon_is_found_in_its_repo_and_the_choice_is_kept() {
+        let dir = test_dir("workspace-icon");
+        let repo = dir.join("repo");
+        let png = |size: u32| {
+            let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+            b.extend_from_slice(b"IHDR");
+            b.extend_from_slice(&size.to_be_bytes());
+            b.extend_from_slice(&size.to_be_bytes());
+            b
+        };
+        std::fs::create_dir_all(repo.join("public")).unwrap();
+        std::fs::write(repo.join("public/logo512.png"), png(512)).unwrap();
+        std::fs::write(repo.join("public/logo192.png"), png(192)).unwrap();
+        let (handle, _bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let created =
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": repo.to_str().unwrap() })).await;
+        let workspace: proto::Workspace = serde_json::from_value(created.result.expect("workspace")).unwrap();
+        let get = |id: u32, choices: bool| {
+            let params = serde_json::json!({ "id": workspace.id, "choices": choices });
+            (id, params)
+        };
+
+        let (n, params) = get(2, true);
+        let auto: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, n, "workspace_icon_get", params).await.result.unwrap()).unwrap();
+        assert_eq!(auto.choice, proto::IconChoice::Auto);
+        let paths: Vec<&str> = auto.found.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["public/logo512.png", "public/logo192.png"]);
+        assert_eq!(auto.image.as_deref(), Some(auto.found[0].image.as_str()), "the best is shown");
+
+        let pick = serde_json::json!({ "id": workspace.id, "choice": "repo", "path": "public/logo192.png" });
+        let picked: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, 3, "workspace_icon_set", pick).await.result.unwrap()).unwrap();
+        assert_eq!((picked.choice, picked.path.as_deref()), (proto::IconChoice::Repo, Some("public/logo192.png")));
+        assert_eq!(picked.image.as_deref(), Some(picked.found[1].image.as_str()));
+        let escape = serde_json::json!({ "id": workspace.id, "choice": "repo", "path": "../crew.sqlite3" });
+        assert!(rpc(&mut ws, 4, "workspace_icon_set", escape).await.error.is_some(), "nothing out of the repo");
+
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(png(64));
+        let upload =
+            serde_json::json!({ "id": workspace.id, "choice": "upload", "upload": { "mime": "image/png", "data": data } });
+        let uploaded: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, 5, "workspace_icon_set", upload).await.result.unwrap()).unwrap();
+        assert_eq!(uploaded.choice, proto::IconChoice::Upload);
+        assert_eq!(uploaded.image, uploaded.uploaded);
+        assert!(dir.join("workspace-icons").join(format!("{}.png", workspace.id)).is_file(), "kept in the data dir");
+        assert!(
+            !std::fs::read_dir(&repo).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains(&workspace.id)),
+            "not in the repo"
+        );
+
+        let initials = serde_json::json!({ "id": workspace.id, "choice": "initials" });
+        rpc(&mut ws, 6, "workspace_icon_set", initials).await.result.expect("initials");
+        let (n, params) = get(7, false);
+        let rail: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, n, "workspace_icon_get", params).await.result.unwrap()).unwrap();
+        assert_eq!((rail.choice, rail.image, rail.found.len(), rail.uploaded), (proto::IconChoice::Initials, None, 0, None));
+        let back = serde_json::json!({ "id": workspace.id, "choice": "upload" });
+        let back: proto::WorkspaceIcon =
+            serde_json::from_value(rpc(&mut ws, 8, "workspace_icon_set", back).await.result.unwrap()).unwrap();
+        assert_eq!(back.image, uploaded.image, "the upload is kept to go back to");
+        handle.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The whole of a connector on this Mac: installed by URL, signed in

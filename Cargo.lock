@@ -354,6 +354,7 @@ dependencies = [
 name = "crewd"
 version = "0.4.0"
 dependencies = [
+ "base64 0.23.1",
  "crew-cli",
  "crew-core",
  "crew-protocol",

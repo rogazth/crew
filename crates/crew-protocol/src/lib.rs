@@ -572,6 +572,82 @@ pub struct WorkspaceProfileSave {
     pub remove: Vec<String>,
 }
 
+/// What a workspace's icon is: the best image its repo offers (`auto`), a
+/// file in the repo the user picked (`repo`), the image they uploaded
+/// (`upload`), or none, for its initials (`initials`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "lowercase")]
+pub enum IconChoice {
+    Auto,
+    Repo,
+    Upload,
+    Initials,
+}
+
+/// `workspace_icon_get`: a workspace's icon, asked of the daemon that holds
+/// the workspace, which looks in its repo.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorkspaceIconGet {
+    pub id: String,
+    /// Look in the repo again now, not only once what it found last is old.
+    #[serde(default)]
+    #[ts(optional)]
+    pub look: Option<bool>,
+    /// With what there is to pick from (`found`, `uploaded`), for its settings;
+    /// without, only what it shows, for the rail.
+    #[serde(default)]
+    #[ts(optional)]
+    pub choices: Option<bool>,
+}
+
+/// A workspace's icon as the user chose it, and what it shows.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorkspaceIcon {
+    pub choice: IconChoice,
+    /// The repo's file picked, relative to the workspace, when `choice` is `repo`.
+    pub path: Option<String>,
+    /// What it shows, as a data URL; none for its initials.
+    pub image: Option<String>,
+    /// With `choices`: the repo's images, best first.
+    pub found: Vec<IconFile>,
+    /// With `choices`: the image uploaded last, as a data URL, kept to go back to.
+    pub uploaded: Option<String>,
+}
+
+/// One of the repo's images: its path relative to the workspace, and itself as a data URL.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct IconFile {
+    pub path: String,
+    pub image: String,
+}
+
+/// `workspace_icon_set`: the user's choice of icon. `repo` takes `path`;
+/// `upload` takes `upload` for a new image, or none to go back to the last one.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorkspaceIconSet {
+    pub id: String,
+    pub choice: IconChoice,
+    #[serde(default)]
+    #[ts(optional)]
+    pub path: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub upload: Option<IconUpload>,
+}
+
+/// An image the user uploaded: its type and its bytes in base64.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct IconUpload {
+    pub mime: String,
+    pub data: String,
+}
+
 /// `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
 /// id (`r3`), applied whole or not at all. An edit or a removal of a rule the
 /// bot removed meanwhile is dropped.

@@ -397,6 +397,57 @@ function saveProfile(row: Row) {
   return profileOf(String(row.id));
 }
 
+/**
+ * Each workspace's icon, as `crew_core::workspace_icon` keeps it: what its repo
+ * offers (drawn here, best first), the choice, and an upload, in memory.
+ */
+const svgIcon = (fill: string, glyph: string, wide = false) =>
+  `data:image/svg+xml;base64,${btoa(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${wide ? 96 : 64} 64"><rect width="${wide ? 96 : 64}" height="64" rx="14" fill="${fill}"/><text x="50%" y="58%" font-family="system-ui" font-size="30" font-weight="700" fill="#fff" text-anchor="middle" dominant-baseline="middle">${glyph}</text></svg>`,
+  )}`;
+const repoIcons = new Map<string, { path: string; image: string }[]>([
+  [
+    "w1",
+    [
+      { path: "public/favicon.svg", image: svgIcon("#4f46e5", "C") },
+      { path: "src-tauri/icons/icon.png", image: svgIcon("#0ea5e9", "c") },
+      { path: "public/logo.svg", image: svgIcon("#111827", "crew", true) },
+    ],
+  ],
+  ["w2", [{ path: "public/favicon.ico", image: svgIcon("#16a34a", "S") }]],
+]);
+type MockIcon = { choice: "auto" | "repo" | "upload" | "initials"; path: string | null; uploaded: string | null };
+const iconChoices = new Map<string, MockIcon>();
+function iconOf({ id, choices }: Row) {
+  const kept = iconChoices.get(String(id)) ?? { choice: "auto", path: null, uploaded: null };
+  const found = repoIcons.get(String(id)) ?? [];
+  const image =
+    kept.choice === "initials"
+      ? null
+      : kept.choice === "upload" && kept.uploaded
+        ? kept.uploaded
+        : ((kept.choice === "repo" ? found.find((file) => file.path === kept.path) : undefined) ?? found[0])?.image ?? null;
+  return {
+    choice: kept.choice,
+    path: kept.choice === "repo" ? kept.path : null,
+    image,
+    found: choices ? found : [],
+    uploaded: choices ? kept.uploaded : null,
+  };
+}
+function setIcon({ id, choice, path, upload }: Row) {
+  const before = iconChoices.get(String(id)) ?? { choice: "auto", path: null, uploaded: null };
+  const sent = upload as { mime: string; data: string } | undefined;
+  if (choice === "repo" && !(repoIcons.get(String(id)) ?? []).some((file) => file.path === path)) throw new Error("Pick an image in the repo");
+  if (choice === "upload" && !sent && !before.uploaded) throw new Error("No image has been uploaded");
+  iconChoices.set(String(id), {
+    choice: choice as MockIcon["choice"],
+    path: choice === "repo" ? String(path) : null,
+    uploaded: sent ? `data:${sent.mime};base64,${sent.data}` : before.uploaded,
+  });
+  return iconOf({ id, choices: true });
+}
+
 /* ── The MCP Registry, live through Vite's /mcp-registry proxy ───────── */
 // The daemon keeps its own copy (crates/crew-core/src/registry.rs); the mock
 // reads the live registry, which sends no CORS headers, through vite.config.ts.
@@ -1271,6 +1322,8 @@ const commands: Record<string, (args: Row) => unknown> = {
   bot_rules_save: saveRules,
   workspace_profile_get: ({ id }) => profileOf(String(id)),
   workspace_profile_save: saveProfile,
+  workspace_icon_get: iconOf,
+  workspace_icon_set: setIcon,
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),
