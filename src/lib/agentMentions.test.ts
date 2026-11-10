@@ -27,7 +27,18 @@ describe("searchAgents", () => {
     expect(searchAgents("lead", AGENTS).map((a) => a.id)).toEqual(["b-1"]);
   });
 
-  it("reads words with spaces as pieces of the name, in order", () => {
+  it("matches the starts of the name's words, not letters scattered through it", () => {
+    expect(searchAgents("de", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
+    expect(searchAgents("ead", AGENTS)).toEqual([]);
+    expect(searchAgents("bots", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
+  });
+
+  it("puts the names that start with what is typed first", () => {
+    const named = [session("x", "Notas de Lead", "terminal", 9), ...AGENTS];
+    expect(searchAgents("lea", named).map((a) => a.id)).toEqual(["b-1", "x"]);
+  });
+
+  it("reads words with spaces as the starts of the name's words, in order", () => {
     expect(searchAgents("menciones de", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
     expect(searchAgents("Menc bo", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
     expect(searchAgents("bots menciones", AGENTS)).toEqual([]);

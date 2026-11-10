@@ -1,4 +1,3 @@
-import { fuzzyMatch } from "./fuzzy";
 import type { Session, Worktree } from "./types";
 import { worktreeLabel } from "./worktrees";
 
@@ -38,37 +37,40 @@ export function searchTrees(query: string, trees: readonly TreeMention[], limit 
 }
 
 /**
- * Names that answer what is typed after an `@`. One word is matched loosely; words with spaces between them, as
- * a session's name has, are matched as Slack does: each word a piece of the name, in order, and a space typed
- * after the last one means the name goes on past it. So `@Lead ` matches no `Lead`: that name is done.
+ * Names that answer what is typed after an `@`, as Slack's do: each word typed starts a word of the name, in
+ * order, so `@a` finds `Alpha` and not `Beta`. A space typed after the last word means the name goes on past
+ * it, so `@Lead ` matches no `Lead`: that name is done. Names that start with what is typed come first.
  */
 function matchNames<T extends { name: string }>(query: string, items: readonly T[], limit: number): T[] {
   if (!query) return items.slice(0, limit);
-  if (!/\s/.test(query)) {
-    const hits: Array<{ item: T; score: number }> = [];
-    for (const item of items) {
-      const hit = fuzzyMatch(query, item.name);
-      if (hit) hits.push({ item, score: hit.score });
-    }
-    hits.sort((a, b) => b.score - a.score);
-    return hits.slice(0, limit).map((hit) => hit.item);
-  }
-  return items.filter((item) => wordsMatch(query, item.name)).slice(0, limit);
+  const hits = items.flatMap((item) => {
+    const at = wordsMatch(query, item.name);
+    return at === null ? [] : [{ item, first: at === 0 ? 0 : 1 }];
+  });
+  return hits
+    .sort((a, b) => a.first - b.first)
+    .slice(0, limit)
+    .map((hit) => hit.item);
 }
 
 const fold = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
-function wordsMatch(query: string, name: string): boolean {
+/** Where the first word typed starts in the name, or null when the words do not all start words of it, in order. */
+function wordsMatch(query: string, name: string): number | null {
   const hay = fold(name);
   const words = fold(query).split(/\s+/);
   const goesOn = words.at(-1) === "";
   let at = 0;
+  let first: number | null = null;
   for (const word of words.filter(Boolean)) {
-    const found = hay.indexOf(word, at);
-    if (found < 0) return false;
+    let found = hay.indexOf(word, at);
+    while (found > 0 && /[\p{L}\p{N}]/u.test(hay[found - 1]!)) found = hay.indexOf(word, found + 1);
+    if (found < 0) return null;
+    first ??= found;
     at = found + word.length;
   }
-  return !goesOn || /\s/.test(hay.slice(at));
+  if (goesOn && !/\s/.test(hay.slice(at))) return null;
+  return first ?? 0;
 }
 
 /** The longest a name being typed may run, spaces and all, before the `@` is taken for plain text. */

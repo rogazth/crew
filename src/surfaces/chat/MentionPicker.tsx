@@ -61,9 +61,9 @@ type AgentProps = {
   onHover: (index: number) => void;
   onPick: (target: Session | TreeMention) => void;
   onPickFile: (file: ProjectFile) => void;
-  /** A row under the matches: the same `@` searches the files alone. */
-  onFiles: () => void;
-  /** The last row, when the repo has worktrees: the same `@` lists them alone. */
+  /** The row under the agents before anything is typed: the same `@` searches the files alone. */
+  onFiles?: (() => void) | undefined;
+  /** The last row, before anything is typed and when the repo has worktrees: the same `@` lists them alone. */
   onTrees?: (() => void) | undefined;
   left?: number | null;
 };
@@ -71,8 +71,8 @@ type AgentProps = {
 const ROW = "flex h-8 w-full items-center gap-1.5 px-2 text-left text-[13px]";
 
 /**
- * The `@` menu: the workspace's bots and sessions, then the worktrees and files that match what is typed, then
- * rows into the files alone and the worktrees alone. The icon says what each is; an agent's right edge says how
+ * The `@` menu: the workspace's bots and sessions with rows into the files alone and the worktrees alone; once
+ * something is typed, the agents, worktrees and files that match it, and nothing else. The icon says what each is; an agent's right edge says how
  * it is now, or when it last moved.
  */
 export function AgentPicker({ results, trees = [], files = [], active, onHover, onPick, onPickFile, onFiles, onTrees, left }: AgentProps) {
@@ -134,15 +134,16 @@ export function AgentPicker({ results, trees = [], files = [], active, onHover, 
           </>,
         );
       })}
-      {moreAt > 0 && <div role="separator" className="mx-2 my-1 h-px bg-hairline" />}
-      {row(
-        moreAt,
-        "files",
-        onFiles,
-        <FileIcon className="size-3.5 text-icon" aria-hidden />,
-        "Files",
-        <ChevronRightIcon className="size-3.5" aria-hidden />,
-      )}
+      {onFiles && moreAt > 0 && <div role="separator" className="mx-2 my-1 h-px bg-hairline" />}
+      {onFiles &&
+        row(
+          moreAt,
+          "files",
+          onFiles,
+          <FileIcon className="size-3.5 text-icon" aria-hidden />,
+          "Files",
+          <ChevronRightIcon className="size-3.5" aria-hidden />,
+        )}
       {onTrees &&
         row(
           moreAt + 1,

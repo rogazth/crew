@@ -137,20 +137,23 @@ export function PromptWell({
   const query = named?.query ?? "";
   const listsNames = named !== null && !searchingFiles;
   const agentResults = useMemo(
-    () => (listsNames && !inTrees ? searchAgents(query, agents, query ? 5 : 6) : []),
+    () => (listsNames && !inTrees ? searchAgents(query, agents, query ? 5 : 4) : []),
     [listsNames, inTrees, query, agents],
   );
-  // Once something is typed, a few worktrees and files that match follow the agents.
+  // Once something is typed, the worktrees and files that match follow the agents.
   const treeResults = useMemo(
-    () => (listsNames ? searchTrees(query, worktrees, inTrees ? 8 : query ? 2 : 0) : []),
+    () => (listsNames ? searchTrees(query, worktrees, inTrees ? 8 : query ? 3 : 0) : []),
     [listsNames, inTrees, query, worktrees],
   );
   const spaced = /\s/.test(query);
   // A name with a space in it stays a mention while something answers it, so a sentence after an `@` closes it.
   const treeMention = inTrees && (!spaced || treeResults.length > 0) ? named : null;
-  const agentMention = listsNames && !inTrees && (!spaced || agentResults.length + treeResults.length > 0) ? named : null;
-  const fileHits = agentMention && mention?.query ? results.slice(0, 3) : [];
-  const moreRows = worktrees.length > 0 ? 2 : 1;
+  const fileHits = listsNames && !inTrees && mention?.query ? results.slice(0, 4) : [];
+  // Once something is typed the menu is its matches alone, and with none it closes; before, it offers its
+  // Files and Worktrees rows.
+  const agentMention =
+    listsNames && !inTrees && (!query || agentResults.length + treeResults.length + fileHits.length > 0) ? named : null;
+  const moreRows = query ? 0 : worktrees.length > 0 ? 2 : 1;
 
   // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
   const slash = mention || agentMention || treeMention ? null : slashAt(draft, cursor);
@@ -421,8 +424,8 @@ export function PromptWell({
           onHover={setActive}
           onPick={pickAgent}
           onPickFile={pick}
-          onFiles={searchFiles}
-          onTrees={worktrees.length > 0 ? listTrees : undefined}
+          onFiles={query ? undefined : searchFiles}
+          onTrees={!query && worktrees.length > 0 ? listTrees : undefined}
           left={pickerLeft}
         />
       )}
