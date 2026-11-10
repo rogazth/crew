@@ -239,6 +239,12 @@ fn error_of(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> GwsError {
     }
 }
 
+/// Whether `gws` can run here: downloaded and checked first when it is not
+/// there yet. An account's "Try now" asks, so a failed setup is tried again.
+pub async fn ready(gws: &Gws) -> Result<(), GwsError> {
+    gws.binary().await.map(|_| ())
+}
+
 /// Runs a tool of `app` for a session, with `token`. Its answer is MCP's.
 pub async fn call(gws: &Gws, app: App, name: &str, args: &Value, token: &str) -> Result<Value, GwsError> {
     let tool = tools(app)
