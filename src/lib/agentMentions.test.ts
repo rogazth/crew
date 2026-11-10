@@ -4,8 +4,10 @@ import {
   agentRuns,
   completeAgentMention,
   mentionedAgents,
+  nameMentionAt,
   mentionedTrees,
   searchAgents,
+  searchTrees,
   splitAgentNote,
 } from "./agentMentions";
 import type { Session } from "./types";
@@ -24,11 +26,48 @@ describe("searchAgents", () => {
     expect(searchAgents("", AGENTS).map((a) => a.id)).toEqual(["s-1", "b-1", "s-2"]);
     expect(searchAgents("lead", AGENTS).map((a) => a.id)).toEqual(["b-1"]);
   });
+
+  it("reads words with spaces as pieces of the name, in order", () => {
+    expect(searchAgents("menciones de", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
+    expect(searchAgents("Menc bo", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
+    expect(searchAgents("bots menciones", AGENTS)).toEqual([]);
+  });
+
+  it("takes a space after the last word to mean the name goes on", () => {
+    expect(searchAgents("menciones ", AGENTS).map((a) => a.id)).toEqual(["s-1"]);
+    expect(searchAgents("lead ", AGENTS)).toEqual([]);
+  });
+});
+
+describe("searchTrees", () => {
+  it("matches a worktree's name as the agents' are", () => {
+    const trees = [{ name: "main", path: "/r" }, { name: "feat/web", path: "/r/w" }];
+    expect(searchTrees("web", trees).map((t) => t.path)).toEqual(["/r/w"]);
+    expect(searchTrees("", trees, 1)).toHaveLength(1);
+  });
+});
+
+describe("nameMentionAt", () => {
+  it("reads past the spaces of a name being typed", () => {
+    expect(nameMentionAt("ask @Menciones de", 17, AGENTS)).toEqual({ start: 4, end: 17, query: "Menciones de" });
+  });
+
+  it("stops at a new line, an `@` inside a word and a space right after the `@`", () => {
+    expect(nameMentionAt("@Lead\nnow", 9, AGENTS)).toBeNull();
+    expect(nameMentionAt("me@mail", 7, AGENTS)).toBeNull();
+    expect(nameMentionAt("@ hi", 4, AGENTS)).toBeNull();
+  });
+
+  it("is done once a whole name has a space after it, and open again when more is typed", () => {
+    expect(nameMentionAt("@Lead", 5, AGENTS)?.query).toBe("Lead");
+    expect(nameMentionAt("@Lead ", 6, AGENTS)).toBeNull();
+    expect(nameMentionAt("@Menciones d", 12, AGENTS)?.query).toBe("Menciones d");
+  });
 });
 
 describe("completeAgentMention", () => {
   it("puts the whole name in, spaces and all, and the caret after it", () => {
-    expect(completeAgentMention("ask @me now", 7, AGENTS[0]!)).toEqual({ text: "ask @Menciones de bots  now", cursor: 23 });
+    expect(completeAgentMention("ask @me now", { start: 4, end: 7 }, AGENTS[0]!)).toEqual({ text: "ask @Menciones de bots  now", cursor: 23 });
   });
 });
 

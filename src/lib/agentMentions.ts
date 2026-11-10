@@ -1,5 +1,4 @@
 import { fuzzyMatch } from "./fuzzy";
-import { mentionAt } from "./mentions";
 import type { Session, Worktree } from "./types";
 import { worktreeLabel } from "./worktrees";
 
@@ -27,38 +26,80 @@ export function agentKind(session: Pick<Session, "kind">): string {
   return "session";
 }
 
-/** The workspace's others, most recently active first, fuzzy-matched on name once something is typed. */
+/** The workspace's others, most recently active first, matched on name once something is typed. */
 export function searchAgents(query: string, agents: readonly Session[], limit = 8): Session[] {
   const recent = [...agents].sort((a, b) => b.updatedAt - a.updatedAt);
-  if (!query) return recent.slice(0, limit);
-  const hits: Array<{ agent: Session; score: number }> = [];
-  for (const agent of recent) {
-    const hit = fuzzyMatch(query, agent.name);
-    if (hit) hits.push({ agent, score: hit.score });
-  }
-  hits.sort((a, b) => b.score - a.score);
-  return hits.slice(0, limit).map((hit) => hit.agent);
+  return matchNames(query, recent, limit);
 }
 
-/** The repo's worktrees, the main checkout first, fuzzy-matched on name once something is typed. */
+/** The repo's worktrees, the main checkout first, matched on name once something is typed. */
 export function searchTrees(query: string, trees: readonly TreeMention[], limit = 4): TreeMention[] {
-  if (!query) return trees.slice(0, limit);
-  const hits: Array<{ tree: TreeMention; score: number }> = [];
-  for (const tree of trees) {
-    const hit = fuzzyMatch(query, tree.name);
-    if (hit) hits.push({ tree, score: hit.score });
-  }
-  hits.sort((a, b) => b.score - a.score);
-  return hits.slice(0, limit).map((hit) => hit.tree);
+  return matchNames(query, trees, limit);
 }
 
-/** Replaces the mention under the caret with `@name `; returns the new text and caret. */
-export function completeAgentMention(text: string, cursor: number, agent: { name: string }) {
-  const active = mentionAt(text, cursor);
-  if (!active) return null;
+/**
+ * Names that answer what is typed after an `@`. One word is matched loosely; words with spaces between them, as
+ * a session's name has, are matched as Slack does: each word a piece of the name, in order, and a space typed
+ * after the last one means the name goes on past it. So `@Lead ` matches no `Lead`: that name is done.
+ */
+function matchNames<T extends { name: string }>(query: string, items: readonly T[], limit: number): T[] {
+  if (!query) return items.slice(0, limit);
+  if (!/\s/.test(query)) {
+    const hits: Array<{ item: T; score: number }> = [];
+    for (const item of items) {
+      const hit = fuzzyMatch(query, item.name);
+      if (hit) hits.push({ item, score: hit.score });
+    }
+    hits.sort((a, b) => b.score - a.score);
+    return hits.slice(0, limit).map((hit) => hit.item);
+  }
+  return items.filter((item) => wordsMatch(query, item.name)).slice(0, limit);
+}
+
+const fold = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+function wordsMatch(query: string, name: string): boolean {
+  const hay = fold(name);
+  const words = fold(query).split(/\s+/);
+  const goesOn = words.at(-1) === "";
+  let at = 0;
+  for (const word of words.filter(Boolean)) {
+    const found = hay.indexOf(word, at);
+    if (found < 0) return false;
+    at = found + word.length;
+  }
+  return !goesOn || /\s/.test(hay.slice(at));
+}
+
+/** The longest a name being typed may run, spaces and all, before the `@` is taken for plain text. */
+const NAME_LIMIT = 60;
+
+/**
+ * The `@` being typed at the caret for the names: unlike a path, a name may have spaces, so the query runs back
+ * to the last `@` that opens a word on the caret's line. Whether it is still a mention is the menu's to say (a
+ * query with a space stays one while some name matches it); one that already holds a whole name, with only
+ * spaces after it up to the caret, is done.
+ */
+export function nameMentionAt(text: string, cursor: number, names: readonly { name: string }[]) {
+  if (cursor < 0) return null;
+  const before = text.slice(0, cursor);
+  const at = before.lastIndexOf("@");
+  if (at < 0 || before.includes("\n", at)) return null;
+  if (at > 0 && !/\s/.test(text[at - 1]!)) return null;
+  const query = before.slice(at + 1);
+  if (query.length > NAME_LIMIT || /^\s/.test(query)) return null;
+  const whole = agentRuns(before.slice(at), names)[0];
+  if (whole && whole.from === 0 && whole.to <= query.length && !/\S/.test(before.slice(at + whole.to))) return null;
+  let end = cursor;
+  while (end < text.length && /\S/.test(text[end]!)) end += 1;
+  return { start: at, end, query };
+}
+
+/** Replaces the mention being typed with `@name `; returns the new text and caret. */
+export function completeAgentMention(text: string, mention: { start: number; end: number }, agent: { name: string }) {
   const inserted = `@${agent.name} `;
-  const next = text.slice(0, active.start) + inserted + text.slice(active.end);
-  return { text: next, cursor: active.start + inserted.length };
+  const next = text.slice(0, mention.start) + inserted + text.slice(mention.end);
+  return { text: next, cursor: mention.start + inserted.length };
 }
 
 /**

@@ -8,7 +8,7 @@ import type { Opener } from "../../chrome/ModelPicker";
 import { activatePrompt, promptLetter, registerPrompt, type Prompt, type PromptPickers } from "../../chrome/promptKeys";
 import { useAgentIcons } from "../../hooks/useAgentIcons";
 import type { Upload } from "../../hooks/useUploads";
-import { completeAgentMention, searchAgents, searchTrees, type TreeMention } from "../../lib/agentMentions";
+import { completeAgentMention, nameMentionAt, searchAgents, searchTrees, type TreeMention } from "../../lib/agentMentions";
 import type { AttachedFile } from "../../lib/blocks";
 import { continueList, indentList, onIndentedListLine, onListLine, removeListMarker } from "../../lib/composerFormat";
 import { completeMention, mentionAt, rememberMention } from "../../lib/mentions";
@@ -19,7 +19,7 @@ import { completeSlash, opensMessage, removeSlash, searchCommands, slashAt } fro
 import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
 import { AttachMenu } from "./ComposerParts";
-import { AgentPicker, MentionPicker } from "./MentionPicker";
+import { AgentPicker, MentionPicker, TreePicker } from "./MentionPicker";
 import { hasWorktreePicker, openWorktreePicker } from "./panePlace";
 import { PromptEditor, type PromptHandle } from "./PromptEditor";
 import { SlashPicker } from "./SlashPicker";
@@ -123,25 +123,37 @@ export function PromptWell({
     ],
     [agents, agentIcons, worktrees],
   );
-  const agentResults = useMemo(
-    () => (mention ? searchAgents(mention.query, agents) : []),
-    [mention?.query, agents], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const treeResults = useMemo(
-    () => (mention ? searchTrees(mention.query, worktrees) : []),
-    [mention?.query, worktrees], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  // Once something is typed, the files it matches follow the agents and worktrees; the menu's last row turns the
-  // `@` into a file search of its own. A path being typed is one already; with no agents or worktrees, it is only files.
-  const [filesAt, setFilesAt] = useState<number | null>(null);
+  // A name may have spaces, as a session's does: the `@` for names reads past them, where a path's stops.
+  const names = useMemo(() => [...agents, ...worktrees], [agents, worktrees]);
+  const named = nameMentionAt(draft, cursor, names);
+  // The menu's last rows turn the `@` into a search of the files alone, or of the worktrees alone; a path being
+  // typed is a file search already, and with no agents or worktrees the `@` is only for files.
+  const [sub, setSub] = useState<{ at: number; kind: "files" | "trees" } | null>(null);
   const searchingFiles =
-    mention !== null && (filesAt === mention.start || mention.query.includes("/") || agents.length + worktrees.length === 0);
-  const agentMention = mention && !searchingFiles ? mention : null;
+    mention !== null &&
+    ((sub?.kind === "files" && sub.at === mention.start) || mention.query.includes("/") || agents.length + worktrees.length === 0);
   const fileMention = searchingFiles ? mention : null;
-  const fileHits = agentMention && agentMention.query ? results.slice(0, 3) : [];
+  const inTrees = !searchingFiles && named !== null && sub?.kind === "trees" && sub.at === named.start;
+  const query = named?.query ?? "";
+  const listsNames = named !== null && !searchingFiles;
+  const agentResults = useMemo(
+    () => (listsNames && !inTrees ? searchAgents(query, agents, query ? 5 : 6) : []),
+    [listsNames, inTrees, query, agents],
+  );
+  // Once something is typed, a few worktrees and files that match follow the agents.
+  const treeResults = useMemo(
+    () => (listsNames ? searchTrees(query, worktrees, inTrees ? 8 : query ? 2 : 0) : []),
+    [listsNames, inTrees, query, worktrees],
+  );
+  const spaced = /\s/.test(query);
+  // A name with a space in it stays a mention while something answers it, so a sentence after an `@` closes it.
+  const treeMention = inTrees && (!spaced || treeResults.length > 0) ? named : null;
+  const agentMention = listsNames && !inTrees && (!spaced || agentResults.length + treeResults.length > 0) ? named : null;
+  const fileHits = agentMention && mention?.query ? results.slice(0, 3) : [];
+  const moreRows = worktrees.length > 0 ? 2 : 1;
 
   // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
-  const slash = mention ? null : slashAt(draft, cursor);
+  const slash = mention || agentMention || treeMention ? null : slashAt(draft, cursor);
   const slashStarts = slash ? opensMessage(draft, slash.start) : false;
   const slashResults = useMemo(
     () => (slash ? searchCommands(commands, slash.query, slashStarts) : []),
@@ -155,15 +167,17 @@ export function PromptWell({
   useEffect(() => {
     if (typingSlash) onSlashNow.current?.();
   }, [typingSlash]);
-  // The agents' menu has one more row than its matches: Files.
+  // The agents' menu has more rows than its matches: Files, and Worktrees when the repo has any.
   const choices = fileMention
     ? results.length
-    : agentMention
-      ? agentResults.length + treeResults.length + fileHits.length + 1
-      : slashResults.length;
+    : treeMention
+      ? treeResults.length
+      : agentMention
+        ? agentResults.length + treeResults.length + fileHits.length + moreRows
+        : slashResults.length;
   // The open picker hangs from the character that opened it, and stays there as the query is typed.
   const well = useRef<HTMLFormElement>(null);
-  const trigger = mention?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null;
+  const trigger = (fileMention ?? treeMention ?? agentMention)?.start ?? (slashResults.length > 0 ? slash?.start : undefined) ?? null;
   const pickerLeft = usePickerAnchor(field, well, trigger);
 
   const model = useRef<Opener>(null);
@@ -221,16 +235,29 @@ export function PromptWell({
   };
 
   const searchFiles = () => {
-    if (!mention) return;
-    setFilesAt(mention.start);
+    const at = (mention ?? named)?.start;
+    if (at === undefined) return;
+    // A name with a space in it is no path: the file search starts over from the `@`.
+    if (!mention && named) {
+      const next = draft.slice(0, named.start + 1) + draft.slice(named.end);
+      onDraft(next);
+      place(named.start + 1);
+    }
+    setSub({ at, kind: "files" });
+    setActive(0);
+  };
+
+  const listTrees = () => {
+    if (!named) return;
+    setSub({ at: named.start, kind: "trees" });
     setActive(0);
   };
 
   const pickAgent = (agent: Session | TreeMention) => {
-    const el = field.current;
-    if (!el) return;
-    const next = completeAgentMention(draft, el.read().from, agent);
-    if (!next) return;
+    const at = treeMention ?? agentMention;
+    if (!at) return;
+    const next = completeAgentMention(draft, at, agent);
+    setSub(null);
     onDraft(next.text);
     setActive(0);
     place(next.cursor);
@@ -273,20 +300,23 @@ export function PromptWell({
         event.preventDefault();
         const at = Math.min(active, choices - 1);
         if (fileMention) pick(results[at]!, event.key === "Tab");
+        else if (treeMention) pickAgent(treeResults[at]!);
         else if (agentMention) {
           const target = agentResults[at] ?? treeResults[at - agentResults.length];
-          const file = fileHits[at - agentResults.length - treeResults.length];
+          const matched = agentResults.length + treeResults.length;
+          const file = fileHits[at - matched];
           if (target) pickAgent(target);
           else if (file) pick(file, event.key === "Tab");
-          else searchFiles();
+          else if (at === matched + fileHits.length) searchFiles();
+          else listTrees();
         } else pickSlash(slashResults[at]!);
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        // Out of the files it went into, back to the agents; from there, the menu closes.
-        if (fileMention && filesAt === fileMention.start) {
-          setFilesAt(null);
+        // Out of the files or worktrees it went into, back to the agents; from there, the menu closes.
+        if ((fileMention && sub?.at === fileMention.start) || treeMention) {
+          setSub(null);
           setActive(0);
         } else setCursor(-1);
         return;
@@ -373,16 +403,26 @@ export function PromptWell({
           left={pickerLeft}
         />
       )}
+      {treeMention && (
+        <TreePicker
+          results={treeResults}
+          active={Math.min(active, Math.max(0, treeResults.length - 1))}
+          onHover={setActive}
+          onPick={pickAgent}
+          left={pickerLeft}
+        />
+      )}
       {agentMention && (
         <AgentPicker
           results={agentResults}
           trees={treeResults}
           files={fileHits}
-          active={Math.min(active, agentResults.length + treeResults.length + fileHits.length)}
+          active={Math.min(active, choices - 1)}
           onHover={setActive}
           onPick={pickAgent}
           onPickFile={pick}
           onFiles={searchFiles}
+          onTrees={worktrees.length > 0 ? listTrees : undefined}
           left={pickerLeft}
         />
       )}
@@ -414,8 +454,11 @@ export function PromptWell({
             onDraft(value);
             setCursor(caret);
             setActive(0);
-            // The file search lasts as long as the `@` it was opened for.
-            if (filesAt !== null && mentionAt(value, caret)?.start !== filesAt) setFilesAt(null);
+            // The file or worktree search lasts as long as the `@` it was opened for.
+            if (sub) {
+              const open = sub.kind === "files" ? mentionAt(value, caret) : nameMentionAt(value, caret, names);
+              if (open?.start !== sub.at) setSub(null);
+            }
           }}
           onCaret={setCursor}
           onKeyDown={onKeyDown}

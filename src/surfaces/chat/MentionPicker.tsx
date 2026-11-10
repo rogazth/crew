@@ -53,7 +53,7 @@ export function MentionPicker({ results, active, onHover, onPick, left }: Props)
 
 type AgentProps = {
   results: Session[];
-  /** The repo's worktrees that match, after the agents. */
+  /** The repo's worktrees that match what is typed, after the agents. */
   trees?: TreeMention[];
   /** The files that match what is typed, after the worktrees. */
   files?: ProjectFile[];
@@ -61,18 +61,21 @@ type AgentProps = {
   onHover: (index: number) => void;
   onPick: (target: Session | TreeMention) => void;
   onPickFile: (file: ProjectFile) => void;
-  /** The last row: the same `@` searches the files alone. */
+  /** A row under the matches: the same `@` searches the files alone. */
   onFiles: () => void;
+  /** The last row, when the repo has worktrees: the same `@` lists them alone. */
+  onTrees?: (() => void) | undefined;
   left?: number | null;
 };
 
 const ROW = "flex h-8 w-full items-center gap-1.5 px-2 text-left text-[13px]";
 
 /**
- * The `@` menu: the workspace's bots and sessions, its repo's worktrees and the files that match, then a row
- * into the files alone. The icon says what each is; an agent's right edge says how it is now, or when it last moved.
+ * The `@` menu: the workspace's bots and sessions, then the worktrees and files that match what is typed, then
+ * rows into the files alone and the worktrees alone. The icon says what each is; an agent's right edge says how
+ * it is now, or when it last moved.
  */
-export function AgentPicker({ results, trees = [], files = [], active, onHover, onPick, onPickFile, onFiles, left }: AgentProps) {
+export function AgentPicker({ results, trees = [], files = [], active, onHover, onPick, onPickFile, onFiles, onTrees, left }: AgentProps) {
   const now = useNow(60_000);
   const treesAt = results.length;
   const filesAt = treesAt + trees.length;
@@ -139,6 +142,52 @@ export function AgentPicker({ results, trees = [], files = [], active, onHover, 
         <FileIcon className="size-3.5 text-icon" aria-hidden />,
         "Files",
         <ChevronRightIcon className="size-3.5" aria-hidden />,
+      )}
+      {onTrees &&
+        row(
+          moreAt + 1,
+          "trees",
+          onTrees,
+          <GitBranchIcon className="size-3.5 text-icon" aria-hidden />,
+          "Worktrees",
+          <ChevronRightIcon className="size-3.5" aria-hidden />,
+        )}
+    </div>
+  );
+}
+
+type TreeProps = {
+  results: TreeMention[];
+  active: number;
+  onHover: (index: number) => void;
+  onPick: (tree: TreeMention) => void;
+  left?: number | null;
+};
+
+/** The `@` menu's Worktrees row, gone into: the repo's worktrees alone. */
+export function TreePicker({ results, active, onHover, onPick, left }: TreeProps) {
+  return (
+    <div role="listbox" aria-label="Worktree mentions" className="crew-popover crew-picker" style={pickerStyle(left)}>
+      {results.length === 0 ? (
+        <p className="px-2 py-2 text-[12px] leading-4 text-text-muted">No matching worktrees</p>
+      ) : (
+        results.map((tree, index) => (
+          <button
+            key={tree.path}
+            type="button"
+            role="option"
+            aria-selected={index === active}
+            onMouseEnter={() => onHover(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onPick(tree)}
+            className={`${ROW} ${index === active ? "bg-hover" : ""}`}
+          >
+            <span className="flex size-4 shrink-0 items-center justify-center">
+              <GitBranchIcon className="size-3.5 text-icon" aria-hidden />
+            </span>
+            <span className="min-w-0 truncate">{tree.name}</span>
+          </button>
+        ))
       )}
     </div>
   );
