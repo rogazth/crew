@@ -32,11 +32,12 @@ use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
-    self as proto, Auth, BotRules, BotRulesCap, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue,
+    self as proto, Auth, BotRules, BotRulesSave, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue,
     ListProjectFiles, Name, NamePath, Names, OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached,
     PtyKill, PtyResize, PtySpawn, PtyWrite, RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SearchQuery, SessionCreate,
     SessionCreated, SessionId, SessionOptions, SessionUpdate, SessionUpdated, SessionsDeleted, SessionsRetention, TempFile,
-    TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
+    TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond, TurnStart, TurnStarted, WorkspaceId, WorkspaceProfile,
+    WorkspaceProfileSave, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -542,33 +543,59 @@ impl ToolDispatch {
 /// A bot's rules, after writing the user's edit when given. Only a bot has
 /// rules.
 fn bot_rules(store: &Store, id: &str, save: Option<BotRulesSave>) -> Result<BotRules, String> {
-    use crew_core::rules::{self, Change};
+    use crew_core::rules::Owner;
     let row = session::get(store, id.to_string())?.filter(|row| row.kind == "bot").ok_or_else(|| format!("No bot {id}"))?;
+    let owner = Owner::Bot(&row.id);
     if let Some(BotRulesSave { add, edit, remove, .. }) = save {
-        // A rule the bot removed while the sheet was open is not the user's
-        // to edit or remove any more; nor is an id that names no rule.
-        let there: Vec<i64> = rules::list(store, &row.id)?.into_iter().map(|rule| rule.id).collect();
-        let known = |label: &str| rules::parse_label(label).filter(|id| there.contains(id));
-        let changes: Vec<Change> = remove
-            .iter()
-            .filter_map(|label| known(label))
-            .map(Change::Remove)
-            .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
-            .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add { body }))
-            .collect();
-        rules::apply(store, &row.id, changes)?.map_err(|refused| match refused {
-            rules::Refused::Full { used, cap } => {
-                format!("Rules hold at most {} characters; these are {}.", rules::thousands(cap), rules::thousands(used))
-            }
-            other => other.say(),
-        })?;
+        save_rules(store, owner, add, edit, remove)?;
     }
-    let listed = rules::list(store, &row.id)?;
-    Ok(BotRules {
-        used: rules::used(&listed) as u32,
-        cap: rules::cap(store, &row.id)? as u32,
-        rules: listed.into_iter().map(|rule| proto::BotRule { id: rules::label(rule.id), body: rule.body }).collect(),
-    })
+    Ok(BotRules { rules: listed_rules(store, owner)? })
+}
+
+/// A workspace's description and rules, after writing the user's edit when
+/// given.
+fn workspace_profile(store: &Store, id: &str, save: Option<WorkspaceProfileSave>) -> Result<WorkspaceProfile, String> {
+    use crew_core::rules::Owner;
+    let row = workspace::get(store, id.to_string())?.ok_or_else(|| format!("No workspace {id}"))?;
+    let owner = Owner::Workspace(&row.id);
+    if let Some(WorkspaceProfileSave { description, add, edit, remove, .. }) = save {
+        save_rules(store, owner, add, edit, remove)?;
+        if let Some(description) = description {
+            workspace::set_description(store, &row.id, &description)?;
+        }
+    }
+    Ok(WorkspaceProfile { description: workspace::description(store, &row.id)?, rules: listed_rules(store, owner)? })
+}
+
+/// The user's edit of the rules, by id, whole or not at all. A rule removed
+/// meanwhile (by the bot, or in another window) is not the user's to edit or
+/// remove any more; nor is an id that names no rule.
+fn save_rules(
+    store: &Store,
+    owner: crew_core::rules::Owner,
+    add: Vec<String>,
+    edit: Vec<proto::RuleEdit>,
+    remove: Vec<String>,
+) -> Result<(), String> {
+    use crew_core::rules::{self, Change};
+    let there: Vec<i64> = rules::list(store, owner)?.into_iter().map(|rule| rule.id).collect();
+    let known = |label: &str| owner.parse(label).filter(|id| there.contains(id));
+    let changes: Vec<Change> = remove
+        .iter()
+        .filter_map(|label| known(label))
+        .map(Change::Remove)
+        .chain(edit.into_iter().filter_map(|edit| Some(Change::Edit { id: known(&edit.id)?, body: edit.body })))
+        .chain(add.into_iter().filter(|body| !body.trim().is_empty()).map(|body| Change::Add { body }))
+        .collect();
+    rules::apply(store, owner, changes)?.map_err(|refused| refused.say())?;
+    Ok(())
+}
+
+fn listed_rules(store: &Store, owner: crew_core::rules::Owner) -> Result<Vec<proto::Rule>, String> {
+    Ok(crew_core::rules::list(store, owner)?
+        .into_iter()
+        .map(|rule| proto::Rule { id: owner.label(rule.id), body: rule.body })
+        .collect())
 }
 
 fn proto_session(row: &crew_core::session::Session) -> proto::Session {
@@ -1695,17 +1722,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let id = save.id.clone();
             json(block(move || bot_rules(&store, &id, Some(save))).await?)
         }
-        // The most this bot's rules may hold; what they hold now stays.
-        "bot_rules_cap_set" => {
-            let BotRulesCap { id, cap } = parse(params)?;
+        "workspace_profile_get" => {
+            let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            json(
-                block(move || {
-                    crew_core::rules::set_cap(&store, &id, cap as usize)?;
-                    bot_rules(&store, &id, None)
-                })
-                .await?,
-            )
+            json(block(move || workspace_profile(&store, &id, None)).await?)
+        }
+        // The user's edit, in the workspace's settings: the rules by id.
+        "workspace_profile_save" => {
+            let save: WorkspaceProfileSave = parse(params)?;
+            let store = hosts.store.clone();
+            let id = save.id.clone();
+            json(block(move || workspace_profile(&store, &id, Some(save))).await?)
         }
         "session_rename" => {
             let IdName { id, name } = parse(params)?;
@@ -3226,7 +3253,7 @@ mod tests {
         assert!(reply["result"]["isError"].as_bool() != Some(true), "reply: {reply}");
         let read = rpc(&mut ws, 50, "bot_rules_get", serde_json::json!({ "id": session_id })).await;
         let rules: BotRules = serde_json::from_value(read.result.expect("rules")).expect("rules");
-        assert_eq!((rules.used, rules.cap, rules.rules.len()), (20, 1_500, 1));
+        assert_eq!(rules.rules.len(), 1);
         let first = rules.rules[0].clone();
         assert_eq!((first.id.as_str(), first.body.as_str()), ("r1", "Never push to master"));
 
@@ -3251,23 +3278,41 @@ mod tests {
         let left: BotRules =
             serde_json::from_value(rpc(&mut ws, 53, "bot_rules_save", removed).await.result.expect("removed")).unwrap();
         assert_eq!(left.rules.len(), 2);
-        let over = serde_json::json!({ "id": session_id, "add": ["x".repeat(1_501)] });
-        assert!(rpc(&mut ws, 54, "bot_rules_save", over.clone()).await.result.is_none(), "over the cap");
+        // No most: as many as the user wants.
+        let long = serde_json::json!({ "id": session_id, "add": ["x".repeat(20_000)] });
+        assert!(rpc(&mut ws, 54, "bot_rules_save", long).await.result.is_some(), "rules have no cap");
+        handle.shutdown();
+    }
 
-        // Its own cap: what it may hold from then on.
-        let raised: BotRules = serde_json::from_value(
-            rpc(&mut ws, 55, "bot_rules_cap_set", serde_json::json!({ "id": session_id, "cap": 4_000 }))
-                .await
-                .result
-                .expect("cap"),
-        )
-        .unwrap();
-        assert_eq!(raised.cap, 4_000);
-        assert!(rpc(&mut ws, 56, "bot_rules_save", over).await.result.is_some(), "under the new cap");
-        let low = serde_json::json!({ "id": session_id, "cap": 10 });
-        let floored: BotRules =
-            serde_json::from_value(rpc(&mut ws, 57, "bot_rules_cap_set", low).await.result.expect("cap")).unwrap();
-        assert_eq!(floored.cap, 1_500, "under the default is the default");
+    /// A workspace's settings write its description and its rules, by id
+    /// (`w1`), and read back what they wrote.
+    #[tokio::test]
+    async fn a_workspaces_settings_keep_its_description_and_rules() {
+        let dir = test_dir("workspace-profile");
+        let (handle, _bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let created = rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_str().unwrap() })).await;
+        let workspace: proto::Workspace = serde_json::from_value(created.result.expect("workspace")).unwrap();
+        let empty = rpc(&mut ws, 2, "workspace_profile_get", serde_json::json!({ "id": workspace.id })).await;
+        let empty: WorkspaceProfile = serde_json::from_value(empty.result.expect("profile")).unwrap();
+        assert_eq!((empty.description.as_str(), empty.rules.len()), ("", 0));
+
+        let save = serde_json::json!({
+            "id": workspace.id,
+            "description": "  The client's site.  ",
+            "add": ["Commits in English", "Never push"]
+        });
+        let saved: WorkspaceProfile =
+            serde_json::from_value(rpc(&mut ws, 3, "workspace_profile_save", save).await.result.expect("saved")).unwrap();
+        assert_eq!(saved.description, "The client's site.");
+        let ids: Vec<&str> = saved.rules.iter().map(|rule| rule.id.as_str()).collect();
+        assert_eq!(ids, ["w1", "w2"]);
+
+        let edit = serde_json::json!({ "id": workspace.id, "edit": [{ "id": "w2", "body": "Never push to main" }], "remove": ["w1"] });
+        let edited: WorkspaceProfile =
+            serde_json::from_value(rpc(&mut ws, 4, "workspace_profile_save", edit).await.result.expect("edited")).unwrap();
+        assert_eq!(edited.description, "The client's site.", "a save without a description keeps it");
+        assert_eq!(edited.rules, [proto::Rule { id: "w2".into(), body: "Never push to main".into() }]);
         handle.shutdown();
     }
 

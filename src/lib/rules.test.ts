@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { BotRule } from "./protocol";
-import { newRuleRow, ruleChanges, ruleRows, rulesUsed } from "./botRules";
+import type { Rule } from "./protocol";
+import { newRuleRow, ruleChanges, ruleRows } from "./rules";
 
-const saved: BotRule[] = [
+const saved: Rule[] = [
   { id: "r1", body: "Never push to master" },
   { id: "r4", body: "Run the tests before pushing" },
 ];
 
-describe("bot rules", () => {
+describe("rules", () => {
   it("sends nothing when nothing changed", () => {
     expect(ruleChanges(saved, ruleRows(saved))).toBeNull();
     // A blank row the user added and left empty is no rule.
@@ -28,12 +28,5 @@ describe("bot rules", () => {
   it("removes a rule the user emptied", () => {
     const rows = ruleRows(saved).map((row) => (row.id === "r4" ? { ...row, text: "   " } : row));
     expect(ruleChanges(saved, rows)).toEqual({ add: [], edit: [], remove: ["r4"] });
-  });
-
-  it("counts characters the way the daemon caps them", () => {
-    expect(rulesUsed([])).toBe(0);
-    expect(rulesUsed(ruleRows(saved))).toBe(20 + 28);
-    // One emoji is one character, not two UTF-16 units; whitespace collapses.
-    expect(rulesUsed([{ ...newRuleRow(), text: " 🪑  a " }])).toBe(3);
   });
 });

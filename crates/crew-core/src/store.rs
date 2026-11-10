@@ -546,10 +546,7 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
     }
     if current < 43 {
         let tx = conn.unchecked_transaction()?;
-        // Each bot's own cap on its rules (see `rules::set_cap`).
-        if !has_column(&tx, "bots", "rules_cap")? {
-            tx.execute_batch(crate::rules::MIGRATION_V43)?;
-        }
+        // v43 gave each bot a cap on its rules; v51 takes it away again.
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
@@ -600,6 +597,13 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
         // Agents manage processes without asking: nothing waits on the user.
         tx.execute_batch(crate::process::MIGRATION_V50)?;
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (50, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
+    if current < 51 {
+        let tx = conn.unchecked_transaction()?;
+        // Rules without a cap, and a workspace's description and rules.
+        crate::rules::migrate_v51(&tx)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (51, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
     Ok(())

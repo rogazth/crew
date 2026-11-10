@@ -12,6 +12,8 @@ import type {
   BackgroundOutput,
   BotRules,
   BotRulesSave,
+  WorkspaceProfile,
+  WorkspaceProfileSave,
   BrowserLeases,
   CommandCatalog,
   Connector,
@@ -160,13 +162,17 @@ export const getBotRules = (id: string): Promise<BotRules> => client.request("bo
 
 /**
  * The user's edit of a bot's rules, by id: what the bot wrote meanwhile is
- * another rule and stays. Applied whole or not at all; refused over the cap.
+ * another rule and stays. Applied whole or not at all.
  */
 export const saveBotRules = (id: string, changes: Omit<BotRulesSave, "id">): Promise<BotRules> =>
   client.request("bot_rules_save", { id, ...changes });
 
-/** The most a bot's rules may hold; what they hold now stays. */
-export const setBotRulesCap = (id: string, cap: number): Promise<BotRules> => client.request("bot_rules_cap_set", { id, cap });
+/** What the user wrote about a workspace for every session and bot in it: its description and its rules. */
+export const getWorkspaceProfile = (id: string): Promise<WorkspaceProfile> => client.request("workspace_profile_get", { id });
+
+/** The user's edit of a workspace's profile: the description when given, the rules by id (`w3`). */
+export const saveWorkspaceProfile = (id: string, changes: Omit<WorkspaceProfileSave, "id">): Promise<WorkspaceProfile> =>
+  client.request("workspace_profile_save", { id, ...changes });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
   client.request("session_rename", { id, name });

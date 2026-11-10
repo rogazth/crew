@@ -9,7 +9,7 @@ import { AccessPicker } from "./ComposerControls";
 import { ModelPicker } from "./ModelPicker";
 import type { useBotSheet } from "../hooks/useBotSheet";
 import { useBotAvatar } from "../hooks/useBotAvatar";
-import { useBotRules } from "../hooks/useBotRules";
+import { useRules } from "../hooks/useRules";
 import { useBotFaces } from "../hooks/useBotFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useRoutines } from "../hooks/useRoutines";
@@ -126,7 +126,7 @@ function BotProfile({
   onOpenRoutine: (routineId: string) => void;
 }) {
   const face = useBotFaces()[session.id] ?? {};
-  const rules = useBotRules(session);
+  const rules = useRules({ kind: "bot", id: session.id });
   const patch = (fields: Partial<BotDraft>) => void sheet.patch(session, fields);
 
   return (

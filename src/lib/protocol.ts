@@ -186,37 +186,17 @@ export type BotRef = { id: string, name: string,
 kind?: string, };
 
 /**
- * One of a bot's rules: the user's decision about how it works.
- */
-export type BotRule = { 
-/**
- * Its id within the bot, as the bot names it: `r3`.
- */
-id: string, body: string, };
-
-/**
- * A rule's new text.
- */
-export type BotRuleEdit = { id: string, body: string, };
-
-/**
  * A bot's rules, as the bot sheet shows them: each by its id, oldest
- * first, and the characters they take of the most they may.
+ * first.
  */
-export type BotRules = { rules: Array<BotRule>, used: number, cap: number, };
-
-/**
- * `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
- * sheet; less than the default is taken as the default.
- */
-export type BotRulesCap = { id: string, cap: number, };
+export type BotRules = { rules: Array<Rule>, };
 
 /**
  * `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
  * id (`r3`), applied whole or not at all. An edit or a removal of a rule the
  * bot removed meanwhile is dropped.
  */
-export type BotRulesSave = { id: string, add: Array<string>, edit: Array<BotRuleEdit>, remove: Array<string>, };
+export type BotRulesSave = { id: string, add: Array<string>, edit: Array<RuleEdit>, remove: Array<string>, };
 
 /**
  * The host has a `browser-call` and is working on it.
@@ -1468,6 +1448,21 @@ export type RoutineRunNow = { routineId: string, };
 
 export type RoutineUpsert = { id: string | null, sessionId: string, name: string, enabled: boolean, prompt: string, schedule: string, nextRunAt?: number, createdBy: string | null, };
 
+/**
+ * One rule: the user's decision about how a bot works (`r3`), or about how
+ * everyone works in a workspace (`w3`).
+ */
+export type Rule = { 
+/**
+ * Its id within its bot or workspace: `r3`, `w3`.
+ */
+id: string, body: string, };
+
+/**
+ * A rule's new text.
+ */
+export type RuleEdit = { id: string, body: string, };
+
 export type ScheduledRoutine = { routine: Routine, session: Session, cwd: string, };
 
 /**
@@ -2093,6 +2088,19 @@ export type Workspace = { id: string, name: string, path: string, createdAt: num
 home: boolean, };
 
 export type WorkspaceId = { workspaceId: string, };
+
+/**
+ * What the user wrote about a workspace for every session and bot in it:
+ * its description and its rules, oldest first.
+ */
+export type WorkspaceProfile = { description: string, rules: Array<Rule>, };
+
+/**
+ * `workspace_profile_save`: the user's edit of a workspace's profile, in its
+ * settings, applied whole or not at all. The description, when given,
+ * replaces the one there; the rules go by id (`w3`).
+ */
+export type WorkspaceProfileSave = { id: string, description?: string, add: Array<string>, edit: Array<RuleEdit>, remove: Array<string>, };
 
 /**
  * A new worktree of the repo whose main checkout is `path`, on `branch`.

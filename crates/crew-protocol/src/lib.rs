@@ -528,22 +528,48 @@ pub struct SessionUpdate {
 }
 
 /// A bot's rules, as the bot sheet shows them: each by its id, oldest
-/// first, and the characters they take of the most they may.
+/// first.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct BotRules {
-    pub rules: Vec<BotRule>,
-    pub used: u32,
-    pub cap: u32,
+    pub rules: Vec<Rule>,
 }
 
-/// One of a bot's rules: the user's decision about how it works.
+/// One rule: the user's decision about how a bot works (`r3`), or about how
+/// everyone works in a workspace (`w3`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BotRule {
-    /// Its id within the bot, as the bot names it: `r3`.
+pub struct Rule {
+    /// Its id within its bot or workspace: `r3`, `w3`.
     pub id: String,
     pub body: String,
+}
+
+/// What the user wrote about a workspace for every session and bot in it:
+/// its description and its rules, oldest first.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorkspaceProfile {
+    pub description: String,
+    pub rules: Vec<Rule>,
+}
+
+/// `workspace_profile_save`: the user's edit of a workspace's profile, in its
+/// settings, applied whole or not at all. The description, when given,
+/// replaces the one there; the rules go by id (`w3`).
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorkspaceProfileSave {
+    pub id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub edit: Vec<RuleEdit>,
+    #[serde(default)]
+    pub remove: Vec<String>,
 }
 
 /// `bot_rules_save`: the user's edit of a bot's rules in the bot sheet, by
@@ -556,24 +582,15 @@ pub struct BotRulesSave {
     #[serde(default)]
     pub add: Vec<String>,
     #[serde(default)]
-    pub edit: Vec<BotRuleEdit>,
+    pub edit: Vec<RuleEdit>,
     #[serde(default)]
     pub remove: Vec<String>,
-}
-
-/// `bot_rules_cap_set`: the most a bot's rules may hold, set from the bot
-/// sheet; less than the default is taken as the default.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BotRulesCap {
-    pub id: String,
-    pub cap: u32,
 }
 
 /// A rule's new text.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BotRuleEdit {
+pub struct RuleEdit {
     pub id: String,
     pub body: String,
 }

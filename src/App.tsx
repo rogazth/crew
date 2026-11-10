@@ -506,7 +506,6 @@ export function App() {
                 key={active.id}
                 workspace={active}
                 workspaces={workspaces.workspaces}
-                sessions={all}
                 remote={envs.remoteOf(active)}
                 onRename={(name) => void workspaces.rename(active.id, name)}
                 onRemove={() => confirms.askWorkspace(active, tabs.unsavedIn(active.id))}

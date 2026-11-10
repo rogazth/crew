@@ -9,18 +9,41 @@
 //! within the bot and never given twice).
 //!
 //! The description is still who the bot is, its job and where it works.
+//!
+//! A workspace has rules too (`w3`), the user's decisions for every session
+//! and bot that works in it, written only by the user. Neither has a most:
+//! they hold as many as the user wants.
 
 use crew_protocol::{Block, BlockRole};
 use rusqlite::{params, Connection};
 
 use crate::store::{now_millis, Store};
 
-/// The most the rules may hold, in characters, summed over their bodies,
-/// until the user sets a bot's own (`bots.rules_cap`).
-pub const CAP: usize = 1_500;
-
-/// v43: each bot's own cap, the default until the user changes it.
-pub const MIGRATION_V43: &str = "ALTER TABLE bots ADD COLUMN rules_cap INTEGER NOT NULL DEFAULT 1500;";
+/// v51: the rules lose their cap (v43 gave each bot one), and a workspace
+/// gets a description and rules of its own. The column goes only where v43
+/// added it.
+pub(crate) fn migrate_v51(conn: &Connection) -> rusqlite::Result<()> {
+    if crate::store::has_column(conn, "bots", "rules_cap")? {
+        conn.execute_batch("ALTER TABLE bots DROP COLUMN rules_cap;")?;
+    }
+    if !crate::store::has_column(conn, "workspaces", "description")? {
+        conn.execute_batch("ALTER TABLE workspaces ADD COLUMN description TEXT NOT NULL DEFAULT '';")?;
+    }
+    if !crate::store::has_column(conn, "workspaces", "rules_made")? {
+        conn.execute_batch("ALTER TABLE workspaces ADD COLUMN rules_made INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workspace_rules (
+           id           INTEGER PRIMARY KEY,
+           workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+           number       INTEGER NOT NULL,
+           body         TEXT NOT NULL,
+           created_at   INTEGER NOT NULL,
+           updated_at   INTEGER NOT NULL,
+           UNIQUE (workspace_id, number)
+         );",
+    )
+}
 
 /// The notes the rules replace: v40 made the table, v41 reads it into rules
 /// and drops it.
@@ -104,52 +127,76 @@ pub struct Rule {
     pub updated_at: i64,
 }
 
-/// `r3`: how a rule is named wherever it is shown or taken: the prompt, the
-/// tool, the CLI, the bot sheet.
+/// Whose rules: a bot's (`r3`) or a workspace's (`w3`), each numbered within
+/// its owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Owner<'a> {
+    Bot(&'a str),
+    Workspace(&'a str),
+}
+
+impl Owner<'_> {
+    fn id(&self) -> &str {
+        match self {
+            Owner::Bot(id) | Owner::Workspace(id) => id,
+        }
+    }
+
+    /// The rules' table, the column naming the owner, and the owner's table,
+    /// which counts the rules it has had (`rules_made`).
+    fn tables(&self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Owner::Bot(_) => ("bot_rules", "bot_id", "bots"),
+            Owner::Workspace(_) => ("workspace_rules", "workspace_id", "workspaces"),
+        }
+    }
+
+    fn prefix(&self) -> char {
+        match self {
+            Owner::Bot(_) => 'r',
+            Owner::Workspace(_) => 'w',
+        }
+    }
+
+    /// `r3` or `w3`: how a rule is named wherever it is shown or taken: the
+    /// prompt, the tool, the CLI, the bot sheet, the workspace's settings.
+    pub fn label(&self, id: i64) -> String {
+        format!("{}{id}", self.prefix())
+    }
+
+    /// A rule's id as it may be written: `r3`, `R3` or `3` for a bot.
+    pub fn parse(&self, text: &str) -> Option<i64> {
+        let text = text.trim();
+        let prefix = self.prefix();
+        let digits = text.strip_prefix([prefix, prefix.to_ascii_uppercase()]).unwrap_or(text);
+        digits.parse().ok().filter(|id| *id > 0)
+    }
+}
+
+/// `r3`: a bot's rule as it is named.
 pub fn label(id: i64) -> String {
-    format!("r{id}")
+    Owner::Bot("").label(id)
 }
 
-/// A rule's id as the bot may write it: `r3`, `R3` or `3`.
+/// A bot's rule id as the bot may write it: `r3`, `R3` or `3`.
 pub fn parse_label(text: &str) -> Option<i64> {
-    let text = text.trim();
-    let digits = text.strip_prefix(['r', 'R']).unwrap_or(text);
-    digits.parse().ok().filter(|id| *id > 0)
+    Owner::Bot("").parse(text)
 }
 
-/// A bot's rules, oldest first.
-pub fn list(store: &Store, bot_id: &str) -> Result<Vec<Rule>, String> {
-    store.with(|conn| read(conn, bot_id))
+/// The owner's rules, oldest first.
+pub fn list(store: &Store, owner: Owner) -> Result<Vec<Rule>, String> {
+    store.with(|conn| read(conn, owner))
 }
 
-/// The most this bot's rules may hold.
-pub fn cap(store: &Store, bot_id: &str) -> Result<usize, String> {
-    store.with(|conn| cap_of(conn, bot_id))
-}
-
-fn cap_of(conn: &Connection, bot_id: &str) -> rusqlite::Result<usize> {
-    let cap: Option<i64> = conn
-        .query_row("SELECT rules_cap FROM bots WHERE id = ?1", params![bot_id], |row| row.get(0))
-        .map(Some)
-        .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
-    Ok(cap.and_then(|cap| usize::try_from(cap).ok()).unwrap_or(CAP))
-}
-
-/// The user's cap for this bot, never under [`CAP`]: less is taken as
-/// that, and there is no most. Returns the cap kept.
-pub fn set_cap(store: &Store, bot_id: &str, cap: usize) -> Result<usize, String> {
-    let cap = cap.max(CAP);
-    let stored = i64::try_from(cap).unwrap_or(i64::MAX);
-    store.with(|conn| conn.execute("UPDATE bots SET rules_cap = ?2 WHERE id = ?1", params![bot_id, stored]))?;
-    Ok(cap)
-}
-
-fn read(conn: &Connection, bot_id: &str) -> rusqlite::Result<Vec<Rule>> {
-    conn.prepare_cached("SELECT number, body, created_at, updated_at FROM bot_rules WHERE bot_id = ?1 ORDER BY number")?
-        .query_map(params![bot_id], |row| {
-            Ok(Rule { id: row.get(0)?, body: row.get(1)?, created_at: row.get(2)?, updated_at: row.get(3)? })
-        })?
-        .collect()
+fn read(conn: &Connection, owner: Owner) -> rusqlite::Result<Vec<Rule>> {
+    let (table, column, _) = owner.tables();
+    conn.prepare_cached(&format!(
+        "SELECT number, body, created_at, updated_at FROM {table} WHERE {column} = ?1 ORDER BY number"
+    ))?
+    .query_map(params![owner.id()], |row| {
+        Ok(Rule { id: row.get(0)?, body: row.get(1)?, created_at: row.get(2)?, updated_at: row.get(3)? })
+    })?
+    .collect()
 }
 
 /// A rule as it is stored: one line, its whitespace collapsed. A rule is a
@@ -185,8 +232,6 @@ pub enum Refused {
     Asked(String),
     /// No rule has this id; `ids` are the ones there are.
     Unknown { id: i64, ids: Vec<i64> },
-    /// The rules would take `used` characters, more than the bot's `cap`.
-    Full { used: usize, cap: usize },
 }
 
 impl Refused {
@@ -200,45 +245,33 @@ impl Refused {
                 label(*id),
                 ids.iter().map(|id| label(*id)).collect::<Vec<_>>().join(", ")
             ),
-            Refused::Full { used, cap } => format!(
-                "Your rules hold at most {} characters, and that would make them {}. Merge, shorten or remove rules first.",
-                thousands(*cap),
-                thousands(*used)
-            ),
         }
     }
 }
 
 /// `changes`, in order, under one hold of the connection and all or none: a
 /// write that lands meanwhile (the bot sheet, a second tool call) cannot be
-/// lost. Over the cap the whole is refused, unless it leaves the rules no
-/// longer than they were: rules from the notes may start over it, and
-/// shortening or removing them is how they come back under.
-pub fn apply(store: &Store, bot_id: &str, changes: Vec<Change>) -> Result<Result<Vec<Done>, Refused>, String> {
+/// lost.
+pub fn apply(store: &Store, owner: Owner, changes: Vec<Change>) -> Result<Result<Vec<Done>, Refused>, String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
-        let before = used(&read(&tx, bot_id)?);
         let mut done = Vec::new();
         for change in changes {
-            match apply_one(&tx, bot_id, change)? {
+            match apply_one(&tx, owner, change)? {
                 Ok(one) => done.push(one),
                 // Dropped without a commit: nothing of the batch is kept.
                 Err(refused) => return Ok(Err(refused)),
             }
-        }
-        let after = used(&read(&tx, bot_id)?);
-        let cap = cap_of(&tx, bot_id)?;
-        if after > cap && after > before {
-            return Ok(Err(Refused::Full { used: after, cap }));
         }
         tx.commit()?;
         Ok(Ok(done))
     })
 }
 
-fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Result<Result<Done, Refused>> {
+fn apply_one(conn: &Connection, owner: Owner, change: Change) -> rusqlite::Result<Result<Done, Refused>> {
     let now = now_millis();
-    let rules = read(conn, bot_id)?;
+    let (table, column, counter) = owner.tables();
+    let rules = read(conn, owner)?;
     let find = |id: i64| match rules.iter().find(|rule| rule.id == id) {
         Some(rule) => Ok(rule.clone()),
         None => Err(Refused::Unknown { id, ids: rules.iter().map(|rule| rule.id).collect() }),
@@ -252,17 +285,17 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
             if let Some(same) = rules.iter().find(|rule| rule.body == body) {
                 return Ok(Ok(Done::Repeated(same.clone())));
             }
-            // The next number this bot has never had.
+            // The next number this owner has never had.
             let id: i64 = conn.query_row(
-                "UPDATE bots SET rules_made = rules_made + 1 WHERE id = ?1 RETURNING rules_made",
-                params![bot_id],
+                &format!("UPDATE {counter} SET rules_made = rules_made + 1 WHERE id = ?1 RETURNING rules_made"),
+                params![owner.id()],
                 |row| row.get(0),
             )?;
             conn.execute(
-                "INSERT INTO bot_rules (bot_id, number, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![bot_id, id, body, now],
+                &format!("INSERT INTO {table} ({column}, number, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)"),
+                params![owner.id(), id, body, now],
             )?;
-            Ok(Done::Added(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just added")))
+            Ok(Done::Added(read(conn, owner)?.into_iter().find(|rule| rule.id == id).expect("just added")))
         }
         Change::Edit { id, body } => {
             let body = tidy(&body);
@@ -273,17 +306,17 @@ fn apply_one(conn: &Connection, bot_id: &str, change: Change) -> rusqlite::Resul
                 return Ok(Err(refused));
             }
             conn.execute(
-                "UPDATE bot_rules SET body = ?3, updated_at = ?4 WHERE bot_id = ?1 AND number = ?2",
-                params![bot_id, id, body, now],
+                &format!("UPDATE {table} SET body = ?3, updated_at = ?4 WHERE {column} = ?1 AND number = ?2"),
+                params![owner.id(), id, body, now],
             )?;
-            Ok(Done::Edited(read(conn, bot_id)?.into_iter().find(|rule| rule.id == id).expect("just edited")))
+            Ok(Done::Edited(read(conn, owner)?.into_iter().find(|rule| rule.id == id).expect("just edited")))
         }
         Change::Remove(id) => {
             let rule = match find(id) {
                 Ok(rule) => rule,
                 Err(refused) => return Ok(Err(refused)),
             };
-            conn.execute("DELETE FROM bot_rules WHERE bot_id = ?1 AND number = ?2", params![bot_id, id])?;
+            conn.execute(&format!("DELETE FROM {table} WHERE {column} = ?1 AND number = ?2"), params![owner.id(), id])?;
             Ok(Done::Removed(rule))
         }
     })
@@ -295,24 +328,13 @@ pub fn typed_by_user(block: &Block) -> bool {
     block.role == BlockRole::User && block.from_bot.is_none() && block.hidden != Some(true)
 }
 
-/// Characters the rules take: their bodies, nothing else.
-pub fn used(rules: &[Rule]) -> usize {
-    rules.iter().map(|rule| rule.body.chars().count()).sum()
-}
-
-/// `[22% - 335/1,500]`: how full the rules are, of `cap`.
-pub fn usage(rules: &[Rule], cap: usize) -> String {
-    let used = used(rules);
-    format!("[{}% - {}/{}]", used * 100 / cap.max(1), thousands(used), thousands(cap))
-}
-
 /// The rules as the prompt shows them, one a line: `[r1] Never push to
 /// master.`
-pub fn lines(rules: &[Rule]) -> String {
+pub fn lines(owner: Owner, rules: &[Rule]) -> String {
     if rules.is_empty() {
         return "None yet.".into();
     }
-    rules.iter().map(|rule| format!("[{}] {}", label(rule.id), tidy(&rule.body))).collect::<Vec<_>>().join("\n")
+    rules.iter().map(|rule| format!("[{}] {}", owner.label(rule.id), tidy(&rule.body))).collect::<Vec<_>>().join("\n")
 }
 
 pub fn thousands(n: usize) -> String {
@@ -356,7 +378,7 @@ mod tests {
     }
 
     fn bodies(store: &Store, bot: &str) -> Vec<String> {
-        list(store, bot).unwrap().into_iter().map(|rule| rule.body).collect()
+        list(store, Owner::Bot(bot)).unwrap().into_iter().map(|rule| rule.body).collect()
     }
 
     fn added(done: Result<Result<Vec<Done>, Refused>, String>) -> Rule {
@@ -369,8 +391,8 @@ mod tests {
     #[test]
     fn rules_are_kept_per_bot_and_go_with_it() {
         let (store, bot, _) = store();
-        assert!(list(&store, &bot).unwrap().is_empty());
-        apply(&store, &bot, vec![add("Never push to master"), add("Run the tests\n  before pushing")]).unwrap().unwrap();
+        assert!(list(&store, Owner::Bot(&bot)).unwrap().is_empty());
+        apply(&store, Owner::Bot(&bot), vec![add("Never push to master"), add("Run the tests\n  before pushing")]).unwrap().unwrap();
         assert_eq!(bodies(&store, &bot), ["Never push to master", "Run the tests before pushing"]);
         crate::session::delete(&store, bot.clone()).unwrap();
         let left: i64 = store.with(|conn| conn.query_row("SELECT COUNT(*) FROM bot_rules", [], |row| row.get(0))).unwrap();
@@ -382,23 +404,23 @@ mod tests {
     #[test]
     fn edits_and_removes_go_by_id() {
         let (store, bot, _) = store();
-        let first = added(apply(&store, &bot, vec![add("Never push to master")]));
-        let second = added(apply(&store, &bot, vec![add("Run the tests before pushing")]));
-        let again = apply(&store, &bot, vec![add("Never push to master")]).unwrap().unwrap();
+        let first = added(apply(&store, Owner::Bot(&bot), vec![add("Never push to master")]));
+        let second = added(apply(&store, Owner::Bot(&bot), vec![add("Run the tests before pushing")]));
+        let again = apply(&store, Owner::Bot(&bot), vec![add("Never push to master")]).unwrap().unwrap();
         assert!(matches!(&again[..], [Done::Repeated(rule)] if rule.id == first.id), "{again:?}");
 
-        let edited = apply(&store, &bot, vec![Change::Edit { id: first.id, body: "Never push to main".into() }]);
+        let edited = apply(&store, Owner::Bot(&bot), vec![Change::Edit { id: first.id, body: "Never push to main".into() }]);
         assert!(matches!(&edited.unwrap().unwrap()[..], [Done::Edited(rule)] if rule.body == "Never push to main"));
         assert_eq!(bodies(&store, &bot), ["Never push to main", "Run the tests before pushing"]);
-        let kept = list(&store, &bot).unwrap().remove(0);
+        let kept = list(&store, Owner::Bot(&bot)).unwrap().remove(0);
         assert_eq!(kept.created_at, first.created_at);
 
-        apply(&store, &bot, vec![Change::Remove(second.id)]).unwrap().unwrap();
+        apply(&store, Owner::Bot(&bot), vec![Change::Remove(second.id)]).unwrap().unwrap();
         assert_eq!(bodies(&store, &bot), ["Never push to main"]);
-        let unknown = apply(&store, &bot, vec![Change::Remove(second.id)]).unwrap().unwrap_err();
+        let unknown = apply(&store, Owner::Bot(&bot), vec![Change::Remove(second.id)]).unwrap().unwrap_err();
         assert_eq!(unknown, Refused::Unknown { id: second.id, ids: vec![first.id] });
         assert_eq!(unknown.say(), format!("No rule r{}. Your rules are r{}.", second.id, first.id));
-        assert!(matches!(apply(&store, &bot, vec![add("  ")]).unwrap(), Err(Refused::Asked(_))));
+        assert!(matches!(apply(&store, Owner::Bot(&bot), vec![add("  ")]).unwrap(), Err(Refused::Asked(_))));
     }
 
     /// A bot's rules are numbered within it, from r1, and a number is never
@@ -406,11 +428,11 @@ mod tests {
     #[test]
     fn a_bots_rules_are_numbered_within_it_and_never_twice() {
         let (store, bot, dir) = store();
-        let first = added(apply(&store, &bot, vec![add("Never push to master")]));
-        let second = added(apply(&store, &bot, vec![add("Run the tests before pushing")]));
+        let first = added(apply(&store, Owner::Bot(&bot), vec![add("Never push to master")]));
+        let second = added(apply(&store, Owner::Bot(&bot), vec![add("Run the tests before pushing")]));
         assert_eq!((first.id, second.id), (1, 2));
-        apply(&store, &bot, vec![Change::Remove(2)]).unwrap().unwrap();
-        assert_eq!(added(apply(&store, &bot, vec![add("Ask before deleting a branch")])).id, 3);
+        apply(&store, Owner::Bot(&bot), vec![Change::Remove(2)]).unwrap().unwrap();
+        assert_eq!(added(apply(&store, Owner::Bot(&bot), vec![add("Ask before deleting a branch")])).id, 3);
 
         std::fs::create_dir_all(dir.join("x")).unwrap();
         let workspace = crate::workspace::create(&store, "x".into(), dir.join("x").to_string_lossy().into()).unwrap();
@@ -426,64 +448,28 @@ mod tests {
         )
         .unwrap()
         .id;
-        assert_eq!(added(apply(&store, &other, vec![add("Never push to master")])).id, 1);
+        assert_eq!(added(apply(&store, Owner::Bot(&other), vec![add("Never push to master")])).id, 1);
         // Each bot's r1 is its own.
-        apply(&store, &other, vec![Change::Remove(1)]).unwrap().unwrap();
+        apply(&store, Owner::Bot(&other), vec![Change::Remove(1)]).unwrap().unwrap();
         assert_eq!(bodies(&store, &bot), ["Never push to master", "Ask before deleting a branch"]);
     }
 
-    /// Over the cap the whole write is refused, and nothing of it is kept.
+    /// A workspace's rules are its own, named `w`, numbered from w1 and gone
+    /// with it; a bot's r1 is another rule.
     #[test]
-    fn a_write_over_the_cap_is_refused_whole() {
-        let (store, bot, _) = store();
-        apply(&store, &bot, vec![add(&"a".repeat(CAP - 10))]).unwrap().unwrap();
-        let refused = apply(&store, &bot, vec![add("short"), add(&"b".repeat(20))]).unwrap().unwrap_err();
-        assert_eq!(refused, Refused::Full { used: CAP - 10 + 5 + 20, cap: CAP });
-        assert!(refused.say().contains("at most 1,500 characters, and that would make them 1,515"), "{}", refused.say());
-        assert_eq!(list(&store, &bot).unwrap().len(), 1, "a refused write changes nothing");
-    }
-
-    /// A bot's own cap is what a write is held to, never under the default;
-    /// lowered under what the rules hold, they stay and may only shrink.
-    #[test]
-    fn a_bot_holds_its_rules_to_its_own_cap() {
-        let (store, bot, _) = store();
-        assert_eq!(cap(&store, &bot).unwrap(), CAP);
-        assert_eq!(set_cap(&store, &bot, 100).unwrap(), CAP, "under the default is the default");
-        assert_eq!(set_cap(&store, &bot, 50_000).unwrap(), 50_000);
-        apply(&store, &bot, vec![add(&"a".repeat(2_000))]).unwrap().unwrap();
-        set_cap(&store, &bot, 0).unwrap();
-        assert_eq!(list(&store, &bot).unwrap().len(), 1, "lowering the cap removes nothing");
-        let refused = apply(&store, &bot, vec![add("more")]).unwrap().unwrap_err();
-        assert_eq!(refused, Refused::Full { used: 2_004, cap: CAP });
-        assert_eq!(usage(&list(&store, &bot).unwrap(), CAP), "[133% - 2,000/1,500]");
-    }
-
-    /// Rules from the notes may start over the cap: what shortens them goes
-    /// through, what grows them does not.
-    #[test]
-    fn rules_over_the_cap_may_still_shrink() {
-        let (store, bot, _) = store();
-        store
-            .with(|conn| {
-                conn.execute(
-                    "INSERT INTO bot_rules (bot_id, number, body, source, created_at, updated_at) VALUES (?1, 1, ?2, 'notes', 1, 1)",
-                    params![bot, "x".repeat(CAP + 100)],
-                )?;
-                conn.execute("UPDATE bots SET rules_made = 1 WHERE id = ?1", params![bot])
-            })
-            .unwrap();
-        assert!(apply(&store, &bot, vec![add("one more")]).unwrap().is_err());
-        let shorter = Change::Edit { id: 1, body: "x".repeat(CAP + 50) };
-        assert!(apply(&store, &bot, vec![shorter]).unwrap().is_ok());
-    }
-
-    #[test]
-    fn usage_counts_bodies_only() {
-        let (store, bot, _) = store();
-        assert_eq!(usage(&[], CAP), "[0% - 0/1,500]");
-        apply(&store, &bot, vec![add(&"x".repeat(335))]).unwrap().unwrap();
-        assert_eq!(usage(&list(&store, &bot).unwrap(), CAP), "[22% - 335/1,500]");
+    fn a_workspaces_rules_are_its_own() {
+        let (store, bot, dir) = store();
+        std::fs::create_dir_all(dir.join("ws")).unwrap();
+        let workspace = crate::workspace::create(&store, "ws".into(), dir.join("ws").to_string_lossy().into()).unwrap().id;
+        let owner = Owner::Workspace(&workspace);
+        apply(&store, Owner::Bot(&bot), vec![add("Ask first")]).unwrap().unwrap();
+        let first = added(apply(&store, owner, vec![add("Commits in English")]));
+        assert_eq!(first.id, 1);
+        assert_eq!(lines(owner, &list(&store, owner).unwrap()), "[w1] Commits in English");
+        assert_eq!(owner.parse("W1"), Some(1));
+        assert_eq!(bodies(&store, &bot), ["Ask first"]);
+        crate::workspace::delete(&store, workspace.clone()).unwrap();
+        assert!(list(&store, owner).unwrap().is_empty());
     }
 
     #[test]
@@ -520,9 +506,9 @@ mod tests {
     #[test]
     fn each_rule_is_one_line() {
         let (store, bot, _) = store();
-        apply(&store, &bot, vec![add("Never push to master."), add("Run the tests.")]).unwrap().unwrap();
-        assert_eq!(lines(&list(&store, &bot).unwrap()), "[r1] Never push to master.\n[r2] Run the tests.");
-        assert_eq!(lines(&[]), "None yet.");
+        apply(&store, Owner::Bot(&bot), vec![add("Never push to master."), add("Run the tests.")]).unwrap().unwrap();
+        assert_eq!(lines(Owner::Bot(&bot), &list(&store, Owner::Bot(&bot)).unwrap()), "[r1] Never push to master.\n[r2] Run the tests.");
+        assert_eq!(lines(Owner::Bot(&bot), &[]), "None yet.");
     }
 
     /// A v40 database: every bot's notes become its rules, an entry a rule
@@ -548,7 +534,7 @@ mod tests {
         drop(store);
 
         let store = Store::open(path).expect("reopen");
-        let rules = list(&store, &bot).unwrap();
+        let rules = list(&store, Owner::Bot(&bot)).unwrap();
         assert_eq!(
             rules.iter().map(|rule| (rule.id, rule.body.as_str())).collect::<Vec<_>>(),
             [(1, "Never push to master"), (2, "The staging password is in 1Password")]
@@ -557,6 +543,6 @@ mod tests {
             assert_eq!((rule.created_at, rule.updated_at), (1_792_000_000_000, 1_792_000_000_000));
         }
         assert!(!store.with(|conn| crate::store::has_table(conn, "bot_notes")).unwrap());
-        assert_eq!(added(apply(&store, &bot, vec![add("Ask first")])).id, 3);
+        assert_eq!(added(apply(&store, Owner::Bot(&bot), vec![add("Ask first")])).id, 3);
     }
 }

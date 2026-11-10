@@ -1,16 +1,17 @@
 // A workspace's settings, the page its sidebar's Settings opens: its face and its name heading it (the name edited
 // in place), General and Connectors under them as pill tabs. General says where it lives and removes it; Connectors
-// switches the app's accounts on or off for it alone. What its profile adds (an icon of its own, the instructions and
-// rules its agents read) comes from workspaceProfile.ts, empty until the daemon keeps them.
+// switches the app's accounts on or off for it alone. General opens with the instructions and rules every bot and
+// session here reads; an icon of its own comes from workspaceProfile.ts, the initials until the daemon keeps one.
 import { Tabs } from "@base-ui/react/tabs";
 import { CopyIcon, LaptopIcon, ServerIcon } from "lucide-react";
 import { useState } from "react";
 import { Button, PillTabs } from "../chrome/kit";
 import { DangerAction, Kept, Section } from "../chrome/SettingsSection";
-import { WorkspaceIconEditor, WorkspaceProfileSections } from "../chrome/workspaceProfile";
+import { WorkspaceIconEditor } from "../chrome/workspaceProfile";
+import { WorkspaceProfileSections } from "../chrome/WorkspaceProfileSections";
 import { WorkspaceTile } from "../chrome/WorkspaceTile";
 import type { EnvLink } from "../lib/client/registry";
-import type { Session, Workspace } from "../lib/types";
+import type { Workspace } from "../lib/types";
 import { WorkspaceConnectors } from "./settings/integrations/WorkspaceConnectors";
 
 type Page = "general" | "connectors";
@@ -23,7 +24,6 @@ const PAGES: { key: Page; label: string }[] = [
 export function WorkspaceSettingsPage({
   workspace,
   workspaces,
-  sessions,
   remote,
   onRename,
   onRemove,
@@ -32,7 +32,6 @@ export function WorkspaceSettingsPage({
   workspace: Workspace;
   /** Every workspace: an account switched off here stays on for the others. */
   workspaces: Workspace[];
-  sessions: Session[];
   remote: EnvLink | null;
   onRename: (name: string) => void;
   onRemove: () => void;
@@ -58,7 +57,7 @@ export function WorkspaceSettingsPage({
         <div className="pt-4">
           {page === "general" ? (
             <>
-              {WorkspaceProfileSections && <WorkspaceProfileSections workspace={workspace} sessions={sessions} />}
+              <WorkspaceProfileSections workspace={workspace} />
               <Location workspace={workspace} remote={remote} />
               <DangerAction onClick={onRemove}>Remove workspace</DangerAction>
             </>

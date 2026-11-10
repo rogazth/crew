@@ -951,24 +951,11 @@ fn bot<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
     }
 }
 
-/// The most a bot may write into its own description. The user's own edit,
-/// in the bot sheet, is not held to it.
-pub const DESCRIPTION_CAP: usize = 2_000;
-
 /// The standing instructions a bot is handed every turn, rewritten by the
 /// bot itself. Whole, not patched: a description assembled from edits nobody
 /// read end to end is one nobody can predict the next turn from.
 fn update_description(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Value) -> Result<Value, String> {
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
-    let len = body.chars().count();
-    if len > DESCRIPTION_CAP {
-        return Err(format!(
-            "Your description holds at most {} characters; this one is {}. It is who you are, your job and where you \
-             work: shorten it and try again.",
-            crate::rules::thousands(DESCRIPTION_CAP),
-            crate::rules::thousands(len)
-        ));
-    }
     session::update(
         store,
         caller.id.clone(),
@@ -1010,7 +997,7 @@ fn rules(store: &Store, transcripts: &TranscriptHub, caller: &Session, args: &Va
         Some(other) => return Err(format!("Unknown action \"{other}\". One of: add, edit, remove")),
         None => return Err("action is required: add, edit or remove.".into()),
     };
-    let done = rules::apply(store, &caller.id, vec![change])?.map_err(|refused| refused.say())?;
+    let done = rules::apply(store, rules::Owner::Bot(&caller.id), vec![change])?.map_err(|refused| refused.say())?;
     // The chat says what changed, as it does for the description.
     let said = match done.first() {
         Some(Done::Added(rule)) => {
@@ -1470,7 +1457,7 @@ mod tests {
         let run = |args: Value| call(&store, &transcripts, &home, "rules", args).expect("call");
 
         let out = run(json!({ "action": "add", "content": "Never push to master" }));
-        let first = crate::rules::list(&store, &home.id).unwrap()[0].clone();
+        let first = crate::rules::list(&store, crate::rules::Owner::Bot(&home.id)).unwrap()[0].clone();
         assert_eq!((is_error(&out), body(&out)), (false, format!("added r{}", first.id)));
         let again = run(json!({ "action": "add", "content": "Never push to master" }));
         assert_eq!(body(&again), format!("already r{}", first.id));
@@ -1486,16 +1473,10 @@ mod tests {
             "{}",
             body(&unknown)
         );
-        let over = run(json!({ "action": "edit", "id": first.id, "content": "x".repeat(crate::rules::CAP + 1) }));
-        assert!(is_error(&over) && body(&over).contains("at most 1,500 characters"), "{}", body(&over));
-        assert_eq!(
-            crate::rules::list(&store, &home.id).unwrap()[0].body,
-            "Never push to main",
-            "a refused write changes nothing"
-        );
+        assert_eq!(crate::rules::list(&store, crate::rules::Owner::Bot(&home.id)).unwrap()[0].body, "Never push to main");
         let removed = run(json!({ "action": "remove", "id": first.id }));
         assert_eq!(body(&removed), format!("removed r{}", first.id));
-        assert!(crate::rules::list(&store, &home.id).unwrap().is_empty());
+        assert!(crate::rules::list(&store, crate::rules::Owner::Bot(&home.id)).unwrap().is_empty());
 
         let said: Vec<String> = transcripts.read(&home.id, |blocks| {
             blocks.iter().filter(|b| b.role == crew_protocol::BlockRole::System).map(|b| b.text.clone()).collect()
@@ -1524,36 +1505,6 @@ mod tests {
         assert!(!visible_names(CallerKind::Bot).contains(&"memory"));
     }
 
-    /// A bot's description is who it is, its job and where it works: one
-    /// longer than that is refused, and the old one stays.
-    #[test]
-    fn a_bot_cannot_write_itself_a_description_past_the_cap() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let long = "x".repeat(DESCRIPTION_CAP + 1);
-        let out = call(&store, &transcripts, &coder, "update_description", json!({ "text": long })).expect("call");
-        assert!(is_error(&out), "{}", body(&out));
-        assert!(body(&out).starts_with("Your description holds at most 2,000 characters; this one is 2,001."), "{}", body(&out));
-        assert_eq!(session::get(&store, coder.id.clone()).unwrap().unwrap().description, "");
-        let fits = "x".repeat(DESCRIPTION_CAP);
-        assert!(!is_error(&call(&store, &transcripts, &coder, "update_description", json!({ "text": fits })).expect("call")));
-        // The user's own edit is not held to it.
-        let user = "y".repeat(DESCRIPTION_CAP * 2);
-        session::update(
-            &store,
-            coder.id.clone(),
-            "Coder".into(),
-            "claude".into(),
-            String::new(),
-            user.clone(),
-            true,
-            "ask".into(),
-        )
-        .unwrap();
-        assert_eq!(session::get(&store, coder.id.clone()).unwrap().unwrap().description, user);
-    }
 
     /// A description written by another model is fine; one the bot cannot
     /// revise is a persona it is stuck with.

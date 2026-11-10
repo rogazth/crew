@@ -102,6 +102,20 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// What the user wrote about the workspace for every session and bot that
+/// works in it; empty when nothing.
+pub fn description(store: &Store, id: &str) -> Result<String, String> {
+    store.with(|conn| {
+        conn.query_row("SELECT description FROM workspaces WHERE id = ?1", params![id], |row| row.get(0))
+            .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(String::new()) } else { Err(error) })
+    })
+}
+
+pub fn set_description(store: &Store, id: &str, description: &str) -> Result<(), String> {
+    store.with(|conn| conn.execute("UPDATE workspaces SET description = ?2 WHERE id = ?1", params![id, description.trim()]))?;
+    Ok(())
+}
+
 /// The chrome it kept goes with it: its tab strip, one per worktree, and the worktree it had on screen.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
     if store.with(|conn| read_state(conn, HOME_WORKSPACE_KEY))?.as_deref() == Some(id.as_str()) {

@@ -952,9 +952,9 @@ impl TurnHost {
         let date = crate::providers::today();
         let branch = crate::worktree::current_branch(cwd);
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
+        let workspace = crate::prompts::Workspace::read(&self.store, &session.workspace_id);
         if session.kind != "child" {
-            let rules = crate::rules::list(&self.store, &session.id).unwrap_or_default();
-            let rules_cap = crate::rules::cap(&self.store, &session.id).unwrap_or(crate::rules::CAP);
+            let rules = crate::rules::list(&self.store, crate::rules::Owner::Bot(&session.id)).unwrap_or_default();
             let folder = self.bot_folder(session);
             return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
@@ -964,7 +964,7 @@ impl TurnHost {
                 harness,
                 tools: &tools,
                 rules: &rules,
-                rules_cap,
+                workspace: workspace.as_ref(),
                 folder: folder.as_deref(),
             }));
         }
@@ -983,6 +983,7 @@ impl TurnHost {
             // opencode's question forms and Grok's `ask_user_question` reach
             // the parent. Cursor offers none.
             question_tool: matches!(session.provider.as_str(), "claude" | "codex" | "opencode" | "grok"),
+            workspace: workspace.as_ref(),
         }))
     }
 
@@ -5182,7 +5183,7 @@ mod mailbox_tests {
         assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
         let prompt = second["prompt"].as_str().unwrap();
         assert!(system.contains("`crew_read_session`") && !prompt.contains("You are Coder,"), "{prompt}");
-        assert!(system.contains("### Your rules [0% - 0/1,500]"), "the rules are on every turn: {system}");
+        assert!(system.contains("### Your rules\n"), "the rules are on every turn: {system}");
         assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
         assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
         assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
@@ -5385,7 +5386,7 @@ mod mailbox_tests {
         let cwd = dir.to_string_lossy().into_owned();
         let told = host.persona(&bot, Harness::Mcp, true, &cwd).expect("bot persona");
         assert!(
-            told.starts_with("## Crew bot") && told.contains("`mcp__crew__delegate`") && told.contains("## Message"),
+            told.starts_with("## Crew bot") && told.contains("`mcp__crew__delegate`") && told.contains("### Who wrote this turn"),
             "{told}"
         );
         assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
@@ -5402,6 +5403,33 @@ mod mailbox_tests {
         }
         let bare = host.persona(&bot, Harness::Mcp, false, &cwd).expect("bot persona");
         assert!(!bare.contains("### Crew tools"), "{bare}");
+    }
+
+    /// What the user writes in a workspace's settings reaches its bots and
+    /// subagents on their next turn, from the store; nothing written, no section.
+    #[test]
+    fn the_persona_carries_the_workspace_the_user_wrote_about() {
+        let host = TurnHost::test_new();
+        let store = host.test_store();
+        let dir = std::env::temp_dir().join(format!("profile-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let ws = crate::workspace::create(store, "shop".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
+        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
+            .expect("bot");
+        let child =
+            crate::session::create_child(store, ws.clone(), "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
+                .expect("child");
+        let cwd = dir.to_string_lossy().into_owned();
+        assert!(!host.persona(&bot, Harness::Mcp, true, &cwd).unwrap().contains("### Workspace"));
+
+        crate::workspace::set_description(store, &ws, "The client's shop.").unwrap();
+        let owner = crate::rules::Owner::Workspace(&ws);
+        crate::rules::apply(store, owner, vec![crate::rules::Change::Add { body: "Never deploy on Fridays".into() }]).unwrap().unwrap();
+        let section = "### Workspace shop\n\nThe client's shop.\n\nRules for everyone who works here:\n\n[w1] Never deploy on Fridays\n";
+        let told = host.persona(&bot, Harness::Mcp, true, &cwd).unwrap();
+        assert!(told.contains(section), "{told}");
+        let child_told = host.persona(&child, Harness::Mcp, true, &cwd).unwrap();
+        assert!(child_told.contains(section), "{child_told}");
     }
 
     /// Crew's own tools never become an approval card, even if the CLI asks.

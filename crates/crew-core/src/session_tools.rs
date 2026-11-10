@@ -2349,12 +2349,18 @@ impl ToolFamily for SessionTools {
              list_peers lists who you can write to."
                 .to_string()
         };
+        // A session of the user's hears of its workspace only here, once, when
+        // it starts: its prompt is the user's.
+        if let Caller::Terminal(me) = caller {
+            let section = crate::prompts::workspace(crate::prompts::Workspace::read(&self.store, &me.workspace_id).as_ref());
+            note.push_str(section.trim());
+        }
         if let (Some(me), Ok(workspace)) = (caller.session(), caller.workspace_id()) {
             if let Ok(live) = self.live_children(workspace, &me.id) {
                 if !live.is_empty() {
                     note.push_str(&format!(
                         "{}Subagents you started: {}.",
-                        if note.is_empty() { "" } else { " " },
+                        if note.is_empty() { "" } else if matches!(caller, Caller::Terminal(_)) { "\n\n" } else { " " },
                         live.iter()
                             .map(|row| format!("{} {} ({}, {})", row.name, row.id, row.provider, self.peer_status(caller, row)))
                             .collect::<Vec<_>>()
@@ -5947,6 +5953,12 @@ time.sleep(600)
         assert!(w.tools.instructions(&bot).is_none(), "a bot is told again what its prompt says");
         let told = w.tools.instructions(&Caller::User { workspace_id: None }).unwrap();
         assert!(!told.contains(GLOSSARY) && told.contains("do not use it just because the user said"), "{told}");
+        // A session of the user's hears of its workspace here, once the user wrote about it.
+        let place = w.row(&shell.session().unwrap().id).workspace_id;
+        crate::workspace::set_description(w.turns.store(), &place, "The client's shop.").unwrap();
+        let told = w.tools.instructions(&shell).unwrap();
+        assert!(told.starts_with("### Workspace") && told.contains("\n\nThe client's shop."), "{told}");
+        crate::workspace::set_description(w.turns.store(), &place, "").unwrap();
         let id = w.start(&shell, "x");
         assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its subagents");
         let child = Caller::from_session(w.row(&id));

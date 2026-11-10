@@ -1,38 +1,22 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import type { useBotRules } from "../hooks/useBotRules";
-import { newRuleRow, rulesUsed, type RuleRow } from "../lib/botRules";
+import type { useRules } from "../hooks/useRules";
+import { newRuleRow, type RuleRow } from "../lib/rules";
 import { AddRow, CardHead, PaneCard } from "./BotPaneParts";
-
-const count = (n: number) => n.toLocaleString("en-US");
-
-/** The least a cap may be (`crew_core::rules::CAP`): less, or nothing, is taken as this. */
-const DEFAULT_CAP = 1500;
 
 /**
  * A bot's rules, a card of them the way Connectors lists an account's tools.
  * The words edit in place and are written when the edit ends; the bot adds
  * rules too, with its rules tool.
  */
-export function BotRules({ rules }: { rules: ReturnType<typeof useBotRules> }) {
-  const { rows, cap, error, commit, setCap } = rules;
+export function BotRules({ rules }: { rules: ReturnType<typeof useRules> }) {
+  const { rows, error, commit } = rules;
   // The rule being written: a row of its own at the end, stored only once it has words.
   const [draft, setDraft] = useState<RuleRow | null>(null);
-  const used = rows ? rulesUsed(rows) : 0;
 
   return (
     <PaneCard label="Rules">
-      <CardHead
-        title="Rules"
-        aside={
-          rows ? (
-            <span className={`flex items-center gap-1 ${used > cap ? "text-danger" : ""}`}>
-              {count(used)} /
-              <CapField cap={cap} onChange={(next) => void setCap(next)} />
-            </span>
-          ) : undefined
-        }
-      />
+      <CardHead title="Rules" />
       {rows === null && !error && <p className="py-3 text-[12px] text-text-muted">Reading its rules…</p>}
       {rows?.map((row) => (
         <Rule
@@ -128,47 +112,5 @@ function Rule({ row, onCommit, onRemove }: { row: RuleRow; onCommit: (text: stri
         </button>
       )}
     </div>
-  );
-}
-
-/**
- * The cap, edited where it reads: the number itself, as the name is. Kept
- * when the edit ends, Escape puts it back. Left empty or under the default,
- * it is the default.
- */
-function CapField({ cap, onChange }: { cap: number; onChange: (cap: number) => void }) {
-  // The digits being typed, shown with the same comma as at rest, so focusing it moves nothing.
-  const [typed, setTyped] = useState<string | null>(null);
-  const discard = useRef(false);
-  const end = () => {
-    const next = Number.parseInt(typed ?? "", 10);
-    const keep = !discard.current;
-    discard.current = false;
-    setTyped(null);
-    if (!keep) return;
-    const kept = Number.isFinite(next) ? Math.max(next, DEFAULT_CAP) : DEFAULT_CAP;
-    if (kept !== cap) onChange(kept);
-  };
-  return (
-    <input
-      aria-label="Most characters its rules may hold"
-      title="Most characters its rules may hold"
-      inputMode="numeric"
-      value={typed === null ? count(cap) : typed && count(Number(typed))}
-      onFocus={(event) => {
-        setTyped(String(cap));
-        event.currentTarget.select();
-      }}
-      onChange={(event) => setTyped(event.target.value.replace(/\D/g, ""))}
-      onBlur={end}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== "Escape") return;
-        event.preventDefault();
-        event.stopPropagation();
-        discard.current = event.key === "Escape";
-        event.currentTarget.blur();
-      }}
-      className="-mx-1 min-w-[3ch] rounded-md bg-transparent px-1 text-right tabular-nums outline-none transition-colors [field-sizing:content] hover:bg-hover focus:bg-hover"
-    />
   );
 }

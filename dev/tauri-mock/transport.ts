@@ -355,7 +355,7 @@ function threadMessages({ a, b, before, limit }: Row): Row {
   return { letters: all.slice(start, stop), more: start > 0 };
 }
 
-/** Each bot's rules, as `crew_core::rules` keeps them. */
+/** Each bot's rules (`r3`) and each workspace's (`w3`), as `crew_core::rules` keeps them. */
 type MockRule = { id: string; body: string };
 const botRules = new Map<string, MockRule[]>([
   [
@@ -366,23 +366,35 @@ const botRules = new Map<string, MockRule[]>([
     ],
   ],
 ]);
+const workspaceRules = new Map<string, MockRule[]>();
+const workspaceDescriptions = new Map<string, string>();
 let nextRule = 3;
-const ruleCaps = new Map<string, number>();
 function rulesOf(id: string) {
-  const rules = botRules.get(id) ?? [];
-  return { rules, used: rules.reduce((sum, rule) => sum + [...rule.body].length, 0), cap: ruleCaps.get(id) ?? 1500 };
+  return { rules: botRules.get(id) ?? [] };
 }
-function saveRules({ id, add = [], edit = [], remove = [] }: Row) {
+/** The user's edit, by id, onto `kept`'s rules for `id`; new rules take `prefix`. */
+function editRules(kept: Map<string, MockRule[]>, prefix: string, { id, add = [], edit = [], remove = [] }: Row) {
   const tidy = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
-  const rules = (botRules.get(String(id)) ?? [])
+  const rules = (kept.get(String(id)) ?? [])
     .filter((rule) => !(remove as string[]).includes(rule.id))
     .map((rule) => {
       const changed = (edit as { id: string; body: string }[]).find((e) => e.id === rule.id);
       return changed ? { ...rule, body: tidy(changed.body) } : rule;
     });
-  for (const body of add as string[]) if (tidy(body)) rules.push({ id: `r${nextRule++}`, body: tidy(body) });
-  botRules.set(String(id), rules);
-  return rulesOf(String(id));
+  for (const body of add as string[]) if (tidy(body)) rules.push({ id: `${prefix}${nextRule++}`, body: tidy(body) });
+  kept.set(String(id), rules);
+}
+function saveRules(row: Row) {
+  editRules(botRules, "r", row);
+  return rulesOf(String(row.id));
+}
+function profileOf(id: string) {
+  return { description: workspaceDescriptions.get(id) ?? "", rules: workspaceRules.get(id) ?? [] };
+}
+function saveProfile(row: Row) {
+  editRules(workspaceRules, "w", row);
+  if (typeof row.description === "string") workspaceDescriptions.set(String(row.id), row.description.trim());
+  return profileOf(String(row.id));
 }
 
 /* ── The MCP Registry, live through Vite's /mcp-registry proxy ───────── */
@@ -1257,7 +1269,8 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_update: ({ id, ...rest }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, rest),
   bot_rules_get: ({ id }) => rulesOf(String(id)),
   bot_rules_save: saveRules,
-  bot_rules_cap_set: ({ id, cap }) => (ruleCaps.set(String(id), Math.max(Number(cap), 1500)), rulesOf(String(id))),
+  workspace_profile_get: ({ id }) => profileOf(String(id)),
+  workspace_profile_save: saveProfile,
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),

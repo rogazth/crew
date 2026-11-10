@@ -1,8 +1,8 @@
-// What a workspace's profile adds once the daemon keeps it: an icon of its own (found in its repo or uploaded) and
-// the instructions and rules its agents read. Until then there is none: the tile shows the initials, and the
-// settings page has neither section nor an icon to change.
+// A workspace's icon of its own, found in its repo or uploaded, once the daemon keeps it. Until then there is none:
+// the tile shows the initials, and the settings page has no icon to change. Its instructions and rules are real:
+// WorkspaceProfileSections.tsx.
 import type { ComponentType } from "react";
-import type { Session, Workspace } from "../lib/types";
+import type { Workspace } from "../lib/types";
 
 /** The workspace's icon, or null for its initials. */
 export function useWorkspaceFace(_workspace: Workspace): string | null {
@@ -14,6 +14,3 @@ export function useWorkspaceFaces(_workspaces: Workspace[], _active: Workspace |
 
 /** Changes the icon, heading the settings page; null: the tile, as it is. */
 export const WorkspaceIconEditor: ComponentType<{ workspace: Workspace }> | null = null;
-
-/** The instructions and the rules, over the page's General; null: none. */
-export const WorkspaceProfileSections: ComponentType<{ workspace: Workspace; sessions: Session[] }> | null = null;
