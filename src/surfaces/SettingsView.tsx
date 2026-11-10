@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { PAGES, PENDING } from "./settings/pages";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import { settingsWarm, warmSettings } from "../lib/settingsReads";
-import type { Workspace } from "../lib/types";
+import type { Session, Workspace } from "../lib/types";
 import { AboutPage } from "./settings/AboutPage";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { EnvironmentsPage } from "./settings/EnvironmentsPage";
@@ -13,11 +13,15 @@ import { SettingsPage, Toasts } from "./settings/ui";
 import { UsagePage } from "./settings/UsagePage";
 import { NotificationSettings } from "./NotificationSettings";
 import { IntegrationsPage } from "./settings/integrations/IntegrationsPage";
+import type { OpenSignIn } from "./settings/integrations/project";
 
 type Props = {
   section: SettingsSectionId;
   workspaces: Workspace[];
   onOpenTerminal: (envId: string, input?: string) => Promise<void>;
+  onOpenSignIn: OpenSignIn;
+  /** On Connectors: the session whose status line led here, for what its project has. */
+  session?: Session;
 };
 
 /**
@@ -26,7 +30,7 @@ type Props = {
  * against the real daemon and host, in the same frame (settings/pages.ts lists
  * any section still pending).
  */
-export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
+export function SettingsView({ section, workspaces, onOpenTerminal, onOpenSignIn, session }: Props) {
   // A page that is still pending has no nav entry; a stale request for it lands on General.
   const shown = PENDING.includes(section) ? settingsSection("general").id : section;
   // The first open waits for the pages' reads, so the first page paints whole, its switches already set.
@@ -36,13 +40,13 @@ export function SettingsView({ section, workspaces, onOpenTerminal }: Props) {
   }, [warm]);
   return (
     <div className="relative h-full">
-      {warm && <Page key={shown} section={shown} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />}
+      {warm && <Page key={shown} section={shown} workspaces={workspaces} onOpenTerminal={onOpenTerminal} onOpenSignIn={onOpenSignIn} {...(session && { session })} />}
       <Toasts />
     </div>
   );
 }
 
-function Page({ section, workspaces, onOpenTerminal }: Props) {
+function Page({ section, workspaces, onOpenTerminal, onOpenSignIn, session }: Props) {
   switch (section) {
     case "keybindings":
       return <KeybindingsPage />;
@@ -69,7 +73,7 @@ function Page({ section, workspaces, onOpenTerminal }: Props) {
     case "usage":
       return <UsagePage />;
     case "connectors":
-      return <IntegrationsPage workspaces={workspaces} />;
+      return <IntegrationsPage workspaces={workspaces} {...(session && { session })} onOpenSignIn={onOpenSignIn} />;
   }
 }
 

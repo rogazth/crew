@@ -10,12 +10,14 @@ import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import { RoutinesView } from "./RoutinesView";
 import { useIntegrationsTrail } from "./settings/integrations/lib";
+import type { OpenSignIn } from "./settings/integrations/project";
 import { SettingsView } from "./SettingsView";
 
 /** A page covers the workspace instead of living in a tab. */
 export type Page =
   | { kind: "workspace" }
-  | { kind: "settings"; section: SettingsSectionId }
+  /** `sessionId`: on Connectors, the session whose status line led here. */
+  | { kind: "settings"; section: SettingsSectionId; sessionId?: string }
   | { kind: "routines"; draft: RoutineDraft | null; editId?: string }
   /** The workspace's services; `view`, what covers their list. */
   | { kind: "services"; view?: ServiceOpen }
@@ -29,6 +31,8 @@ type Props = {
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
   onOpenTerminal: (envId: string, input?: string) => Promise<void>;
+  /** Runs an MCP server's login for a session in a terminal tab; its end has the session connect the server. */
+  onOpenSignIn: OpenSignIn;
   /** The sidebar is closed: the strip leaves room for its toggle, as the tabs do. */
   inset: boolean;
   onClose: () => void;
@@ -49,6 +53,7 @@ export function Pages({
   sessions,
   onConfirm,
   onOpenTerminal,
+  onOpenSignIn,
   inset,
   onClose,
   renderServices,
@@ -72,7 +77,16 @@ export function Pages({
     </div>
   );
   if (page.kind === "settings") {
-    return sheet(<SettingsView section={page.section} workspaces={workspaces} onOpenTerminal={onOpenTerminal} />);
+    const session = sessions.find((one) => one.id === page.sessionId);
+    return sheet(
+      <SettingsView
+        section={page.section}
+        workspaces={workspaces}
+        {...(session && { session })}
+        onOpenTerminal={onOpenTerminal}
+        onOpenSignIn={onOpenSignIn}
+      />,
+    );
   }
   if (page.kind === "routines" && activeWorkspace) {
     return sheet(

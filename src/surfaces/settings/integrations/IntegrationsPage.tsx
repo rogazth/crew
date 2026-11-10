@@ -8,20 +8,21 @@
 // (docs/plans/2026-10-23-integrations.md).
 import { useEffect } from "react";
 import { Button } from "../../../chrome/kit";
-import type { Workspace } from "../../../lib/types";
+import type { Session, Workspace } from "../../../lib/types";
 import { SettingsPage } from "../ui";
 import { ConnectDialog } from "./connect";
 import { DetailPage } from "./detail";
 import { CustomDialog, DirectoryPage, SummaryDialog } from "./directory";
 import { KEYFRAMES, ui, useUi, type Sheet } from "./lib";
 import { FromProviders } from "./clis";
+import { FromProject, type OpenSignIn } from "./project";
 import { Installed } from "./sections";
 import { BuiltInDialog, BuiltinSummaryDialog } from "./builtin";
 import { VaultDialog } from "./vault-dialog";
 import { AccountWorkspacesDialog, AddAccountDialog } from "./workspaces";
 import { setWorkspaces, useIntegrations, type Source } from "./store";
 
-export function IntegrationsPage({ workspaces }: { workspaces: Workspace[] }) {
+export function IntegrationsPage({ workspaces, session, onOpenSignIn }: { workspaces: Workspace[]; session?: Session; onOpenSignIn: OpenSignIn }) {
   const { sheet, view, detail } = useUi();
   const s = useIntegrations();
   // With no connector yet, the empty state carries the one way to the registry.
@@ -50,6 +51,7 @@ export function IntegrationsPage({ workspaces }: { workspaces: Workspace[] }) {
       }
     >
       <style>{KEYFRAMES}</style>
+      {session && <FromProject session={session} onOpenSignIn={onOpenSignIn} />}
       <Installed />
       <FromProviders />
       {sheet && <Sheets sheet={sheet} />}

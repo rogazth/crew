@@ -39,7 +39,7 @@ export function ConnectorsSegment({
   const { openConnectors } = useChatActions();
   const manage = () => {
     close();
-    openConnectors();
+    openConnectors(session.id);
   };
 
   return (

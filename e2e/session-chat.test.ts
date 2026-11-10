@@ -8,7 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, sessions, terminalIn, waitFor, workspaceRail, type Crew, turnOver } from "./harness.ts";
+import { chatLine, composerOf, editorText, holdsFor, launchCrew, MOD, newSession, openConnectorSettings, sessions, terminalIn, waitFor, workspaceRail, type Crew, turnOver } from "./harness.ts";
 
 let crew: Crew;
 
@@ -634,6 +634,40 @@ test("more connectors than fit scroll, fading at the edge with more past it", as
   } finally {
     await rm(servers, { force: true });
   }
+});
+
+test("a project's own server that needs the user can be signed in to from the page the session opens", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  // Seen by a CLI working in the project, not by the one the machine's list is read with.
+  const servers = path.join(crew.home, "fake-claude-mcp-project.json");
+  await writeFile(servers, JSON.stringify([{ name: "sentry", status: "needs-auth" }]));
+  try {
+    const session = await newChat(workspace.id);
+    await send("which project servers");
+    await said("Reply 1: which project servers").waitFor();
+    const chip = crew.window.locator("[data-status-line]:visible [data-connectors-trigger]");
+    await chip.locator('[data-status-dot="warning"]').waitFor({ state: "attached" });
+    await chip.click();
+    await crew.window.locator("[data-connectors-sheet]:visible").getByRole("button", { name: "Manage" }).click();
+
+    // Claude's login is its own command, in a terminal tab of Crew's, in the session's folder.
+    const row = crew.window.locator('[data-project-server="sentry"]');
+    await row.getByRole("button", { name: "Sign in" }).click();
+    await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "Sign in to sentry" }).waitFor();
+    await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.argv.join(" ") === "mcp login sentry"), {
+      message: "the login runs as `claude mcp login sentry`",
+    });
+    await idle(session);
+  } finally {
+    await rm(servers, { force: true });
+  }
+});
+
+test("Settings › Connectors opened from the rail has no project to speak of", async () => {
+  await openConnectorSettings(crew);
+  assert.equal(await crew.window.getByText("In this project", { exact: true }).count(), 0);
+  await workspaceRail(crew).getByRole("button", { name: "Settings", exact: true }).click();
 });
 
 test("the first prompt from home is the chat session's first turn", async () => {

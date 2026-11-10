@@ -203,8 +203,8 @@ export function App() {
   } = usePages();
   useUpdateWiring(openSettings);
   const connectorsAlert = useConnectorsAlert();
-  // A session's Connectors chip: the app's Connectors, in Settings.
-  const openConnectors = useCallback(() => openSettings("connectors"), [openSettings]);
+  // A session's Connectors chip: the app's Connectors, with what that session's project has on top.
+  const openConnectors = useCallback((sessionId: string) => openSettings("connectors", sessionId), [openSettings]);
   const openUsage = useCallback(() => openSettings("usage"), [openSettings]);
   // Settings lives in the sidebar, so opening it opens the sidebar; leaving puts back a closed one.
   // Adjusted while rendering, on the page opening or closing, not on a toggle while it is open.
@@ -498,6 +498,7 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenTerminal={envs.openTerminalOn}
+          onOpenSignIn={nav.openSignIn}
           inset={!sidebarOpen}
           onClose={closePage}
           renderCustomize={() =>
@@ -641,7 +642,6 @@ export function App() {
               onOpenProcessRun={nav.openProcessRun}
               onOpenConnectors={openConnectors}
               onOpenUsage={openUsage}
-              onOpenSignIn={nav.openSignIn}
               onOpenLogin={nav.openLogin}
             />
             </PanePlaceContext>

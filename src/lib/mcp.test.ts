@@ -146,6 +146,22 @@ describe("sessionServers", () => {
   });
 });
 
+describe("projectProblems", () => {
+  const listed = (name: string) => ({ provider: "claude", name, transport: "http", target: "", scope: null, state: "needs_auth" as McpState, error: null, tools: null, canSignIn: true, canRemove: true, offInCrew: false });
+
+  it("keeps what needs the user and the machine's list does not name, leaving Crew's own out", async () => {
+    const { projectProblems } = await mcp();
+    const said = status(server("docs", "connected"), server("broken", "failed"), server("sentry", "needs_auth"), server("linear", "needs_auth"), server("crew", "failed"));
+    expect(projectProblems(said, [listed("linear")]).map((one) => one.name)).toEqual(["sentry", "broken"]);
+  });
+
+  it("has nothing to say before the CLI has spoken", async () => {
+    const { projectProblems } = await mcp();
+    expect(projectProblems({ servers: [server("sentry", "needs_auth")], reported: false }, [])).toEqual([]);
+    expect(projectProblems(null, [])).toEqual([]);
+  });
+});
+
 describe("activeServers", () => {
   it("leaves out what is switched off, and keeps what needs the user first", async () => {
     const { activeServers } = await mcp();

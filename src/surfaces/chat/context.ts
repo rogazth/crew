@@ -34,12 +34,10 @@ export type ChatActions = {
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */
   openProcessRun: (process: Process, worktree: string | null) => void;
-  /** The Connectors page: what is installed, and switching it. */
-  openConnectors: () => void;
+  /** The Connectors page, from this session: what is installed, switching it, and what its project's own servers need. */
+  openConnectors: (sessionId: string) => void;
   /** Settings' Usage page: the plan's limits. */
   openUsage: () => void;
-  /** Runs an MCP server's login for a session in a terminal tab; its end has the session connect the server. */
-  openSignIn: (sessionId: string, server: string, command: string[]) => void;
   /** Runs the provider's own login in a terminal tab; a clean exit restarts the session's CLI. */
   openLogin: (sessionId: string, provider: string, command: string[]) => void;
   /** Asks the shell's dialog before something that costs the session work: a restart over running background work. */
@@ -57,7 +55,6 @@ export const ChatContext = createContext<ChatActions>({
   openProcessRun: () => undefined,
   openConnectors: () => undefined,
   openUsage: () => undefined,
-  openSignIn: () => undefined,
   openLogin: () => undefined,
   confirm: () => undefined,
 });

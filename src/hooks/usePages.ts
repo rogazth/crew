@@ -17,8 +17,10 @@ export function usePages() {
     (next: Page) => setPage((open) => (open.kind === next.kind ? { kind: "workspace" } : next)),
     [],
   );
+  /** `sessionId`: the session whose Connectors chip led here, for what its project has. */
   const openSettings = useCallback(
-    (section: SettingsSectionId = SETTINGS_DEFAULT) => setPage({ kind: "settings", section }),
+    (section: SettingsSectionId = SETTINGS_DEFAULT, sessionId?: string) =>
+      setPage({ kind: "settings", section, ...(sessionId !== undefined && { sessionId }) }),
     [],
   );
   /** The Services page, on its list or on what covers it: a service, a run's output, a new one. */

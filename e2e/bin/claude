@@ -105,6 +105,8 @@ serve();
  *   log), are the ones in $HOME/fake-claude-mcp.json, a list of
  *   `{name, status, error?}` as the real CLI names them (`connected`,
  *   `needs-auth`, `failed`, `pending`); none while the file is not there.
+ *   Working anywhere but $HOME, as a project's own servers are, it adds the
+ *   ones in $HOME/fake-claude-mcp-project.json.
  * - A `user` message is a turn: `system/init`, the message echoed back when
  *   `--replay-user-messages` is on, the reply streamed a word at a time as
  *   `stream_event` deltas, the `assistant` message with its usage, and the
@@ -178,11 +180,15 @@ function serve() {
   };
   const used = () => STEP * Math.min(turns, 9);
   const servers = () => {
-    try {
-      return JSON.parse(fs.readFileSync(path.join(HOME, "fake-claude-mcp.json"), "utf8"));
-    } catch {
-      return [];
-    }
+    const read = (file) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(HOME, file), "utf8"));
+      } catch {
+        return [];
+      }
+    };
+    const inProject = fs.realpathSync(process.cwd()) !== fs.realpathSync(HOME);
+    return [...read("fake-claude-mcp.json"), ...(inProject ? read("fake-claude-mcp-project.json") : [])];
   };
 
   function control(rec) {

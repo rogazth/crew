@@ -137,6 +137,17 @@ export function sessionServers(status: McpStatus | null | undefined, inventory: 
   return { servers, reported: false };
 }
 
+/**
+ * What a session's CLI needs the user for and the machine's list does not name:
+ * a project's own servers, which only a CLI working in that folder can see.
+ * Crew's own server is not the user's to fix.
+ */
+export function projectProblems(status: McpStatus | null | undefined, listed: readonly ProviderServer[]): McpServer[] {
+  if (!status?.reported) return [];
+  const names = new Set(listed.map((one) => one.name));
+  return sortedServers(status).filter((server) => actionOf(server) !== null && server.name !== "crew" && !names.has(server.name));
+}
+
 const reconnected = new Set<string>();
 
 /**
