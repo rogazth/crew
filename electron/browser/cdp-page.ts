@@ -1,4 +1,5 @@
 import type { WebContents } from "electron";
+import { CHANNELS } from "../../src/lib/browser/bridge";
 import type { Page } from "./agent-tools";
 
 /** Bounded, so a chatty page driven for an hour costs the same as one driven for a minute. */
@@ -168,6 +169,10 @@ export function cdpPage(guest: WebContents): Page {
       return lines;
     },
     networkLog: () => networkLines(session),
+    shieldFocus: () => {
+      const host = guest.hostWebContents;
+      if (host && !host.isDestroyed()) host.send(CHANNELS.agentInput, guest.id);
+    },
   };
   const session: Session = {
     page,

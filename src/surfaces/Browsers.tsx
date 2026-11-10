@@ -7,6 +7,7 @@ import * as api from "../lib/api";
 import { loadSitePermissions } from "../hooks/useSitePermissions";
 import { downloads as downloadStore, isRunning } from "../lib/browser/downloads";
 import { paneHandle } from "../lib/browser/handles";
+import { shieldFocus } from "../lib/browser/agentFocus";
 import { leases } from "../lib/browser/leases";
 import { pages } from "../lib/browser/pageStore";
 import { prompts } from "../lib/browser/prompts";
@@ -224,6 +225,7 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
         const pane = latest.current.browsers.find((p) => pages.get(p.tab.id).webContentsId === webContentsId);
         if (pane) pages.update(pane.tab.id, { hung });
       }),
+      host.onAgentInput((webContentsId) => shieldFocus(webContentsId)),
     ];
     return () => {
       for (const stop of stops) stop();

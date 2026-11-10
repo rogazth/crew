@@ -1,4 +1,6 @@
 
+import { returnFocus } from "./agentFocus";
+
 /**
  * The slice of Electron's <webview> element the pane uses. The renderer build
  * has no Electron types, so it is spelled out here.
@@ -160,7 +162,10 @@ export function createGuest(container: HTMLElement, src: string, partition: stri
   listen("devtools-closed", () => on.devtools(false));
   listen("media-started-playing", () => on.media(true));
   listen("media-paused", () => on.media(false));
-  listen("focus", () => on.focus());
+  // An agent's click hands the page the keyboard; it goes back, and the pane never hears of it.
+  listen("focus", () => {
+    if (!returnFocus(view, learnId())) on.focus();
+  });
   listen("found-in-page", (event) => {
     const result = event.result as Partial<FindResult> | undefined;
     if (result && typeof result.matches === "number") {

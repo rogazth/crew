@@ -110,6 +110,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     answer: (id: string, value: PromptAnswer) => ipcRenderer.send(CHANNELS.answer, id, value),
     setSitePermissions: (decisions: SitePermissions) => ipcRenderer.send(CHANNELS.sitePermissions, decisions),
     onResponsive: (cb: (state: Responsiveness) => void) => listen(CHANNELS.responsive, cb),
+    onAgentInput: (cb: (webContentsId: number) => void) => listen(CHANNELS.agentInput, cb),
     kill: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.kill, webContentsId),
     print: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.print, webContentsId),
     toggleDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.devtools, webContentsId),

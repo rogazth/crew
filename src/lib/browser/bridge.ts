@@ -75,6 +75,8 @@ export const CHANNELS = {
   sitePermissions: "browser:site-permissions",
   /** main → window: a page stopped answering, or came back. */
   responsive: "browser:responsive",
+  /** main → window: an agent's click is on its way to this page; the focus it takes is not the person's. */
+  agentInput: "browser:agent-input",
   /** Ends a hung page's process so it can load again. */
   kill: "browser:kill",
   print: "browser:print",

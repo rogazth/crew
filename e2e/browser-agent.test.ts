@@ -158,3 +158,54 @@ test("B2: a page and its cross-origin iframe see the browser's own name, and the
   );
   assert.match(log, /top-uncaught/);
 });
+
+// A real mouse press hands its page the window's keyboard, even a page in a tab
+// behind the one on screen. The person typing in a composer keeps it: the
+// agent's click lands, and the focus goes back to where it was. With nothing
+// focused, the page does not keep it either.
+test("B3: an agent's click in a tab behind the chat leaves the person's caret where it was", async (t) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!doctype html><title>0</title><button onclick="document.title = Number(document.title) + 1">Go</button>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const tool = (name: string, args: object = {}) =>
+    crew.request<Block[]>("browser_tool", { workspaceId: workspace.id, tool: name, args });
+  const text = (blocks: Block[]) => blocks.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+  const focused = () =>
+    crew.window.evaluate(() => {
+      const el = document.activeElement;
+      return el?.classList.contains("cm-content") ? "composer" : (el?.tagName.toLowerCase() ?? "none");
+    });
+
+  const composer = crew.window.locator(".cm-content").first();
+  await composer.click();
+  await crew.window.keyboard.type("draft");
+  assert.equal(await focused(), "composer");
+
+  await waitFor(() => tool("open_tab", { url }).catch(() => null), { timeout: 30_000, interval: 250, message: "open_tab reaches the browser host" });
+  const go = /uid=(\S+) button "Go"/.exec(text(await tool("browser_snapshot")))?.[1];
+  assert.ok(go);
+
+  await tool("browser_act", { action: "click", uid: go });
+  assert.equal(text(await tool("browser_evaluate", { expression: "document.title" })), '"1"');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(await focused(), "composer");
+  await crew.window.keyboard.type(" more");
+  assert.match((await composer.textContent()) ?? "", /draft more/);
+
+  // Nothing focused: the page's click still lands, and the focus does not stay in it.
+  await crew.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  assert.equal(await focused(), "body");
+  await tool("browser_act", { action: "click", uid: go });
+  assert.equal(text(await tool("browser_evaluate", { expression: "document.title" })), '"2"');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.notEqual(await focused(), "webview");
+});

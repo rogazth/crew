@@ -168,6 +168,8 @@ export type BrowserHost = {
   /** The remembered decisions, whole, each time they change. */
   setSitePermissions(decisions: SitePermissions): void;
   onResponsive(cb: (state: Responsiveness) => void): () => void;
+  /** An agent's click is about to reach this page: whatever focus it takes goes back. */
+  onAgentInput(cb: (webContentsId: number) => void): () => void;
   /** Ends a hung page's process. */
   kill(webContentsId: number): Promise<void>;
   print(webContentsId: number): Promise<void>;

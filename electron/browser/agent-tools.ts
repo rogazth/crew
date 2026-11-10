@@ -51,6 +51,12 @@ export interface Page {
   /** Console lines and requests seen since the debugger attached. */
   consoleLog(): readonly string[];
   networkLog(): readonly string[];
+  /**
+   * An agent's pointer input is on its way. A real mouse press hands the page
+   * the window's keyboard, even a page in a tab nobody is looking at; the
+   * window gives it back to wherever the person had it.
+   */
+  shieldFocus?(): void;
 }
 
 export type Driver = {
@@ -151,6 +157,7 @@ export function createAgentTools(driver: Driver) {
   /** Marks our own input, so its echo is not taken for the user's. */
   async function drive<T>(page: Page, work: () => Promise<T>): Promise<T> {
     driving.set(page.id, Number.POSITIVE_INFINITY);
+    page.shieldFocus?.();
     try {
       return await work();
     } finally {

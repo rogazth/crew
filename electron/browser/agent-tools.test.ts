@@ -119,6 +119,16 @@ describe("agent tools", () => {
     expect(page.sent.find((s) => s.method === "DOM.scrollIntoViewIfNeeded")?.params).toEqual({ backendNodeId: 20 });
   });
 
+  it("warns the window before a click can take the keyboard", async () => {
+    const page = fakePage(1, { "Accessibility.getFullAXTree": () => TREE, "DOM.getBoxModel": () => BOX });
+    page.shieldFocus = () => page.sent.push({ method: "shieldFocus" });
+    const { call } = setup({ a: page });
+    const uid = /uid=(\S+) button/.exec(textOf(await call("a", "browser_snapshot")))?.[1];
+    await call("a", "browser_click", { uid });
+    const order = page.sent.map((s) => s.method).filter((m) => m === "shieldFocus" || m === "Input.dispatchMouseEvent");
+    expect(order).toEqual(["shieldFocus", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent"]);
+  });
+
   it("uids die with the next snapshot and with a revived guest", async () => {
     const page = fakePage(1, { "Accessibility.getFullAXTree": () => TREE, "DOM.getBoxModel": () => BOX });
     const revived = fakePage(2, { "Accessibility.getFullAXTree": () => TREE, "DOM.getBoxModel": () => BOX });
