@@ -1,6 +1,6 @@
 // Each workspace's icon as the window draws it, asked of the daemon that holds the workspace
 // (`crew_core::workspace_icon`), which looks in its repo and keeps the user's choice. The rail asks
-// for what each shows; the settings page asks for what there is to pick from as well.
+// for what each shows; the face on the settings page uploads another or goes back to the default.
 import * as api from "./api";
 import type { IconUpload, WorkspaceIcon, WorkspaceIconSet } from "./protocol";
 
@@ -13,7 +13,7 @@ export const MAX_UPLOAD = 2 * 1024 * 1024;
 
 const icons = new Map<string, WorkspaceIcon>();
 const asking = new Map<string, Promise<WorkspaceIcon | null>>();
-/** What went wrong with the last choice or upload, for the picker to say. */
+/** What went wrong with the last choice or upload, for the settings page to say. */
 const problems = new Map<string, string>();
 /**
  * How many choices have been sent for each workspace. An answer to a question
@@ -87,7 +87,7 @@ export function problemOf(workspaceId: string): string | null {
   return problems.get(workspaceId) ?? null;
 }
 
-/** A choice made in the picker: what goes wrong is kept for it to say, and the next choice clears it. */
+/** A choice made on the settings page: what goes wrong is kept for it to say, and the next choice clears it. */
 export async function pick(workspaceId: string, choice: Omit<WorkspaceIconSet, "id"> | (() => Promise<Omit<WorkspaceIconSet, "id">>)) {
   if (problems.delete(workspaceId)) emit();
   try {

@@ -1,8 +1,8 @@
-// A workspace's icon of its own: the best image its repo offers, another of its images or one the user uploaded, or
-// none for its initials, as the daemon that holds the workspace keeps it (lib/workspaceIcons.ts). The rail asks for
-// every workspace's, and again for the one in front once it has stayed there a beat and when the window comes back;
-// the daemon looks in the repo again only once what it found is old. The picker is WorkspaceIcon.tsx; the
-// instructions and rules are WorkspaceProfileSections.tsx.
+// A workspace's icon of its own: the best image its repo offers or one the user uploaded, or none for its initials,
+// as the daemon that holds the workspace keeps it (lib/workspaceIcons.ts). The rail asks for every workspace's, and
+// again for the one in front once it has stayed there a beat and when the window comes back; the daemon looks in the
+// repo again only once what it found is old. The face to change it is WorkspaceIcon.tsx; the instructions and rules
+// are WorkspaceProfileSections.tsx.
 import { useEffect, useSyncExternalStore } from "react";
 import { SETTLE, imageOf, refresh, snapshot, subscribe } from "../lib/workspaceIcons";
 import type { Workspace } from "../lib/types";
