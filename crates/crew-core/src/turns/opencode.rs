@@ -228,7 +228,12 @@ pub(super) fn ok(reply: Result<Reply, crate::http_local::HttpError>, what: &str)
 }
 
 impl TurnHost {
-    pub(super) fn run_opencode(&self, session: session::Session, params: TurnStart, history: Option<String>) -> TurnOutcome {
+    pub(super) fn run_opencode(
+        &self,
+        session: session::Session,
+        params: TurnStart,
+        history: Option<super::Memory>,
+    ) -> TurnOutcome {
         let id = session.id.clone();
         let (tx, rx) = oneshot::channel();
         let arm = self.opencode_arm(&session, &params.cwd, tx);
@@ -276,7 +281,7 @@ impl TurnHost {
         &self,
         session: &session::Session,
         params: &TurnStart,
-        history: Option<String>,
+        history: Option<super::Memory>,
         arm: Arm,
     ) -> Result<(), String> {
         let id = session.id.as_str();
@@ -287,10 +292,14 @@ impl TurnHost {
         if self.stop_requested(id) {
             return Err("cancelled".into());
         }
-        let oc = match arm {
-            Arm::Fresh => self.opencode_open(session, params, &conn)?,
-            Arm::Kept(since) => self.opencode_settle(session, params, &conn, &since)?,
-            Arm::Joined => self.opencode_bound(id).ok_or("opencode session is gone")?,
+        let (oc, resumed) = match arm {
+            Arm::Fresh => {
+                let oc = self.opencode_open(session, params, &conn)?;
+                let resumed = conversation_to_resume(session).as_deref() == Some(oc.as_str());
+                (oc, resumed)
+            }
+            Arm::Kept(since) => (self.opencode_settle(session, params, &conn, &since)?, true),
+            Arm::Joined => (self.opencode_bound(id).ok_or("opencode session is gone")?, true),
         };
         self.transcripts.apply(id, HarnessEvent::SessionProviderBound { provider_session_id: oc.clone() });
         self.transcripts.apply(id, HarnessEvent::SessionStarted {});
@@ -308,10 +317,13 @@ impl TurnHost {
             return Err("cancelled".into());
         }
         let files = path_list(params, &HashSet::new());
-        let text = if carries_conversation(session) {
-            crate::providers::with_files(params.text.trim(), &files)
-        } else {
-            bot_text(history.as_deref(), &params.text, &files)
+        let text = match &history {
+            // A bot: this turn's header over the message when it carries on
+            // its session, and the tail too when that session is new.
+            Some(memory) if resumed => memory.headed(&crate::providers::with_files(params.text.trim(), &files)),
+            Some(memory) => bot_text(Some(&memory.trail), &params.text, &files),
+            None if carries_conversation(session) => crate::providers::with_files(params.text.trim(), &files),
+            None => bot_text(None, &params.text, &files),
         };
         let client = conn.client();
         let skills = params.skills.clone().unwrap_or_default();
@@ -391,8 +403,7 @@ impl TurnHost {
             live.oc = Some(oc.clone());
         }
         self.opencode_bind(session, conn, &oc)?;
-        // A child is told who started it on its first turn; a bot every turn,
-        // as each is a session of its own.
+        // A child, and a bot's episode, are told who they are on their first turn.
         let first = resume.is_none();
         let persona = self.persona(session, Harness::Opencode, self.mcp().is_some(), &params.cwd);
         if let Some(persona) = persona.filter(|_| first) {
@@ -545,6 +556,14 @@ impl TurnHost {
 
     /// A binding let go: its routes and its standing with the bridge go, and
     /// steers it still held wait in Crew's queue.
+    /// Deletes the opencode session a bot's episode carried on, once Crew has
+    /// cut it: nothing carries it on again, and the transcript keeps what it said.
+    pub(super) fn opencode_drop(&self, session_id: &str, oc: &str) {
+        if let Ok(conn) = self.opencode_conn(Some(session_id)) {
+            let _ = conn.client().delete(&format!("/api/session/{oc}"));
+        }
+    }
+
     pub(super) fn opencode_forget(&self, mut live: OpencodeLive, session_id: &str) {
         live.release_asks();
         if let Some(oc) = &live.oc {
@@ -779,6 +798,7 @@ impl TurnHost {
         let mut outcome = None;
         let mut used = None;
         let mut stale = false;
+        let mut steps = Vec::new();
         let mut work = ChildWork::default();
         {
             let mut map = self.lock();
@@ -911,6 +931,7 @@ impl TurnHost {
                 }
                 "session.step.ended" => {
                     live.usage = Some(add_usage(live.usage.as_ref(), data));
+                    steps.extend(super::episode::opencode_step(data));
                     used = context_used(data).map(|used| (used, live.window));
                     let finish = data.get("finish").and_then(Value::as_str).unwrap_or_default();
                     if let Some(why) = finish_failure(finish) {
@@ -949,6 +970,9 @@ impl TurnHost {
                 "session.execution.interrupted" => outcome = Some(TurnOutcome::Stopped),
                 _ => {}
             }
+        }
+        for step in steps {
+            self.cache_request(&id, step);
         }
         for steer in read {
             self.opencode_read(&id, steer);

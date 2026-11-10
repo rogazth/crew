@@ -100,11 +100,36 @@ All sessions go through `TurnHost` (`crates/crew-core/src/turns.rs`). They diffe
 
 | | Starts from | Prompt | Process between turns |
 |---|---|---|---|
-| Bot | a clean provider session | description, rules, folder, conversation tail | none |
+| Bot | its episode's provider session, or a clean one when the episode is cut | a new session: description, rules, folder, conversation tail; a carried one: the turn's header | kept while its cache is warm |
 | Subagent | its own provider conversation | an envelope naming its parent | kept |
 | User's session | its own provider conversation | none: runs as the user's CLI | kept |
 
 A kept process is released after a failed turn or 30 idle minutes, and the next message resumes the conversation by its provider id.
+
+### A bot's episode
+
+A bot carries one provider session on, an episode, while that costs less than starting another (`crates/crew-core/src/bot_episode.rs`). Before each turn Crew decides:
+
+| Before the turn | Then |
+|---|---|
+| no episode, the last turn failed, or the model, effort, folder or persona changed | cut |
+| context past the cap (150k tokens, or 60% of a smaller window) | cut |
+| idle less than the cache's window | carry on |
+| idle past the window, under 50k tokens of context | carry on: writing it again costs about a new session's prefix |
+| otherwise | cut |
+
+A cut lets go of the provider session and its process, says why in the chat, and the turn starts a clean session with the tail, as every bot turn once did. Crew never lets a provider compact a bot: the cap is under every provider's own threshold, which stays as a safety net for a turn that grows past it.
+
+The window is how long the provider keeps its prompt cache after the last request, less a minute:
+
+| Provider | Window |
+|---|---|
+| Claude | the lifetime its last write was given (`ephemeral_5m` or `ephemeral_1h`); bots ask for an hour (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) |
+| Codex | 25 minutes on GPT-5.6 and later (OpenAI keeps a prefix at least 30), else 4 |
+| Grok, opencode | learned, from 4 minutes |
+| Cursor | what the model's maker documents: it reports no cache |
+
+A learned window grows when a small episode carried on past it finds its cache still warm, and shrinks when one carried on within it finds the cache gone (`cache_windows` in the store). A bot's idle process goes when its window closes.
 
 ## Sessions a caller starts
 

@@ -252,7 +252,7 @@ impl TurnHost {
         &self,
         session: crate::session::Session,
         mut params: crew_protocol::TurnStart,
-        history: Option<String>,
+        history: Option<super::Memory>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
         let (tx, turn_rx) = oneshot::channel();
@@ -273,19 +273,28 @@ impl TurnHost {
         let persona = self.persona(&session, Harness::Cursor, mcp.is_some(), &params.cwd);
         params.text =
             self.cursor_skill_text(&params.text, params.command.as_deref(), params.skills.as_deref().unwrap_or_default());
-        let texts = if carries {
-            Texts {
+        let files = path_list(&params, &HashSet::new());
+        let texts = match (carries, &history) {
+            // A bot carrying on its session: this turn's header over the
+            // message, or, should the provider not have the session any
+            // more, the persona and the tail as for a new one.
+            (true, Some(memory)) => Texts {
+                fresh: build_cursor_prompt(persona.as_deref().unwrap_or_default(), Some(&memory.trail), &params.text, &files),
+                resumed: memory.headed(&self.child_prompt(None, true, &params)),
+            },
+            (true, None) => Texts {
                 fresh: self.child_prompt(persona.as_deref(), false, &params),
                 resumed: self.child_prompt(persona.as_deref(), true, &params),
+            },
+            (false, _) => {
+                let text = build_cursor_prompt(
+                    persona.as_deref().unwrap_or_default(),
+                    history.as_ref().map(|memory| memory.trail.as_str()),
+                    &params.text,
+                    &files,
+                );
+                Texts { fresh: text.clone(), resumed: text }
             }
-        } else {
-            let text = build_cursor_prompt(
-                persona.as_deref().unwrap_or_default(),
-                history.as_deref(),
-                &params.text,
-                &path_list(&params, &HashSet::new()),
-            );
-            Texts { fresh: text.clone(), resumed: text }
         };
         let process = match kept {
             // The process the last turn left has the session open.
@@ -1852,16 +1861,49 @@ mod tests {
         assert_eq!(k.count("session/load"), 1);
     }
 
-    /// A bot's turn is on a clean process and session of its own, as before.
+    /// What each `session/prompt` said, in order.
+    fn prompted(k: &Kept) -> Vec<String> {
+        k.log()
+            .iter()
+            .filter(|line| line["method"] == "session/prompt")
+            .map(|line| line["params"]["prompt"][0]["text"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// A bot carries its ACP session on while the cache is warm, on the
+    /// process it kept: its persona goes once, and a turn after it is handed
+    /// its header and message.
     #[test]
-    fn a_bots_turns_each_launch_a_process() {
+    fn a_bots_warm_turns_carry_one_session_on() {
         let k = Kept::new("bot");
         k.say("one");
-        assert!(k.host.idle_since(&k.session).is_none());
-        assert!(!k.host.test_agents().running().contains(&k.session));
+        assert!(k.host.idle_since(&k.session).is_some(), "the bot's process went with its turn");
         k.say("two");
-        assert_eq!(k.launches().len(), 2, "{:?}", k.log());
-        assert_eq!((k.count("session/new"), k.count("session/load")), (2, 0));
+        assert_eq!(k.launches().len(), 1, "{:?}", k.log());
+        assert_eq!((k.count("session/new"), k.count("session/load")), (1, 0));
+        let prompts = prompted(&k);
+        assert!(prompts[0].contains("You are "), "{prompts:?}");
+        assert!(prompts[1].starts_with("## This turn (block ") && prompts[1].ends_with("two"), "{prompts:?}");
+        assert!(!prompts[1].contains("You are "), "{prompts:?}");
+    }
+
+    /// Should Cursor no longer have the session a bot carries on, the turn
+    /// opens a new one, with the persona and the tail it would have had.
+    #[test]
+    fn a_bot_whose_session_is_gone_starts_one_with_its_tail() {
+        let k = Kept::new("bot");
+        k.say("one");
+        let pid = k.host.test_agents().pid_of(&k.session).expect("process up");
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        k.until("the entry went", || k.host.lock().get(&k.session).is_none());
+        let name = k.log.file_name().unwrap().to_string_lossy().into_owned();
+        let tag = name.trim_start_matches("fake-cursor-").trim_end_matches(".log");
+        std::fs::remove_dir_all(k.log.with_file_name(format!("fake-cursor-{tag}-sessions"))).expect("rm");
+        k.say("two");
+        assert_eq!((k.count("session/new"), k.count("session/load")), (2, 1));
+        let last = prompted(&k).pop().expect("a prompt");
+        assert!(last.contains("You are ") && last.contains("## The conversation so far"), "{last}");
+        assert!(last.trim_end().ends_with("two"), "{last}");
     }
 
     /// The menu belongs to the session: a command Cursor announces on a later

@@ -739,6 +739,15 @@ pub fn set_provider_session(store: &Store, id: String, provider_session_id: Stri
     Ok(())
 }
 
+/// Lets go of the provider conversation a session carried on: its next turn starts another.
+pub fn clear_provider_session(store: &Store, id: &str) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("UPDATE sessions SET provider_session_id = NULL, updated_at = ?2 WHERE id = ?1")?
+            .execute(params![id, now_millis()])
+    })?;
+    Ok(())
+}
+
 /// The runtime owns this; the UI only renders whatever the last writer left.
 pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
     const KNOWN: [&str; 7] = ["starting", "idle", "working", "needs-input", "done", "error", "exited"];

@@ -2,8 +2,8 @@
 //! §7.3, as settled in §7e.4b).
 //!
 //! Three readers:
-//! - a bot, every turn (each turn is a fresh CLI): who it is, how its memory
-//!   works, who wrote this turn, how to hand off work, and Crew's tools;
+//! - a bot, at the start of each of its sessions (see [`crate::bot_episode`]):
+//!   who it is, how its memory works, who wrote this turn, how to hand off work, and Crew's tools;
 //! - a subagent a caller started with `delegate` (a child), on its first turn:
 //!   who started it, where its final message goes, and Crew's tools. Nothing
 //!   about how to do its job: Crew adds context and tools, it does not change
@@ -107,8 +107,9 @@ You are {name}, a bot in Crew, a desktop app that runs coding agents side by sid
 {description}{workspace}
 ### Your memory
 
-Each turn starts a new session. Crew hands you the latest part of this conversation; the rest is still there: \
-`read_session` with `query` searches it, with `around` reads it. Look there before asking the user something they \
+Crew carries your session on from one turn to the next while that is cheap, and starts a new one when it is not; a \
+new one opens with the latest part of this conversation. The rest is still there: `read_session` with `query` \
+searches it, with `around` reads it. Look there before asking the user something they \
 may have said. What other bots know, ask them.
 
 ### Your rules
@@ -302,7 +303,7 @@ fn listed(tools: &[&str]) -> String {
     tools.iter().map(|tool| format!("`{tool}`")).collect::<Vec<_>>().join(", ")
 }
 
-/// A bot, as Crew runs it every turn.
+/// A bot, as Crew starts each of its sessions.
 pub struct Bot<'a> {
     pub name: &'a str,
     pub id: &'a str,
@@ -667,7 +668,10 @@ mod tests {
         let blank = Workspace { name: "crew".into(), ..Workspace::default() };
         assert_eq!(workspace(Some(&blank)), "");
         let rules_only = Workspace { rules: vec![rule(1, "Never push.")], ..blank };
-        assert_eq!(workspace(Some(&rules_only)), "\n### Workspace crew\n\nRules for everyone who works here:\n\n[w1] Never push.\n");
+        assert_eq!(
+            workspace(Some(&rules_only)),
+            "\n### Workspace crew\n\nRules for everyone who works here:\n\n[w1] Never push.\n"
+        );
     }
 
     /// The bot's folder is one line under where it works, and nothing more.

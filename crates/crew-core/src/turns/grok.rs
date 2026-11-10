@@ -196,7 +196,7 @@ impl TurnHost {
         &self,
         session: crate::session::Session,
         params: crew_protocol::TurnStart,
-        history: Option<String>,
+        history: Option<super::Memory>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
         let (tx, turn_rx) = oneshot::channel();
@@ -214,19 +214,28 @@ impl TurnHost {
         let persona = self.persona(&session, Harness::Grok, mcp.is_some(), &params.cwd);
         let model = Some(session.model.as_str()).filter(|model| !model.is_empty()).map(str::to_string);
         let effort = Some(session.effort.as_str()).filter(|effort| !effort.is_empty()).map(str::to_string);
-        let texts = if carries {
-            Texts {
+        let files = path_list(&params, &HashSet::new());
+        let texts = match (carries, &history) {
+            // A bot carrying on its session: this turn's header over the
+            // message, or, should the provider not have the session any
+            // more, the persona and the tail as for a new one.
+            (true, Some(memory)) => Texts {
+                fresh: build_grok_prompt(persona.as_deref().unwrap_or_default(), Some(&memory.trail), &params.text, &files),
+                resumed: memory.headed(&self.child_prompt(None, true, &params)),
+            },
+            (true, None) => Texts {
                 fresh: self.child_prompt(persona.as_deref(), false, &params),
                 resumed: self.child_prompt(persona.as_deref(), true, &params),
+            },
+            (false, _) => {
+                let text = build_grok_prompt(
+                    persona.as_deref().unwrap_or_default(),
+                    history.as_ref().map(|memory| memory.trail.as_str()),
+                    &params.text,
+                    &files,
+                );
+                Texts { fresh: text.clone(), resumed: text }
             }
-        } else {
-            let text = build_grok_prompt(
-                persona.as_deref().unwrap_or_default(),
-                history.as_deref(),
-                &params.text,
-                &path_list(&params, &HashSet::new()),
-            );
-            Texts { fresh: text.clone(), resumed: text }
         };
         let process = match kept {
             Some(acp_session) => Ok(Process::Kept(acp_session)),
@@ -602,6 +611,7 @@ impl TurnHost {
         };
         let mut events = Vec::new();
         let mut outcome = None;
+        let mut usage = None;
         let waiter = {
             let mut map = self.lock();
             let Some(Live::Grok(live)) = map.get_mut(session_id) else {
@@ -611,6 +621,11 @@ impl TurnHost {
                 live.load_id = None;
             }
             if live.prompt_id == Some(id) {
+                if let Some(read) =
+                    answer.as_ref().ok().and_then(|result| result.pointer("/_meta/usage")).and_then(super::episode::grok_turn)
+                {
+                    usage = Some(read);
+                }
                 live.prompt_id = None;
                 if let Some(wire) = live.prompt_wire.take() {
                     remember_prompt(&mut live.settled_prompts, wire);
@@ -625,6 +640,9 @@ impl TurnHost {
                 live.calls.remove(&id)
             }
         };
+        if let Some(read) = usage {
+            self.cache_request_once(session_id, Some("grok-turn"), read);
+        }
         for event in events {
             self.transcripts.apply(session_id, event);
         }
@@ -779,6 +797,9 @@ impl TurnHost {
         // A prompt can finish on a notice while `session/prompt` stays open.
         // Both spellings, and a root `turn_completed` with the same id.
         if let Some(signal) = crate::providers::grok::prompt_signal(method, params) {
+            if let Some(read) = params.pointer("/update/usage").and_then(super::episode::grok_turn) {
+                self.cache_request_once(session_id, Some("grok-turn"), read);
+            }
             self.grok_prompt_notice(session_id, &signal);
             return;
         }
@@ -1087,7 +1108,12 @@ def run(rid, sid, text, turn):
     convo.append({"user": text, "agent": reply})
     save(sid, convo)
     state["turn"] = None
-    out({"id": rid, "result": {"stopReason": "end_turn"}})
+    # The turn's usage, one call each: the conversation grows 3000 a turn, and
+    # all of it but this turn's own is cached, unless the prompt says COLD.
+    n = len(convo)
+    total = 2000 + 3000 * n
+    usage = {"inputTokens": total, "cachedReadTokens": 0 if ("COLD" in text or n == 1) else total - 3000, "cacheCreationTokens": 0, "modelCalls": 1}
+    out({"id": rid, "result": {"stopReason": "end_turn", "_meta": {"usage": usage}}})
 for line in sys.stdin:
     try: m = json.loads(line)
     except Exception: continue
@@ -1176,6 +1202,10 @@ mod tests {
 
     impl Kept {
         fn child() -> Self {
+            Self::new("terminal")
+        }
+
+        fn new(kind: &str) -> Self {
             let host = TurnHost::test_new();
             host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
             let dir = std::env::temp_dir().join(format!("crew-grok-{}", uuid::Uuid::new_v4()));
@@ -1185,7 +1215,7 @@ mod tests {
             let session = crate::session::create(
                 host.test_store(),
                 workspace,
-                "terminal".into(),
+                kind.into(),
                 "shell".into(),
                 "grok".into(),
                 "grok-4.5".into(),
@@ -1636,5 +1666,38 @@ mod tests {
         assert_eq!(status, &Some(ToolStatus::Failed));
         let Some(crew_protocol::ToolDetail::Mcp { output, .. }) = detail else { panic!("{detail:?}") };
         assert_eq!(output.as_deref(), Some("Tool not found: demo__echo"));
+    }
+
+    /// Grok publishes no cache lifetime: a bot's window is learned from what
+    /// its turns read. A small conversation carried on past the window that
+    /// finds the cache warm says it lasts that long; one carried on within it
+    /// that finds it cold says it lasts less.
+    #[test]
+    fn a_grok_bot_learns_how_long_its_cache_stays_warm() {
+        let k = Kept::new("bot");
+        let store = k.host.test_store();
+        let age = |idle_ms: i64| {
+            let mut episode = crate::bot_episode::get(store, &k.session).expect("read").expect("an episode");
+            episode.last_request_at -= idle_ms;
+            crate::bot_episode::put(store, &episode).expect("put");
+        };
+        k.say("one");
+        k.say("two");
+        assert_eq!(k.count("session/new"), 1, "{:?}", k.log());
+        let episode = crate::bot_episode::get(store, &k.session).expect("read").expect("an episode");
+        // No context reading: the last call's input is the estimate.
+        assert_eq!((episode.context_used, episode.base_read), (Some(8000), Some(0)));
+        assert_eq!(crate::bot_episode::learned(store, "grok", "grok-4.5"), None, "a warm carry within the window");
+
+        age(20 * 60_000);
+        k.say("three");
+        assert_eq!(k.count("session/new"), 1, "a small episode carries on cold");
+        let learned = crate::bot_episode::learned(store, "grok", "grok-4.5").expect("a window");
+        assert!((20 * 60_000..21 * 60_000).contains(&learned), "{learned}");
+
+        age(10 * 60_000);
+        k.say("COLD four");
+        let learned = crate::bot_episode::learned(store, "grok", "grok-4.5").expect("a window");
+        assert!((10 * 60_000..11 * 60_000).contains(&learned), "{learned}");
     }
 }

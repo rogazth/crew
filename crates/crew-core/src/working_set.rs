@@ -1,8 +1,6 @@
-//! The conversation the model is shown at the top of every turn.
-//!
-//! A turn starts a clean provider session, so this is the only memory a bot
-//! has of what it already did. It renders the tail of the transcript the way
-//! the chat renders it folded — text as text, a tool as the one line it did,
+//! The conversation a bot is shown when its turn starts a provider session
+//! (see [`crate::bot_episode`]): its only memory of what it already did. It
+//! renders the tail of the transcript the way the chat renders it folded — text as text, a tool as the one line it did,
 //! never its output — and stops at a whole block when the budget runs out.
 //!
 //! A message the user typed says its block number, and so does the header of

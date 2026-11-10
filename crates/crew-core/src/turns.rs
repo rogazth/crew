@@ -38,6 +38,7 @@ use crate::working_set;
 
 mod codex;
 mod cursor;
+mod episode;
 mod grok;
 mod mcp;
 mod naming;
@@ -49,6 +50,7 @@ use codex::CodexLive;
 use cursor::CursorLive;
 #[cfg(test)]
 pub(crate) use cursor::{fake_cursor, ACP_NOTE as CURSOR_ACP_NOTE};
+use episode::{EpisodeTurn, Memory};
 use grok::GrokLive;
 #[cfg(test)]
 pub(crate) use opencode::fake_opencode_server;
@@ -132,6 +134,9 @@ pub(crate) fn batch_remaining(oldest: i64, newest: i64, now: i64, wait: i64, max
     (newest + wait).min(oldest + max) - now
 }
 
+/// What Claude Code reads for the main conversation's cache lifetime.
+const CACHE_TTL_ENV: &str = "CLAUDE_CODE_PROMPT_CACHE_TTL";
+
 const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 600 });
 /// How long a session's process stays up with no turn on it before it is let
 /// go. A process holds its CLI and its MCP servers in memory; the next message
@@ -166,8 +171,9 @@ const EDIT_TOOLS: [&str; 6] = ["edit", "write", "multiedit", "notebookedit", "fi
 /// Who a session's turns are for, and so how Crew drives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Driven {
-    /// A bot: every turn is a clean provider session with the tail Crew hands
-    /// it, under a persona.
+    /// A bot: it carries on one provider session while that is cheaper than
+    /// starting another (see [`crate::bot_episode`]), and otherwise starts a
+    /// clean one with the tail Crew hands it, under a persona.
     Bot,
     /// A subagent: it carries on the provider's own conversation, under a
     /// persona that says who started it.
@@ -176,14 +182,6 @@ enum Driven {
     /// over the provider's protocol. It carries on the provider's own
     /// conversation and is told nothing their CLI would not be.
     User,
-}
-
-impl Driven {
-    /// Whether the provider's own store carries the conversation from turn to
-    /// turn: the next one resumes it by its provider id and is handed no tail.
-    fn carries_conversation(self) -> bool {
-        self != Driven::Bot
-    }
 }
 
 /// How Crew drives `session`, if it does. The one place that says which sessions are driven; the checks that mean
@@ -245,24 +243,29 @@ fn dispatch_of(params: &TurnStart) -> Option<mailbox::Dispatch> {
 /// What `begin` answers when the session has a turn already.
 const ALREADY_RUNNING: &str = "Turn already running";
 
-/// Whether `session` carries on the provider's own conversation.
+/// Whether `session` carries on the provider's own conversation: the next
+/// turn resumes it by its provider id and is handed no tail. A bot does while
+/// it holds one; the start of a turn lets go of it when the episode is cut
+/// ([`TurnHost::bot_episode_start`]).
 fn carries_conversation(session: &crate::session::Session) -> bool {
-    driven(session).is_some_and(Driven::carries_conversation)
+    match driven(session) {
+        Some(Driven::Bot) => session.provider_session_id.as_deref().is_some_and(|id| !id.is_empty()),
+        Some(Driven::Child | Driven::User) => true,
+        None => false,
+    }
 }
 
-/// The provider conversation a session carries on, once its first turn bound
-/// one. A bot never resumes: its memory is the tail Crew hands it.
+/// The provider conversation a session carries on, once its first turn bound one.
 fn conversation_to_resume(session: &crate::session::Session) -> Option<String> {
     carries_conversation(session).then(|| session.provider_session_id.clone()).flatten().filter(|id| !id.is_empty())
 }
 
-/// Whether the process a turn ran on stays up for the session's next one.
-/// Only a session that carries the provider's conversation keeps it: a bot
-/// starts a clean provider session every turn, with the tail Crew hands it,
-/// so a process kept for it would carry nothing it may use. This is the one
-/// place that says so.
+/// Whether the process a turn ran on stays up for the session's next one:
+/// every session Crew drives keeps it. A bot's goes when its cache's window
+/// closes ([`TurnHost::release_idle`]), or when its next turn cuts the
+/// episode. This is the one place that says so.
 fn keeps_process(session: &crate::session::Session) -> bool {
-    carries_conversation(session)
+    driven(session).is_some()
 }
 
 /// Names one CLI process, so a timer or a watcher armed for it can tell when
@@ -823,6 +826,11 @@ pub struct TurnHost {
     /// Sessions whose process is up with no turn on it, since when. Apart from
     /// the process entries so the drivers' match arms do not all change.
     idle: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Each bot's running turn, as its episode sees it (see [`episode`]).
+    episode_turns: Arc<Mutex<HashMap<String, EpisodeTurn>>>,
+    /// How long each bot's cache stays warm after its last turn: its idle
+    /// process goes then.
+    bot_windows: Arc<Mutex<HashMap<String, Duration>>>,
     /// Sessions whose running turn is being stopped to send the user's letter
     /// at the head of the queue: the end of that stop hands the queue over
     /// instead of holding it.
@@ -883,6 +891,8 @@ impl TurnHost {
             usage,
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
+            episode_turns: Arc::new(Mutex::new(HashMap::new())),
+            bot_windows: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
             settling: Arc::new(Mutex::new(HashSet::new())),
             naming: Arc::default(),
@@ -1294,7 +1304,6 @@ impl TurnHost {
         let Some(drive) = driven(&session) else {
             return Err(format!("{} is not a session Crew drives.", session.name));
         };
-        let carries = drive.carries_conversation();
         if drive == Driven::Child && session.status == "exited" {
             return Err("This session has exited. Start another one.".into());
         }
@@ -1315,19 +1324,31 @@ impl TurnHost {
         if drive == Driven::Child {
             self.note_starter(&params, &letters);
         }
-        if drive == Driven::Bot {
+        let mut cut = None;
+        let session = if drive == Driven::Bot {
             // A bot's persona must not see the user's commands or skills.
             params.command = None;
             params.skills = None;
-        }
+            // Carried on or cut here, before anything asks whether it carries.
+            let (session, cutting) = self.bot_episode_start(session, &params.cwd);
+            cut = cutting;
+            session
+        } else {
+            session
+        };
+        let carries = carries_conversation(&session);
         // Read before the new message is appended: the tail is what the bot
-        // is reminded of, and this turn is not history yet. A session that
-        // carries on its provider's own conversation is handed none.
-        let trail = (!carries).then(|| {
+        // is reminded of, and this turn is not history yet. A bot's is read
+        // even when it carries on, for a provider that turns out not to hold
+        // the conversation any more. Any other session is handed none.
+        let trail = (drive == Driven::Bot).then(|| {
             self.transcripts.read(&params.session_id, |blocks| {
                 working_set::history(blocks, crate::prompts::Harness::for_provider(&session.provider))
             })
         });
+        if let Some(message) = cut.as_ref().and_then(crate::bot_episode::Cut::note) {
+            self.transcripts.apply(&params.session_id, HarnessEvent::SessionNote { message });
+        }
         // Each letter is a block of its own; otherwise the turn's text is one.
         let appended = letters.len().max(1);
         let hidden = params.hidden.unwrap_or(false);
@@ -1401,7 +1422,7 @@ impl TurnHost {
                     params.text = mailbox::envelope(
                         &from,
                         &params.text,
-                        (!carries).then(|| params.sent_at.unwrap_or_else(crate::store::now_millis)),
+                        (!carries || drive == Driven::Bot).then(|| params.sent_at.unwrap_or_else(crate::store::now_millis)),
                         session.parent_id.as_deref(),
                     );
                 }
@@ -1418,7 +1439,8 @@ impl TurnHost {
         // took, numbered as the trail's messages are.
         let history = trail.map(|trail| {
             let last = self.transcripts.len(&params.session_id);
-            working_set::with_turn(trail, (last + 1).saturating_sub(appended).max(1), last)
+            let first = (last + 1).saturating_sub(appended).max(1);
+            Memory { trail: working_set::with_turn(trail, first, last), header: working_set::with_turn(None, first, last) }
         });
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
@@ -1559,14 +1581,15 @@ impl TurnHost {
     }
 
     fn reload_claude(&self, session: &session::Session, cwd: &str) -> Result<String, String> {
+        // A bot runs without the user's settings, so there is nothing of theirs to read again.
+        if session.kind == "bot" {
+            return Ok("A bot reads its commands and skills when its session starts.".into());
+        }
         let up = match self.lock().get(&session.id) {
             Some(Live::Claude(live)) => Some(live.menu_cwd.clone()),
             _ => None,
         };
         let Some(menu_cwd) = up else {
-            if session.kind == "bot" {
-                return Ok("A bot reads its commands and skills afresh with each turn.".into());
-            }
             self.probe_claude_commands(&session.id, cwd, true)?;
             return Ok(self.reloaded("Read the commands and skills again", "claude", cwd));
         };
@@ -2416,7 +2439,7 @@ impl TurnHost {
         let mut released = Vec::new();
         for (id, since) in idle {
             let age = since.elapsed();
-            let due = age >= pin_cap || (age >= limit && !self.is_pinned(&id));
+            let due = age >= pin_cap || (age >= self.idle_limit(&id, limit) && !self.is_pinned(&id));
             // A turn claimed since the snapshot is not idle any more.
             if !due || self.is_running(&id) || self.idle_since(&id) != Some(since) {
                 continue;
@@ -2505,7 +2528,7 @@ impl TurnHost {
         }
     }
 
-    fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
+    fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<Memory>, carried: Vec<String>) {
         let row = session.clone();
         // A span is per thread, and a line holds only its innermost span's
         // fields: what this thread logs directly carries the turn's ids, but
@@ -2533,6 +2556,10 @@ impl TurnHost {
     /// of the one ending, starts its own watch here.
     fn finish_turn(&self, row: crate::session::Session, outcome: TurnOutcome, carried: Vec<String>) {
         let session_id = row.id.clone();
+        // Written before the turn leaves `running`: the next one decides on it.
+        if driven(&row) == Some(Driven::Bot) {
+            self.bot_episode_end(&row, &outcome);
+        }
         // The CLI is gone, unless the session kept it for its next turn: then
         // what it left running in the background still runs.
         if self.idle_since(&session_id).is_none() {
@@ -3149,7 +3176,7 @@ impl TurnHost {
         }
     }
 
-    fn run_claude(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) -> TurnOutcome {
+    fn run_claude(&self, session: crate::session::Session, params: TurnStart, history: Option<Memory>) -> TurnOutcome {
         let outcome = self.claude_turn(&session, &params, history);
         self.claude_turn_ended(&session, &outcome);
         outcome
@@ -3199,8 +3226,6 @@ impl TurnHost {
     /// its message goes in as a steer of it would; one whose message is
     /// written already is running, and the CLI's turn is read as its own.
     fn adopt_claude_turn(&self, session_id: &str, epoch: u64) {
-        // A bot's process goes with its turn: what it would start after its
-        // result is nobody's.
         let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) else {
             return;
         };
@@ -3291,7 +3316,7 @@ impl TurnHost {
 
     /// The turn itself, on a process armed and launched for it: the user
     /// message goes in, and the outcome is what the process says of it.
-    fn claude_turn(&self, session: &crate::session::Session, params: &TurnStart, history: Option<String>) -> TurnOutcome {
+    fn claude_turn(&self, session: &crate::session::Session, params: &TurnStart, history: Option<Memory>) -> TurnOutcome {
         let session_id = session.id.clone();
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
@@ -3341,9 +3366,12 @@ impl TurnHost {
         let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
         let files = path_list(params, &inline);
+        // A bot that carries on its session is handed this turn's header
+        // alone; one that starts a session, the tail too.
+        let history = history.as_ref().map(|memory| memory.for_turn(carries_conversation(session)));
         let message = build_claude_dispatch_message(
             &claude_session_id,
-            history.as_deref(),
+            history,
             params.text.trim(),
             &files,
             &images,
@@ -3542,8 +3570,8 @@ impl TurnHost {
             Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
             _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         };
-        // A bot's process goes with its turn, and what it ran in the
-        // background with it: the turn waits for that work instead.
+        // A bot's turn waits for what it ran in the background, as a child's
+        // does: a cut lets the process go before the next one.
         let waits_for_background = matches!(driven(session), Some(Driven::Child | Driven::Bot));
         self.lock().insert(
             session_id.to_string(),
@@ -3649,7 +3677,8 @@ impl TurnHost {
             resume,
             // A steer is matched by its echo, for a bot as for a child.
             replay_user_messages: true,
-            asks_questions: carries_conversation(session),
+            // A bot asks nobody: who wrote to it may not be there to answer.
+            asks_questions: driven(session) != Some(Driven::Bot),
             system_prompt: persona,
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, &connectors)),
@@ -3679,6 +3708,12 @@ impl TurnHost {
                 let mut env = self.agent_env(&session_id);
                 env.insert("CLAUDE_CODE_ARTIFACT".into(), "1".into());
                 env.insert("CLAUDE_CODE_ENTRYPOINT".into(), crate::providers::claude::ENTRYPOINT.into());
+                // A bot's next message often comes minutes later: an hour's
+                // cache carries its episode on where five minutes would not.
+                // A subscription has it already; this asks it of an API key too.
+                if session.kind == "bot" {
+                    env.insert(CACHE_TTL_ENV.into(), "1h".into());
+                }
                 env
             }),
         )?;
@@ -4127,6 +4162,9 @@ impl TurnHost {
                     if let Some((id, tokens)) = assistant_context(&rec).filter(|(id, _)| *id != live.context_message) {
                         live.context_message = id;
                         used = Some(tokens);
+                        if let Some(read) = episode::claude_request(&rec) {
+                            self.cache_request(session_id, read);
+                        }
                     }
                 }
             } else if type_name.as_deref() == Some("user") {
@@ -5038,22 +5076,65 @@ mod mailbox_tests {
         assert_eq!(mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"), 0);
     }
 
-    /// The turn is the whole prompt: every turn is a new provider session, so
-    /// nothing a bot knows survives except what Crew hands it back. Its
-    /// session goes when its turn ends; Crew keeps the transcript.
+    /// Ages a bot's episode as if `idle_ms` had passed since its last request,
+    /// with `used` tokens of context.
+    fn age_episode(world: &World, id: &str, idle_ms: i64, used: u64) {
+        let store = world.host.test_store();
+        let mut episode = crate::bot_episode::get(store, id).expect("read").expect("an episode");
+        episode.last_request_at -= idle_ms;
+        episode.context_used = Some(used);
+        crate::bot_episode::put(store, &episode).expect("put");
+    }
+
+    /// A bot's next message while its cache is warm carries its provider
+    /// session on: the conversation is the provider's, so the turn is handed
+    /// only its header and message, and the persona is not given again.
     #[test]
-    fn a_second_turn_is_handed_the_first_one() {
+    fn a_bots_warm_second_turn_carries_its_session_on() {
         let world = world();
         let ws = workspace(&world);
         let coder = bot(&world, &ws, "Coder");
 
         turn(&world, &coder, "el parser se cae con tabs");
+        settle(&world, &coder.id);
+        let first = launches(&world)[0].clone();
+        assert!(first["system"].as_str().unwrap().starts_with("## Crew bot\n\nYou are Coder,"), "{first}");
+        let episode = crate::bot_episode::get(world.host.test_store(), &coder.id).expect("read").expect("an episode");
+        assert_eq!((episode.turns, episode.failed, episode.provider.as_str()), (1, false, "opencode"));
+
+        turn(&world, &coder, "y ahora?");
+        settle(&world, &coder.id);
+        let second = launches(&world)[1].clone();
+        assert_eq!(first["session"], second["session"], "a warm bot's turn started a new session");
+        assert_eq!(second["resumed"], json!(true), "{second}");
+        assert_eq!(second["prompt"].as_str().unwrap(), "## This turn (block 3)\n\ny ahora?", "{second}");
+        let episode = crate::bot_episode::get(world.host.test_store(), &coder.id).expect("read").expect("an episode");
+        assert_eq!(episode.turns, 2);
+        assert!(!blocks(&world, &coder.id).iter().any(|block| block.text.starts_with("New session")));
+    }
+
+    /// The turn is the whole prompt when an episode is cut: a new provider
+    /// session knows nothing a bot did except what Crew hands it back. The
+    /// last session goes; Crew keeps the transcript, and the chat says why.
+    #[test]
+    fn a_second_turn_after_a_cut_is_handed_the_first_one() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = bot(&world, &ws, "Coder");
+
+        turn(&world, &coder, "el parser se cae con tabs");
+        settle(&world, &coder.id);
         let first = launches(&world)[0].clone();
         assert!(!first["prompt"].as_str().unwrap().contains("## The conversation so far"), "{first}");
 
+        // Two hours idle with 80k tokens: cold, and too large to write again.
+        age_episode(&world, &coder.id, 2 * 3_600_000, 80_000);
         turn(&world, &coder, "y ahora?");
+        settle(&world, &coder.id);
         let second = launches(&world)[1].clone();
-        assert_ne!(first["session"], second["session"], "a bot's turn carried on its last session");
+        assert_ne!(first["session"], second["session"], "a cut bot's turn carried on its last session");
+        let note = blocks(&world, &coder.id).into_iter().find(|block| block.text.starts_with("New session")).expect("a note");
+        assert!(note.text.contains("the cache went cold after 2 hours idle, with 80k tokens"), "{}", note.text);
         let log =
             world.dir.read_dir().unwrap().flatten().map(|entry| entry.path()).find(|path| {
                 path.extension().is_some_and(|ext| ext == "log") && path.to_string_lossy().contains("fake-opencode-")
@@ -5069,6 +5150,7 @@ mod mailbox_tests {
         assert!(system.contains("### Your rules\n"), "the rules are on every turn: {system}");
         assert!(prompt.contains("· user] el parser se cae con tabs"), "{prompt}");
         assert!(prompt.contains("· you] report: el parser se cae con tabs"), "the reply is in the tail too: {prompt}");
+        assert!(!prompt.contains("New session"), "the note is the chat's, not the tail's: {prompt}");
         assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
         assert!(prompt.find("· user] el parser").unwrap() < prompt.find("## This turn").unwrap(), "{prompt}");
         // A bot has nobody to put a question to, and Crew's tools never ask.
@@ -5091,10 +5173,24 @@ mod mailbox_tests {
         let prompt = first["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("## This turn (block 1)\n\nnunca hagas push a master"), "{prompt}");
 
+        // Carried on, the turn is handed its header alone, with the same number.
         turn(&world, &probe, "y corre los tests");
         settle(&world, &probe.id);
         let second = launches(&world)[1].clone();
-        let prompt = second["prompt"].as_str().unwrap().to_string();
+        let rows = blocks(&world, &probe.id);
+        let carried = second["prompt"].as_str().unwrap();
+        let header = carried
+            .strip_prefix("## This turn (block ")
+            .and_then(|rest| rest.split(')').next())
+            .unwrap_or_else(|| panic!("{carried}"));
+        assert_eq!(rows[header.parse::<usize>().unwrap() - 1].text, "y corre los tests", "{carried}");
+
+        // Cut, under the trail too.
+        age_episode(&world, &probe.id, 2 * 3_600_000, 80_000);
+        turn(&world, &probe, "y corre los tests");
+        settle(&world, &probe.id);
+        let third = launches(&world)[2].clone();
+        let prompt = third["prompt"].as_str().unwrap().to_string();
         let rows = blocks(&world, &probe.id);
         assert_eq!(prompt.matches("## This turn").count(), 1, "{prompt}");
         let header = prompt.split("## This turn (block ").nth(1).expect("the header").split(')').next().unwrap();
@@ -5297,18 +5393,38 @@ mod mailbox_tests {
         let dir = std::env::temp_dir().join(format!("profile-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("dir");
         let ws = crate::workspace::create(store, "shop".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
-        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
-            .expect("bot");
-        let child =
-            crate::session::create_child(store, ws.clone(), "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
-                .expect("child");
+        let bot = crate::session::create(
+            store,
+            ws.clone(),
+            "bot".into(),
+            "B".into(),
+            "claude".into(),
+            "".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("bot");
+        let child = crate::session::create_child(
+            store,
+            ws.clone(),
+            "C".into(),
+            "claude".into(),
+            "".into(),
+            "ask".into(),
+            None,
+            Some(bot.id.clone()),
+        )
+        .expect("child");
         let cwd = dir.to_string_lossy().into_owned();
         assert!(!host.persona(&bot, Harness::Mcp, true, &cwd).unwrap().contains("### Workspace"));
 
         crate::workspace::set_description(store, &ws, "The client's shop.").unwrap();
         let owner = crate::rules::Owner::Workspace(&ws);
-        crate::rules::apply(store, owner, vec![crate::rules::Change::Add { body: "Never deploy on Fridays".into() }]).unwrap().unwrap();
-        let section = "### Workspace shop\n\nThe client's shop.\n\nRules for everyone who works here:\n\n[w1] Never deploy on Fridays\n";
+        crate::rules::apply(store, owner, vec![crate::rules::Change::Add { body: "Never deploy on Fridays".into() }])
+            .unwrap()
+            .unwrap();
+        let section =
+            "### Workspace shop\n\nThe client's shop.\n\nRules for everyone who works here:\n\n[w1] Never deploy on Fridays\n";
         let told = host.persona(&bot, Harness::Mcp, true, &cwd).unwrap();
         assert!(told.contains(section), "{told}");
         let child_told = host.persona(&child, Harness::Mcp, true, &cwd).unwrap();

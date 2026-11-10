@@ -322,9 +322,7 @@ impl SessionTools {
     fn peer_status(&self, caller: &Caller, row: &Session) -> String {
         match row.status.as_str() {
             "needs-input" if self.pending_question(row).is_some() => "question".into(),
-            "needs-input" if self.pending_approval(row).is_some() && Self::acts_on(caller, row) => {
-                "approval".into()
-            }
+            "needs-input" if self.pending_approval(row).is_some() && Self::acts_on(caller, row) => "approval".into(),
             "needs-input" => "waiting_for_user".into(),
             "starting" => "working".into(),
             "done" => "idle".into(),
@@ -700,9 +698,10 @@ impl SessionTools {
         };
         self.store.user_asked(&me.id, &target.id, "approval", &format!("{} wants to run: {title}", target.name));
         let why = text.map(str::trim).filter(|text| !text.is_empty()).map(|text| format!(". {text}")).unwrap_or_default();
-        self.turns
-            .transcripts()
-            .apply(&target.id, crew_protocol::HarnessEvent::SessionNote { message: format!("{} asked the user: {title}{why}", me.name) });
+        self.turns.transcripts().apply(
+            &target.id,
+            crew_protocol::HarnessEvent::SessionNote { message: format!("{} asked the user: {title}{why}", me.name) },
+        );
         self.saw(caller, target, target.cursor);
         Ok(json!({
             "to": target.name,
@@ -2360,7 +2359,13 @@ impl ToolFamily for SessionTools {
                 if !live.is_empty() {
                     note.push_str(&format!(
                         "{}Subagents you started: {}.",
-                        if note.is_empty() { "" } else if matches!(caller, Caller::Terminal(_)) { "\n\n" } else { " " },
+                        if note.is_empty() {
+                            ""
+                        } else if matches!(caller, Caller::Terminal(_)) {
+                            "\n\n"
+                        } else {
+                            " "
+                        },
                         live.iter()
                             .map(|row| format!("{} {} ({}, {})", row.name, row.id, row.provider, self.peer_status(caller, row)))
                             .collect::<Vec<_>>()
@@ -2449,7 +2454,7 @@ CONTROL = os.path.join(HERE, "claude-control.log")
 LAUNCH = os.path.join(HERE, "claude-launch.log")
 INPUT = os.path.join(HERE, "claude-input.log")
 MCP = os.path.join(HERE, "claude-mcp.log")
-with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", "")}}) + "\n")
+with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", ""), "CLAUDE_CODE_PROMPT_CACHE_TTL": os.environ.get("CLAUDE_CODE_PROMPT_CACHE_TTL", "")}}) + "\n")
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
 replay = "--replay-user-messages" in args
 spare = [False]
@@ -3267,13 +3272,18 @@ while True:
         assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
     }
 
-    /// A bot starts a clean provider session every turn, so each turn gets its
-    /// own process and it is gone when the turn ends.
-    #[test]
-    fn a_claude_bot_launches_once_for_each_turn() {
-        let w = world();
+    /// Ages a bot's episode as if `idle_ms` had passed since its last request,
+    /// with `used` tokens of context.
+    fn age_episode(w: &World, id: &str, idle_ms: i64, used: u64) {
+        let mut episode = crate::bot_episode::get(w.turns.store(), id).expect("read").expect("an episode");
+        episode.last_request_at -= idle_ms;
+        episode.context_used = Some(used);
+        crate::bot_episode::put(w.turns.store(), &episode).expect("put");
+    }
+
+    fn claude_bot(w: &World) -> Session {
         w.turns.override_binary("claude", fake_claude(&w.dir));
-        let bot = session::create(
+        session::create(
             w.turns.store(),
             w.workspace.clone(),
             "bot".into(),
@@ -3283,37 +3293,92 @@ while True:
             String::new(),
             "full".into(),
         )
-        .expect("bot");
-        for text in ["one", "two"] {
-            w.turns
-                .start(TurnStart {
-                    session_id: bot.id.clone(),
-                    cwd: w.dir.to_string_lossy().into_owned(),
-                    text: text.into(),
-                    files: None,
-                    mentions: None,
-                    hidden: None,
-                    from_bot: None,
-                    sent_at: None,
-                    nonce: None,
-                    letter_id: None,
-                    mode: None,
-                    command: None,
-                    skills: None,
-                })
-                .expect("start");
-            w.settle(&bot.id);
-            assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
-            assert!(w.turns.idle_since(&bot.id).is_none());
-        }
-        let launches = launched(&w.dir.join("claude-launch.log"));
-        assert_eq!(launches.len(), 2, "{launches:?}");
-        assert!(launches.iter().all(|launch| after_flag(launch, "--resume").is_none()), "{launches:?}");
+        .expect("bot")
     }
 
-    /// A bot's process goes with its turn, so the turn waits for what it left
-    /// running in the background, as a child's does: the CLI wakes on it, and
-    /// what the bot says then ends the turn and lets the process go.
+    /// A bot carries its provider session on while the cache is warm: one
+    /// process for both turns, kept between them, on an hour's cache.
+    #[test]
+    fn a_claude_bot_carries_its_session_on_while_its_cache_is_warm() {
+        let w = world();
+        let bot = claude_bot(&w);
+        for text in ["one", "two"] {
+            w.type_to(&bot, text, None, None);
+            w.settle(&bot.id);
+            assert!(w.turns.idle_since(&bot.id).is_some(), "the bot's process went with its turn");
+        }
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 1, "{launches:?}");
+        assert!(after_flag(&launches[0], "--resume").is_none(), "{launches:?}");
+        assert_eq!(launches[0]["env"]["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h", "{launches:?}");
+        let episode = crate::bot_episode::get(w.turns.store(), &bot.id).expect("read").expect("an episode");
+        assert_eq!(episode.turns, 2);
+    }
+
+    /// Cold and large, an episode is cut: a new process on a new
+    /// conversation, and the chat says why. Cold and small, it carries on,
+    /// from Claude's own file when its process is gone; with the file gone
+    /// too, it is cut.
+    #[test]
+    fn a_claude_bot_cuts_a_cold_large_episode_and_resumes_a_cold_small_one() {
+        let w = world();
+        let bot = claude_bot(&w);
+        let log = w.dir.join("claude-launch.log");
+        let notes = |w: &World| -> Vec<String> {
+            w.blocks(&bot.id).into_iter().map(|block| block.text).filter(|text| text.starts_with("New session")).collect()
+        };
+        w.type_to(&bot, "one", None, None);
+        w.settle(&bot.id);
+        let first = w.row(&bot.id).provider_session_id.expect("a conversation");
+
+        age_episode(&w, &bot.id, 2 * 3_600_000, 80_000);
+        w.type_to(&bot, "two", None, None);
+        w.settle(&bot.id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert!(after_flag(&launches[1], "--resume").is_none(), "{launches:?}");
+        let second = w.row(&bot.id).provider_session_id.expect("a conversation");
+        assert_ne!(first, second);
+        assert_eq!(notes(&w), ["New session: the cache went cold after 2 hours idle, with 80k tokens to write again."]);
+
+        // Its process let go, small and cold: it carries on from the file.
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![bot.id.clone()]);
+        w.claude_wrote(&second);
+        age_episode(&w, &bot.id, 2 * 3_600_000, 10_000);
+        w.type_to(&bot, "three", None, None);
+        w.settle(&bot.id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 3, "{launches:?}");
+        assert_eq!(after_flag(&launches[2], "--resume").as_deref(), Some(second.as_str()), "{launches:?}");
+        assert_eq!(notes(&w).len(), 1);
+
+        // The file gone, there is nothing to carry on.
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![bot.id.clone()]);
+        std::fs::remove_dir_all(w.dir.join("home")).expect("rm");
+        w.type_to(&bot, "four", None, None);
+        w.settle(&bot.id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 4, "{launches:?}");
+        assert!(after_flag(&launches[3], "--resume").is_none(), "{launches:?}");
+        assert_eq!(notes(&w).last().map(String::as_str), Some("New session: the provider no longer has the last one."));
+    }
+
+    /// A bot's idle process goes when its cache's window closes, not after
+    /// the half hour any other session's is kept.
+    #[test]
+    fn a_bots_idle_process_goes_with_its_cache() {
+        let w = world();
+        let bot = claude_bot(&w);
+        w.type_to(&bot, "one", None, None);
+        w.settle(&bot.id);
+        assert!(w.turns.release_idle(Duration::from_secs(3600), Duration::from_secs(7200)).is_empty());
+        // The fake writes no cache, so the window is five minutes less the margin.
+        assert_eq!(w.turns.idle_limit(&bot.id, Duration::from_secs(3600)), Duration::from_secs(240));
+    }
+
+    /// A bot's turn waits for what it left running in the background, as a
+    /// child's does: the CLI wakes on it, and what the bot says then ends the
+    /// turn. The process stays for the next one.
     #[test]
     fn a_claude_bot_turn_waits_for_what_it_left_running_in_the_background() {
         let w = world();
@@ -3350,7 +3415,7 @@ while True:
             said(&w),
             ["started it in the background", "report: hello?", "report: BACKGROUND 1.5 + the background command finished"]
         );
-        assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
+        assert!(w.turns.idle_since(&bot.id).is_some(), "the bot's process went with its turn");
     }
 
     /// A `result` that comes while no turn runs belongs to none: it ends
@@ -4071,7 +4136,7 @@ time.sleep(600)
         assert!(said.contains(&"Read the commands and skills again: 1 command, 1 skill.".to_string()), "{said:?}");
     }
 
-    /// A bot reads its folder afresh with each turn, so a reload has nothing
+    /// A bot reads its folder when its session starts, so a reload has nothing
     /// to read and starts nothing; a CLI that lists nothing says it does so
     /// when the session restarts.
     #[test]
@@ -4092,7 +4157,7 @@ time.sleep(600)
         .id;
         let menu = w.turns.commands_reload(&bot).expect("reload");
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
-        assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
+        assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills when its session starts."));
 
         for (provider, head) in [("cursor", "Cursor reads"), ("grok", "Grok reads")] {
             let id = session::create(
@@ -4642,10 +4707,10 @@ time.sleep(600)
         assert_eq!(sent(&log, "thread/resume").len(), 1);
     }
 
-    /// A bot starts a clean provider session every turn, so each turn gets its
-    /// own process and it is gone when the turn ends.
+    /// A bot carries its thread on while the cache is warm, on the process it
+    /// kept, and starts a new one when the episode is cut.
     #[test]
-    fn a_codex_bot_launches_once_for_each_turn() {
+    fn a_codex_bot_carries_its_thread_on_until_the_episode_is_cut() {
         let w = world();
         let (fake, log) = crate::turns::fake_codex(&w.dir);
         w.turns.override_binary("codex", fake);
@@ -4679,13 +4744,25 @@ time.sleep(600)
                 })
                 .expect("start");
             w.settle(&bot.id);
-            assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
-            assert!(w.turns.idle_since(&bot.id).is_none());
+            assert!(w.turns.idle_since(&bot.id).is_some(), "the bot's process went with its turn");
         }
+        assert_eq!(launched(&log).len(), 1);
+        assert_eq!(sent(&log, "thread/start").len(), 1);
+        assert_eq!(sent(&log, "turn/start").len(), 2);
+        // The persona goes with every turn; Codex keeps one copy of what does not change.
+        let carried = sent(&log, "turn/start")[1].clone();
+        let text = carried["input"][0]["text"].as_str().unwrap_or_default().to_string();
+        assert!(text.starts_with("## This turn (block 3)"), "{carried}");
+        assert!(!text.contains("## The conversation so far"), "{carried}");
+
+        age_episode(&w, &bot.id, 2 * 3_600_000, 80_000);
+        w.type_to(&bot, "three", None, None);
+        w.settle(&bot.id);
         assert_eq!(launched(&log).len(), 2);
         assert_eq!(sent(&log, "thread/start").len(), 2);
         assert!(sent(&log, "thread/resume").is_empty());
-        assert_eq!(sent(&log, "turn/start").len(), 2);
+        let cut = sent(&log, "turn/start").last().cloned().expect("a turn");
+        assert!(cut["input"][0]["text"].as_str().unwrap_or_default().contains("## The conversation so far"), "{cut}");
     }
 
     /// A stop Codex closes (`turn/completed`, interrupted) leaves the thread
@@ -6377,12 +6454,11 @@ time.sleep(600)
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        // The next turn is what waited, under the tail that holds the steer
-        // where the busy turn read it.
+        // The next turn is what waited, on the session that read the steer:
+        // its header and the letter, with no tail.
         let next = prompts(&w).into_iter().find(|p| p.contains("when you get a minute")).expect("the queue never went over");
-        let (tail, this_turn) = next.split_once("## This turn").expect("a tail");
-        assert!(tail.contains("] and this\n") && tail.contains("report: SLEEP 1.5 + and this"), "{next}");
-        assert!(!this_turn.contains("and this"), "{next}");
+        assert!(next.starts_with("## This turn (block "), "{next}");
+        assert!(!next.contains("## The conversation so far") && !next.contains("and this"), "{next}");
         w.settle(&to);
     }
 

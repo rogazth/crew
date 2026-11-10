@@ -270,7 +270,7 @@ impl TurnHost {
         &self,
         session: crate::session::Session,
         params: crew_protocol::TurnStart,
-        history: Option<String>,
+        history: Option<super::Memory>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
         let (tx, turn_rx) = oneshot::channel();
@@ -282,10 +282,15 @@ impl TurnHost {
         // catalogs override developer instructions.
         let instructions = self.persona(&session, Harness::Mcp, self.mcp().is_some(), &params.cwd);
         let files = path_list(&params, &HashSet::new());
-        let text = if carries {
-            crate::providers::with_files(params.text.trim(), &files)
-        } else {
-            crate::providers::assemble(String::new(), history.as_deref(), &with_attached_paths(params.text.trim(), &files))
+        let text = match (carries, &history) {
+            // A bot carrying on its thread: this turn's header over the message.
+            (true, Some(memory)) => memory.headed(&crate::providers::with_files(params.text.trim(), &files)),
+            (true, None) => crate::providers::with_files(params.text.trim(), &files),
+            (false, _) => crate::providers::assemble(
+                String::new(),
+                history.as_ref().map(|memory| memory.trail.as_str()),
+                &with_attached_paths(params.text.trim(), &files),
+            ),
         };
         // A fresh process was given the settings on its thread; a kept one is
         // told only what moved since, so what the user's own config says of
@@ -1099,6 +1104,9 @@ impl TurnHost {
     /// never `total`, which adds up every response of the thread) over the
     /// model's window. Codex does not say where it compacts by itself.
     fn codex_context(&self, session_id: &str, params: &Value) {
+        if let Some(read) = super::episode::codex_request(params) {
+            self.cache_request(session_id, read);
+        }
         let Some((used, window)) = token_reading(params) else {
             return;
         };
