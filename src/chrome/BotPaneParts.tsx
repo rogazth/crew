@@ -1,10 +1,8 @@
-// The bot pane's pieces, drawn the way Connectors draws a connector's page:
+// A bot's settings' pieces (BotDialog.tsx), drawn the way Connectors draws a connector's page:
 // cards of rows on the sheet, hairlines between them, an icon, a title over a
 // muted line, and the row's control at its right end. No eyebrow over a card:
 // what a card holds says what it is, in its own first row when it needs one.
-import { Tabs } from "@base-ui/react/tabs";
-import { useState, type ReactNode } from "react";
-import { PillTabs } from "./kit";
+import type { ReactNode } from "react";
 
 /** A card of rows, hairlines between them. */
 // A rule between rows, never on the focus guards a picker puts beside its trigger while its menu is open.
@@ -95,23 +93,5 @@ export function AddRow({ children, onClick }: { children: ReactNode; onClick: ()
     >
       {children}
     </button>
-  );
-}
-
-/**
- * Tabs in the middle of the pane, each with what it holds under it, the one
- * open on a pill that slides to the next (PillTabs).
- */
-export function PaneTabs({ tabs }: { tabs: { key: string; label: string; content: ReactNode }[] }) {
-  const [value, setValue] = useState(tabs[0]?.key ?? "");
-  return (
-    <Tabs.Root value={value} onValueChange={(next) => setValue(String(next))} className="flex flex-col gap-3">
-      <PillTabs value={value} tabs={tabs} className="mx-auto" />
-      {tabs.map((tab) => (
-        <Tabs.Panel key={tab.key} value={tab.key} className="flex flex-col gap-3 outline-none">
-          {tab.content}
-        </Tabs.Panel>
-      ))}
-    </Tabs.Root>
   );
 }

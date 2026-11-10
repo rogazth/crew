@@ -1,6 +1,6 @@
 import { SlideShell } from "./chrome/SidebarSlide";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BotPaneHost } from "./chrome/BotPane";
+import { BotDialog } from "./chrome/BotDialog";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { MachineBanner } from "./chrome/MachineBanner";
 import { MachinePalette } from "./chrome/MachinePalette";
@@ -22,7 +22,6 @@ import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
 import { useExplorer } from "./hooks/useExplorer";
-import { useRecede } from "./hooks/useRecede";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useNotificationTarget } from "./hooks/useNotificationTarget";
@@ -280,8 +279,6 @@ export function App() {
     [openFile, treePath],
   );
   const sheet = useBotSheet({ create, update, openSession: nav.openSession });
-  const appRoot = useRef<HTMLDivElement>(null);
-  useRecede(appRoot, sheet.sheet !== null);
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, openTabIn: nav.openTabIn });
 
   const { activate } = workspaces;
@@ -354,7 +351,7 @@ export function App() {
       closePage();
       explorer.toggle("search", selectedLine());
     },
-    // The chord that opened a new bot's pane closes it again.
+    // The chord that opened a new bot's dialog closes it again.
     newBot: () => (sheet.sheet?.session === null ? sheet.close() : sheet.newBot()),
     newSession: () => void newSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
@@ -422,8 +419,8 @@ export function App() {
     <>
     <LinkRouter open={nav.openBrowser} />
     <Toaster onOpen={openNotified} sessions={all} />
-    {/* Under a bot's pane the whole window steps back (useRecede); the pane is portaled out of it. */}
-    <div ref={appRoot} data-app className="flex h-full">
+    {/* Under a bot's settings the whole window sinks a touch (useSettingsDialog); the dialog is portaled out of it. */}
+    <div data-app className="flex h-full">
       <SlideShell
         open={sidebarOpen}
         width={sidebar.width}
@@ -715,11 +712,11 @@ export function App() {
 
       <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
-      {/* Over the window, not beside the tabs: a bot's pane is no tab. */}
-      <BotPaneHost
+      {/* Over the window, not beside the tabs: a bot's settings are no tab. */}
+      <BotDialog
         sheet={sheet}
         sessions={sessions}
-        // Going to another page leaves the pane: it is about the window it stepped back from.
+        // Going to another page leaves the dialog: it is about the window it sank over.
         onNewRoutine={(id) => {
           sheet.close();
           openRoutines(id);

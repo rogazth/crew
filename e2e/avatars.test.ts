@@ -40,9 +40,9 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   assert.ok(workspace);
   const page = crew.window;
 
-  // A bot, made in the sheet.
+  // A bot, made in its dialog.
   await pressChord(crew, `${MOD}+Shift+a`);
-  const sheet = page.getByRole("complementary", { name: "New bot" });
+  const sheet = page.getByRole("dialog", { name: "New bot" });
   await sheet.getByLabel("Name", { exact: true }).fill("Scout");
   await sheet.getByRole("button", { name: "Create bot" }).click();
   await sheet.waitFor({ state: "detached" });
@@ -97,7 +97,7 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
     { message: "the bot's menu opens" },
   );
   await item.click();
-  const settings = page.getByRole("complementary", { name: "Bot settings" });
+  const settings = page.getByRole("dialog", { name: "Bot settings" });
   await settings.waitFor();
   const before = ((await stored(crew, "bot:faces")) ?? {}) as Faces;
   await settings.getByRole("button", { name: "Change its face" }).click();

@@ -1447,44 +1447,6 @@ svg.lucide {
     0 0 0 1px var(--color-hairline),
     0 0 16px -6px oklch(0% 0 0 / 0.1);
 }
-/* A bot's rules (BotRules.tsx): the one being written or pointed at stands
-   out because the others step back, not because it gains a ground. Focus
-   wins over a pointer passing by. */
-:has(> [data-rule]:focus-within) > [data-rule]:not(:focus-within),
-:not(:has(> [data-rule]:focus-within)):has(> [data-rule]:hover) > [data-rule]:not(:hover) {
-  opacity: 0.45;
-}
-
-/* A bot's pane (BotPane.tsx) comes in from the right, the side it lives on,
-   and goes back out there; leaving is quicker than arriving, and `forwards`
-   holds the end state until unmount. Its backdrop fades as a dialog's does. */
-@keyframes bot-pane-in {
-  from { transform: translateX(24px); opacity: 0; }
-}
-@keyframes bot-pane-out {
-  to { transform: translateX(24px); opacity: 0; }
-}
-.bot-pane-in {
-  animation: bot-pane-in 180ms cubic-bezier(0.2, 0, 0, 1);
-}
-.bot-pane-out {
-  animation: bot-pane-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
-}
-@media (prefers-reduced-motion: reduce) {
-  .bot-pane-in, .bot-pane-out { animation: none; }
-}
-
-/* Under a bot's pane (BotPane.tsx) the whole window steps back, on a spring
-   (useRecede): what is in it a touch smaller and a little to the left, away
-   from the pane, under a scrim. No frame and no
-   ground of its own: it shrinks on the ground it already stands on, so
-   nothing reads as a box. The pane itself is portaled out of it. */
-:root {
-  --recede-scale: 0.965;
-  --recede-shift: 24px;
-  --recede-scrim: light-dark(oklch(0% 0 0 / 0.12), oklch(0% 0 0 / 0.4));
-}
-
 /* The sidebar under, the main panel over it (SidebarSlide.tsx). Only resting
    styles live here; the motion is inline, written by springs. */
 .sbx {
@@ -1787,6 +1749,13 @@ button:not(:disabled):active {
 [data-toaster] [data-sonner-toaster] {
   z-index: 50;
   font-family: inherit;
+}
+/* Under a settings dialog (SettingsDialog.tsx) they sink with the window, about its centre, and under the backdrop:
+   Sonner's list sits `--offset-right` from the right and `--offset-top` from the top. */
+:root[data-dialog-sunk] [data-toaster] [data-sonner-toaster] {
+  scale: var(--dialog-sink, 1);
+  transform-origin: calc(100% + var(--offset-right, 0px) - 50vw) calc(50vh - var(--offset-top, 0px));
+  z-index: 40;
 }
 
 [data-toaster] [data-sonner-toast][data-styled="true"] {

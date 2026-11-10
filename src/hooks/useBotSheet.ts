@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { BotDraft } from "../chrome/BotPane";
+import type { BotDraft } from "../chrome/BotDialog";
 import { MIN_SAVE_MS } from "../lib/timing";
 import type { Session } from "../lib/types";
 import { setBotFace } from "./useBotFaces";
@@ -13,11 +13,11 @@ type Deps = {
   openSession: (session: Session) => void;
 };
 
-/** One pane serves both create and edit: a new bot is saved whole, a bot that exists a field at a time. */
+/** One dialog serves both create and edit: a new bot is saved whole, a bot that exists a field at a time. */
 export function useBotSheet({ create, update, openSession }: Deps) {
   const [sheet, setSheet] = useState<{ session: Session | null; worktree?: string } | null>(null);
 
-  /** `worktree` is where a new bot is made, from "New bot here" on a worktree; the sheet itself has no picker. */
+  /** `worktree` is where a new bot is made, from "New bot here" on a worktree; the dialog itself has no picker. */
   const newBot = useCallback(
     (worktree?: string) => setSheet(worktree ? { session: null, worktree } : { session: null }),
     [],
@@ -29,7 +29,7 @@ export function useBotSheet({ create, update, openSession }: Deps) {
     async (draft: BotDraft) => {
       const editing = sheet?.session;
       // Writing is instant, which reads as cheap; the floor holds the spinner so the
-      // sidebar row, the tab and the sheet's exit all land on the same beat.
+      // sidebar row, the tab and the dialog's exit all land on the same beat.
       const settle = new Promise((r) => setTimeout(r, MIN_SAVE_MS));
       const { face, ...fields } = draft;
       if (editing) {
