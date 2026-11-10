@@ -375,7 +375,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           <WorkspaceBanner workspace={props.workspace} naming={naming || wanted} onNaming={setNamingOrSettle} onRename={props.onRenameWorkspace} />
         )}
 
-        {!props.home && <WorkspacePlaces {...props.nav} />}
+        <WorkspacePlaces {...props.nav} />
 
         {/* Bots, as they are today. */}
         {prefs && !(filtering && bots.length === 0) && (
