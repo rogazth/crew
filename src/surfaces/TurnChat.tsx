@@ -341,12 +341,16 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     closeThread();
     setListOpen(true);
   }, [closeThread]);
+  // One agent at work and nothing else to list: the clip opens it, not a list of one.
+  const [first] = agentEntries;
+  const sole = agentEntries.length === 1 && conversations.length === 0 && first?.state === "running" && !first.attention ? first : undefined;
+  const soleOpen = sole !== undefined && openedId === sole.id;
   const agentsLine = useMemo<AgentsLine>(
     () => ({
       notices,
       agents: agentEntries,
       conversations: conversations.length,
-      open: listOpen && !output,
+      open: (listOpen && !output) || soleOpen,
       working: agentEntries.filter((entry) => entry.state === "running" && !entry.attention).length,
       any: agentEntries.length + conversations.length > 0,
       onOpenNotice: () => {
@@ -356,9 +360,13 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
         else showList();
       },
       onDismiss: () => setDismissed((was) => [...was, ...notices.map((one) => one.key)]),
-      onToggleList: () => (listOpen && !output ? closePanel() : showList()),
+      onToggleList: () => {
+        if ((listOpen && !output) || soleOpen) closePanel();
+        else if (sole) openEntry(sole);
+        else showList();
+      },
     }),
-    [agentEntries, closePanel, conversations.length, embedded, listOpen, notices, openEntry, output, showList],
+    [agentEntries, closePanel, conversations.length, embedded, listOpen, notices, openEntry, output, showList, sole, soleOpen],
   );
 
   const queue = useMemo<QueueScope>(
