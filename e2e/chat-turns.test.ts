@@ -149,6 +149,30 @@ test("a chat joins the sidebar with its first message; closing a tab deletes a b
   await sessionRow(crew, spoken.name).waitFor();
 });
 
+test("closing the tab of a new session nothing was said in deletes it, and a restart does not bring it back", async (t) => {
+  let crew = await launchCrew();
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+
+  const spoken = await newSession(crew, workspace.id);
+  await sendInChat(crew, "hello");
+  await chatLine(crew, "Reply 1: hello").waitFor();
+  await idle(crew, spoken);
+
+  const blank = await newSession(crew, workspace.id);
+  assert.equal(blank.name, "New session");
+  await closeTab(crew, blank, "button");
+  await waitFor(async () => (await get(crew, blank.id)) === null, { timeout: 5000, message: "crewd deletes the blank session" });
+
+  await closeTab(crew, spoken, "chord");
+  await kept(crew, spoken, "that held a turn");
+
+  crew = await crew.restart();
+  assert.ok(await get(crew, spoken.id), "the spoken session survives the restart");
+  assert.equal(await get(crew, blank.id), null, "the blank session came back");
+});
+
 test("a turn reads Working across tab switches, Unread and rung when it ends out of sight, and Mark as Read stays read across a restart", async (t) => {
   let crew = await launchCrew();
   t.after(() => crew.close());
@@ -216,7 +240,7 @@ test("the CLI's title names the row, the tab and crewd's session, on screen and 
   const stamp = Date.now().toString(36);
   const title = `Sort the invoices ${stamp}`;
   const aside = `Audit the ledger ${stamp}`;
-  // The window asks crewd for each session's title every 15s.
+  // crewd adopts the title as the turn ends and tells the window.
   const named = (session: Session, name: string) =>
     waitFor(async () => (await get(crew, session.id))?.name === name, { timeout: 25_000, message: `crewd names the session "${name}"` });
 

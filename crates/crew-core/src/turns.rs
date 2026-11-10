@@ -40,6 +40,7 @@ mod codex;
 mod cursor;
 mod grok;
 mod mcp;
+mod naming;
 mod opencode;
 mod opencode_server;
 #[cfg(test)]
@@ -627,8 +628,6 @@ struct ClaudeLive {
     /// Whether the user has been told this process runs fast turns at
     /// standard speed, which is said once.
     fast_refused: bool,
-    /// Whether this process has been asked to name its conversation.
-    title_asked: bool,
     stderr: Vec<String>,
     /// Steers written and not yet echoed, oldest first. A turn that ends
     /// before reading one leaves it here: the CLI starts a turn of its own on
@@ -690,7 +689,6 @@ impl ClaudeLive {
             init_id: None,
             menu_cwd: None,
             fast_refused: false,
-            title_asked: false,
             stderr: Vec::new(),
             steers: Vec::new(),
             background: HashSet::new(),
@@ -832,11 +830,8 @@ pub struct TurnHost {
     /// Child turns out of `running` that have not yet written how they ended:
     /// a waiter must not take that gap for a session with nothing to report.
     settling: Arc<Mutex<HashSet<String>>>,
-    /// Sessions asked for a name since the daemon started (see
-    /// [`TurnHost::name_untitled`]): one ask each, whatever it comes to.
-    naming: Arc<Mutex<HashSet<String>>>,
-    /// One name asked at a time: a sweep finds every unnamed session at once.
-    naming_gate: Arc<Mutex<()>>,
+    /// The names asked for and looked for (see [`naming`]).
+    naming: Arc<naming::Naming>,
     /// Run once by the next Claude turn just before its message goes in: a
     /// test puts the CLI's own turn there, the race that is otherwise a
     /// matter of milliseconds.
@@ -890,8 +885,7 @@ impl TurnHost {
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
             settling: Arc::new(Mutex::new(HashSet::new())),
-            naming: Arc::new(Mutex::new(HashSet::new())),
-            naming_gate: Arc::new(Mutex::new(())),
+            naming: Arc::default(),
             #[cfg(test)]
             before_message: Arc::new(Mutex::new(None)),
         }
@@ -2587,6 +2581,7 @@ impl TurnHost {
         if let Some(rx) = adopted {
             self.watch_adopted(&row, rx);
         }
+        self.watch_title(&row);
     }
 
     /// How a turn's end shows, and whether the queue goes over now.
@@ -3360,118 +3355,6 @@ impl TurnHost {
         }
         self.ask_claude_title(session, params);
         self.block_on(turn_rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
-    }
-
-    /// In stream-json the CLI names a conversation only when asked, as its
-    /// terminal does on the first message. With `persist` the name goes into
-    /// its transcript as an `ai-title`, where the window's sweep adopts it
-    /// (`session::sync_title`). Asked once per process, of a user's session
-    /// the provider has not named yet.
-    fn ask_claude_title(&self, session: &crate::session::Session, params: &TurnStart) {
-        let text = params.text.trim();
-        if session.kind != "terminal" || params.command.is_some() || text.is_empty() {
-            return;
-        }
-        if session::provider_title_of(&self.store, &session.id).ok().flatten().is_some() {
-            return;
-        }
-        let epoch = match self.lock().get_mut(&session.id) {
-            Some(Live::Claude(live)) if !live.title_asked => {
-                live.title_asked = true;
-                live.epoch
-            }
-            _ => return,
-        };
-        let host = self.clone();
-        let id = session.id.clone();
-        let description = text.to_string();
-        thread::spawn(move || {
-            let _ = host.claude_control_on(&id, Some(epoch), crate::titles::claude_request(&description));
-        });
-    }
-
-    /// Names a user's session its provider has not named, once per daemon:
-    /// what a window's sweep asks for when `session::sync_title` finds no
-    /// name. Claude is asked on its live process if it has one, and otherwise
-    /// on one resumed only to be asked; Codex's cheapest model is asked in a
-    /// run of its own. Neither conversation gains a message. A session with
-    /// nothing said in it yet is left for a later sweep.
-    pub fn name_untitled(&self, session_id: &str) {
-        let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
-            return;
-        };
-        if session.kind != "terminal"
-            || !matches!(session.provider.as_str(), "claude" | "codex")
-            || !session::is_placeholder_name(&session.name, &session.provider)
-            || session::provider_title_of(&self.store, session_id).ok().flatten().is_some()
-            || self.naming.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
-        {
-            return;
-        }
-        let host = self.clone();
-        thread::spawn(move || {
-            let _one = host.naming_gate.lock().unwrap_or_else(|e| e.into_inner());
-            if let Err(error) = host.name_now(&session) {
-                // The CLI answered without a name, which it does often: not a fault.
-                if error.ends_with("no name") {
-                    tracing::debug!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.unnamed");
-                } else {
-                    tracing::warn!(session_id = %session.id, error = %crate::trace::error_text(&error.to_string()), "title.failed");
-                }
-            }
-        });
-    }
-
-    fn name_now(&self, session: &crate::session::Session) -> Result<(), String> {
-        use crate::session_history::{claude::ClaudeDecoder, codex::CodexDecoder};
-        use crate::titles;
-        let cwd = session::cwd(&self.store, session)?;
-        let claim = || self.naming.lock().unwrap_or_else(|e| e.into_inner()).insert(session.id.clone());
-        match session.provider.as_str() {
-            "claude" => {
-                let id = session.provider_session_id.clone().unwrap_or_else(|| session.id.clone());
-                let home = self.claude_home_dir().ok_or("no home folder")?;
-                let transcript = crate::provider_session::claude_transcript(&home, &cwd, &id);
-                let Some(first) = titles::first_message::<ClaudeDecoder>(&transcript) else {
-                    return Ok(());
-                };
-                if !claim() {
-                    return Ok(());
-                }
-                // Asked already, by the turn that wrote the first message.
-                let live = match self.lock().get_mut(&session.id) {
-                    Some(Live::Claude(live)) if live.initialized => Some(std::mem::replace(&mut live.title_asked, true)),
-                    _ => None,
-                };
-                match live {
-                    Some(true) => Ok(()),
-                    Some(false) => self.claude_control(&session.id, titles::claude_request(&first)).map(drop),
-                    None => titles::name_claude(
-                        std::path::Path::new(&self.resolve_bin("claude")?),
-                        std::path::Path::new(&cwd),
-                        &id,
-                        &first,
-                    )
-                    .map(drop),
-                }
-            }
-            "codex" => {
-                let Some(thread) = session.provider_session_id.as_deref() else {
-                    return Ok(());
-                };
-                let home = crate::provider_session::codex_home().ok_or("no Codex home")?;
-                let rollout = crate::session_history::codex::rollout_path(&home, thread);
-                let Some(first) = rollout.and_then(|path| titles::first_message::<CodexDecoder>(&path)) else {
-                    return Ok(());
-                };
-                if !claim() {
-                    return Ok(());
-                }
-                let name = titles::codex_name(std::path::Path::new(&self.resolve_bin("codex")?), &first)?;
-                titles::name_codex(&home.join("session_index.jsonl"), thread, &name)
-            }
-            _ => Ok(()),
-        }
     }
 
     /// Write a message into a Claude child's running turn. Claude reads it at

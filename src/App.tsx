@@ -18,7 +18,6 @@ import { useBlankSessions } from "./hooks/useBlankSessions";
 import { showFolder } from "./hooks/useFileTree";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useKeyOverrides, useLoadKeybindings } from "./hooks/useKeybindings";
-import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
 import { useExplorer } from "./hooks/useExplorer";
@@ -111,7 +110,6 @@ export function App() {
     create,
     update,
     rename,
-    adoptName,
     remove,
     forget,
     reorder,
@@ -120,8 +118,6 @@ export function App() {
   } = useSessions(workspaceId);
   const { blank, markBlank } = useBlankSessions(all);
   const listed = useMemo(() => sessions.filter((session) => !blank.has(session.id)), [blank, sessions]);
-  // Every workspace's: their terminals keep running, and renaming, out of sight.
-  useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
   // A turn that ends may have made or removed a worktree: git is read again then, not only when the window comes back.

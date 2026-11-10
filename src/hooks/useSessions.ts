@@ -123,8 +123,9 @@ export function useSessions(workspaceId: string | null) {
         return { ...prev, [session.workspaceId]: [...list, session] };
       });
     });
-    // A Claude terminal that moved to a new conversation comes back renamed and
-    // rebound; a bot that rewrote its description comes back with it.
+    // A session its provider named comes back renamed, a Claude terminal that
+    // moved to a new conversation renamed and rebound; a bot that rewrote its
+    // description comes back with it.
     const unsubscribeUpdated = client.on('session-updated', (payload) => {
       const row = (payload as SessionUpdated).session as unknown as Session;
       patchSession(row.id, (session) => applyUpdated(session, row));
@@ -164,12 +165,6 @@ export function useSessions(workspaceId: string | null) {
       await api.renameSession(id, name);
       patchSession(id, (session) => ({ ...session, name }));
     },
-    [patchSession],
-  );
-
-  /** The daemon already stored it; this only catches the list up. */
-  const adoptName = useCallback(
-    (id: string, name: string) => patchSession(id, (session) => ({ ...session, name })),
     [patchSession],
   );
 
@@ -248,5 +243,5 @@ export function useSessions(workspaceId: string | null) {
   }, []);
 
   const sessions = (workspaceId ? registry[workspaceId] : undefined) ?? NONE;
-  return { sessions, all, create, update, rename, adoptName, remove, forget, reorder, setStatus, dropWorkspace, reload };
+  return { sessions, all, create, update, rename, remove, forget, reorder, setStatus, dropWorkspace, reload };
 }

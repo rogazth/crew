@@ -637,6 +637,11 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
 /// first title, a `/rename`, a fresh one after `/clear`. A name typed in Crew
 /// stands until the provider comes up with another. Returns the adopted name.
 pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
+    sync_title_in(store, id, ClaudeDirs::from_env().home.as_deref())
+}
+
+/// [`sync_title`] with Claude's transcripts under `claude_home`.
+pub fn sync_title_in(store: &Store, id: String, claude_home: Option<&Path>) -> Result<Option<String>, String> {
     let row = get(store, id)?.ok_or("Session not found")?;
     if row.kind != "terminal" {
         return Ok(None);
@@ -644,16 +649,19 @@ pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
     let Ok(cwd) = cwd(store, &row) else {
         return Ok(None);
     };
-    match provider_title(&row, &cwd) {
+    match provider_title(&row, &cwd, claude_home) {
         Some(title) => adopt_title(store, &row, title),
         None => Ok(None),
     }
 }
 
-fn provider_title(row: &Session, cwd: &str) -> Option<String> {
+fn provider_title(row: &Session, cwd: &str, claude_home: Option<&Path>) -> Option<String> {
     let bound = row.provider_session_id.as_deref();
     match row.provider.as_str() {
-        "claude" => claude_title::read(&claude_title::transcript_path(cwd, bound.unwrap_or(&row.id))?),
+        "claude" => {
+            let transcript = provider_session::claude_transcript(claude_home?, cwd, bound.unwrap_or(&row.id));
+            claude_title::read(&transcript.to_string_lossy())
+        }
         other => provider_session::title(other, bound?),
     }
 }
@@ -979,7 +987,7 @@ pub fn stale(store: &Store, before: i64) -> Result<Vec<String>, String> {
 /// the worktree it worked in before that folder went away.
 fn disposable(session: &Session, cwd: &str, home: Option<&Path>) -> bool {
     session.kind == "terminal"
-        && is_derived_name(&session.name, &session.provider)
+        && is_placeholder_name(&session.name, &session.provider)
         && folders(session, cwd).into_iter().all(|folder| {
             !provider_session::has_conversation(
                 home,
@@ -1000,15 +1008,6 @@ pub(crate) fn provider_title_of(store: &Store, id: &str) -> Result<Option<String
     store.with(|conn| {
         conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?.query_row(params![id], |row| row.get(0))
     })
-}
-
-/// Mirrors `isDerivedSessionName` in the window: claude, claude 2, …
-fn is_derived_name(name: &str, base: &str) -> bool {
-    match name.strip_prefix(base) {
-        Some("") => true,
-        Some(rest) => rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
-        None => false,
-    }
 }
 
 /// The session ids in a `tabs:<workspace>` entry the window saved. One it can
@@ -1397,19 +1396,22 @@ mod tests {
     }
 
     #[test]
-    fn only_derived_names_read_as_unnamed() {
-        assert!(is_derived_name("codex", "codex"));
-        assert!(is_derived_name("codex 12", "codex"));
-        assert!(!is_derived_name("codex 2b", "codex"));
-        assert!(!is_derived_name("codex ", "codex"));
-        assert!(!is_derived_name("codexer", "codex"));
-        assert!(!is_derived_name("Refactor", "codex"));
+    fn only_placeholder_names_read_as_unnamed() {
+        assert!(is_placeholder_name("New session", "codex"));
+        assert!(is_placeholder_name("codex", "codex"));
+        assert!(is_placeholder_name("codex 12", "codex"));
+        assert!(!is_placeholder_name("codex 2b", "codex"));
+        assert!(!is_placeholder_name("codex ", "codex"));
+        assert!(!is_placeholder_name("codexer", "codex"));
+        assert!(!is_placeholder_name("Refactor", "codex"));
     }
 
     #[test]
     fn the_sweep_keeps_what_was_named_spoken_in_or_open() {
         let (store, workspace) = world();
         let empty = terminal(&store, &workspace, "codex", "codex");
+        // What a new session is called since sessions stopped taking the provider's name.
+        let fresh = terminal(&store, &workspace, PLACEHOLDER_NAME, "claude");
         let named = terminal(&store, &workspace, "Refactor", "codex");
         let spoken = terminal(&store, &workspace, "codex 2", "codex");
         set_provider_session(&store, spoken.id.clone(), "rollout".into()).expect("bind");
@@ -1425,8 +1427,10 @@ mod tests {
         .expect("tabs");
 
         assert!(is_disposable(&store, empty.id.clone()).unwrap());
-        assert_eq!(sweep_disposable(&store).unwrap(), 1);
+        assert!(is_disposable(&store, fresh.id.clone()).unwrap());
+        assert_eq!(sweep_disposable(&store).unwrap(), 2);
         assert!(get(&store, empty.id).unwrap().is_none());
+        assert!(get(&store, fresh.id).unwrap().is_none());
         for kept in [named.id, spoken.id, open.id, unread.id, planner.id] {
             assert!(get(&store, kept).unwrap().is_some());
         }

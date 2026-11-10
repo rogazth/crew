@@ -2505,8 +2505,10 @@ def reader():
                 continue
             if req.get("subtype") == "generate_session_title":
                 # Asked beside the turn, so it keeps a log of its own.
-                with open(os.path.join(HERE, "claude-titles.log"), "a") as f: f.write("%s %s\n" % (req.get("persist"), req.get("description")))
-                out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"title": "Named"}}})
+                with open(os.path.join(HERE, "claude-titles.log"), "a") as f: f.write("%s %s\n" % (req.get("persist"), json.dumps(req.get("description"))))
+                # A greeting names nothing, as the real CLI's model often finds.
+                named = {} if req.get("description") == "hi" else {"title": "Named"}
+                out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": named}})
                 continue
             if req.get("subtype") == "get_context_usage":
                 # Asked on its own schedule, so it stays out of the control log.
@@ -3721,7 +3723,7 @@ time.sleep(600)
     }
 
     /// The CLI names a conversation in stream-json only when asked: a user's
-    /// Claude is asked once, on its first message, to name it after that.
+    /// Claude is asked on its first message, and once named not again.
     #[test]
     fn a_users_claude_is_asked_once_to_name_its_conversation() {
         let w = world();
@@ -3730,7 +3732,57 @@ time.sleep(600)
         w.say(&mine, "again");
         let titles = w.dir.join("claude-titles.log");
         until("the title was asked", || titles.exists());
-        assert_eq!(std::fs::read_to_string(&titles).unwrap().lines().collect::<Vec<_>>(), ["True hello"]);
+        assert_eq!(std::fs::read_to_string(&titles).unwrap().lines().collect::<Vec<_>>(), [r#"True "hello""#]);
+        w.turns.release(&mine.id);
+    }
+
+    /// The name a provider writes is the session's once the turn that wrote
+    /// it ends: nobody polls for it, and every window hears the change.
+    #[test]
+    fn the_end_of_a_turn_adopts_the_name_the_provider_wrote() {
+        let w = world();
+        let mine = users_claude(&w);
+        session::rename(w.turns.store(), mine.id.clone(), session::PLACEHOLDER_NAME.into()).expect("unnamed");
+        let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+        let into = heard.clone();
+        w.turns.store().set_listener(Arc::new(move |what| {
+            if let crate::store::Changed::Session(id) = what {
+                into.lock().unwrap().push(id.to_string());
+            }
+        }));
+        w.say(&mine, "hello");
+        // What `persist` has the real CLI write into its transcript.
+        let folder = w.dir.join("home/.claude/projects").join(crate::claude_title::project_slug(&w.dir.to_string_lossy()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        let mut transcript =
+            std::fs::OpenOptions::new().create(true).append(true).open(folder.join(format!("{}.jsonl", mine.id))).expect("jsonl");
+        std::io::Write::write_all(&mut transcript, b"{\"type\":\"ai-title\",\"aiTitle\":\"Sidebar titles\"}\n").expect("title");
+        heard.lock().unwrap().clear();
+        w.say(&mine, "again");
+        until("the name is adopted", || w.row(&mine.id).name == "Sidebar titles");
+        assert!(heard.lock().unwrap().contains(&mine.id), "the windows were told");
+        w.turns.release(&mine.id);
+    }
+
+    /// A first message that names nothing leaves the session unnamed: the
+    /// next one asks again, with all that was said so far.
+    #[test]
+    fn a_greeting_that_names_nothing_is_asked_again_with_the_next_message() {
+        let w = world();
+        let mine = users_claude(&w);
+        let titles = w.dir.join("claude-titles.log");
+        let asked = || std::fs::read_to_string(&titles).map(|log| log.lines().count()).unwrap_or(0);
+        w.say(&mine, "hi");
+        until("the greeting was asked", || asked() == 1);
+        w.say(&mine, "fix the sidebar");
+        until("asked again", || asked() == 2);
+        w.say(&mine, "and its header");
+        // Named on the second ask: the third message asks nothing.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            std::fs::read_to_string(&titles).unwrap().lines().collect::<Vec<_>>(),
+            [r#"True "hi""#, r#"True "hi\n\nfix the sidebar""#]
+        );
         w.turns.release(&mine.id);
     }
 

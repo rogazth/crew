@@ -843,6 +843,8 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
 
     // Before the window can list them, or it would show rows already gone.
     let _ = session::sweep_disposable(&config.store);
+    // What a provider named while the daemon was down; after that, names come with turns.
+    turns.adopt_titles();
     if let Err(error) = session::bypass_to_access(&config.store) {
         tracing::warn!(error = %crew_core::trace::error_text(&error), "settings.bypass_migration_failed");
     }
@@ -1870,22 +1872,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || session::set_status(&store, id, status)).await?;
             Ok(Value::Null)
         }
+        // The daemon adopts names as turns end and tells every window; a
+        // window from before that still asks.
         "session_sync_title" => {
             let Id { id } = parse(params)?;
-            let store = hosts.store.clone();
             let turns = hosts.turns.clone();
-            json(
-                block(move || {
-                    let name = session::sync_title(&store, id.clone())?;
-                    // Nothing yet: a provider that does not name its sessions
-                    // under Crew is asked to, and the next sweep adopts it.
-                    if name.is_none() {
-                        turns.name_untitled(&id);
-                    }
-                    Ok::<_, String>(name)
-                })
-                .await?,
-            )
+            json(block(move || turns.adopt_title(&id)).await?)
         }
         "session_mark_seen" => {
             let proto::SessionMarkSeen { id, cursor } = parse(params)?;

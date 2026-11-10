@@ -3,20 +3,18 @@
 //! app-server never does: their terminals did, which Crew no longer runs.
 //! Both are asked of the provider's cheapest model, outside the conversation,
 //! which gains no message. The name lands where the provider keeps its own,
-//! for `session::sync_title` to adopt like any other.
+//! for `session::sync_title` to adopt like any other (see `turns::naming`).
 
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crew_protocol::HarnessEvent;
 use serde_json::{json, Value};
 
 use crate::providers::claude::{build_control_request, parse_control_response};
-use crate::session_history::{Decoded, Decoder, MAX_RECORD_BYTES};
 use crate::shell_path;
 
 /// The model Codex names a thread with: its cheapest.
@@ -24,32 +22,9 @@ pub const CODEX_MODEL: &str = "gpt-6-luna";
 /// The model a Claude CLI asked for a name runs on. The name itself comes
 /// from the CLI's own small model; this keeps the process from loading more.
 const CLAUDE_MODEL: &str = "haiku";
-/// The start of the first message says what a conversation is about.
-const DESCRIPTION_CHARS: usize = 2000;
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a CLI that answered gets to write what it holds and exit.
 const EXIT_GRACE: Duration = Duration::from_secs(10);
-
-/// What the user said first in a provider's session file, as the chat shows
-/// it: what the provider injects is left out by the decoder.
-pub fn first_message<D: Decoder + Default>(path: &Path) -> Option<String> {
-    let mut decoder = D::default();
-    for raw in BufReader::new(File::open(path).ok()?).split(b'\n') {
-        let raw = raw.ok()?;
-        if raw.len() > MAX_RECORD_BYTES {
-            continue;
-        }
-        for decoded in decoder.decode(&String::from_utf8_lossy(&raw)) {
-            if let Decoded::Event { event: HarnessEvent::UserMessage { text, hidden, .. }, .. } = decoded {
-                let text = text.trim();
-                if hidden != Some(true) && !text.is_empty() {
-                    return Some(text.chars().take(DESCRIPTION_CHARS).collect());
-                }
-            }
-        }
-    }
-    None
-}
 
 /// What asks a live Claude CLI to name its conversation after `description`.
 /// With `persist` the name goes into its transcript as an `ai-title`.
@@ -234,43 +209,6 @@ pub(crate) fn rfc3339(at: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_history::{claude::ClaudeDecoder, codex::CodexDecoder};
-
-    fn temp(name: &str, lines: &[Value]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("crew-titles-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("session.jsonl");
-        std::fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
-        path
-    }
-
-    #[test]
-    fn the_first_message_is_the_users_first_words() {
-        let path = temp(
-            "claude",
-            &[
-                json!({ "type": "queue-operation", "operation": "enqueue" }),
-                json!({ "type": "user", "isMeta": true, "message": { "role": "user", "content": "<local-command-caveat>x</local-command-caveat>" } }),
-                json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "text", "text": "Fix the sidebar" }] } }),
-                json!({ "type": "user", "message": { "role": "user", "content": "Later" } }),
-            ],
-        );
-        assert_eq!(first_message::<ClaudeDecoder>(&path).as_deref(), Some("Fix the sidebar"));
-        let empty = temp("empty", &[json!({ "type": "queue-operation" })]);
-        assert_eq!(first_message::<ClaudeDecoder>(&empty), None);
-    }
-
-    #[test]
-    fn a_codex_rollouts_first_message_skips_what_codex_injects() {
-        let path = temp(
-            "codex",
-            &[
-                json!({ "type": "event_msg", "payload": { "type": "user_message", "message": "<environment_context>cwd</environment_context>" } }),
-                json!({ "type": "event_msg", "payload": { "type": "user_message", "message": "Arregla el sidebar" } }),
-            ],
-        );
-        assert_eq!(first_message::<CodexDecoder>(&path).as_deref(), Some("Arregla el sidebar"));
-    }
 
     #[test]
     fn codex_says_its_name_last() {

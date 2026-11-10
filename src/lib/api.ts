@@ -401,10 +401,6 @@ export const pathExists = (path: string): Promise<boolean> => client.request("pa
 /** True only for a file: a directory, or nothing at all, is false. */
 export const pathIsFile = (path: string): Promise<boolean> => client.request("path_is_file", { path });
 
-/** The provider's new title for the session, once adopted as its name. */
-export const syncSessionTitle = (id: string): Promise<string | null> =>
-  client.request("session_sync_title", { id });
-
 /** The subset of `names` found on the user's PATH. */
 export const installedBinaries = (names: string[]): Promise<string[]> =>
   client.request("agent_installed", { names });
