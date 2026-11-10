@@ -29,7 +29,7 @@ after(async () => {
 
 const composer = () => composerOf(crew, chat);
 const page = () => crew.window.locator("[data-agent-view]");
-const segment = () => crew.window.locator('[data-sheet="workspace"] [data-agents-segment]').first();
+const segment = () => crew.window.locator('[data-sheet="workspace"] [data-agents-working]').first();
 
 test("the clip opens the one subagent at work straight away", async () => {
   await turnOver(crew);

@@ -17,6 +17,7 @@ import {
   SlashIcon,
   SquareIcon,
   TriangleAlertIcon,
+  WorkflowIcon,
   XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -42,9 +43,8 @@ export type AgentsLine = {
   notices: readonly AgentNoticeItem[];
   /** Everyone this chat has started. */
   agents: readonly PanelEntry[];
-  conversations: number;
   working: number;
-  /** There is someone to list: the clip stays when nothing wants the user. */
+  /** There is someone to list: the line under the prompt offers the list. */
   any: boolean;
   /** The right panel is showing the list. */
   open: boolean;
@@ -84,26 +84,25 @@ export function ActionWord({ children, onClick, disabled = false, plain = false 
 
 const ASK_ICON = { failed: TriangleAlertIcon, question: MessageCircleQuestionIcon, approval: ShieldCheckIcon };
 const ASK_ACTION = { failed: "Open", question: "Answer", approval: "Review" };
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /**
- * On the prompt's top edge, only agents: what wants the user, else who works.
- * It opens the agent that asks, or the right panel with everyone; the x waves
- * what asks away until the next time.
+ * On the prompt's top edge, only while an agent is owed a look: what wants the
+ * user, else who works. It opens the agent that asks, or the right panel with
+ * everyone; the x waves what asks away until the next time. At rest it is gone:
+ * the line under the prompt keeps the way to the list.
  */
 export function AgentsClip({ line }: { line: AgentsLine }) {
-  const { notices, agents, working, conversations, open } = line;
+  const { notices, agents, working, open } = line;
   const [only] = notices;
-  if (!only && !line.any) return null;
+  if (!only && working === 0) return null;
   const several = notices.length > 1;
-  const quiet = working > 0 ? `${working} working` : agents.length > 0 ? plural(agents.length, "agent") : plural(conversations, "conversation");
   return (
     <div data-agent-clip {...(only ? { "data-notice": "" } : {})} className={`ds-clip ${open ? "ds-clip-on" : ""}`}>
       <div className="flex h-[30px] items-center gap-2 pr-1 pl-2 whitespace-nowrap">
         <button
           type="button"
           aria-expanded={open}
-          {...(only ? { "data-agent-notice": "" } : { "data-agents-segment": "" })}
+          {...(only ? { "data-agent-notice": "" } : { "data-agents-working": "" })}
           onClick={only ? line.onOpenNotice : line.onToggleList}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:text-text"
         >
@@ -119,7 +118,7 @@ export function AgentsClip({ line }: { line: AgentsLine }) {
               ))}
             </span>
           )}
-          <span className={`min-w-0 truncate ${only ? "font-medium text-text" : ""}`}>{only ? (several ? `${notices.length} agents` : only.entry.title) : quiet}</span>
+          <span className={`min-w-0 truncate ${only ? "font-medium text-text" : ""}`}>{only ? (several ? `${notices.length} agents` : only.entry.title) : `${working} working`}</span>
         </button>
         {only && <ActionWord onClick={line.onOpenNotice}>{several ? "Review" : ASK_ACTION[only.asks]}</ActionWord>}
         {only && (
@@ -130,6 +129,12 @@ export function AgentsClip({ line }: { line: AgentsLine }) {
       </div>
     </div>
   );
+}
+
+/** In the line under the prompt, beside Connectors: the way to everyone this chat has started. The clip says when to look. */
+export function SubAgentsSegment({ line }: { line: AgentsLine }) {
+  if (!line.any) return null;
+  return <StatusSegment data-agents-segment icon={WorkflowIcon} label="Sub-agents" open={line.open} onClick={line.onToggleList} />;
 }
 
 /** A segment of the line under the prompt. Its label leaves first when the pane narrows. */

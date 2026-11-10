@@ -349,7 +349,6 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
     () => ({
       notices,
       agents: agentEntries,
-      conversations: conversations.length,
       open: (listOpen && !output) || soleOpen,
       working: agentEntries.filter((entry) => entry.state === "running" && !entry.attention).length,
       any: agentEntries.length + conversations.length > 0,

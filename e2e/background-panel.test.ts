@@ -100,7 +100,7 @@ test("what the session started is one line under the composer, and its sheet lis
   // Nothing wants the user, so nothing sits over the composer.
   assert.equal(await crew.window.locator("[data-notice]").count(), 0);
   await agentsSegment().waitFor();
-  assert.match(await agentsSegment().innerText(), /^1 agent$/, "a child that reported is not working");
+  assert.equal(await crew.window.locator("[data-agent-clip]").count(), 0, "a child that reported is not working: no clip");
 
   // The agent is in the panel, what it left running in the sheet. The first time it opens, it slides in like every other.
   const widths = crew.window.evaluate(
@@ -310,7 +310,7 @@ test("a subagent the chat's CLI runs shows its tokens and its step, and x stops 
   await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
 
   // The turn is over and the subagent is not: the line under the composer says so.
-  await waitFor(async () => /^1 working$/.test(await agentsSegment().innerText()), { message: "the line counts it" });
+  await waitFor(async () => /^1 working$/.test(await inChat().locator("[data-agents-working]").first().innerText()), { message: "the clip counts it" });
   await agentsSegment().click();
   const row = agentRow("Explore the repo");
   await row.waitFor();

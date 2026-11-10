@@ -15,7 +15,7 @@ import { WorkSegment, type PanelScope } from "./Panel";
 import { useChatActions } from "./context";
 import type { PromptHandle } from "./PromptEditor";
 import { PromptWell } from "./PromptWell";
-import { AgentsClip, type AgentsLine, ContextRing, QuotaSegment, SendButton, SessionRemoteSegment, useQuota, WorktreeSegment } from "./ComposerParts";
+import { AgentsClip, type AgentsLine, SubAgentsSegment, ContextRing, QuotaSegment, SendButton, SessionRemoteSegment, useQuota, WorktreeSegment } from "./ComposerParts";
 import { useWhere } from "./where";
 
 type Props = {
@@ -197,6 +197,7 @@ export function Composer({
         {/* Shells and processes the chat left running: this opens their sheet. */}
         {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <ConnectorsSegment session={session} open={sheet === "connectors"} onOpenChange={openConnectors} onEscape={focusField} />
+        {agentsLine && !centered && <SubAgentsSegment line={agentsLine} />}
         <span className="flex-1" />
         <QuotaSegment provider={session.provider} />
         {!centered && !crowded && (
