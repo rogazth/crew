@@ -173,7 +173,7 @@ function RunLine({
   steps: Block[];
   live: boolean;
   open: boolean;
-  /** A card below waits on the reader: the time is theirs, so nothing turns or counts. */
+  /** A card below waits on the reader: the time is theirs, so nothing turns or counts. The card says it waits; the line says what was done. */
   waiting: boolean;
   since: number | undefined;
 }) {
@@ -181,14 +181,14 @@ function RunLine({
   const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
   const failed = allFailed(blocks);
   const doing = live && !waiting ? nowDoing(steps) : null;
-  const icon: Icon = failed ? XIcon : waiting ? MessageCircleMoreIcon : DIGEST_ICON[digest.kind];
+  const icon: Icon = failed ? XIcon : DIGEST_ICON[digest.kind];
   return (
     <>
       <span className="crew-node relative">
         {doing ? (
           <WorkGlyph className="transition-opacity group-hover:opacity-0" />
         ) : (
-          createElement(icon, { className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : waiting ? " text-warning" : ""}` })
+          createElement(icon, { className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}` })
         )}
         <ChevronRightIcon
           className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
@@ -199,7 +199,7 @@ function RunLine({
           {doing}
         </span>
       ) : (
-        <span className="min-w-0 truncate text-text-muted transition-colors group-hover:text-text">{waiting ? "Waiting for you" : digest.label}</span>
+        <span className="min-w-0 truncate text-text-muted transition-colors group-hover:text-text">{digest.label}</span>
       )}
       {doing && since !== undefined ? (
         <span className="shrink-0 text-[11.5px] text-placeholder tabular-nums">{duration(Math.max(0, now - since))}</span>
@@ -484,18 +484,18 @@ function AnsweredRow({ block }: { block: Block }) {
 
 /**
  * The turn in progress, at the foot of the chat: how long the agent has been
- * at it, ticking. While a card waits on the reader the time is theirs, so the
- * line says so instead of counting.
+ * at it, ticking. While a card waits on the reader it is not drawn: the card
+ * already says the agent is stopped on them.
  */
-export function WorkingLine({ since, waiting }: { since: number | undefined; waiting: boolean }) {
-  const now = useNow(1000, !waiting);
-  const label = waiting ? "Waiting for you" : since !== undefined ? `Working for ${duration(Math.max(0, now - since))}` : "Working";
+export function WorkingLine({ since }: { since: number | undefined }) {
+  const now = useNow(1000);
+  const label = since !== undefined ? `Working for ${duration(Math.max(0, now - since))}` : "Working";
   return (
     <div className="flex min-h-6 items-center gap-2 text-[13px] leading-[18px]">
       <span className="crew-node">
-        {waiting ? <MessageCircleMoreIcon className="size-3.5 text-warning" /> : <WorkGlyph />}
+        <WorkGlyph />
       </span>
-      <span className={`tabular-nums ${waiting ? "text-text-muted" : "crew-shimmer"}`}>{label}</span>
+      <span className="crew-shimmer tabular-nums">{label}</span>
     </div>
   );
 }
