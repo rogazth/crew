@@ -163,7 +163,6 @@ export function ServicesView({ workspaceId, processes, places, sessions, onOpenB
   return (
     <PageFrame
       title="Services"
-      subtitle="Dev servers and watchers, run in any worktree."
       actions={
         // With none yet, the empty state's own button is the way in: one, not two.
         all.length > 0 && (
