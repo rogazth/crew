@@ -1,12 +1,11 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { createElement, lazy, memo, Suspense, useMemo, useState, type ReactNode } from "react";
-import { TypingDots } from "../../chrome/StatusDot";
+import { createElement, lazy, memo, Suspense, useMemo, useState } from "react";
+import { TypingDots, WorkGlyph } from "../../chrome/StatusDot";
 import {
-  FOLD_AT,
   activityDigest,
   buildActivity,
-  currentActivity,
+  nowDoing,
   afterSummary,
   phaseKind,
   summarize,
@@ -15,10 +14,12 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { allFailed, answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { isImage } from "../../lib/attachments";
+import { allFailed, answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type AttachedFile, type Block } from "../../lib/blocks";
+import { useImageSrc } from "../../hooks/useImageSrc";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
-import { AttachmentStrip } from "./Attachments";
+import { AttachmentStrip, Lightbox } from "./Attachments";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
 
@@ -35,8 +36,8 @@ type Props = {
   marked: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
-  /** Never behind one line of its own: it already sits behind a subagent's. */
-  flat?: boolean;
+  /** When the turn began, for the live line's clock. */
+  since?: number | undefined;
 };
 
 const KIND_ICON: Record<PhaseKind, Icon> = {
@@ -79,7 +80,7 @@ function sameBlocks(prev: Props, next: Props): boolean {
     prev.marked !== next.marked ||
     prev.onApprove !== next.onApprove ||
     prev.onAnswer !== next.onAnswer ||
-    prev.flat !== next.flat
+    prev.since !== next.since
   ) {
     return false;
   }
@@ -88,9 +89,10 @@ function sameBlocks(prev: Props, next: Props): boolean {
 }
 
 /**
- * Every call, thought and question is a row of its own on one rail. A long run
- * hides behind one line that says what it was; a short one does not, and a
- * group inside a turn's fold never does: the fold already is that line.
+ * The agent's work between two messages, as one line: what it is on while it
+ * works, shimmering, and what it did once it is over. A click lays out every
+ * call, thought and question on the rail below it. What it captured stays in
+ * sight under the line, and what waits on the reader never hides behind it.
  */
 export const ActivityGroup = memo(function ActivityGroup({
   blocks,
@@ -99,29 +101,124 @@ export const ActivityGroup = memo(function ActivityGroup({
   marked,
   onApprove,
   onAnswer,
-  flat = false,
+  since,
 }: Props) {
   const steps = useMemo(() => blocks.filter(shown), [blocks]);
+  const captures = useMemo(() => steps.flatMap((block) => (block.files ?? []).filter(isImage)), [steps]);
+  const waiting = blocks.filter(awaitsUser);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
-  // Its own rail, unless a run folds it: then the run's steps are the rail.
-  const folds = !flat && steps.length >= FOLD_AT;
-  const rows = (
-    <div className={`flex flex-col gap-0.5 ${folds ? "" : "crew-timeline"}`}>
-      {steps.map((block) => (
-        <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
-      ))}
-    </div>
-  );
-  if (!folds) return rows;
+  // A row nobody can see is a row nobody can be sent to, and the mark outlives
+  // the request, so the run stays open after the reader has been taken there.
+  const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
+  const [pinned, setPinned] = useState<boolean | null>(null);
+  // Sent to a row inside, it opens even if the reader had closed it.
+  const [sentTo, setSentTo] = useState(focusId);
+  if (focusId !== sentTo) {
+    setSentTo(focusId);
+    if (sent(focusId)) setPinned(null);
+  }
+  const open = pinned ?? (sent(focusId) || sent(marked));
+  const [viewing, setViewing] = useState<number | null>(null);
+  if (steps.length === 0) return null;
   return (
-    <div className="crew-timeline">
-      <RunShell blocks={blocks} live={live} focusId={focusId} marked={marked}>
-        {rows}
-      </RunShell>
+    <div>
+      <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
+        <Collapsible.Trigger className="group flex min-h-6 w-full items-center gap-2 text-left text-[13px] leading-[18px]">
+          <RunLine blocks={blocks} steps={steps} live={live} open={open} waiting={waiting.length > 0} since={since} />
+        </Collapsible.Trigger>
+        <Collapsible.Panel className="crew-phase-panel">
+          <div className="crew-timeline flex flex-col gap-0.5 pt-1 pb-0.5">
+            {steps.map((block) => (
+              <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
+            ))}
+          </div>
+        </Collapsible.Panel>
+      </Collapsible.Root>
+      {!open && captures.length > 0 ? (
+        <div className="crew-captures">
+          {captures.map((file, index) => (
+            <Capture key={file.path} file={file} onOpen={() => setViewing(index)} />
+          ))}
+        </div>
+      ) : null}
+      {!open && waiting.length > 0 ? (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {waiting.map((block) => (
+            <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
+          ))}
+        </div>
+      ) : null}
+      {viewing !== null ? (
+        <Lightbox images={captures} index={Math.min(viewing, captures.length - 1)} onIndex={setViewing} onClose={() => setViewing(null)} />
+      ) : null}
     </div>
   );
 }, sameBlocks);
+
+/**
+ * The run's one line. While the agent works it names the newest thing it is
+ * on, each new one sliding in, and how long the turn has run; once it is over,
+ * the two biggest kinds of work it did, muted.
+ */
+function RunLine({
+  blocks,
+  steps,
+  live,
+  open,
+  waiting,
+  since,
+}: {
+  blocks: Block[];
+  steps: Block[];
+  live: boolean;
+  open: boolean;
+  /** A card below waits on the reader: the time is theirs, so nothing turns or counts. */
+  waiting: boolean;
+  since: number | undefined;
+}) {
+  const now = useNow(1000, live && !waiting && since !== undefined);
+  const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
+  const failed = allFailed(blocks);
+  const doing = live && !waiting ? nowDoing(steps) : null;
+  const icon: Icon = failed ? XIcon : waiting ? MessageCircleMoreIcon : DIGEST_ICON[digest.kind];
+  return (
+    <>
+      <span className="crew-node relative">
+        {doing ? (
+          <WorkGlyph className="transition-opacity group-hover:opacity-0" />
+        ) : (
+          createElement(icon, { className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : waiting ? " text-warning" : ""}` })
+        )}
+        <ChevronRightIcon
+          className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+        />
+      </span>
+      {doing ? (
+        <span key={doing} className="crew-shimmer crew-line-in min-w-0 truncate" title={doing}>
+          {doing}
+        </span>
+      ) : (
+        <span className="min-w-0 truncate text-text-muted transition-colors group-hover:text-text">{waiting ? "Waiting for you" : digest.label}</span>
+      )}
+      {doing && since !== undefined ? (
+        <span className="shrink-0 text-[11.5px] text-placeholder tabular-nums">{duration(Math.max(0, now - since))}</span>
+      ) : null}
+      {/* A folded run hides its rows; a failure inside it may not hide too. */}
+      {failed && !live ? <span className="ml-auto shrink-0 text-[11px] text-danger">failed</span> : null}
+    </>
+  );
+}
+
+/** A capture the run took, small under its line; it opens in the viewer. */
+function Capture({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) {
+  const src = useImageSrc(file.path);
+  return (
+    <button type="button" onClick={onOpen} title={file.name} aria-label={`Open ${file.name}`} className="crew-capture">
+      {src ? <img src={src} alt={file.name} /> : null}
+    </button>
+  );
+}
 
 /** A redacted thought arrives with no words: there is nothing to show for it. */
 function shown(block: Block): boolean {
@@ -158,90 +255,6 @@ function StepRow({
       onApprove={onApprove}
       icon={iconFor(block, KIND_ICON[phaseKind(block)])}
     />
-  );
-}
-
-/**
- * Whether the reader has pinned this thing open or shut. Moving on clears the
- * pin, so the next turn's rows start folded again instead of inheriting a
- * decision made about work that is over.
- */
-function useFold(live: boolean): [boolean | null, (next: boolean | null) => void] {
-  const [pinned, setPinned] = useState<boolean | null>(null);
-  const [wasLive, setWasLive] = useState(live);
-  if (live !== wasLive) {
-    setWasLive(live);
-    if (!live) setPinned(null);
-  }
-  return [pinned, setPinned];
-}
-
-/**
- * A long run of thinking and calls behind one line. Open while the agent is
- * still in it, folded once it is over: the line says what it has done and what
- * it is on now. A finished run opens by itself only for something waiting on
- * an answer or a row the reader was sent to; a click pins it either way.
- */
-function RunShell({
-  blocks,
-  live,
-  focusId,
-  marked,
-  children,
-}: {
-  blocks: Block[];
-  live: boolean;
-  focusId: string | null;
-  marked: string | null;
-  children: ReactNode;
-}) {
-  // A running call waits on the agent, not the reader: it may not open the run
-  // only to shut it again a moment later.
-  const waiting = blocks.some(awaitsUser);
-  const failed = allFailed(blocks);
-  // A row nobody can see is a row nobody can be sent to, and the mark outlives
-  // the request, so the run stays open after the reader has been taken there.
-  const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
-  const holds = sent(focusId) || sent(marked);
-  const [pinned, setPinned] = useFold(live);
-  // Sent to a row inside, it opens even if the reader had closed it.
-  const [sentTo, setSentTo] = useState(focusId);
-  if (focusId !== sentTo) {
-    setSentTo(focusId);
-    if (sent(focusId)) setPinned(null);
-  }
-  const open = waiting || (pinned ?? (live || holds));
-  const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
-  const now = live ? currentActivity(blocks) : null;
-
-  return (
-    <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-6 w-full items-center gap-2 text-left text-[13px] leading-[18px]">
-        <span className="crew-node relative">
-          {createElement(failed ? XIcon : DIGEST_ICON[digest.kind], {
-            className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
-          })}
-          <ChevronRightIcon
-            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-          />
-        </span>
-        <span
-          className={`shrink-0 ${live ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}
-        >
-          {digest.label}
-        </span>
-        {now && now !== digest.label ? (
-          <span className="min-w-0 flex-1 truncate text-[12px] text-placeholder" title={now}>
-            {now}
-          </span>
-        ) : null}
-        {/* A folded run hides its rows; a failure inside it may not hide too. */}
-        {failed && !waiting ? <span className="ml-auto shrink-0 text-[11px] text-danger">failed</span> : null}
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="crew-phase-panel">
-        <div className="crew-phase-steps">{children}</div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
   );
 }
 
@@ -480,7 +493,7 @@ export function WorkingLine({ since, waiting }: { since: number | undefined; wai
   return (
     <div className="flex min-h-6 items-center gap-2 text-[13px] leading-[18px]">
       <span className="crew-node">
-        {waiting ? <MessageCircleMoreIcon className="size-3.5 text-warning" /> : <TypingDots />}
+        {waiting ? <MessageCircleMoreIcon className="size-3.5 text-warning" /> : <WorkGlyph />}
       </span>
       <span className={`tabular-nums ${waiting ? "text-text-muted" : "crew-shimmer"}`}>{label}</span>
     </div>

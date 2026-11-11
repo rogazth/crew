@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityDigest, afterSummary, buildActivity, currentActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import { activityDigest, afterSummary, buildActivity, nowDoing, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -239,10 +239,19 @@ describe("activityDigest", () => {
   });
 });
 
-describe("currentActivity", () => {
-  it("names the call still out, the newest one", () => {
-    const blocks = [tool("Bash", "npm test", "pending"), tool("Read", "Read a.ts"), tool("Bash", "npm run lint", "pending")];
-    expect(currentActivity(blocks)).toBe("npm run lint");
+describe("nowDoing", () => {
+  const withDetail = (block: Block, detail: NonNullable<NonNullable<Block["tool"]>["detail"]>): Block => ({ ...block, tool: { ...block.tool!, detail } });
+
+  it("says the newest call as underway", () => {
+    expect(nowDoing([tool("Read", "Read a.ts"), withDetail(tool("Bash", "npm test", "pending"), { kind: "command", command: "npm test" })])).toBe("Running npm test");
+    expect(nowDoing([withDetail(tool("Read", "Read a.ts", "pending"), { kind: "file", path: "src/a.ts" })])).toBe("Reading src/a.ts");
+  });
+
+  it("turns a server's tool into a verb", () => {
+    const shot = withDetail(tool("mcp__chrome__take_screenshot", "chrome · take screenshot", "pending"), { kind: "mcp", server: "chrome", tool: "take_screenshot", input: "{}" });
+    expect(nowDoing([shot])).toBe("Taking screenshot");
+    const nav = withDetail(tool("mcp__chrome__navigate_page", "chrome · navigate page", "pending"), { kind: "mcp", server: "chrome", tool: "navigate_page", input: "{}" });
+    expect(nowDoing([nav])).toBe("Navigating page");
   });
 
   it("reads the first line of the thought coming in", () => {
@@ -250,12 +259,11 @@ describe("currentActivity", () => {
       tool("Bash", "npm test"),
       { id: "r", role: "reasoning", text: "**Checking the fold**\nthen more", streaming: true },
     ];
-    expect(currentActivity(blocks)).toBe("Checking the fold");
+    expect(nowDoing(blocks)).toBe("Checking the fold");
   });
 
-  it("is nothing once every call came back and no thought is coming in", () => {
-    const blocks: Block[] = [tool("Bash", "npm test"), { id: "r", role: "reasoning", text: "done" }];
-    expect(currentActivity(blocks)).toBeNull();
+  it("is nothing for an empty run", () => {
+    expect(nowDoing([])).toBeNull();
   });
 });
 

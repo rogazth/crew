@@ -36,6 +36,11 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
 }
 
 /** Three dots in ink, rising in turn: a turn running, or a call still open. */
+/** A glyph that turns while the agent works: one character, the stylesheet cycles it. */
+export function WorkGlyph({ className = "" }: { className?: string }) {
+  return <span aria-hidden className={`crew-glyph ${className}`} />;
+}
+
 export function TypingDots({ className = "" }: { className?: string }) {
   return (
     <span className={`crew-typing ${className}`}>

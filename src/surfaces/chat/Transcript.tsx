@@ -273,8 +273,9 @@ export function Transcript({
             </button>
           </div>
         )}
-        <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
-        {working && (
+        <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} since={since ?? turnStart(blocks)} />
+        {/* The live run's own line already says the agent is at it. */}
+        {working && rows.at(-1)?.kind !== "activity" && (
           <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
             <WorkingLine since={since ?? turnStart(blocks)} waiting={waiting(blocks)} />
           </div>

@@ -148,12 +148,6 @@ export function phaseLabel(phase: Phase): string {
   }
 }
 
-/**
- * How many rows a run has to reach before it folds behind one line. Two rows
- * fold to one plus a click to get them back, which is not a trade worth making.
- */
-export const FOLD_AT = 3;
-
 /** What a folded run says it was: its line, and the glyph that line wears. */
 export type ActivityDigest = { label: string; kind: PhaseKind | "thought" };
 
@@ -196,19 +190,40 @@ function thinking(item: ActivityItem | undefined): boolean {
   return item?.kind === "reasoning" && item.block.streaming === true;
 }
 
+/** take → Taking, navigate → Navigating, run → Running. */
+function ing(word: string): string {
+  const w = word.toLowerCase();
+  if (!w) return "";
+  const stem = /[^aeiou]e$/.test(w) ? w.slice(0, -1) : /^(run|get|set|put)$/.test(w) ? w + w.slice(-1) : w;
+  const out = `${stem}ing`;
+  return out.charAt(0).toUpperCase() + out.slice(1);
+}
+
+const ING: Record<string, string> = { Read: "Reading", Edit: "Editing", Write: "Writing", Search: "Searching" };
+
 /**
- * What the agent is on this moment, for the line a folded run shows while it
- * works: the thought still coming in, or the newest call still out. Nothing
- * between the two, when the line's own count already says enough.
+ * What the agent is on this moment, for the one line a run shows while it
+ * works: the newest thing in it, said as something underway. "Reading
+ * Panel.tsx", "Running npm test", "Taking screenshot", or the first line of
+ * the thought coming in.
  */
-export function currentActivity(blocks: Block[]): string | null {
-  const last = blocks.at(-1);
-  if (last?.role === "reasoning") return last.streaming ? summarize(last.text) || null : null;
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    const block = blocks[index]!;
-    if (block.role === "tool" && isOpen(block)) return toolLine(block).text || null;
+export function nowDoing(blocks: Block[]): string | null {
+  const block = blocks.at(-1);
+  if (!block) return null;
+  if (block.role === "reasoning") return summarize(block.text) || "Thinking";
+  if (block.role === "question") return isOpen(block) ? "Waiting for your answer" : block.text;
+  if (block.role === "approval") return isOpen(block) ? "Waiting for your approval" : prettyTitle(block.text);
+  if (block.role !== "tool") return null;
+  const line = toolLine(block);
+  const detail = detailOf(block);
+  if (detail?.kind === "command") return `Running ${line.text}`;
+  if (detail?.kind === "mcp") {
+    const [verb = "", ...rest] = detail.tool.replace(/[_-]/g, " ").split(" ");
+    return [ing(verb), ...rest].join(" ");
   }
-  return null;
+  if (detail?.kind === "fetch") return `Reading ${line.text}`;
+  if (line.verb) return `${ING[line.verb] ?? line.verb} ${line.text}`;
+  return line.text || null;
 }
 
 function decap(label: string): string {

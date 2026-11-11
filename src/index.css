@@ -302,15 +302,51 @@ html[data-sidebar-resize="active"] * {
   opacity: 0;
   transform: scale(0.98);
 }
+/* Held back from the edges, so the scrim around it reads as the way out.
+   Zoomed, it grows from its centre and drags. */
 .crew-lightbox-image {
-  max-width: min(92vw, 1400px);
-  max-height: calc(100vh - 96px);
+  max-width: min(70vw, 1100px);
+  max-height: calc(100vh - 200px);
   border-radius: 8px;
   object-fit: contain;
   box-shadow: 0 24px 64px -24px rgb(0 0 0 / 0.6);
+  cursor: zoom-in;
+  user-select: none;
+  touch-action: none;
+  transition: transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+.crew-lightbox-image[data-zoomed] {
+  cursor: grab;
+}
+.crew-lightbox-image[data-dragging] {
+  cursor: grabbing;
+  transition: none;
+}
+.crew-lightbox-zoom {
+  display: inline-flex;
+  align-items: center;
+  margin: -2px -8px -2px 0;
+}
+.crew-lightbox-zoom button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 999px;
+  transition: background-color 100ms ease;
+}
+.crew-lightbox-zoom button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-canvas) 18%, transparent);
+}
+.crew-lightbox-zoom button:disabled {
+  opacity: 0.4;
 }
 .crew-lightbox-bar {
   position: absolute;
+  z-index: 1;
+  align-items: center;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
@@ -319,7 +355,9 @@ html[data-sidebar-resize="active"] * {
   max-width: 60vw;
   padding: 4px 12px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-canvas) 14%, transparent);
+  /* Dark under light words whatever the image is: zoomed, the image is all there is behind it. */
+  background: color-mix(in srgb, var(--color-text) 72%, transparent);
+  backdrop-filter: blur(12px);
   color: var(--color-canvas);
   font-size: 12px;
   line-height: 18px;
@@ -327,13 +365,15 @@ html[data-sidebar-resize="active"] * {
 .crew-lightbox-nav,
 .crew-lightbox-close {
   position: absolute;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-canvas) 14%, transparent);
+  background: color-mix(in srgb, var(--color-text) 72%, transparent);
+  backdrop-filter: blur(12px);
   color: var(--color-canvas);
   transition: background-color 100ms ease;
 }
@@ -347,7 +387,7 @@ html[data-sidebar-resize="active"] * {
 }
 .crew-lightbox-nav:hover,
 .crew-lightbox-close:hover {
-  background: color-mix(in srgb, var(--color-canvas) 26%, transparent);
+  background: color-mix(in srgb, var(--color-text) 88%, transparent);
 }
 
 /* A card is the one thing in the log that waits for the user: one flat fill,
@@ -1411,6 +1451,77 @@ svg.lucide {
   border-radius: 999px;
   background: var(--color-canvas);
   color: var(--color-icon);
+}
+
+/* The agent at work: one character turning in the node, the way a terminal
+   spinner does. Chromium steps `content` through the frames, so it costs no
+   renders. */
+@keyframes crew-glyph {
+  0%, 100% { content: "·"; }
+  10%, 90% { content: "✢"; }
+  20%, 80% { content: "✳"; }
+  30%, 70% { content: "✶"; }
+  40%, 60% { content: "✻"; }
+  50% { content: "✽"; }
+}
+.crew-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1;
+}
+.crew-glyph::before {
+  content: "✻";
+  animation: crew-glyph 1.2s steps(1, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-glyph::before { animation: none; }
+}
+
+/* Each new thing the live line names slides up into place. */
+@keyframes crew-line-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.crew-line-in {
+  animation: crew-line-in 220ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-line-in { animation: none; }
+}
+
+/* What a run captured, small under its line where the words start. */
+.crew-captures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 2px 27px;
+}
+.crew-capture {
+  width: 72px;
+  height: 46px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--color-card);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  transition: box-shadow 120ms ease;
+}
+.crew-capture:hover {
+  box-shadow: inset 0 0 0 1px var(--color-hairline), 0 4px 14px -6px rgb(0 0 0 / 0.35);
+}
+.crew-capture:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--color-focus) 50%, transparent);
+  outline-offset: 1px;
+}
+.crew-capture img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
 }
 
 /* A background command still running: a green dot that breathes. */

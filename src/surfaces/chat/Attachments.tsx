@@ -1,5 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useImageSrc } from "../../hooks/useImageSrc";
@@ -185,7 +185,29 @@ function FilePill({ file, onOpen, onRemove, onInk }: { file: AttachedFile; onOpe
   );
 }
 
-/** The image at rest, on a dim scrim. Arrows walk the strip, Escape and the scrim close. */
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 8;
+const ZOOM_STEP = 1.5;
+/** How far an arrow key moves a zoomed image. */
+const PAN_PX = 80;
+
+type View = { scale: number; x: number; y: number };
+const AT_REST: View = { scale: 1, x: 0, y: 0 };
+
+/** The view zoomed to `scale`, keeping the point `at` (from the viewport's centre) where it is on screen. */
+function zoomTo(view: View, scale: number, at = { x: 0, y: 0 }): View {
+  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+  if (next === MIN_ZOOM) return AT_REST;
+  const k = next / view.scale;
+  return { scale: next, x: at.x - (at.x - view.x) * k, y: at.y - (at.y - view.y) * k };
+}
+
+/**
+ * The image at rest, on a dim scrim, held back from the edges. It zooms with
+ * the buttons, + and −, a pinch or ⌘ and the wheel, or a double click where
+ * it lands; zoomed in, it drags and the arrows move it. Otherwise the arrows
+ * walk the strip. 0 puts it back, Escape and the scrim close.
+ */
 export function Lightbox({
   images,
   index,
@@ -200,30 +222,105 @@ export function Lightbox({
   const file = images[index]!;
   const src = useImageSrc(file.path);
   const many = images.length > 1;
+  const [view, setView] = useState<View>(AT_REST);
+  // Another image starts whole.
+  const [shown, setShown] = useState(index);
+  if (shown !== index) {
+    setShown(index);
+    setView(AT_REST);
+  }
+  const zoomed = view.scale > MIN_ZOOM;
+  const drag = useRef<{ x: number; y: number; from: View; moved: boolean } | null>(null);
+  // While the hand moves it, the image follows at once instead of easing after it.
+  const [dragging, setDragging] = useState(false);
+  // The keys are the viewer's, not the first button's: Enter would reset the zoom.
+  const popup = useRef<HTMLDivElement>(null);
   const prev = () => onIndex((index - 1 + images.length) % images.length);
   const next = () => onIndex((index + 1) % images.length);
+  const zoomBy = (factor: number) => setView((v) => zoomTo(v, v.scale * factor));
+  const fromCentre = (event: { clientX: number; clientY: number }) => ({ x: event.clientX - innerWidth / 2, y: event.clientY - innerHeight / 2 });
 
   useEffect(() => {
-    if (!many) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft") prev();
-      if (event.key === "ArrowRight") next();
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const pan = { ArrowLeft: [PAN_PX, 0], ArrowRight: [-PAN_PX, 0], ArrowUp: [0, PAN_PX], ArrowDown: [0, -PAN_PX] }[event.key];
+      if (pan && zoomed) {
+        event.preventDefault();
+        setView((v) => ({ ...v, x: v.x + pan[0]!, y: v.y + pan[1]! }));
+      } else if (event.key === "ArrowLeft" && many) prev();
+      else if (event.key === "ArrowRight" && many) next();
+      else if (event.key === "+" || event.key === "=") zoomBy(ZOOM_STEP);
+      else if (event.key === "-" || event.key === "_") zoomBy(1 / ZOOM_STEP);
+      else if (event.key === "0") setView(AT_REST);
+      else return;
+      event.preventDefault();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    // Captured: the popup stops arrow keys from bubbling past itself.
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   });
+
+  const onWheel = (event: React.WheelEvent) => {
+    // A trackpad pinch arrives as a wheel with ctrl held; ⌘ and the wheel zooms too.
+    if (event.ctrlKey || event.metaKey) {
+      const at = fromCentre(event);
+      // A pinch sends small steps; a mouse wheel sends big ones, held to one notch's worth.
+      const step = Math.max(-40, Math.min(40, event.deltaY));
+      setView((v) => zoomTo(v, v.scale * Math.exp(-step / 100), at));
+    } else if (zoomed) {
+      setView((v) => ({ ...v, x: v.x - event.deltaX, y: v.y - event.deltaY }));
+    }
+  };
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Backdrop className="crew-lightbox-scrim" />
         <Dialog.Popup
+          ref={popup}
+          initialFocus={popup}
           className="crew-lightbox"
           aria-label={file.name}
+          onWheel={onWheel}
           // The popup fills the viewport above the scrim, so the empty space around the image is the outside.
-          onClick={(event) => event.target === event.currentTarget && onClose()}
+          onClick={(event) => event.target === event.currentTarget && !drag.current?.moved && onClose()}
         >
-          {src ? <img src={src} alt={file.name} className="crew-lightbox-image" /> : null}
+          {src ? (
+            <img
+              src={src}
+              alt={file.name}
+              draggable={false}
+              data-zoomed={zoomed || undefined}
+              data-dragging={dragging || undefined}
+              className="crew-lightbox-image"
+              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+              onDoubleClick={(event) => {
+                const at = fromCentre(event);
+                setView((v) => (v.scale > MIN_ZOOM ? AT_REST : zoomTo(v, 2.5, at)));
+              }}
+              onPointerDown={(event) => {
+                // The second press of a double click is the double click's.
+                if (!zoomed || event.button !== 0 || event.detail > 1) return;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                drag.current = { x: event.clientX, y: event.clientY, from: view, moved: false };
+              }}
+              onPointerMove={(event) => {
+                const start = drag.current;
+                if (!start) return;
+                const dx = event.clientX - start.x;
+                const dy = event.clientY - start.y;
+                if (!start.moved && Math.abs(dx) + Math.abs(dy) <= 3) return;
+                start.moved = true;
+                setDragging(true);
+                setView({ ...start.from, x: start.from.x + dx, y: start.from.y + dy });
+              }}
+              onPointerUp={() => {
+                setDragging(false);
+                // The click that ends a drag is not one on the scrim.
+                setTimeout(() => (drag.current = null));
+              }}
+            />
+          ) : null}
           <div className="crew-lightbox-bar">
             <span className="min-w-0 truncate">{file.name}</span>
             {many && (
@@ -231,6 +328,17 @@ export function Lightbox({
                 {index + 1} / {images.length}
               </span>
             )}
+            <span className="crew-lightbox-zoom">
+              <button type="button" aria-label="Zoom out" title="Zoom out (−)" disabled={!zoomed} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+                <MinusIcon className="size-3.5" />
+              </button>
+              <button type="button" aria-label="Actual size" title="Fit (0)" onClick={() => setView(AT_REST)} className="tabular-nums">
+                {Math.round(view.scale * 100)}%
+              </button>
+              <button type="button" aria-label="Zoom in" title="Zoom in (+)" disabled={view.scale >= MAX_ZOOM} onClick={() => zoomBy(ZOOM_STEP)}>
+                <PlusIcon className="size-3.5" />
+              </button>
+            </span>
           </div>
           {many && (
             <>

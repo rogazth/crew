@@ -20,8 +20,8 @@ type Props = {
   focusId: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
-  /** Inside a turn's fold: its groups lay their rows out instead of folding again. */
-  flat?: boolean;
+  /** When the running turn began, for the clock on its live line. */
+  since?: number | undefined;
 };
 
 /** A login's note stands later in the rows: the sign-in prompt at `index` is answered. */
@@ -30,7 +30,7 @@ function signedAfter(rows: Row[], index: number): boolean {
 }
 
 /** The transcript's rows, in order. A fold holds rows of its own and draws them the same way. */
-export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false }: Props) {
+export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Props) {
   return <>{rows.map((row, index) => {
     const className = gapBefore(rows[index - 1], row);
     switch (row.kind) {
@@ -44,7 +44,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
               marked={focusId}
               onApprove={onApprove}
               onAnswer={onAnswer}
-              flat={flat}
+              since={working && index === rows.length - 1 ? since : undefined}
             />
           </div>
         );
@@ -52,7 +52,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
         return (
           <div key={row.id} className={className}>
             <TurnFold row={row} focusId={focusId}>
-              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} flat />
+              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
             </TurnFold>
           </div>
         );
