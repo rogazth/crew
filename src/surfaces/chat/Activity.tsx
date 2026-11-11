@@ -1,7 +1,8 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, lazy, memo, Suspense, useMemo, useState } from "react";
-import { TypingDots, WorkGlyph } from "../../chrome/StatusDot";
+import type { OrbState } from "thinking-orbs";
+import { TypingDots, WorkOrb } from "../../chrome/StatusDot";
 import {
   activityDigest,
   buildActivity,
@@ -62,6 +63,27 @@ const DETAIL_ICON: Record<NonNullable<ToolGlyphKind>, Icon> = {
   mcp: PlugIcon,
   plan: NotebookTextIcon,
 };
+
+/** The orb that turns while the agent is on a step: what kind of work it is. */
+const ORB: Record<NonNullable<ToolGlyphKind>, OrbState> = {
+  command: "working",
+  file: "searching",
+  search: "searching",
+  edit: "composing",
+  fetch: "connecting",
+  mcp: "connecting",
+  message: "connecting",
+  agent: "weaving",
+  todo: "shaping",
+  plan: "shaping",
+};
+
+function orbFor(block: Block | undefined): OrbState {
+  if (!block) return "breathing";
+  if (block.role === "reasoning") return "solving";
+  const kind = glyphKind(block);
+  return kind ? ORB[kind] : "working";
+}
 
 function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {
   const kind = glyphKind(block);
@@ -186,7 +208,7 @@ function RunLine({
     <>
       <span className="crew-node relative">
         {doing ? (
-          <WorkGlyph className="transition-opacity group-hover:opacity-0" />
+          <WorkOrb state={orbFor(steps.at(-1))} label={doing} className="transition-opacity group-hover:opacity-0" />
         ) : (
           createElement(icon, { className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}` })
         )}
@@ -493,7 +515,7 @@ export function WorkingLine({ since }: { since: number | undefined }) {
   return (
     <div className="flex min-h-6 items-center gap-2 text-[13px] leading-[18px]">
       <span className="crew-node">
-        <WorkGlyph />
+        <WorkOrb state="breathing" label="Working" />
       </span>
       <span className="crew-shimmer tabular-nums">{label}</span>
     </div>

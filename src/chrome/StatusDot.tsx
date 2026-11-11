@@ -1,3 +1,5 @@
+import { ThinkingOrb, type OrbState } from "thinking-orbs";
+import { useDarkScheme } from "../hooks/useDarkScheme";
 import { statusLabel } from "../lib/status";
 import type { SessionStatus } from "../lib/types";
 
@@ -36,9 +38,14 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
 }
 
 /** Three dots in ink, rising in turn: a turn running, or a call still open. */
-/** A glyph that turns while the agent works: one character, the stylesheet cycles it. */
-export function WorkGlyph({ className = "" }: { className?: string }) {
-  return <span aria-hidden className={`crew-glyph ${className}`} />;
+/**
+ * The dotted orb that turns while the agent works, in the inline size. The
+ * scheme is passed in: the orb's own guess reads the `dark` class the root
+ * has always carried, whatever the app shows.
+ */
+export function WorkOrb({ state, label, className }: { state: OrbState; label: string; className?: string }) {
+  const dark = useDarkScheme();
+  return <ThinkingOrb state={state} size={20} theme={dark ? "dark" : "light"} aria-label={label} {...(className ? { className } : {})} />;
 }
 
 export function TypingDots({ className = "" }: { className?: string }) {

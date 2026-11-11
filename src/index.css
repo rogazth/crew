@@ -1453,34 +1453,6 @@ svg.lucide {
   color: var(--color-icon);
 }
 
-/* The agent at work: one character turning in the node, the way a terminal
-   spinner does. Chromium steps `content` through the frames, so it costs no
-   renders. */
-@keyframes crew-glyph {
-  0%, 100% { content: "·"; }
-  10%, 90% { content: "✢"; }
-  20%, 80% { content: "✳"; }
-  30%, 70% { content: "✶"; }
-  40%, 60% { content: "✻"; }
-  50% { content: "✽"; }
-}
-.crew-glyph {
-  display: inline-grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  color: var(--color-text);
-  font-size: 13px;
-  line-height: 1;
-}
-.crew-glyph::before {
-  content: "✻";
-  animation: crew-glyph 1.2s steps(1, end) infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .crew-glyph::before { animation: none; }
-}
-
 /* Each new thing the live line names slides up into place. */
 @keyframes crew-line-in {
   from { opacity: 0; transform: translateY(4px); }
