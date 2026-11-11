@@ -2,7 +2,7 @@ import { EllipsisIcon, PlusIcon, SquareIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { ActionMenu } from "../chrome/ActionMenu";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { Button, EmptyState, FilterChip, FilterTabs, IconButton, PageFrame, SearchField } from "../chrome/kit";
+import { Button, EmptyState, FilterTabs, IconButton, PageFrame, SearchField } from "../chrome/kit";
 import { deleteConfirm, type Processes } from "../hooks/useProcesses";
 import type { MenuPoint } from "../lib/menu";
 import {
@@ -47,7 +47,6 @@ type Props = {
 };
 
 type Filter = "all" | "running" | "stopped";
-type By = "anyone" | "you" | "agents";
 
 /** Past this many, a search sits over the list. */
 const SEARCH_FROM = 7;
@@ -62,7 +61,6 @@ export function ServicesView({ workspaceId, processes, places, sessions, onOpenB
   /** A service's ⋯, or with `run` one run's right-click. */
   const [menu, setMenu] = useState<{ point: MenuPoint; process: Process; run?: ProcessRun } | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
-  const [by, setBy] = useState<By>("anyone");
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   /** Pills taken away, by the start of the run they stood for. */
@@ -115,21 +113,13 @@ export function ServicesView({ workspaceId, processes, places, sessions, onOpenB
   };
 
   const all = useMemo(() => list ?? [], [list]);
-  const agents = all.filter((process) => process.createdBy !== null).length;
-  // A filter whose control has gone (the last agent's service deleted, the list under the search's size) no longer
-  // narrows: nothing on screen could undo it.
-  const byShown = agents > 0 && agents < all.length;
+  // A search whose field has gone (the list under its size) no longer narrows: nothing on screen could undo it.
   const searchShown = all.length >= SEARCH_FROM;
-  const author = byShown ? by : "anyone";
   const text = searchShown ? query.trim().toLowerCase() : "";
   const narrowed = useMemo(
     () =>
-      all.filter(
-        (process) =>
-          (author === "anyone" || (author === "you") === (process.createdBy === null)) &&
-          (text === "" || [process.name, process.command].some((field) => field.toLowerCase().includes(text))),
-      ),
-    [all, author, text],
+      all.filter((process) => text === "" || [process.name, process.command].some((field) => field.toLowerCase().includes(text))),
+    [all, text],
   );
   const up = (process: Process) => process.runs.some(isLive);
   const shown = narrowed.filter((process) => (filter === "all" ? true : filter === "running" ? up(process) : !up(process)));
@@ -206,21 +196,6 @@ export function ServicesView({ workspaceId, processes, places, sessions, onOpenB
                 ]}
               />
               <span className="flex-1" />
-              {byShown && (
-                <FilterChip
-                  label="Added by"
-                  // From its right edge, as the Routines filters; three names need no search.
-                  align="end"
-                  value={by}
-                  neutral="anyone"
-                  options={[
-                    { value: "anyone", label: "Anyone" },
-                    { value: "you", label: "You" },
-                    { value: "agents", label: "Agents" },
-                  ]}
-                  onChange={setBy}
-                />
-              )}
               {/* Stop all only once there is more than one run to stop: one run stops from its own pill. */}
               {live > 1 && (
                 <Button variant="ghost" size="sm" icon={SquareIcon} title={`Stop all ${live} runs`} onClick={() => void processes.stopAll()}>
