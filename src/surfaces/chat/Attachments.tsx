@@ -192,6 +192,11 @@ const ZOOM_STEP = 1.5;
 const PAN_PX = 80;
 
 type View = { scale: number; x: number; y: number };
+
+/** Where a pointer is, from the viewport's centre: the image's own centre at rest. */
+function fromCentre(event: { clientX: number; clientY: number }) {
+  return { x: event.clientX - innerWidth / 2, y: event.clientY - innerHeight / 2 };
+}
 const AT_REST: View = { scale: 1, x: 0, y: 0 };
 
 /** The view zoomed to `scale`, keeping the point `at` (from the viewport's centre) where it is on screen. */
@@ -238,7 +243,6 @@ export function Lightbox({
   const prev = () => onIndex((index - 1 + images.length) % images.length);
   const next = () => onIndex((index + 1) % images.length);
   const zoomBy = (factor: number) => setView((v) => zoomTo(v, v.scale * factor));
-  const fromCentre = (event: { clientX: number; clientY: number }) => ({ x: event.clientX - innerWidth / 2, y: event.clientY - innerHeight / 2 });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -318,6 +322,10 @@ export function Lightbox({
                 setDragging(false);
                 // The click that ends a drag is not one on the scrim.
                 setTimeout(() => (drag.current = null));
+              }}
+              onPointerCancel={() => {
+                setDragging(false);
+                drag.current = null;
               }}
             />
           ) : null}
