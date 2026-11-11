@@ -30,6 +30,37 @@ export function startedOf(block: Block): Started | null {
   return null;
 }
 
+/** The name Crew gives a session whose call named none: its CLI and the prompt's first words. */
+export function defaultSessionName(provider: string, prompt: string): string {
+  const name = `${provider}: ${prompt.split(/\s+/).filter(Boolean).slice(0, 6).join(" ")}`;
+  return [...name].length > 48 ? `${[...name].slice(0, 47).join("")}…` : name;
+}
+
+/** What a session row has to say for a start call to find it. */
+type StartedRowOf = { id: string; name: string; provider: string; createdAt: number; parentId?: string; launchedBy?: string };
+
+/**
+ * The session a start call made, before its answer names it: a `delegate`
+ * that waits answers only once the child is done, and the child's row is
+ * there from its first second. The owner's child or launched session, made
+ * after the call, under the name it asked for or the one Crew gives.
+ */
+export function startedSession<T extends StartedRowOf>(
+  sessions: readonly T[],
+  ownerId: string | undefined,
+  block: Block,
+  started: Extract<Started, { kind: "subagent" | "session" }>,
+): T | undefined {
+  if (!ownerId || started.target.id) return undefined;
+  // The call's time and the row's come from the same clock; a little slack for the order they were written in.
+  const since = (block.at ?? 0) - 2_000;
+  const mine = (row: T) => (started.kind === "subagent" ? row.parentId === ownerId : row.launchedBy === ownerId);
+  const named = (row: T) => row.name === started.target.name || row.name === defaultSessionName(row.provider, started.prompt);
+  return sessions
+    .filter((row) => mine(row) && row.createdAt >= since && named(row))
+    .sort((a, b) => a.createdAt - b.createdAt)[0];
+}
+
 /** The name a native subagent goes by in a row: its type, else what it was for. */
 export function nativeName(detail: AgentDetail): string {
   return detail.agentType?.trim() || detail.description.trim() || "subagent";

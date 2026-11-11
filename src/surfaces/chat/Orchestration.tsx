@@ -14,7 +14,7 @@ import {
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
-import { lazy, memo, Suspense, useContext, type ReactNode } from "react";
+import { lazy, memo, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Block } from "../../lib/blocks";
 import { botLabel } from "../../lib/botNames";
 import { checkpointOf, letterIdOf, resolveParty, USER, type ThreadBlock } from "../../lib/letters";
@@ -27,6 +27,8 @@ import {
   nativeReportAt,
   sentOf,
   startedOf,
+  startedSession,
+  type Started,
 } from "../../lib/orchestration";
 import type { CrewTarget } from "../../lib/protocol";
 import { agentDetail, entryOfCall, resumesEntry } from "../../lib/subagent";
@@ -177,15 +179,31 @@ export const SubagentReport = memo(function SubagentReport({ block }: { block: B
 export const StartedRow = memo(function StartedRow({ block, marked }: { block: Block; marked: string | null }) {
   const entries = useContext(WorkContext);
   const { openAgent } = useChatActions();
-  const { sessions } = useLetterScope();
+  const { sessions, owner } = useLetterScope();
   const me = useOwnerPeer();
-  const started = startedOf(block);
-  if (!started) return null;
+  const found = startedOf(block);
+  // A call still out (a delegate that waits) has no answer to name its session yet: its row does.
+  const made = found && found.kind !== "sessions" ? startedSession(sessions, owner?.id, block, found) : undefined;
+  const madeId = made?.id;
+  // Clicked before the row was there (an approval, a worktree being made): it opens once the row comes.
+  const [opening, setOpening] = useState(false);
+  const pending = block.tool?.status === "pending";
+  const letterId = letterIdOf(block);
+  useEffect(() => {
+    if (!opening || !madeId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the open the click asked for, now that it can
+    setOpening(false);
+    openAgent(madeId, letterId ? { focus: letterId } : undefined);
+  }, [opening, madeId, letterId, openAgent]);
+  if (!found) return null;
+  const started: Started = made && found.kind !== "sessions" ? { ...found, target: { ...found.target, id: made.id } } : found;
+  // Until the row is there, the caller's own CLI: the one Crew picks when the call names none.
+  const asked = sessions.find((row) => row.id === owner?.id)?.provider;
   const peerOf = (target: CrewTarget): Peer => {
     const session = target.id ? sessions.find((row) => row.id === target.id) : undefined;
-    return { id: target.id, name: session?.name ?? target.name, provider: session?.provider ?? target.provider, bot: false };
+    return { id: target.id, name: session?.name ?? target.name, provider: session?.provider ?? target.provider ?? asked, bot: false };
   };
-  const letter = started.kind === "sessions" ? undefined : letterIdOf(block);
+  const letter = started.kind === "sessions" ? undefined : letterId;
   const focus = letter ? { focus: letter } : undefined;
   const open = (target: CrewTarget) => {
     const entry = target.id ? entries.find((one) => one.id === `session:${target.id}`) : undefined;
@@ -210,7 +228,7 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
             note={target.note}
             failed={Boolean(target.note)}
             at={block.at}
-            onOpen={target.note ? undefined : open(target)}
+            onOpen={target.note ? undefined : (open(target) ?? (pending && started.kind !== "sessions" ? () => setOpening(true) : undefined))}
             peek={!target.note && prompt ? { title: `What ${peer.name} was asked`, text: prompt } : undefined}
           />
         );

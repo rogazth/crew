@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { ToolDetail } from "./protocol";
-import { exitedless, controlOf, deliveryNote, nativeName, nativeReport, sentOf, startedOf } from "./orchestration";
+import { exitedless, controlOf, defaultSessionName, deliveryNote, nativeName, nativeReport, sentOf, startedOf, startedSession } from "./orchestration";
 import { foldTurns, groupRows, speaker, type Row } from "./transcriptRows";
 
 const tool = (detail: ToolDetail): Block => ({
@@ -32,6 +32,28 @@ describe("what a Crew call started", () => {
     expect(startedOf(tool({ kind: "message", to: "x", text: "", what: "start", error: "no" }))).toBeNull();
     expect(startedOf(tool({ kind: "crew", verb: "start_sessions", targets: [{ name: "a" }] }))).toMatchObject({ kind: "sessions" });
     expect(startedOf(tool({ kind: "crew", verb: "read_session", targets: [] }))).toBeNull();
+  });
+
+  it("finds the session a call made before the call answers", () => {
+    const call = { ...tool({ kind: "message", to: "scout", text: "look around the repo", what: "start" }), at: 10_000 };
+    const started = startedOf(call);
+    if (started?.kind !== "subagent") throw new Error("not a start");
+    const row = (id: string, name: string, at: number, parentId = "me") => ({ id, name, provider: "claude", createdAt: at, parentId });
+    // An older child of the same name is not this call's; a stranger's is nobody's here.
+    const rows = [row("old", "scout", 1_000), row("theirs", "scout", 10_500, "other"), row("new", "scout", 10_400)];
+    expect(startedSession(rows, "me", call, started)?.id).toBe("new");
+    // A call that named none: the name Crew gave it.
+    const unnamed = { ...call, tool: { ...call.tool!, detail: { kind: "message" as const, to: "claude", text: "look around the repo", what: "start" } } };
+    const loose = startedOf(unnamed);
+    if (loose?.kind !== "subagent") throw new Error("not a start");
+    expect(startedSession([row("x", "claude: look around the repo", 10_100)], "me", unnamed, loose)?.id).toBe("x");
+    // An answered call names its session itself.
+    expect(startedSession(rows, "me", call, { ...started, target: { ...started.target, id: "s9" } })).toBeUndefined();
+  });
+
+  it("names an unnamed session as Crew does", () => {
+    expect(defaultSessionName("codex", "fix the  flaky test in the parser module now")).toBe("codex: fix the flaky test in the");
+    expect([...defaultSessionName("claude", "a".repeat(30) + " " + "b".repeat(30))].length).toBe(48);
   });
 
 });
