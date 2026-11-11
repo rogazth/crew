@@ -1,5 +1,5 @@
-// The Services page with nothing on it: a soft card that says what goes here
-// and offers to add the first one. Still, on purpose: an empty page has nothing to animate.
+// The Services page with nothing on it: a soft card that says what a service
+// gives you (the page's subtitle already says what one is) and offers to add the first one. Still, on purpose: an empty page has nothing to animate.
 import { LayersIcon, PlusIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 
@@ -12,7 +12,7 @@ export function EmptyServices({ onNew }: { onNew: () => void }) {
       <div className="flex flex-col items-center gap-1">
         <span className="text-[14px] font-semibold tracking-[-0.01em] text-text">No services yet</span>
         <span className="max-w-[420px] text-[12.5px] leading-[18px] text-text-muted">
-          Dev servers and watchers, run in any worktree.
+          Save a command once, and you and your agents can start it and read its output.
         </span>
       </div>
       <Button variant="primary" icon={PlusIcon} onClick={onNew}>
