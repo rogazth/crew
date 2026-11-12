@@ -89,8 +89,8 @@ const NO_TREES: string[] = [];
 const running = (s: Session) => s.status === "working" || s.status === "starting";
 /** What waits on you: a question, a failure, a pause. */
 const urgent = (s: Session) => Boolean(s.paused) || s.status === "needs-input" || s.status === "error" || failedUnseen(s);
-/** Finished, and you have not looked. */
-const unread = (s: Session, activeId: string | null) => s.id !== activeId && unseen(s) && (s.status === "done" || s.status === "idle");
+/** Finished, and you have not looked: crewd's done (until Mark as Read or opening it), or an idle row with news past what you read. */
+const unread = (s: Session, activeId: string | null) => s.id !== activeId && (s.status === "done" || (s.status === "idle" && unseen(s)));
 
 /** The one dot a line shows: its status, with pauses, failures and unread news folded in. */
 function dotOf(s: Session, activeId: string | null): SessionStatus {
