@@ -422,16 +422,8 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>, end: &ToolEnd) -> Opt
 
 /// The row's one line: what the call did, to what.
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
-    if let Some((verb, input)) = super::crew_call(name, input) {
-        let input: &Map<String, Value> = &input;
-        let subject = string_field(Some(input), "to")
-            .or_else(|| string_field(Some(input), "name"))
-            .or_else(|| string_field(Some(input), "query"));
-        let verb = format!("Crew {}", verb.replace('_', " "));
-        return match subject {
-            Some(subject) => format!("{verb} {}", clip(&subject, 40)),
-            None => verb,
-        };
+    if let Some(label) = super::crew_label(name, input) {
+        return label;
     }
     if let Some(command) = string_field(Some(input), "command") {
         return clip(&command, 72);

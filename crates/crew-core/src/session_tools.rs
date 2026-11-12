@@ -5139,7 +5139,7 @@ time.sleep(600)
             "{done}"
         );
         let (blocks, _) = w.turns.transcripts().since(&id, 0);
-        assert!(blocks.iter().any(|block| block.text == "Crew list peers"), "{blocks:?}");
+        assert!(blocks.iter().any(|block| block.text == "List peers"), "{blocks:?}");
         assert!(blocks.iter().any(|block| block.text == "Plan: Hello"), "{blocks:?}");
         assert!(blocks.iter().any(|block| block.text == "Todos"), "{blocks:?}");
     }

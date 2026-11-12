@@ -1716,7 +1716,7 @@ mod tests {
             vec![HarnessEvent::ToolStarted {
                 call_id: "x1".into(),
                 name: "message_agent".into(),
-                title: "Crew message agent 6e85".into(),
+                title: "Message 6e85".into(),
                 detail: Some(ToolDetail::Message {
                     to: "6e85".into(),
                     text: "green".into(),

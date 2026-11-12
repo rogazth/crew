@@ -418,35 +418,129 @@ pub fn crew_result_detail(
     Some(row(Some(letter_id), field("id"), to_name, field("delivery"), None, report))
 }
 
-/// The row line for a Crew call: `Crew message agent abc`, the tool it ran
-/// (directly, or through the old `call_tool`) and whom or what it was about.
+/// The row line for a Crew call: what it did, to whom or to what — `Start
+/// process web`, `Message Flake hunter`, `Wait for “ready in” in web`. Crew's
+/// tools read like any other step, with no "Crew" in front: the app does not
+/// sign its own work. The tool is the one it ran, directly or through the old
+/// `call_tool`, and the names a tool had before it was merged read the same.
 pub fn crew_label(name: &str, input: &Map<String, Value>) -> Option<String> {
     let (verb, input) = crew_call(name, input)?;
     let input: &Map<String, Value> = &input;
-    let verb = format!("Crew {}", crew_words(verb, input));
-    let subject = string_field(Some(input), "to")
-        .or_else(|| string_field(Some(input), "session"))
-        .or_else(|| string_field(Some(input), "name"))
-        .or_else(|| string_field(Some(input), "process"))
-        .or_else(|| string_field(Some(input), "query"));
-    Some(match subject {
-        Some(subject) => format!("{verb} {}", clip(&subject, 40)),
-        None => verb,
+    let field = |key: &str| string_field(Some(input), key).filter(|value| !value.trim().is_empty());
+    let short = |key: &str| field(key).map(|value| clip(&value, 40));
+    let quoted = |key: &str| field(key).map(|value| format!("“{}”", clip(&value, 40)));
+    let about = |words: &str, subject: Option<String>| match subject {
+        Some(subject) => format!("{words} {subject}"),
+        None => words.to_string(),
+    };
+    let session = || short("session").or_else(|| short("to")).or_else(|| short("name"));
+    let process = || short("process").or_else(|| short("name"));
+    // Before `control_process`, `browser_act` and `browser_activity` merged
+    // them, each action was a tool of its own: `start_process`, `browser_click`.
+    let (verb, action) = match verb {
+        "control_process" | "browser_act" => (verb, field("action")),
+        "browser_activity" => (verb, field("kind")),
+        _ => match verb.strip_suffix("_process").filter(|action| PROCESS_ACTIONS.contains(action)) {
+            Some(action) => ("control_process", Some(action.to_string())),
+            None => match verb.strip_prefix("browser_") {
+                Some(action) if BROWSER_ACTIONS.contains(&action) => ("browser_act", Some(action.to_string())),
+                Some(kind @ ("console" | "network")) => ("browser_activity", Some(kind.to_string())),
+                _ => (verb, None),
+            },
+        },
+    };
+    Some(match verb {
+        "send_message" | "message_agent" | "send_to_session" => about("Message", short("to").or_else(|| short("session"))),
+        "delegate" => short("name").map_or_else(|| "Delegate".into(), |name| format!("Delegate to {name}")),
+        "start_session" => about("Start session", short("name")),
+        "start_sessions" => match input.get("sessions").and_then(Value::as_array).map(Vec::len) {
+            Some(1) => "Start 1 session".into(),
+            Some(count) => format!("Start {count} sessions"),
+            None => "Start sessions".into(),
+        },
+        "list_peers" => "List peers".into(),
+        "read_session" => about("Read", short("session")),
+        "interrupt_session" => about("Interrupt", short("session")),
+        "stop_session" => about("Stop", short("session")),
+        "update_session" => match field("action").as_deref() {
+            Some("rename") => about("Rename", short("session")),
+            Some("effort") => about("Set the effort of", short("session")),
+            Some("delete") => about("Delete", short("session")),
+            _ => about("Update", short("session")),
+        },
+        "control_process" => match action {
+            Some(action) => about(&format!("{} process", capitalized(&action)), process()),
+            None => about("Control process", process()),
+        },
+        "save_process" => about("Save process", process()),
+        "delete_process" => about("Delete process", process()),
+        "read_logs" => match (quoted("pattern"), process()) {
+            (Some(pattern), Some(process)) => format!("Search logs of {process} for {pattern}"),
+            (Some(pattern), None) => format!("Search logs for {pattern}"),
+            (None, Some(process)) => format!("Read logs of {process}"),
+            (None, None) => "Read logs".into(),
+        },
+        "wait_for_log" => match (quoted("pattern"), process()) {
+            (Some(pattern), Some(process)) => format!("Wait for {pattern} in {process}"),
+            (Some(pattern), None) => format!("Wait for {pattern}"),
+            (None, process) => about("Wait for a log line in", process),
+        },
+        "send_input" => about("Send input to", process()),
+        "list_tabs" => "List tabs".into(),
+        "open_tab" => field("url").map_or_else(|| "Open a tab".into(), |url| format!("Open {}", short_url(&url))),
+        "release_tab" => "Release tab".into(),
+        "browser_navigate" => match (field("action").as_deref(), field("url")) {
+            (Some("back"), _) => "Go back".into(),
+            (Some("forward"), _) => "Go forward".into(),
+            (Some("reload"), _) => "Reload the page".into(),
+            (_, Some(url)) => format!("Go to {}", short_url(&url)),
+            _ => "Navigate".into(),
+        },
+        "browser_snapshot" => "Read the page".into(),
+        "browser_act" => match action.as_deref() {
+            Some("fill") => about("Fill in", quoted("value")),
+            Some("type") => about("Type", quoted("text")),
+            Some("press") => about("Press", short("key")),
+            Some(action) => capitalized(action),
+            None => "Act on the page".into(),
+        },
+        "browser_screenshot" => "Screenshot the page".into(),
+        "browser_wait_for" => about("Wait for", quoted("text")),
+        "browser_activity" => match action.as_deref() {
+            Some("console") => "Read the console".into(),
+            Some("network") => "Read the network requests".into(),
+            _ => "Read the page's activity".into(),
+        },
+        "browser_evaluate" => about("Run", short("expression")),
+        "create_bot" => about("Create bot", short("name")),
+        "update_description" => "Update description".into(),
+        "rules" => match (field("action").as_deref(), quoted("content"), short("id")) {
+            (Some("add"), content, _) => about("Add rule", content),
+            (Some("edit"), _, id) => about("Edit rule", id),
+            (Some("remove"), _, id) => about("Remove rule", id),
+            _ => "Rules".into(),
+        },
+        "list_routines" => "List routines".into(),
+        "save_routine" => about("Save routine", short("name").or_else(|| short("routine_id"))),
+        "delete_routine" => about("Delete routine", short("routine_id").or_else(|| short("name"))),
+        // A tool the workspace adds through Crew's server, or one Crew no
+        // longer has: its name in words, and whom or what it was about.
+        other => about(&capitalized(&other.replace('_', " ")), session().or_else(process).or_else(|| short("query"))),
     })
 }
 
-/// What a Crew call reads as: its name in words, or for a tool that merges
-/// verbs, the one it ran. `control_process` with action start reads "start
-/// process", as the `start_process` of older transcripts still does.
-pub fn crew_words(verb: &str, input: &Map<String, Value>) -> String {
-    let field = |key: &str| string_field(Some(input), key);
-    let merged = match verb {
-        "control_process" => field("action").map(|action| format!("{action} process")),
-        "browser_act" => field("action").map(|action| format!("browser {action}")),
-        "browser_activity" => field("kind").map(|kind| format!("browser {kind}")),
-        _ => None,
-    };
-    merged.unwrap_or_else(|| verb.replace('_', " "))
+const PROCESS_ACTIONS: [&str; 5] = ["start", "stop", "restart", "pause", "resume"];
+const BROWSER_ACTIONS: [&str; 5] = ["click", "hover", "fill", "type", "press"];
+
+fn capitalized(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+}
+
+/// A URL as a row names it: no scheme, no trailing slash.
+fn short_url(url: &str) -> String {
+    let bare = url.split_once("://").map_or(url, |(_, rest)| rest);
+    clip(bare.trim_end_matches('/'), 48)
 }
 
 /// An MCP tool's server and tool, from Claude's `mcp__server__tool` name.
@@ -666,7 +760,7 @@ mod tests {
         assert!(detail("mcp__crew__list_routines", serde_json::json!({})).is_none());
         let label =
             crew_label("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "x" }).as_object().unwrap());
-        assert_eq!(label.as_deref(), Some("Crew send to session abc"));
+        assert_eq!(label.as_deref(), Some("Message abc"));
     }
 
     /// Transcripts from before tools were listed directly hold `call_tool`
@@ -689,7 +783,7 @@ mod tests {
         assert_eq!(crew_call("mcp__crew__call_tool", bare.as_object().unwrap()).map(|(verb, _)| verb), Some("list_agents"));
         let empty = serde_json::Map::new();
         assert_eq!(crew_call("mcp__crew__call_tool", &empty).map(|(verb, _)| verb), Some("call_tool"));
-        assert_eq!(crate::providers::claude::tool_label("mcp__crew__call_tool", input), "Crew message agent abc");
+        assert_eq!(crate::providers::claude::tool_label("mcp__crew__call_tool", input), "Message abc");
     }
 
     /// A merged tool reads as the verb it ran, and the old names it replaced
@@ -701,13 +795,58 @@ mod tests {
             (crew_label(name, &input).unwrap(), crate::providers::claude::tool_label(name, &input))
         };
         let start = label("mcp__crew__control_process", serde_json::json!({ "process": "web", "action": "start" }));
-        assert_eq!(start, ("Crew start process web".to_string(), "Crew start process web".to_string()));
+        assert_eq!(start, ("Start process web".to_string(), "Start process web".to_string()));
         let old = label("mcp__crew__start_process", serde_json::json!({ "process": "web" }));
         assert_eq!(old, start, "history keeps reading the same");
-        assert_eq!(label("crew_browser_act", serde_json::json!({ "action": "click", "uid": "1_2" })).0, "Crew browser click");
-        assert_eq!(label("crew_browser_click", serde_json::json!({ "uid": "1_2" })).0, "Crew browser click");
-        assert_eq!(label("crew_browser_activity", serde_json::json!({ "kind": "console" })).0, "Crew browser console");
-        assert_eq!(label("crew_control_process", serde_json::json!({})).0, "Crew control process");
+        assert_eq!(label("crew_browser_act", serde_json::json!({ "action": "click", "uid": "1_2" })).0, "Click");
+        assert_eq!(label("crew_browser_click", serde_json::json!({ "uid": "1_2" })).0, "Click");
+        assert_eq!(label("crew_browser_activity", serde_json::json!({ "kind": "console" })).0, "Read the console");
+        assert_eq!(label("crew_browser_console", serde_json::json!({})).0, "Read the console");
+        assert_eq!(label("crew_control_process", serde_json::json!({})).0, "Control process");
+    }
+
+    /// A Crew call reads as what it did, never as "Crew …": the app does not
+    /// sign its own tools. Every provider's row reads the same.
+    #[test]
+    fn a_crew_call_reads_as_what_it_did() {
+        for (name, input, want) in [
+            ("send_message", serde_json::json!({ "to": "Flake hunter", "text": "x" }), "Message Flake hunter"),
+            ("delegate", serde_json::json!({ "name": "Scout", "prompt": "x" }), "Delegate to Scout"),
+            ("start_session", serde_json::json!({ "name": "Release", "prompt": "x" }), "Start session Release"),
+            ("start_sessions", serde_json::json!({ "sessions": [{}, {}] }), "Start 2 sessions"),
+            ("list_peers", serde_json::json!({}), "List peers"),
+            ("read_session", serde_json::json!({ "session": "Flake hunter" }), "Read Flake hunter"),
+            ("interrupt_session", serde_json::json!({ "session": "Bundle spike" }), "Interrupt Bundle spike"),
+            ("update_session", serde_json::json!({ "session": "a1", "action": "rename", "name": "B" }), "Rename a1"),
+            ("list_processes", serde_json::json!({}), "List processes"),
+            ("save_process", serde_json::json!({ "name": "web", "command": "npm run dev" }), "Save process web"),
+            ("read_logs", serde_json::json!({ "process": "web", "pattern": "(?i)error" }), "Search logs of web for “(?i)error”"),
+            ("read_logs", serde_json::json!({ "process": "web" }), "Read logs of web"),
+            ("wait_for_log", serde_json::json!({ "process": "web", "pattern": "ready in" }), "Wait for “ready in” in web"),
+            ("send_input", serde_json::json!({ "process": "repl", "text": "y" }), "Send input to repl"),
+            ("open_tab", serde_json::json!({ "url": "http://localhost:5173/settings" }), "Open localhost:5173/settings"),
+            ("browser_navigate", serde_json::json!({ "url": "https://example.com/" }), "Go to example.com"),
+            ("browser_navigate", serde_json::json!({ "action": "back" }), "Go back"),
+            ("browser_snapshot", serde_json::json!({}), "Read the page"),
+            ("browser_act", serde_json::json!({ "action": "fill", "uid": "1_4", "value": "Groceries" }), "Fill in “Groceries”"),
+            ("browser_act", serde_json::json!({ "action": "press", "key": "Enter" }), "Press Enter"),
+            ("browser_wait_for", serde_json::json!({ "text": "Saved" }), "Wait for “Saved”"),
+            ("browser_screenshot", serde_json::json!({}), "Screenshot the page"),
+            ("browser_evaluate", serde_json::json!({ "expression": "document.title" }), "Run document.title"),
+            ("create_bot", serde_json::json!({ "name": "Helper" }), "Create bot Helper"),
+            ("rules", serde_json::json!({ "action": "add", "content": "Never push to master" }), "Add rule “Never push to master”"),
+            ("rules", serde_json::json!({ "action": "remove", "id": "r3" }), "Remove rule r3"),
+            ("save_routine", serde_json::json!({ "name": "Morning digest" }), "Save routine Morning digest"),
+            ("delete_routine", serde_json::json!({ "routine_id": "r_8f2c" }), "Delete routine r_8f2c"),
+            ("boil_kettle", serde_json::json!({}), "Boil kettle"),
+        ] {
+            let input = input.as_object().unwrap();
+            for spelling in [format!("mcp__crew__{name}"), format!("crew_{name}")] {
+                assert_eq!(crew_label(&spelling, input).as_deref(), Some(want), "{spelling}");
+            }
+            assert_eq!(crate::providers::claude::tool_label(&format!("mcp__crew__{name}"), input), want);
+            assert_eq!(crate::providers::opencode::tool_label(&format!("crew_{name}"), input), want);
+        }
     }
 
     /// Measured on Claude Code 2.1.286: the stream carries `arguments` as the

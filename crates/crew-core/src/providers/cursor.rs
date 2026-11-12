@@ -1024,7 +1024,7 @@ mod tests {
         let message = tool(json!({ "toolCallId": "m", "title": "crew: message_agent", "kind": "other", "rawInput": {
             "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } }));
         assert_eq!(tool_name(&message), "mcp__crew__message_agent");
-        assert_eq!(tool_label(&message), "Crew message agent abc");
+        assert_eq!(tool_label(&message), "Message abc");
         let echo = tool(json!({ "toolCallId": "s", "title": "spike: echo", "kind": "other", "rawInput": {
             "providerIdentifier": "spike", "toolName": "echo", "args": { "text": "hi" } } }));
         assert!(matches!(tool_detail(&echo, None, None), Some(ToolDetail::Mcp { ref server, .. }) if server == "spike"));

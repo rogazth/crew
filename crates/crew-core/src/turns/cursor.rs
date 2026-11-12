@@ -1347,7 +1347,7 @@ mod tests {
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "status": "completed", "rawOutput": { "success": true } })));
         let events = cap.take();
         let HarnessEvent::ToolStarted { name, title, .. } = &events[0] else { panic!("{events:?}") };
-        assert_eq!((name.as_str(), title.as_str()), ("mcp__crew__message_agent", "Crew message agent abc"));
+        assert_eq!((name.as_str(), title.as_str()), ("mcp__crew__message_agent", "Message abc"));
         assert!(
             matches!(events.last(), Some(HarnessEvent::ToolUpdated { status: Some(ToolStatus::Completed), .. })),
             "{events:?}"

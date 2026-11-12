@@ -815,22 +815,8 @@ pub fn is_compact_boundary(rec: &Map<String, Value>) -> bool {
 }
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
-    if let Some((verb_raw, input)) = name.strip_prefix("mcp__crew__").and(super::crew_call(name, input)) {
-        let input: &Map<String, Value> = &input;
-        if !verb_raw.is_empty() && verb_raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            let verb = format!("Crew {}", super::crew_words(verb_raw, input));
-            let subject = string_field(Some(input), "to")
-                .or_else(|| string_field(Some(input), "name"))
-                .or_else(|| string_field(Some(input), "process"))
-                .or_else(|| string_field(Some(input), "routine_id"))
-                .or_else(|| string_field(Some(input), "bot_id"))
-                // Older transcripts named the owner of a routine this way.
-                .or_else(|| string_field(Some(input), "agent_id"));
-            return match subject {
-                Some(subject) => format!("{verb} {}", clip(&subject, 40)),
-                None => verb,
-            };
-        }
+    if let Some(label) = super::crew_label(name, input) {
+        return label;
     }
     if let Some((server, tool)) = mcp_name(name) {
         return mcp_label(&server, &tool);
