@@ -62,7 +62,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since, inFol
         );
       case "footer":
         return (
-          <div key={row.id} className={className}>
+          <div key={row.id} data-turn-footer className={className}>
             <TurnFooter
               {...(row.at !== undefined ? { at: row.at } : {})}
               {...(row.text !== undefined ? { text: row.text } : {})}

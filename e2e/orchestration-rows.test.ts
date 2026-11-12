@@ -253,10 +253,14 @@ test("a child's approval waits as a beat in the parent's chat and is decided in 
   await idle();
 });
 
-test("A background subagent that finishes is said once, by its call's beat: what it woke takes no line of its own", async () => {
+test("A background subagent that finishes is said once, by its call's beat: what it woke takes no line of its own, and ends the turn that sent it", async () => {
+  const footers = () => crew.window.locator("[data-turn-footer]").count();
+  const before = await footers();
   await send("agentdone");
   await crew.window.getByText("Report read.", { exact: true }).waitFor({ timeout: 30_000 });
   await idle();
+  assert.equal(await footers(), before + 1, "one line (copy, the time) for the turn and the one its report woke");
+  assert.equal(await crew.window.getByText(/Reply \d+: agentdone/).count(), 1, "the reply between stays in sight");
   const beat = crew.window.locator("[data-beat]").filter({ hasText: /Explore the repo.*finished/ });
   assert.equal(await beat.count(), 1, "the call's beat says it finished");
   assert.equal(await crew.window.getByText(/Agent "Explore the repo" finished/).count(), 0, "no line beside the beat");

@@ -441,6 +441,30 @@ describe("foldTurns with turns the agent was woken into", () => {
     ]);
   });
 
+  it("closes a turn a subagent's report woke and the one that sent it with one line, the reply between kept", () => {
+    const agent = block("tool", "Explore", {
+      at: 1_100,
+      tool: {
+        callId: "ag",
+        name: "Agent",
+        title: "Explore",
+        status: "completed",
+        detail: { kind: "agent", description: "Explore", output: "found it", steps: [{ id: "ag-step", role: "assistant", text: "found it", at: 2_500 }] },
+      },
+    });
+    const rows = foldTurns(
+      groupRows([
+        block("user", "look around", { at: 1_000 }),
+        agent,
+        block("assistant", "sent it, I'll tell you", { at: 1_200, usage: COST }),
+        block("assistant", "it found it", { at: 3_000, usage: COST }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "subagent", "message", "report", "message", "footer"]);
+    expect(said(rows)).toEqual(["user: look around", "assistant: sent it, I'll tell you", "assistant: it found it"]);
+  });
+
   it("still starts a turn at a bot's letter", () => {
     const letter = block("user", "report: done", { fromBot: { id: "b1", name: "Scout" } });
     const rows = foldTurns(groupRows([...work("first", 1_000), letter, ...work("second", 2_000)]), false);

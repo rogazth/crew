@@ -380,6 +380,13 @@ function serve() {
   function finishAgent(task) {
     const call = agents.get(task);
     agents.delete(task);
+    emit({
+      type: "assistant",
+      session_id: sessionId,
+      parent_tool_use_id: call,
+      agent_id: task,
+      message: { id: `msg_${randomUUID().slice(0, 8)}`, role: "assistant", model: model || "fake", content: [{ type: "text", text: "Found 3 files." }] },
+    });
     emit({ type: "system", subtype: "task_updated", session_id: sessionId, task_id: task, patch: { status: "completed" } });
     emit({ type: "system", subtype: "task_notification", session_id: sessionId, task_id: task, tool_use_id: call, status: "completed", summary: "Found 3 files." });
     emit({ type: "system", subtype: "background_tasks_changed", session_id: sessionId, tasks: [] });

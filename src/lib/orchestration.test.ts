@@ -110,7 +110,7 @@ describe("the rows a transcript groups into", () => {
     expect(speaker(rows[0]!)).toBe("meta");
   });
 
-  it("still starts a turn at a report, and leaves a subagent, a start and a report on the rail when the turn folds", () => {
+  it("still starts a turn at a report, and leaves a subagent, a start and a report on the rail when the turn folds; the line (copy, the time) closes the turn the report woke", () => {
     const report = block("user", "done", { fromBot: scout, letterId: "L9", letterKind: "report" });
     const rows = foldTurns(
       groupRows([
@@ -125,7 +125,7 @@ describe("the rows a transcript groups into", () => {
       ]),
       false,
     );
-    expect(kinds(rows)).toEqual(["date", "message", "fold", "subagent", "started", "message", "footer", "report", "message", "footer"]);
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "subagent", "started", "message", "report", "message", "footer"]);
   });
 });
 

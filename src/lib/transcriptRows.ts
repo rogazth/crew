@@ -413,6 +413,10 @@ export function rowBlocks(row: Row): Block[] {
  * Letters sent or received on the way stay out of the fold, under it, in the
  * order they came: a checkpoint is where the conversation with someone else
  * happened, and a folded turn must not hide that it did.
+ *
+ * A turn that a subagent's report woke goes on the one that sent it, for the
+ * reader: the reply in between keeps its place, but its line (copy, the time)
+ * gives way to the one under the last answer.
  */
 export function foldTurns(rows: Row[], working: boolean): Row[] {
   rows = withFooters(rows, working);
@@ -432,7 +436,7 @@ export function foldTurns(rows: Row[], working: boolean): Row[] {
     if (row.kind === "footer") close(false);
   }
   close(working);
-  return out;
+  return out.filter((row, index) => row.kind !== "footer" || out[index + 1]?.kind !== "report");
 }
 
 /**
