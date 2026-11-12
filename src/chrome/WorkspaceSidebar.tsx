@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
+import { applyHeld, holdOrder, type HeldOrder } from "../lib/heldOrder";
 import { WorkspaceTile } from "./WorkspaceTile";
 import { WorkspacePlaces, type WorkspacePlacesProps } from "./WorkspacePlaces";
 import { BotAvatar } from "./BotAvatar";
@@ -231,7 +232,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
         : trimSection(sessions, prefs, activeId, now),
     [activeId, expanded, filtering, mode, now, prefs],
   );
-  const sections = useMemo<Section[]>(() => {
+  const live = useMemo<Section[]>(() => {
     if (mode === "worktree")
       return props.worktrees
         .filter((tree) => !hiddenTrees.includes(tree.path))
@@ -245,6 +246,17 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
       })).filter((section) => section.sessions.length > 0);
     return [{ key: "sessions", sessions: terminals }];
   }, [activeId, filtering, hiddenTrees, mode, pathOf, props.worktrees, terminals]);
+
+  // Rows stay put while the pointer is over the list, or a row's menu or rename is open: what moved
+  // goes to its place once the pointer leaves. A find lists its matches as they are.
+  const [frozen, setFrozen] = useState<HeldOrder<Section> | null>(null);
+  const [pointing, setPointing] = useState(false);
+  const holding = frozen !== null && !filtering && (pointing || menu !== null || renaming !== null);
+  const sections = useMemo(() => (holding ? applyHeld(live, frozen) : live), [frozen, holding, live]);
+  const onPointerEnter = () => {
+    setPointing(true);
+    setFrozen(holdOrder(sections));
+  };
 
   const open = (section: Section) => filtering || (folds.get(section.key) ?? true);
   const listed = useMemo(() => new Map(sections.map((section) => [section.key, trim(section.sessions, section.key)])), [sections, trim]);
@@ -362,7 +374,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3" onPointerEnter={onPointerEnter} onPointerLeave={() => setPointing(false)}>
         {props.home ? (
           <div className="flex h-12 items-center pr-2 pl-3">
             <span className={`${NAME_TYPE} min-w-0 truncate`}>Home</span>
