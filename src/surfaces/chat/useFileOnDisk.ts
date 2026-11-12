@@ -5,6 +5,13 @@ import { useChatActions } from "./context";
 /** The folders the message being drawn names: where a bare file name is looked for after the session's folder. */
 export const MessageDirs = createContext<readonly string[]>([]);
 
+/**
+ * The files the chat's own calls read or edited, as they named them. A reply
+ * that says `ARCHITECTURE.md` means the one it just read in `docs/`, not one
+ * at the root that is not there.
+ */
+export const ChatFiles = createContext<readonly string[]>([]);
+
 type Watcher = (visible: boolean) => void;
 const watchers = new WeakMap<Element, Watcher>();
 let observer: IntersectionObserver | null = null;
@@ -39,17 +46,25 @@ function observe(el: Element, watcher: Watcher): () => void {
 export function useFileOnDisk(path: string) {
   const { resolvePath } = useChatActions();
   const dirs = useContext(MessageDirs);
+  const touched = useContext(ChatFiles);
   const candidates = useMemo(() => {
     const own = resolvePath(path);
     const list = own ? [own] : [];
-    if (!path.startsWith("/") && !path.startsWith("~/")) {
+    if (path && !path.startsWith("/") && !path.startsWith("~/")) {
+      const relative = path.replace(/^\.\//, "");
       for (const dir of dirs) {
         const base = resolvePath(dir);
-        if (base) list.push(`${base}/${path.replace(/^\.\//, "")}`);
+        if (base) list.push(`${base}/${relative}`);
+      }
+      for (const file of touched) {
+        if (file.endsWith(`/${relative}`)) {
+          const full = resolvePath(file);
+          if (full) list.push(full);
+        }
       }
     }
     return [...new Set(list)];
-  }, [path, dirs, resolvePath]);
+  }, [path, dirs, touched, resolvePath]);
   const key = candidates.join("\n");
   const [found, setFound] = useState<{ key: string; file: string | null } | null>(null);
   const ref = useRef<HTMLElement>(null);

@@ -11,6 +11,8 @@ import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
 import { Rows } from "./Rows";
 import { useBackgroundScope, useLetterScope } from "./context";
+import { ChatFiles } from "./useFileOnDisk";
+import { detailOf } from "../../lib/toolDetail";
 
 const NEAR_BOTTOM_PX = 16;
 /** How long a clicked row holds its place: the panel's 200ms, and room for what renders late in it. */
@@ -92,6 +94,9 @@ export function Transcript({
   // The queue at the foot waits under the working line, outside any turn.
   const { calls } = useBackgroundScope();
   const { inThread } = useLetterScope();
+  // Joined, so a turn that touches no new file keeps the same list while it streams.
+  const filesKey = useMemo(() => touchedFiles(blocks).join("\n"), [blocks]);
+  const files = useMemo(() => (filesKey ? filesKey.split("\n") : []), [filesKey]);
   const { rows, queued } = useMemo(() => {
     const split = splitQueued(groupRows(blocks, calls.size > 0 ? new Set(calls.keys()) : undefined));
     // The message the agent is already working on is that turn's prompt. It
@@ -273,8 +278,10 @@ export function Transcript({
             </button>
           </div>
         )}
-        <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} since={since ?? turnStart(blocks)} />
-        {/* The live run's own line already says the agent is at it, and an open card that it waits on the reader. */}
+        <ChatFiles value={files}>
+          <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} since={since ?? turnStart(blocks)} />
+        </ChatFiles>
+        {/* The live run's own line already says the agent is at it. */}
         {working && rows.at(-1)?.kind !== "activity" && !waiting(blocks) && (
           <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
             <WorkingLine since={since ?? turnStart(blocks)} />
@@ -291,3 +298,12 @@ export function Transcript({
   );
 }
 
+/** Every file the chat's calls read or edited, once each, newest last. */
+function touchedFiles(blocks: readonly Block[]): string[] {
+  const files = new Set<string>();
+  for (const block of blocks) {
+    const detail = detailOf(block);
+    if (detail?.kind === "file" || detail?.kind === "edit") files.add(detail.path);
+  }
+  return [...files];
+}
