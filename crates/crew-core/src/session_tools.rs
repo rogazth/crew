@@ -2348,12 +2348,6 @@ impl ToolFamily for SessionTools {
              list_peers lists who you can write to."
                 .to_string()
         };
-        // A session of the user's hears of its workspace only here, once, when
-        // it starts: its prompt is the user's.
-        if let Caller::Terminal(me) = caller {
-            let section = crate::prompts::workspace(crate::prompts::Workspace::read(&self.store, &me.workspace_id).as_ref());
-            note.push_str(section.trim());
-        }
         if let (Some(me), Ok(workspace)) = (caller.session(), caller.workspace_id()) {
             if let Ok(live) = self.live_children(workspace, &me.id) {
                 if !live.is_empty() {
@@ -6082,11 +6076,11 @@ time.sleep(600)
         assert!(w.tools.instructions(&bot).is_none(), "a bot is told again what its prompt says");
         let told = w.tools.instructions(&Caller::User { workspace_id: None }).unwrap();
         assert!(!told.contains(GLOSSARY) && told.contains("do not use it just because the user said"), "{told}");
-        // A session of the user's hears of its workspace here, once the user wrote about it.
+        // Its workspace is in its system prompt (`TurnHost::persona`), never here,
+        // where the CLI cuts a long text short.
         let place = w.row(&shell.session().unwrap().id).workspace_id;
         crate::workspace::set_description(w.turns.store(), &place, "The client's shop.").unwrap();
-        let told = w.tools.instructions(&shell).unwrap();
-        assert!(told.starts_with("### Workspace") && told.contains("\n\nThe client's shop."), "{told}");
+        assert!(w.tools.instructions(&shell).is_none(), "the workspace is told in the MCP instructions");
         crate::workspace::set_description(w.turns.store(), &place, "").unwrap();
         let id = w.start(&shell, "x");
         assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its subagents");
@@ -7358,8 +7352,9 @@ time.sleep(600)
         assert_eq!(w.row(&mine.id).last_event, None, "nobody waits on a user's turn");
     }
 
-    /// Nothing is added to the user's own CLI: no persona, their settings
-    /// loaded, and the question tool kept so its questions reach them.
+    /// The user's own CLI is told only its workspace: no persona, their
+    /// settings loaded, and the question tool kept so its questions reach
+    /// them. With nothing written about the workspace, nothing is added.
     #[test]
     fn a_users_session_is_launched_without_a_persona_and_with_the_users_settings() {
         let w = world();
@@ -7380,6 +7375,15 @@ time.sleep(600)
         assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
         assert_eq!(after_flag(user, "--permission-prompt-tool"), Some("stdio".to_string()), "{argv:?}");
         assert!(subagent["argv"].to_string().contains("--append-system-prompt"), "{subagent}");
+
+        // Once the user writes about the workspace, a new session's system
+        // prompt carries that section and nothing of Crew's persona.
+        crate::workspace::set_description(w.turns.store(), &mine.workspace_id, "The client's shop.").unwrap();
+        let next = w.user_session("claude", "", "full");
+        w.say(&next, "hello");
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        let told = after_flag(launches.last().unwrap(), "--append-system-prompt").expect("a system prompt");
+        assert!(told.starts_with("### Workspace") && told.ends_with("The client's shop."), "{told}");
     }
 
     /// Claude refuses a new session under an id it holds, so a conversation

@@ -945,11 +945,13 @@ impl TurnHost {
     /// What a session is told before its turn (plan §6, §7): a bot, every
     /// turn; a child, on its first. The tools are the ones `tools/list`
     /// answers it with, by its kind, as its harness spells them; none when
-    /// Crew's server is not there. None for the user's own session: it runs
-    /// as their CLI, which is told nothing beyond what the CLI itself says.
+    /// Crew's server is not there. The user's own session runs as their CLI
+    /// and is told only its workspace, as bots and children are: the
+    /// description and rules the user wrote. None when they wrote nothing.
     pub(crate) fn persona(&self, session: &crate::session::Session, harness: Harness, mcp: bool, cwd: &str) -> Option<String> {
         if driven(session) == Some(Driven::User) {
-            return None;
+            let workspace = crate::prompts::Workspace::read(&self.store, &session.workspace_id);
+            return crate::prompts::user_session(workspace.as_ref());
         }
         let kind = crate::caller::Caller::from_session(session.clone()).kind();
         let tools = if mcp { self.toolbox.visible_names(kind) } else { Vec::new() };
@@ -5384,8 +5386,9 @@ mod mailbox_tests {
         assert!(!bare.contains("### Crew tools"), "{bare}");
     }
 
-    /// What the user writes in a workspace's settings reaches its bots and
-    /// subagents on their next turn, from the store; nothing written, no section.
+    /// What the user writes in a workspace's settings reaches its bots,
+    /// subagents and the user's own sessions in their system prompt, from the
+    /// store; nothing written, no section.
     #[test]
     fn the_persona_carries_the_workspace_the_user_wrote_about() {
         let host = TurnHost::test_new();
@@ -5415,8 +5418,20 @@ mod mailbox_tests {
             Some(bot.id.clone()),
         )
         .expect("child");
+        let mine = crate::session::create(
+            store,
+            ws.clone(),
+            "terminal".into(),
+            "Mine".into(),
+            "claude".into(),
+            "".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("terminal");
         let cwd = dir.to_string_lossy().into_owned();
         assert!(!host.persona(&bot, Harness::Mcp, true, &cwd).unwrap().contains("### Workspace"));
+        assert_eq!(host.persona(&mine, Harness::Mcp, true, &cwd), None, "the user's session is told an empty workspace");
 
         crate::workspace::set_description(store, &ws, "The client's shop.").unwrap();
         let owner = crate::rules::Owner::Workspace(&ws);
@@ -5429,6 +5444,8 @@ mod mailbox_tests {
         assert!(told.contains(section), "{told}");
         let child_told = host.persona(&child, Harness::Mcp, true, &cwd).unwrap();
         assert!(child_told.contains(section), "{child_told}");
+        // The user's own session gets the same section, and only it.
+        assert_eq!(host.persona(&mine, Harness::Mcp, true, &cwd).as_deref(), Some(section.trim_end()));
     }
 
     /// Crew's own tools never become an approval card, even if the CLI asks.

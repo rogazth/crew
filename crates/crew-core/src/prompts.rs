@@ -363,6 +363,16 @@ pub fn workspace(workspace: Option<&Workspace>) -> String {
     out
 }
 
+/// What a session of the user's is told in its system prompt: the same
+/// workspace section a bot and a subagent get, and nothing else, since the
+/// rest of its prompt is the user's CLI's. None when the user wrote nothing
+/// about the workspace.
+pub fn user_session(workspace: Option<&Workspace>) -> Option<String> {
+    let section = self::workspace(workspace);
+    let section = section.trim();
+    (!section.is_empty()).then(|| section.to_string())
+}
+
 pub fn bot(bot: &Bot) -> String {
     let name = match bot.name.trim() {
         "" => "the user's bot",
