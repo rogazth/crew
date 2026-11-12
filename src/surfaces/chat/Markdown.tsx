@@ -22,7 +22,7 @@ import type { AttachedFile } from "../../lib/blocks";
 import { Lightbox } from "./Attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
 import { isPathLike, localPath, namedDirs } from "../../lib/localLink";
-import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
+import { fenceTitle, remarkAlerts, remarkTightLinks } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { Blockquote } from "./Alert";
 import { CodeBlock } from "./CodeBlock";
@@ -199,7 +199,7 @@ const COMPONENTS: Components = {
 };
 
 /** Streamdown's own plugins, then callouts. Module-level: a new array would re-parse every run. */
-const REMARK = [...Object.values(defaultRemarkPlugins), remarkAlerts];
+const REMARK = [...Object.values(defaultRemarkPlugins), remarkAlerts, remarkTightLinks];
 /**
  * Streamdown's sanitizer keeps a blockquote's `cite` and nothing else, which
  * would strip the kind `remarkAlerts` put on it. Its schema, plus those two.
@@ -211,7 +211,14 @@ const REHYPE = Object.entries(defaultRehypePlugins).map(([name, plugin]) => {
   const attributes = schema.attributes ?? {};
   return [
     sanitize,
-    { ...schema, attributes: { ...attributes, blockquote: [...(attributes.blockquote ?? []), "dataAlert", "dataAlertTitle"] } },
+    {
+      ...schema,
+      attributes: {
+        ...attributes,
+        blockquote: [...(attributes.blockquote ?? []), "dataAlert", "dataAlertTitle"],
+        a: [...(attributes.a ?? []), "dataTight"],
+      },
+    },
   ] as Pluggable;
 });
 /** `$$…$$` only: a lone `$` is a price far more often than it is maths. */

@@ -61,7 +61,9 @@ export function renderMermaid(source: string, dark: boolean): Promise<string> {
           startOnLoad: false,
           securityLevel: "strict",
           theme: wanted,
-          fontFamily: "inherit",
+          // Named, not inherited: mermaid sizes each label in <body> and draws it in the fence, whose
+          // font is monospace. Inherited, the two differ and every label comes out clipped.
+          fontFamily: "ui-sans-serif, -apple-system, system-ui, sans-serif",
           // Without it a source that does not parse leaves its error diagram in <body>, under the window.
           suppressErrorRendering: true,
         });

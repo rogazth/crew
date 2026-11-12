@@ -52,3 +52,24 @@ export function fenceTitle(meta: string | undefined): string | undefined {
   const bare = meta.trim().split(/\s+/)[0];
   return bare && /[./]/.test(bare) && !bare.includes("=") ? bare : undefined;
 }
+
+/** What closes a sentence or a clause right after a link: the link's pill padding would open a gap before it. */
+const CLOSING = /^[.,;:!?)\]}»”’…]/;
+
+/**
+ * A link a punctuation mark follows gets `data-tight`: its pill keeps no
+ * room on the right, so "a link." does not read as "a link .".
+ */
+export function remarkTightLinks() {
+  return (tree: Root) => tighten(tree);
+}
+
+function tighten(node: Parent) {
+  node.children.forEach((child, index) => {
+    const after = node.children[index + 1];
+    if (child.type === "link" && after?.type === "text" && CLOSING.test(after.value)) {
+      child.data = { ...child.data, hProperties: { ...(child.data?.hProperties ?? {}), dataTight: "" } };
+    }
+    if ("children" in child) tighten(child);
+  });
+}

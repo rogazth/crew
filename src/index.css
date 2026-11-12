@@ -1149,6 +1149,8 @@ html:has(body > :not(#root) :is([role="dialog"], [role="alertdialog"], [role="me
   justify-content: center;
   padding: 6px 14px 14px;
   overflow-x: auto;
+  /* The font mermaid measured its labels in, not the fence's monospace. */
+  font-family: ui-sans-serif, -apple-system, system-ui, sans-serif;
 }
 .crew-mermaid svg {
   max-width: 100%;
@@ -1183,6 +1185,10 @@ html:has(body > :not(#root) :is([role="dialog"], [role="alertdialog"], [role="me
 .crew-md [data-streamdown="link"][data-footnote-backref] {
   padding: 0;
   margin: 0;
+}
+/* Punctuation right after it: no room on the right, or "a link." reads "a link .". */
+.crew-md [data-streamdown="link"][data-tight] {
+  padding-right: 1px;
 }
 .crew-md [data-streamdown="link"]:hover {
   background: color-mix(in srgb, var(--color-link) 14%, transparent);
