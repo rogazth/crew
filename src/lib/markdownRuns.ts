@@ -14,7 +14,8 @@ function closesFence(line: string, marker: string): boolean {
 
 /**
  * Splits a message into prose runs and the blocks that need the whole column:
- * fences, quotes, tables, rules and lone images. Works on lines rather than
+ * fences, quotes, tables, rules and lone images, an image's neighbours (blank
+ * lines between them or not) going with it into one row. Works on lines rather than
  * the parser's blocks so a fence inside a list still breaks out. Fences
  * indented four or more spaces stay in the prose, as do lazy quote lines.
  */
@@ -30,7 +31,7 @@ export function groupRuns(text: string): Run[] {
     prose = [];
   };
   // Headings that close a run caption the wide block after it, so they leave the bubble.
-  const wide = (from: number, to: number) => {
+  const flushWide = (block: string) => {
     let cut = prose.length;
     while (cut > 0 && prose[cut - 1]!.trim() === "") cut--;
     while (cut > 0 && HEADING.test(prose[cut - 1]!)) cut--;
@@ -39,8 +40,9 @@ export function groupRuns(text: string): Run[] {
       prose = prose.slice(cut);
     }
     flush();
-    runs.push({ kind: "wide", text: lines.slice(from, to).join("\n") });
+    runs.push({ kind: "wide", text: block });
   };
+  const wide = (from: number, to: number) => flushWide(lines.slice(from, to).join("\n"));
   let i = 0;
   while (i < lines.length) {
     const line = lines[i]!;
@@ -68,7 +70,20 @@ export function groupRuns(text: string): Run[] {
     }
     // A run of dashes under a text line is a setext heading, not a rule.
     const afterBlank = i === 0 || lines[i - 1]!.trim() === "";
-    if (afterBlank && (RULE.test(line) || IMAGE_ONLY.test(line))) {
+    if (afterBlank && IMAGE_ONLY.test(line)) {
+      const images = [line];
+      let j = i + 1;
+      for (let k = j; k < lines.length; k++) {
+        if (lines[k]!.trim() === "") continue;
+        if (!IMAGE_ONLY.test(lines[k]!)) break;
+        images.push(lines[k]!);
+        j = k + 1;
+      }
+      flushWide(images.join("\n"));
+      i = j;
+      continue;
+    }
+    if (afterBlank && RULE.test(line)) {
       wide(i, i + 1);
       i++;
       continue;

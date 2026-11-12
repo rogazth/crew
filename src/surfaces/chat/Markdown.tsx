@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
   type ComponentProps,
+  type Ref,
   type ReactNode,
 } from "react";
 import { createMathPlugin } from "@streamdown/math";
@@ -15,7 +16,9 @@ import "streamdown/styles.css";
 import { FileRef } from "../../chrome/FileRef";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
+import { useImageSrc } from "../../hooks/useImageSrc";
 import { attachedFrom, extensionOf, imageMime } from "../../lib/attachments";
+import type { AttachedFile } from "../../lib/blocks";
 import { Lightbox } from "./Attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
 import { isPathLike, localPath, namedDirs } from "../../lib/localLink";
@@ -130,6 +133,51 @@ function Link({ href, children, node: _node, ...rest }: LinkProps) {
   );
 }
 
+type ImgProps = ComponentProps<"img"> & { node?: unknown };
+
+/**
+ * `![shot](/tmp/shots/a.png)`: an image on the agent's machine, read through
+ * the app like an attachment, so it shows wherever the window was loaded
+ * from. Every one is the same box, whatever its shape, and opens the viewer
+ * on every image the message shows, in order.
+ */
+function MarkdownImage({ src, alt }: ImgProps) {
+  const path = typeof src === "string" ? localPath(src) : null;
+  const { ref, file } = useFileOnDisk(path ?? "");
+  const data = useImageSrc(file ?? "");
+  const [gallery, setGallery] = useState<{ images: AttachedFile[]; index: number } | null>(null);
+  const label = alt || file?.split("/").pop() || "image";
+  if (!path || file === null) return <span>{alt || src}</span>;
+  return (
+    <>
+      <button
+        ref={ref as unknown as Ref<HTMLButtonElement>}
+        type="button"
+        title={file ?? path}
+        aria-label={`Open ${label}`}
+        className="crew-md-image"
+        {...(file ? { "data-md-image": file } : {})}
+        onClick={(event) => {
+          if (!file) return;
+          const shown = [...(event.currentTarget.closest(".crew-md")?.querySelectorAll<HTMLElement>("[data-md-image]") ?? [])];
+          const paths = [...new Set(shown.map((el) => el.dataset.mdImage!))];
+          setGallery({ images: paths.map((p) => attachedFrom(p)), index: Math.max(0, paths.indexOf(file)) });
+        }}
+      >
+        {data && <img src={data} alt={label} draggable={false} />}
+      </button>
+      {gallery && (
+        <Lightbox
+          images={gallery.images}
+          index={gallery.index}
+          onIndex={(index) => setGallery({ ...gallery, index })}
+          onClose={() => setGallery(null)}
+        />
+      )}
+    </>
+  );
+}
+
 type InputProps = ComponentProps<"input"> & { node?: unknown };
 
 /** A task item's box: the native control can't take the icon shape the list wants. */
@@ -143,6 +191,7 @@ const COMPONENTS: Components = {
   a: Link,
   blockquote: Blockquote,
   code: Code,
+  img: MarkdownImage,
   input: Input,
   // The fence's <pre> only marks its child as a block; the box is CodeBlock's.
   pre: ({ children }) =>

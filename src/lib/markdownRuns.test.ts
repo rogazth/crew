@@ -10,6 +10,14 @@ describe("groupRuns", () => {
     ]);
   });
 
+  it("keeps images that follow each other in one row, blank lines between them or not", () => {
+    expect(groupRuns("Shots:\n\n![a](/a.png)\n![b](/b.png)\n\n![c](/c.png)\n\nAfter")).toEqual([
+      { kind: "prose", text: "Shots:" },
+      { kind: "wide", text: "![a](/a.png)\n![b](/b.png)\n![c](/c.png)" },
+      { kind: "prose", text: "\nAfter" },
+    ]);
+  });
+
   it("breaks fences, quotes, tables, rules and lone images out", () => {
     const text = [
       "Intro",
