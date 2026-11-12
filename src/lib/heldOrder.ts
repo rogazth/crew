@@ -17,19 +17,24 @@ export function holdOrder<R extends Row, G extends Group<R>>(groups: G[]): HeldO
 /**
  * The live groups laid out as `held` had them. A row keeps its group and place,
  * with what it says now; a row gone is gone; a new row comes in at the top of
- * the group it falls in. A held group stays while it holds rows (or while the
- * live list still has it); a group new to the list comes in after the one it
+ * the group it falls in. A group new to the list comes in after the one it
  * follows there.
+ *
+ * A held group the live list no longer has is kept while it holds rows only
+ * when `keepEmptied`: a group the list drops for being empty (a status) holds
+ * its rows in place, but one that is gone (a worktree removed) goes, and its
+ * rows come in where they fall now.
  */
-export function applyHeld<R extends Row, G extends Group<R>>(live: G[], held: HeldOrder<G>): G[] {
+export function applyHeld<R extends Row, G extends Group<R>>(live: G[], held: HeldOrder<G>, keepEmptied: boolean): G[] {
   const byId = new Map<string, R>();
   for (const group of live) for (const session of group.sessions) byId.set(session.id, session);
-  const known = new Set(held.flatMap((entry) => entry.ids));
   const liveByKey = new Map(live.map((group) => [group.key, group]));
+  const kept = held.filter((entry) => keepEmptied || liveByKey.has(entry.group.key));
+  const known = new Set(kept.flatMap((entry) => entry.ids));
   const fresh = (group: G | undefined) => (group?.sessions ?? []).filter((s) => !known.has(s.id));
 
   const out: G[] = [];
-  for (const { group, ids } of held) {
+  for (const { group, ids } of kept) {
     const now = liveByKey.get(group.key);
     const sessions = [...fresh(now), ...ids.flatMap((id) => byId.get(id) ?? [])];
     if (now || sessions.length > 0) out.push({ ...(now ?? group), sessions });

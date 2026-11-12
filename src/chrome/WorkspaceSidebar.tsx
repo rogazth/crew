@@ -252,7 +252,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const [frozen, setFrozen] = useState<HeldOrder<Section> | null>(null);
   const [pointing, setPointing] = useState(false);
   const holding = frozen !== null && !filtering && (pointing || menu !== null || renaming !== null);
-  const sections = useMemo(() => (holding ? applyHeld(live, frozen) : live), [frozen, holding, live]);
+  const sections = useMemo(() => (holding ? applyHeld(live, frozen, mode === "status") : live), [frozen, holding, live]);
   const onPointerEnter = () => {
     setPointing(true);
     setFrozen(holdOrder(sections));

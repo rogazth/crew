@@ -298,6 +298,8 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
         workspaces.push(await request<Workspace>("workspace_create", { name: path.basename(dir), path: dir }));
       }
       await request("active_workspace_set", { id: workspaces[0]!.id });
+      // The specs read sessions under their worktree's heading; the app's own default groups by status.
+      await request("state_set", { key: "sidebar:prefs", value: JSON.stringify({ groupBy: "worktree" }) });
       await page.reload();
     } else {
       workspaces.push(...(await request<Workspace[]>("workspace_list")));
