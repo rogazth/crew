@@ -19,7 +19,7 @@ describe("parsePrefs", () => {
   it("keeps only the limits and spans the menu offers", () => {
     expect(parsePrefs(JSON.stringify({ limit: 20, recency: "week" }))).toMatchObject({ limit: 20, recency: "week" });
     expect(parsePrefs(JSON.stringify({ limit: 0 })).limit).toBe(0);
-    expect(parsePrefs(JSON.stringify({ limit: 7, recency: "year" }))).toMatchObject({ limit: 10, recency: "any" });
+    expect(parsePrefs(JSON.stringify({ limit: 7, recency: "year" }))).toMatchObject({ limit: DEFAULT_PREFS.limit, recency: "any" });
   });
 
   it("keeps the layout the view menu picked", () => {

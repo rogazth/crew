@@ -44,7 +44,7 @@ export const DEFAULT_PREFS: SidebarPrefs = {
   hiddenKinds: [],
   hiddenProviders: [],
   recency: "any",
-  limit: 10,
+  limit: 5,
   groupBy: DEFAULT_GROUPING,
   showWorktree: true,
   hiddenTrees: [],
