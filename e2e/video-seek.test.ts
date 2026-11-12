@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { before, test } from "node:test";
-import { addRemote, launchCrew, MOD, pressChord, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openPalette, pressChord, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 /** The ten-second fixture is small enough to load whole, and a whole file seeks anyway: a `free` box keeps it loading. */
 async function largeVideo(): Promise<Buffer> {
@@ -31,7 +31,7 @@ const inGuest = <T>(crew: Crew, script: string) =>
   }, script) as Promise<T | null>;
 
 async function openVideo(crew: Crew): Promise<void> {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("clip");
   await palette.getByRole("button", { name: "clip.mp4", exact: true }).click();

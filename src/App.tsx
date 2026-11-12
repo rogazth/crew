@@ -63,6 +63,8 @@ import { WorkspaceStart, focusWorkspaceStart } from "./surfaces/WorkspaceStart";
 import type { AgentChoice } from "./lib/providers";
 import type { NavPlace } from "./chrome/WorkspacePlaces";
 import { WorkspaceSettingsPage } from "./surfaces/WorkspaceSettingsPage";
+import { focus as focusBlock } from "./lib/transcript";
+import type { Session } from "./lib/types";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
 const NO_PROCESSES: Process[] = [];
@@ -260,7 +262,7 @@ export function App() {
     if (place === "services") togglePage({ kind: "services" });
     if (place === "routines") togglePage({ kind: "routines", draft: null });
   };
-  // A file dropped on the strip opens as ⌘P would open it: one in the worktree
+  // A file dropped on the strip opens as ⌘K's Files would open it: one in the worktree
   // keeps its path there, one from elsewhere resolves against its own folder.
   const { openFile } = nav;
   const openDropped = useCallback(
@@ -327,6 +329,23 @@ export function App() {
       window.setTimeout(focusWorkspaceStart, 0);
     },
   });
+
+  // A session the palette found, at the line it found: at once in this workspace, or once its own is on screen.
+  const opening = useRef<{ session: Session; pos: number | null } | null>(null);
+  const openFound = useCallback(
+    (session: Session, pos: number | null) => {
+      closePage();
+      nav.openSession(session);
+      if (pos !== null) void focusBlock(session.id, pos, Number.POSITIVE_INFINITY);
+    },
+    [closePage, nav],
+  );
+  useEffect(() => {
+    const wanted = opening.current;
+    if (!wanted || active?.id !== wanted.session.workspaceId) return;
+    opening.current = null;
+    openFound(wanted.session, wanted.pos);
+  }, [active?.id, openFound]);
 
   useAppCommands({
     workspaces,
@@ -670,12 +689,19 @@ export function App() {
           key={palette}
           mode={palette}
           files={files}
+          recentFiles={tabs.recentFiles}
           sessions={sessions}
+          allSessions={all}
+          activeSessionId={activeSessionId}
           workspaces={workspaces.workspaces}
           activeWorkspaceId={active.id}
           worktrees={worktrees.list}
           onOpenFile={nav.openFile}
-          onOpenSession={nav.openSession}
+          onOpenSession={(session, pos) => {
+            if (session.workspaceId === active.id) return openFound(session, pos);
+            opening.current = { session, pos };
+            workspaces.activate(session.workspaceId);
+          }}
           onSelectWorkspace={(id) => {
             closePage();
             workspaces.activate(id);

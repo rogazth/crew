@@ -26,7 +26,7 @@ import {
 } from '../lib/tabs';
 import { collapseGroup, collapseOthers, expandGroup, revealActive, visibleIn, type PlaceOf } from '../lib/tabGroups';
 import type { BrowserTabPatch } from '../lib/tabs';
-import type { Tab } from '../lib/types';
+import type { ProjectFile, Tab } from '../lib/types';
 import { migrateLegacyTabs } from '../lib/tabsMigration';
 import { tabEvents } from '../lib/tabsTrace';
 import { trace } from '../lib/trace';
@@ -298,9 +298,11 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
   const shown = useMemo(() => (state && placeOf ? revealActive(state, placeOf) : state), [state, placeOf]);
   const tabs = shown?.tabs ?? NO_TABS.tabs;
   const active = tabs.find((t) => t.id === shown?.activeId) ?? null;
+  const recentFiles = useMemo(() => filesOf(shown), [shown]);
   return {
     tabs,
     active,
+    recentFiles,
     collapsed: shown?.collapsed ?? NO_COLLAPSED,
     panes,
     open,
@@ -328,4 +330,23 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     strips,
     replace,
   };
+}
+
+/** How many files the palette offers before anything is typed. */
+const RECENT_FILES = 6;
+
+/** The files last on screen, newest first: the open ones in the strip's recent order, then the ones closed. */
+function filesOf(state: TabState | undefined): ProjectFile[] {
+  if (!state) return [];
+  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+  const ordered = [...(state.recent ?? []).flatMap((id) => byId.get(id) ?? []), ...state.tabs, ...state.closed];
+  const seen = new Set<string>();
+  const out: ProjectFile[] = [];
+  for (const tab of ordered) {
+    if (tab.kind !== "file" || seen.has(tab.path)) continue;
+    seen.add(tab.path);
+    out.push({ name: tab.relative.split("/").at(-1) ?? tab.relative, path: tab.path, relative: tab.relative });
+    if (out.length === RECENT_FILES) break;
+  }
+  return out;
 }

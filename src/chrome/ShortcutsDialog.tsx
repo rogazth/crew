@@ -18,7 +18,6 @@ function sections(): { group: string; rows: Row[] }[] {
         [commandKeys("go-home"), "Go home"],
         [range("workspace-1"), "Go to workspace"],
         [pair("prev-workspace", "next-workspace"), "Previous / next workspace"],
-        [commandKeys("switch-workspace"), "Switch workspace"],
       ],
     },
     {
@@ -35,7 +34,6 @@ function sections(): { group: string; rows: Row[] }[] {
       rows: [
         [commandKeys("open-launcher"), "New tab"],
         [pair("new-browser-tab", "new-incognito-tab"), "New browser / incognito tab"],
-        [commandKeys("go-to-file"), "Open a file"],
         [pair("close", "reopen-tab"), "Close / reopen tab"],
         [pair("prev-tab", "next-tab"), "Previous / next tab"],
       ],
@@ -64,8 +62,7 @@ function sections(): { group: string; rows: Row[] }[] {
     {
       group: "Everywhere",
       rows: [
-        [commandKeys("open-palette"), "Command palette"],
-        [commandKeys("open-actions"), "All actions"],
+        [commandKeys("open-palette"), "Find chats, files, workspaces and commands"],
         [commandKeys("toggle-explorer"), "Explorer"],
         [commandKeys("search-files"), "Search in files"],
         [commandKeys("open-settings"), "Settings"],

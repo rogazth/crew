@@ -3,7 +3,7 @@
 // than the window, and a scroll then took the tab strip off the top.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, noteEditor, pressChord, type Crew } from "./harness.ts";
+import { launchCrew, noteEditor, openPalette, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -18,7 +18,7 @@ after(async () => {
 });
 
 test("a diagram that does not parse leaves the page the height of the window and unscrollable", async () => {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("broken");
   await palette.getByRole("button", { name: "broken.md", exact: true }).click();

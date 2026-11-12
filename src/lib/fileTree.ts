@@ -38,7 +38,7 @@ export function foldersTo(root: string, path: string): string[] {
   return parts.map((_, index) => prefix + parts.slice(0, index + 1).join("/"));
 }
 
-/** Where `path` sits under `root`, as ⌘P and the tab strip spell it. */
+/** Where `path` sits under `root`, as ⌘K's Files and the tab strip spell it. */
 export function relativeTo(root: string, path: string): string {
   const prefix = root.endsWith("/") ? root : `${root}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;

@@ -13,6 +13,7 @@ import {
   addRemote,
   launchCrew,
   MOD,
+  openPalette,
   pressChord,
   remoteRequest,
   startChat,
@@ -90,7 +91,7 @@ test("images in a remote worktree beside the workspace, and ones a chat there na
     await worktreeHeader(crew, "feat/pics").waitFor();
     await startInWorktree(crew, "feat/pics");
 
-    await pressChord(crew, `${MOD}+p`);
+    await openPalette(crew, "Files");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("textbox", { name: "Search" }).fill("dot");
     await palette.getByRole("button", { name: "public/dot.png", exact: true }).click();

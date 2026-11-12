@@ -3,7 +3,7 @@
 // tabs answer ⌘F with the find bar, which counts and steps through their matches.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { codeScrollerIn, launchCrew, MOD, pressChord, waitFor, webviewIn, type Crew } from "./harness.ts";
+import { codeScrollerIn, launchCrew, MOD, openPalette, pressChord, waitFor, webviewIn, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -49,7 +49,7 @@ after(async () => {
 });
 
 async function openFile(query: string, relative: string): Promise<void> {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();

@@ -1,4 +1,4 @@
-// Stress: big files opened with ⌘P in a heavy user's window (`seedHeavy`).
+// Stress: big files opened with ⌘K's Files in a heavy user's window (`seedHeavy`).
 // Each open is timed from the click on the palette's row to the first frame
 // that shows the file's first line, with the read asked of crewd, the long
 // tasks it ran (the freeze) and when it went quiet. Then, on a few of them:
@@ -12,7 +12,7 @@
 // Diagnostics only: nothing here fails on a number.
 import path from "node:path";
 import { after, before, test, type TestContext } from "node:test";
-import { launchCrew, MOD, pressChord, waitFor, type Crew } from "../harness.ts";
+import { launchCrew, MOD, openPalette, pressChord, waitFor, type Crew } from "../harness.ts";
 import { seedHeavy } from "./heavy.ts";
 import { probe, profiled, read, requestOf, reset, settle, stats } from "./probe.ts";
 
@@ -171,7 +171,7 @@ type Open = {
 };
 
 async function openFile(crew: Crew, s: Spec): Promise<Open> {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(s.file);
   const row = palette.getByRole("button", { name: s.file, exact: true });
@@ -266,7 +266,7 @@ async function typeAtTop(crew: Crew, s: Spec): Promise<ReturnType<typeof stats>>
   return stats(typing);
 }
 
-test("big files opened with ⌘P, timed", { timeout: 20 * 60_000 }, async (t: TestContext) => {
+test("big files opened with ⌘K's Files, timed", { timeout: 20 * 60_000 }, async (t: TestContext) => {
   const opens: Open[] = [];
   for (const s of FILES.filter((f) => f.file !== "code/early.ts")) {
     const file = PROFILE ? path.join(PROFILE, `${path.basename(s.file)}.cpuprofile`) : undefined;
@@ -288,7 +288,7 @@ test("big files opened with ⌘P, timed", { timeout: 20 * 60_000 }, async (t: Te
 
   // Typing before the highlight is back: the text holds, and the window does not freeze.
   const early = FILES.find((f) => f.file === "code/early.ts")!;
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(early.file);
   await palette.getByRole("button", { name: early.file, exact: true }).click();

@@ -204,9 +204,9 @@ To add a line, name it `domain.action` with `tracing` (or `trace.info` in the wi
 
 `crewd` answers every question about a worktree's files, so they work the same on a remote machine.
 
-- **⌘P** matches in memory against one list per worktree (`crates/crew-core/src/files.rs`): what git tracks or has not seen, plus small ignored folders.
+- **⌘K's Files** matches in memory against one list per worktree (`crates/crew-core/src/files.rs`): what git tracks or has not seen, plus small ignored folders.
 - **⌘⇧E** reads one folder at a time from disk, everything included (`src/chrome/explorer`).
-- **⌘⇧F** searches the ⌘P files with ripgrep's engine (`crates/crew-core/src/file_search.rs`).
+- **⌘⇧F** searches the same files with ripgrep's engine (`crates/crew-core/src/file_search.rs`).
 
 ## Settings
 

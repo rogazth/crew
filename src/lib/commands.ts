@@ -34,12 +34,13 @@ export const COMMANDS = {
   "next-tab": { label: "Next tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
   "prev-tab": { label: "Previous tab", keys: { key: "[", mod: true, shift: true }, repeat: true },
 
-  // Finding things — three doors into one palette, each opening a different filter.
+  // Finding things — one door, ⌘K, with a tab for chats, files, workspaces and commands.
+  // The tabs have no chord of their own; these three open on theirs only if someone binds them.
   "open-palette": { label: "Command palette", keys: "Mod+K" },
-  "go-to-file": { label: "Go to file", keys: "Mod+P" },
-  "open-actions": { label: "Show all actions", keys: "Mod+Shift+P" },
+  "go-to-file": { label: "Go to file" },
+  "open-actions": { label: "Show all actions" },
   "open-workspace": { label: "Open workspace", keys: "Mod+O" },
-  "switch-workspace": { label: "Switch workspace", keys: "Mod+Shift+O" },
+  "switch-workspace": { label: "Switch workspace" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
   // Each level up the ladder takes a harder chord: tabs ⌘⇧, workspaces ⌘⌥.
   "go-home": { label: "Go home", keys: "Mod+Shift+H" },
@@ -284,7 +285,7 @@ export function liveCommands(): LiveCommand[] {
 
 /** Tab plumbing and the palette's own doors: bound, but noise in a command list. */
 const UNLISTED =
-  /^(next-tab|prev-tab|workspace-[1-9]|close|open-palette|go-to-file|open-actions)$/;
+  /^(next-tab|prev-tab|workspace-[1-9]|close|open-palette|go-to-file|open-actions|switch-workspace)$/;
 
 /** Live commands worth offering in the palette, in declaration order. */
 export function listedCommands(): { id: CommandId; label: string; keys: string }[] {

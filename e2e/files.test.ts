@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, servePages, stripTabIds, waitFor, type Crew, type PageServer } from "./harness.ts";
+import { launchCrew, openPalette, servePages, stripTabIds, waitFor, type Crew, type PageServer } from "./harness.ts";
 
 let crew: Crew;
 let web: PageServer;
@@ -46,7 +46,7 @@ after(async () => {
 });
 
 async function openFile(query: string, relative: string): Promise<void> {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();

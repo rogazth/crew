@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { addRemote, launchCrew, MOD, pressChord, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, openPalette, pressChord, waitFor, workspaceMark, type RemoteDaemon } from "./harness.ts";
 
 const REPORT = [
   "<!doctype html>",
@@ -35,7 +35,7 @@ test("an HTML report on another machine runs its inline scripts", async () => {
     await window.keyboard.press(`${MOD}+Enter`);
     await workspaceMark(crew, "api").waitFor();
 
-    await pressChord(crew, `${MOD}+p`);
+    await openPalette(crew, "Files");
     const palette = window.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("textbox", { name: "Search" }).fill("report");
     await palette.getByRole("button", { name: "report.html", exact: true }).click();

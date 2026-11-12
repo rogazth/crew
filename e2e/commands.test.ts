@@ -10,7 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Process } from "../src/lib/protocol.ts";
-import { launchCrew, MOD, newSession, newWorktree, openServices, pressChord, sendInChat, waitFor, worktreeHeader } from "./harness.ts";
+import { launchCrew, newSession, newWorktree, openPalette, openServices, sendInChat, waitFor, worktreeHeader } from "./harness.ts";
 
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
@@ -117,7 +117,7 @@ test("C2: every service starts from the palette and stops from the Services page
   }
 
   // The palette opens the Services page, and the sidebar marks its row.
-  await pressChord(crew, `${MOD}+Shift+p`);
+  await openPalette(crew, "Commands");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("Services");
   await palette.getByRole("button", { name: /^Services/ }).first().click();
@@ -138,7 +138,7 @@ test("C2: every service starts from the palette and stops from the Services page
   await waitFor(async () => (await states())[0] === "stopped" || (await states())[0] === "exited", { message: "crewd stops web" });
   await web.getByRole("button", { name: "Start web", exact: true }).waitFor();
 
-  await pressChord(crew, `${MOD}+Shift+p`);
+  await openPalette(crew, "Commands");
   await palette.getByRole("textbox", { name: "Search" }).fill("Start all");
   await palette.getByRole("button", { name: /^Start all services/ }).click();
   await waitFor(async () => (await states()).every((state) => state === "running"), { message: "crewd starts both" });
@@ -157,7 +157,7 @@ test("C3: saving a new service goes back to the list and says it was created", a
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
 
-  await pressChord(crew, `${MOD}+Shift+p`);
+  await openPalette(crew, "Commands");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("Services");
   await palette.getByRole("button", { name: /^Services/ }).first().click();

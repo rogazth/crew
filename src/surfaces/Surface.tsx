@@ -45,7 +45,7 @@ export function Surface({
   renderProcess,
 }: Props) {
   // Before the first file tab, so it does not wait out Suspense's reveal
-  // throttle. ⌘P asks too, for a file opened before the window is idle.
+  // throttle. ⌘K's Files asks too, for a file opened before the window is idle.
   useEffect(() => preloadWhenIdle(preloadFileTab), []);
 
   if (!hasWorkspace) {
@@ -59,7 +59,7 @@ export function Surface({
   if (!tab) {
     if (empty) return empty;
     return (
-      <EmptyState title={`Open a bot or session, or ${commandKeys("go-to-file")} for a file`} />
+      <EmptyState title={`Open a bot or session, or ${commandKeys("open-palette")} to find one or a file`} />
     );
   }
   if (tab.kind === "stub") {

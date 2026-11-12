@@ -6,15 +6,15 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { codeScrollerIn, holdsFor, launchCrew, MOD, noteEditor, pressChord, waitFor, type Crew } from "./harness.ts";
+import { codeScrollerIn, holdsFor, launchCrew, MOD, noteEditor, openPalette, pressChord, waitFor, type Crew } from "./harness.ts";
 
 const APP = ["export function answer(): number {", "  return 42;", "}", ""].join("\n");
 const UTIL = ["export const twice = (n: number) => n * 2;", ""].join("\n");
 
-/** ⌘P, the query, and the file's row: its tab opens and its editor (a code one unless said) paints. */
+/** ⌘K's Files, the query, and the file's row: its tab opens and its editor (a code one unless said) paints. */
 async function openFile(crew: Crew, query: string, relative: string, shown = editor(crew, path.basename(relative))): Promise<void> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();

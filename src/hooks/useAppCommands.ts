@@ -46,7 +46,7 @@ export function useAppCommands(deps: Deps) {
     act();
   };
   useCommands({
-    "open-palette": () => deps.togglePalette("all"),
+    "open-palette": () => deps.togglePalette("chats"),
     "go-to-file": () => deps.togglePalette("files"),
     "open-actions": () => deps.togglePalette("actions"),
     "open-workspace": deps.openWorkspace,

@@ -1,11 +1,11 @@
-// A PDF opens in a page tab, straight from ⌘P or dropped on the tab strip from
+// A PDF opens in a page tab, straight from ⌘K's Files or dropped on the tab strip from
 // anywhere on disk, and comes back after a restart. HTML's way there, through
 // its editor, is in files.test.ts.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, openPalette, stripTabIds, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 let repo: string;
@@ -52,7 +52,7 @@ after(async () => {
 });
 
 async function openFile(query: string, relative: string): Promise<void> {
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = crew.window.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();
@@ -116,7 +116,7 @@ async function dropOnStrip(files: string[]): Promise<void> {
   );
 }
 
-test("a PDF from ⌘P opens in a page tab, in the previews' session", async () => {
+test("a PDF from ⌘K's Files opens in a page tab, in the previews' session", async () => {
   await openFile("manual", "docs/manual.pdf");
   await waitFor(async () => (await fileGuests("/docs/manual.pdf")).some((g) => g.viewer), {
     message: "the PDF opens in Chromium's viewer",
@@ -135,7 +135,7 @@ test("a PDF from ⌘P opens in a page tab, in the previews' session", async () =
   assert.equal(ids.filter((id) => id.endsWith("/docs/manual.pdf")).length, 1);
 });
 
-test("files dropped on the strip open, each where ⌘P would open it", async () => {
+test("files dropped on the strip open, each where ⌘K's Files would open it", async () => {
   const outside = path.join(crew.home, "Downloads");
   await mkdir(outside, { recursive: true });
   const invoice = path.join(outside, "invoice.pdf");

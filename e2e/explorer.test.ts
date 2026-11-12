@@ -1,12 +1,12 @@
 // X1: the explorer beside the tabs. ⌘⇧E shows the worktree's folders as they
 // are on disk, what git ignores dimmed but there; ⌘⇧F finds text in the files
-// ⌘P lists, a small ignored folder like `.ai/` included and node_modules not,
+// ⌘K's Files lists, a small ignored folder like `.ai/` included and node_modules not,
 // and a result opens its file at the match.
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, openPalette, pressChord, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 let repo = "";
@@ -79,9 +79,9 @@ test("X1: ⌘⇧E shows the folders on disk, ignored ones dimmed, and opens a fi
   await shot("explorer-files");
 });
 
-test("X2: ⌘P finds a file in a small folder git ignores", async () => {
+test("X2: ⌘K's Files finds a file in a small folder git ignores", async () => {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("plan");
   await palette.getByRole("button", { name: ".ai/plan.md", exact: true }).waitFor({ timeout: 5000 });

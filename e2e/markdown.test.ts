@@ -14,6 +14,7 @@ import {
   launchCrew,
   MOD,
   noteEditor,
+  openPalette,
   pressChord,
   waitFor,
   type Crew,
@@ -33,10 +34,10 @@ const PLAN = [
   "",
 ].join("\n");
 
-/** ⌘P, the query, and the file's row: its tab opens and its editor paints. */
+/** ⌘K's Files, the query, and the file's row: its tab opens and its editor paints. */
 async function openFile(crew: Crew, query: string, relative: string): Promise<void> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();
@@ -260,10 +261,10 @@ async function sectionIs(crew: Crew, heading: string, message: string): Promise<
   if (!ok) assert.equal(last, heading, message);
 }
 
-/** ⌘P for `query`: the rows it lists (after `settle` shows up, when given). */
+/** ⌘K's Files for `query`: the rows it lists (after `settle` shows up, when given). */
 async function paletteRows(crew: Crew, query: string, settle?: string): Promise<string[]> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+p`);
+  await openPalette(crew, "Files");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   if (settle) await palette.getByRole("button", { name: settle, exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
@@ -273,7 +274,7 @@ async function paletteRows(crew: Crew, query: string, settle?: string): Promise<
   return rows;
 }
 
-test("M2: the outline follows the note and keeps its setting; ⌘P finds a small folder git ignores", async (t) => {
+test("M2: the outline follows the note and keeps its setting; ⌘K's Files finds a small folder git ignores", async (t) => {
   let crew = await launchCrew({
     repos: [
       {
@@ -333,11 +334,11 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   await page.keyboard.press(`${MOD}+Home`);
   await sectionIs(crew, "Guide", "back at the top, the outline marks the first heading");
 
-  // Git ignores vendor-docs, but a folder that small is notes, not a build: ⌘P finds it.
-  assert.ok((await paletteRows(crew, "guide", "notes/guide.md")).includes("notes/guide.md"), "⌘P has indexed the workspace");
+  // Git ignores vendor-docs, but a folder that small is notes, not a build: ⌘K's Files finds it.
+  assert.ok((await paletteRows(crew, "guide", "notes/guide.md")).includes("notes/guide.md"), "⌘K's Files has indexed the workspace");
   assert.ok(
     (await paletteRows(crew, "vendored", "vendor-docs/vendored-api.md")).includes("vendor-docs/vendored-api.md"),
-    "⌘P finds the file in the ignored folder",
+    "⌘K's Files finds the file in the ignored folder",
   );
 
   // The outline off, then a restart: the setting comes back.
@@ -361,7 +362,7 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   assert.equal(await page2.getByRole("navigation", { name: "Outline" }).count(), 0, "and shows none");
   assert.ok(
     (await paletteRows(crew, "vendored", "vendor-docs/vendored-api.md")).includes("vendor-docs/vendored-api.md"),
-    "after the restart ⌘P still finds it",
+    "after the restart ⌘K's Files still finds it",
   );
 
   // A folder that is not a repo: its dotfiles are found too (35b5b96).
@@ -372,7 +373,7 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
   await crew.addWorkspace(loose);
   assert.ok(
     (await paletteRows(crew, "env", ".env.example")).includes(".env.example"),
-    "⌘P finds a dotfile in a workspace git does not track",
+    "⌘K's Files finds a dotfile in a workspace git does not track",
   );
 });
 
@@ -536,7 +537,7 @@ test("M3: a note opens to read, its tables scroll instead of breaking words, and
 
   // A table from the command palette, at the end of the note.
   await editorLines(noteEditor(crew)).filter({ hasText: /^End of note\.$/ }).click();
-  await pressChord(crew, `${MOD}+Shift+p`);
+  await openPalette(crew, "Commands");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill("Insert table");
   await page.keyboard.press("Enter");

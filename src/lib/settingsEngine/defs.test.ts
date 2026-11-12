@@ -17,6 +17,7 @@ function sources(dir: string): string[] {
  * there: it goes through `defineSetting`, or it never reaches the other machines.
  */
 const WINDOW_MEMORY = [
+  "src/chrome/CommandPalette.tsx",
   "src/chrome/FolderBrowser.tsx",
   "src/chrome/MachinePalette.tsx",
   "src/hooks/useBotFaces.ts",

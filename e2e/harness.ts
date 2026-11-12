@@ -790,6 +790,13 @@ export async function pressChord(crew: Crew, chord: string): Promise<void> {
   await crew.window.keyboard.press(chord);
 }
 
+/** ⌘K, the one door into the palette, then the tab asked for: Files and Commands have no chord of their own. */
+export async function openPalette(crew: Crew, tab: "Chats" | "Files" | "Workspaces" | "Commands"): Promise<void> {
+  await pressChord(crew, `${MOD}+k`);
+  const palette = crew.window.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("tab", { name: tab, exact: true }).click();
+}
+
 /** ⌃⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
 export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   const page = crew.window;
