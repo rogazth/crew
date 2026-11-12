@@ -2,7 +2,8 @@ import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, lazy, memo, Suspense, useMemo, useState } from "react";
 import type { OrbState } from "thinking-orbs";
-import { TypingDots, WorkOrb } from "../../chrome/StatusDot";
+import { TypingDots } from "../../chrome/StatusDot";
+import { WorkOrb } from "../../chrome/WorkOrb";
 import {
   activityDigest,
   buildActivity,
