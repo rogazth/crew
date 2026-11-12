@@ -127,6 +127,10 @@ serve();
  *   subagent's own frame, and a `task_progress` with 41300 tokens on its step
  *   "Reading README.md". It runs until a `stop_task` for it, which ends it as
  *   `stopped`; the turn itself answers at once.
+ * - `agentdone` sends one the same way, which finishes a second after the
+ *   turn: `task_notification` `completed`, its summary the report `Found 3
+ *   files.`, and a turn of the model's own that it woke, answering `Report
+ *   read.`
  * - `shell` is a turn that sends a shell, `npm test`, to the background
  *   (`sh1`) beside the subagents that run; it runs until the session ends.
  * - `ask` is a turn that asks Crew, as a `can_use_tool` control request, to
@@ -372,6 +376,22 @@ function serve() {
     });
   }
 
+  /** A subagent that finishes: its report wakes the model, which answers in a turn of its own. */
+  function finishAgent(task) {
+    const call = agents.get(task);
+    agents.delete(task);
+    emit({ type: "system", subtype: "task_updated", session_id: sessionId, task_id: task, patch: { status: "completed" } });
+    emit({ type: "system", subtype: "task_notification", session_id: sessionId, task_id: task, tool_use_id: call, status: "completed", summary: "Found 3 files." });
+    emit({ type: "system", subtype: "background_tasks_changed", session_id: sessionId, tasks: [] });
+    const reply = "Report read.";
+    turnStarted = Date.now();
+    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS, mcp_servers: servers() });
+    emit({ type: "assistant", session_id: sessionId, message: { id: `msg_${randomUUID().slice(0, 8)}`, role: "assistant", content: [{ type: "text", text: reply }] } });
+    say(reply);
+    turnEnd();
+    emit({ type: "result", subtype: "success", is_error: false, result: reply, session_id: sessionId, total_cost_usd: 0, duration_ms: 1, usage: {} });
+  }
+
   /** A `stop_task` for a subagent: it ends as stopped, and nothing wakes the model. */
   function endAgent(task) {
     const call = agents.get(task);
@@ -448,7 +468,13 @@ function serve() {
       if (mine.stopped) return;
       reply = `Reply ${n}: ask ${behavior === "allow" ? "allowed" : "denied"}`;
     }
-    if (command === "agent") startAgent();
+    if (command === "agent" || command === "agentdone") startAgent();
+    if (command === "agentdone") {
+      const task = `ag${started}`;
+      // Once the turn that sent it is over, as a report wakes an idle model.
+      const finish = () => (current ? setTimeout(finish, 200) : finishAgent(task));
+      setTimeout(finish, 1000);
+    }
     if (command === "shell") startShell();
     if (command === "crew") crewCalls();
     if (command === "crewsent") crewCalls(text.trim().split(/\s+/).slice(1));

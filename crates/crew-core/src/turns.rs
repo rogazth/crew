@@ -3949,17 +3949,25 @@ impl TurnHost {
                     self.background.read(session_id, |board| board.command(&task).and_then(|row| row.tool_call_id.clone()));
                 call.flatten().map(|call| (task, call))
             });
-        // A finished shell the transcript already draws: its row is marked
-        // "Sent to the background" and says how it ended, so what woke the
-        // model needs no line of its own.
+        // Background work the transcript already draws: a shell's row is
+        // marked "Sent to the background" and says how it ended, and a
+        // subagent that finished ends its call's beat (`Explore finished`), so
+        // what woke the model needs no line of its own. One that failed or
+        // was stopped keeps its line: the beat says only that it reported.
+        let completed = string_field(Some(&rec), "status").as_deref() == Some("completed");
         let drawn = (rec.get("subtype").and_then(Value::as_str) == Some("task_notification"))
             .then(|| string_field(Some(&rec), "task_id"))
             .flatten()
             .and_then(|task| {
                 self.background.read(session_id, |board| {
-                    board
-                        .command(&task)
-                        .is_some_and(|row| row.kind == crew_protocol::BackgroundKind::Shell && row.tool_call_id.is_some())
+                    board.command(&task).is_some_and(|row| {
+                        row.tool_call_id.is_some()
+                            && match row.kind {
+                                crew_protocol::BackgroundKind::Shell => true,
+                                crew_protocol::BackgroundKind::Subagent => completed,
+                                crew_protocol::BackgroundKind::Monitor => false,
+                            }
+                    })
                 })
             })
             .unwrap_or(false);
@@ -4109,6 +4117,8 @@ impl TurnHost {
                         // Only what wakes the model is what woke it.
                         if !foreground && wakes_the_model(string_field(Some(&rec), "status").as_deref()) {
                             live.wakes = true;
+                            // A subagent this process saw called is drawn by its call's beat.
+                            let drawn = drawn || (completed && notice.is_some());
                             let summary = notice.or_else(|| string_field(Some(&rec), "summary")).filter(|_| !drawn);
                             if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
                                 let summary = summary.trim().to_string();

@@ -1779,8 +1779,8 @@ mod tests {
     /// subagent keeps working, and its steps keep landing on its row after
     /// the turn is over. Its words between steps, sent while the agent was
     /// writing its own reply, stay in the subagent's row: the agent's reply
-    /// streams on undisturbed. Its report is the row's output, and the line
-    /// for what woke the agent names it instead of quoting it.
+    /// streams on undisturbed. Its report is the row's output, and its call's
+    /// beat says it finished: what woke the agent takes no line of its own.
     #[test]
     fn a_background_subagent_works_on_after_its_turn() {
         let host = TurnHost::test_new();
@@ -1807,7 +1807,7 @@ mod tests {
         assert_eq!(said(&steps, crew_protocol::BlockRole::Assistant).len(), 2);
         assert!(output.is_some_and(|report| report.contains("beta")));
         let notes = said(&blocks, crew_protocol::BlockRole::System);
-        assert_eq!(notes, vec!["Agent \"Read a.txt and b.txt\" finished".to_string()]);
+        assert!(notes.is_empty(), "the call's beat says it finished: {notes:?}");
         let replies = said(&blocks, crew_protocol::BlockRole::Assistant);
         assert_eq!(replies.last().map(String::as_str), Some("The files contain \"alpha\" and \"beta\" respectively."));
         assert!(!replies.iter().any(|reply| reply.contains("I've read both files")), "{replies:?}");
@@ -1995,9 +1995,9 @@ mod tests {
         assert!(steps.iter().any(|step| step.contains("Cristalira")), "{steps:?}");
         assert_eq!(thread.as_deref(), Some("ab19f83e8d09a8136"));
         let notes = said(&blocks, crew_protocol::BlockRole::System);
-        // The first call ran in the foreground, answered in its result: only
-        // the resumed one, in the background, woke the agent.
-        assert_eq!(notes.iter().filter(|note| note.contains("Describir ciudad inventada")).count(), 1, "{notes:?}");
+        // The first call ran in the foreground, answered in its result; the
+        // resumed one woke the agent, and its call's beat says it finished.
+        assert!(notes.iter().all(|note| !note.contains("Describir ciudad inventada")), "{notes:?}");
 
         let list = host.background_list("s");
         assert_eq!(list.commands.len(), 1, "one entry for the one subagent");
@@ -2150,7 +2150,8 @@ mod tests {
 
     /// The CLI reports in the agent's stream each long command a background
     /// subagent runs, as a foreground task of its own named by the command.
-    /// Its end wakes nobody: what woke the agent is the subagent's report.
+    /// Its end wakes nobody: what woke the agent is the subagent's report,
+    /// which its call's beat already says.
     #[test]
     fn a_background_subagents_commands_say_nothing_of_what_woke_the_agent() {
         let host = TurnHost::test_new();
@@ -2190,7 +2191,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(notes, ["Agent \"Echo work\" finished"]);
+        assert!(notes.is_empty(), "{notes:?}");
     }
 
     /// A shell sent to the background is drawn on its own row, which says how

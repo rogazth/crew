@@ -317,14 +317,18 @@ impl ClaudeDecoder {
             });
         }
         // A finished shell is said on its own row, marked as sent to the
-        // background, so it adds nothing to the line; one that woke the model
-        // alone leaves none.
+        // background, and a subagent that finished in its call's beat
+        // (`Explore finished`), so they add nothing to the line; work that
+        // woke the model alone leaves none. A subagent that failed or was
+        // stopped keeps its words: the beat says only that it reported.
         let said: Vec<&str> = text
             .split("<task-notification>")
             .skip(1)
             .filter(|notification| {
-                !tag(notification, "tool-use-id")
-                    .is_some_and(|call| self.tools.get(call.trim()).is_some_and(|(name, _)| name == "Bash"))
+                let completed = tag(notification, "status").map(str::trim) == Some("completed");
+                !tag(notification, "tool-use-id").is_some_and(|call| {
+                    self.tools.get(call.trim()).is_some_and(|(name, _)| name == "Bash" || (completed && is_subagent_tool(name)))
+                })
             })
             .collect();
         if said.is_empty() {
@@ -768,7 +772,7 @@ mod tests {
                 User, Tool, System, // the interrupted sleep
                 User, Tool, Tool, Assistant, // read, edit
                 User, Tool, Assistant, // the subagent, sent to the background
-                System, Assistant, // its report, and what it woke
+                Assistant, // what its report woke: the call's beat says it finished
                 User, System, System, // /compact
                 User, Assistant, // after it
             ]
@@ -792,18 +796,17 @@ mod tests {
         // the call and what the parent said once it reported back.
         let agent = blocks[11].tool.as_ref().expect("tool");
         assert_eq!(agent.name, "Agent");
-        assert_eq!(blocks[13].text, "Agent \"Count lines in notes.txt\" finished");
-        assert_eq!(blocks[14].text, "The file notes.txt has **3 lines**.");
+        assert_eq!(blocks[13].text, "The file notes.txt has **3 lines**.");
         assert!(blocks.iter().all(|block| !block.text.contains("task-notification")));
 
         // Typed once, written twice: before the boundary and after it.
-        assert_eq!(blocks[15].text, "/compact");
-        assert_eq!(blocks[16].text, "Context compacted");
-        assert!(blocks[17].text.starts_with("Compacted (ctrl+o to see full summary)"));
-        assert!(!blocks[17].text.contains('\u{1b}'));
+        assert_eq!(blocks[14].text, "/compact");
+        assert_eq!(blocks[15].text, "Context compacted");
+        assert!(blocks[16].text.starts_with("Compacted (ctrl+o to see full summary)"));
+        assert!(!blocks[16].text.contains('\u{1b}'));
         assert!(blocks.iter().all(|block| !block.text.starts_with("This session is being continued")));
-        assert_eq!(blocks[18].text, "What file did we edit? One line.");
-        assert_eq!(blocks[19].usage.as_ref().and_then(|usage| usage.duration_ms), Some(1568));
+        assert_eq!(blocks[17].text, "What file did we edit? One line.");
+        assert_eq!(blocks[18].usage.as_ref().and_then(|usage| usage.duration_ms), Some(1568));
     }
 
     #[test]

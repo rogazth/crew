@@ -1106,6 +1106,6 @@ mod tests {
                 "The files contain \"alpha\" and \"beta\" respectively.".to_string(),
             ]
         );
-        assert_eq!(said(blocks, BlockRole::System), vec!["Agent \"Read a.txt and b.txt\" finished".to_string()]);
+        assert!(said(blocks, BlockRole::System).is_empty(), "the call's beat says it finished");
     }
 }
