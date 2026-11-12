@@ -218,9 +218,33 @@ export function TabBar({
     setLauncher(!launcher);
   });
 
+  // A press in the strip — a click, a close, a middle click — holds it where it stands, so
+  // the tab that comes up after a close never slides another under the pointer. The hold
+  // ends once the pointer leaves the strip or a key is pressed.
+  const pressed = useRef(false);
+  useEffect(() => {
+    const scroller = ref.current;
+    if (!scroller) return;
+    const press = () => {
+      pressed.current = true;
+    };
+    const release = () => {
+      pressed.current = false;
+    };
+    scroller.addEventListener("pointerdown", press);
+    scroller.addEventListener("pointerleave", release);
+    window.addEventListener("keydown", release, true);
+    return () => {
+      scroller.removeEventListener("pointerdown", press);
+      scroller.removeEventListener("pointerleave", release);
+      window.removeEventListener("keydown", release, true);
+    };
+  }, [ref]);
+
   // Selecting from the launcher or the sidebar can land on a tab that scrolled out of view.
   // Brought in sideways only: the strip never scrolls up or down, whatever a tab's height.
   useEffect(() => {
+    if (pressed.current) return;
     const scroller = ref.current;
     const el = activeId ? scroller?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeId)}"]`) : null;
     if (!scroller || !el) return;

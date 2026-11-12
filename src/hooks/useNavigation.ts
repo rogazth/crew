@@ -170,6 +170,15 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /** A link from a chat or a terminal: a page beside the tab it was followed from, which closing it hands back. */
+  const openLink = useCallback(
+    (url: string) => {
+      closePage();
+      tabs.openLink(newBrowserTab(url));
+    },
+    [closePage, tabs],
+  );
+
   /**
    * A session tab that never held a turn goes with its session; any other
    * leaves the session in the sidebar, a terminal's CLI running on. Files with
@@ -228,6 +237,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openSignIn,
     openLogin,
     openBrowser,
+    openLink,
     openProcessRun,
     closeTab,
     closeTabs,

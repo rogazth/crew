@@ -6,7 +6,7 @@ import { useWorkspaceMachine } from "../../hooks/useEnvLinks";
 import * as api from "../../lib/api";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
-import { BLANK_PAGE, pages, type PageState } from "../../lib/browser/pageStore";
+import { pages, type PageState } from "../../lib/browser/pageStore";
 import { originOf } from "../../lib/browser/permissions";
 import { isWebUrl } from "../../lib/browser/url";
 import { fitScale, preset, type Viewport } from "../../lib/browser/viewport";
@@ -149,9 +149,10 @@ export function BrowserPane({
     // A file's page leaves the keyboard with the window, as a preview always did:
     // the PDF viewer keeps the keys it holds from the app, ⌘P among them.
     if (hasFile.current) return;
-    // A tab opened with a URL shows before its guest reports one; the store still says blank.
+    // A tab opened with a URL shows before its guest reports one: the store says blank,
+    // or holds the URL as still pending, set by the guest's setup just before this runs.
     const current = pages.get(pageId);
-    const shown = current === BLANK_PAGE ? initialUrl.current : current.url;
+    const shown = isWebUrl(current.url) ? current.url : (current.pending ?? initialUrl.current);
     if (isWebUrl(shown)) guest.current?.focus();
     else address.current?.focus();
   }, [visible, pageId, guest]);

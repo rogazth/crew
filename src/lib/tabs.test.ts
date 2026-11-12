@@ -110,21 +110,80 @@ describe("the recent order", () => {
 });
 
 describe("closeTab", () => {
-  it("hands focus back to the tab last on screen, not the one beside it", () => {
-    const state = visit(opened("a", "b", "c", "d", "e"), "c", "e");
-    expect(closeTab(state, "session:e").activeId).toBe("session:c");
+  // Tabs as useTabs opens them: a link from the tab on screen, or one opened for a quick look.
+  const link = (state: TabState, id: string, background = false) =>
+    withRecent(openTab(state, sessionTab(id), { opener: state.activeId!, background }));
+  const look = (state: TabState, id: string) => withRecent(openTab(state, sessionTab(id), { lookup: true }));
+  const order = (state: TabState) => state.tabs.map((tab) => tab.id.slice("session:".length));
+
+  it("hands the screen to the neighbour, not the tab last on screen", () => {
+    const state = visit(opened("a", "b", "c", "d", "e"), "a", "c");
+    expect(closeTab(state, "session:c").activeId).toBe("session:d");
   });
 
-  it("walks back through the recent order as tabs keep closing", () => {
-    let state = visit(opened("a", "b", "c", "d"), "b", "d", "a");
-    state = withRecent(closeTab(state, "session:a"));
-    expect(state.activeId).toBe("session:d");
-    expect(closeTab(state, "session:d").activeId).toBe("session:b");
+  it("opens a link beside its tab, and its tabs behind past the ones it already opened", () => {
+    let state = visit(opened("a", "b", "c"), "a");
+    state = link(state, "x", true);
+    state = link(state, "y", true);
+    expect(order(state)).toEqual(["a", "x", "y", "b", "c"]);
+    state = link(state, "z");
+    expect(order(state)).toEqual(["a", "z", "x", "y", "b", "c"]);
   });
 
-  it("skips a recent tab that is folded away", () => {
-    const state = visit(opened("a", "b", "c"), "a", "c");
-    expect(closeTab(state, "session:c", (tab) => tab.id !== "session:a").activeId).toBe("session:b");
+  it("closing a link's tab goes back to the tab it came from", () => {
+    const state = link(visit(opened("a", "b", "c"), "a"), "x");
+    expect(closeTab(state, "session:x").activeId).toBe("session:a");
+  });
+
+  it("walks a tab's links before going back to it", () => {
+    let state = visit(opened("a", "b"), "a");
+    state = link(link(link(state, "x", true), "y", true), "z", true);
+    state = withRecent(selectTab(state, "session:x"));
+    state = withRecent(closeTab(state, "session:x"));
+    expect(state.activeId).toBe("session:y");
+    state = withRecent(closeTab(state, "session:y"));
+    expect(state.activeId).toBe("session:z");
+    expect(closeTab(state, "session:z").activeId).toBe("session:a");
+  });
+
+  it("hands a closed tab's links to the tab it came from", () => {
+    let state = visit(opened("a", "b"), "a");
+    state = link(state, "x", true);
+    state = withRecent(selectTab(state, "session:x"));
+    state = link(state, "z", true);
+    expect(order(state)).toEqual(["a", "x", "z", "b"]);
+    state = withRecent(closeTab(state, "session:x"));
+    expect(state.activeId).toBe("session:z");
+    expect(state.openers).toEqual({ "session:z": "session:a" });
+  });
+
+  it("a link opened in front starts a new family", () => {
+    let state = link(visit(opened("a", "b"), "a"), "x");
+    state = link(state, "y");
+    expect(state.openers).toEqual({ "session:y": "session:x" });
+  });
+
+  it("forgets who opened what once the user jumps outside the family", () => {
+    let state = link(visit(opened("a", "b", "c"), "a"), "x");
+    state = withRecent(selectTab(state, "session:c"));
+    state = withRecent(selectTab(state, "session:x"));
+    expect(closeTab(state, "session:x").activeId).toBe("session:b");
+  });
+
+  it("a tab opened for a quick look hands back where you were, until another tab comes up", () => {
+    const base = visit(opened("a", "b", "c"), "a");
+    const quick = look(base, "q");
+    expect(order(quick)).toEqual(["a", "b", "c", "q"]);
+    expect(closeTab(quick, "session:q").activeId).toBe("session:a");
+    const left = withRecent(selectTab(withRecent(selectTab(quick, "session:a")), "session:q"));
+    expect(closeTab(left, "session:q").activeId).toBe("session:c");
+  });
+
+  it("skips a tab of the family that is folded away", () => {
+    let state = visit(opened("a", "b"), "a");
+    state = link(link(state, "x", true), "y", true);
+    state = withRecent(selectTab(state, "session:x"));
+    expect(closeTab(state, "session:x", (tab) => tab.id !== "session:y").activeId).toBe("session:a");
   });
 
   it("moves focus to the right neighbour without a recent order", () => {

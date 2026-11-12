@@ -28,7 +28,7 @@ type Props = {
   panes: MountedPane[];
   sessions: Session[];
   onPatch: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
-  onOpenTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
+  onOpenTab: (workspaceId: string, tab: Tab, opts: { opener: string; background: boolean }) => void;
   onAdopt: (context: string, tab: Tab) => void;
 };
 
@@ -205,7 +205,7 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
           all.find((pane) => pane.visible);
         if (!opener) return;
         const tab = newBrowserTab(request.url, request.incognito);
-        openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });
+        openTab(opener.workspaceId, tab, { opener: opener.tab.id, background: request.background });
         // A tab opened behind the current one still loads, the way a middle-click does.
         setWarm((current) => touch(current, [paneId(opener.workspaceId, tab.id)], Date.now()));
       }),

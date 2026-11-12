@@ -412,7 +412,7 @@ export function App() {
 
   return (
     <>
-    <LinkRouter open={nav.openBrowser} />
+    <LinkRouter open={nav.openLink} />
     <Toaster onOpen={openNotified} sessions={all} />
     {/* Under a bot's settings the whole window sinks a touch (useSettingsDialog); the dialog is portaled out of it. */}
     <div data-app className="flex h-full">

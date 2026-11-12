@@ -100,6 +100,13 @@ export type TabState = {
   recent?: string[];
   /** Worktrees whose tabs are folded into one chip, all together only. */
   collapsed?: string[];
+  /**
+   * Which tab opened which, by id, the way Chromium keeps it: closing a tab
+   * hands the screen to its family before its neighbour. Kept for the run only.
+   */
+  openers?: Record<string, string>;
+  /** A tab opened for a quick look (⌘T): it forgets its opener once another tab comes on screen. */
+  lookup?: string;
 };
 
 /**
@@ -117,27 +124,116 @@ export const CLOSED_LIMIT = 10;
 
 /**
  * Opens a tab, or focuses it if it is already open. `after` places it next to
- * the tab that asked for it, the way a link opened in a new tab lands beside
- * its page, and `at` at an index; `background` leaves the active tab alone.
+ * the tab that asked for it, and `at` at an index; `background` leaves the
+ * active tab alone.
+ *
+ * `opener` is the tab a link was followed from: the new one is its child and,
+ * unplaced, lands beside it — past the children it already opened when it
+ * opens behind. `lookup` makes the tab on screen its opener only until another
+ * tab comes up, the way Chromium's ⌘T does: closed right away, it hands back
+ * where you were.
  */
 export function openTab(
   state: TabState,
   tab: Tab,
-  { after, at, background = false }: { after?: string; at?: number; background?: boolean } = {},
+  {
+    after,
+    at,
+    background = false,
+    opener,
+    lookup = false,
+  }: { after?: string; at?: number; background?: boolean; opener?: string; lookup?: boolean } = {},
 ): TabState {
-  const exists = state.tabs.some((t) => t.id === tab.id);
-  let tabs = state.tabs;
-  if (!exists) {
-    // Pinned tabs lead the strip: a pinned one lands among them, at their end
-    // unless placed, any other past them.
-    const pins = pinnedCount(state.tabs);
-    const anchor = after === undefined ? -1 : state.tabs.findIndex((t) => t.id === after);
-    const wanted = Math.min(at ?? (anchor === -1 ? state.tabs.length : anchor + 1), state.tabs.length);
-    const index = tab.pinned ? Math.min(wanted, pins) : Math.max(pins, wanted);
-    tabs = [...state.tabs.slice(0, index), tab, ...state.tabs.slice(index)];
+  // A tab already open comes up, even one asked for behind.
+  if (state.tabs.some((t) => t.id === tab.id)) return switchTo(state, tab.id);
+  const from = opener ?? (lookup ? state.activeId : null);
+  const parent = from !== null && state.tabs.some((t) => t.id === from) ? from : null;
+  // Pinned tabs lead the strip: a pinned one lands among them, at their end
+  // unless placed, any other past them.
+  const pins = pinnedCount(state.tabs);
+  const anchor = after ?? (opener !== undefined && parent !== null ? lastOpenedBy(state, parent, background) : undefined);
+  const anchorAt = anchor === undefined ? -1 : state.tabs.findIndex((t) => t.id === anchor);
+  const wanted = Math.min(at ?? (anchorAt === -1 ? state.tabs.length : anchorAt + 1), state.tabs.length);
+  const index = tab.pinned ? Math.min(wanted, pins) : Math.max(pins, wanted);
+  const tabs = [...state.tabs.slice(0, index), tab, ...state.tabs.slice(index)];
+  const next: TabState = background ? { ...state, tabs } : { ...moveTo(state, tab.id), tabs };
+  if (parent === null) return next;
+  // One family at a time: a tab opened in front starts a new one.
+  const openers = { ...(background ? next.openers : undefined), [tab.id]: parent };
+  const marked: TabState = { ...next, openers };
+  if (!background) delete marked.lookup;
+  return lookup && opener === undefined ? { ...marked, lookup: tab.id } : marked;
+}
+
+/**
+ * Where a link from `opener` lands: right past it when it opens in front, else
+ * past the run of tabs it already opened, so links opened behind keep their order.
+ */
+function lastOpenedBy(state: TabState, opener: string, background: boolean): string {
+  if (!background) return opener;
+  const openers = state.openers ?? {};
+  const descends = (id: string) => {
+    for (let at: string | undefined = openers[id], hops = 0; at !== undefined && hops < state.tabs.length; at = openers[at], hops += 1)
+      if (at === opener) return true;
+    return false;
+  };
+  let last = opener;
+  for (const tab of state.tabs.slice(state.tabs.findIndex((t) => t.id === opener) + 1)) {
+    if (!descends(tab.id)) break;
+    last = tab.id;
   }
-  const activeId = background && exists === false ? state.activeId : tab.id;
-  return tabs === state.tabs && activeId === state.activeId ? state : { ...state, tabs, activeId };
+  return last;
+}
+
+/** `openers` without `id`'s own entry. */
+function forget(openers: Record<string, string> = {}, id: string): Record<string, string> {
+  if (!(id in openers)) return openers;
+  const rest = { ...openers };
+  delete rest[id];
+  return rest;
+}
+
+/** The screen moves to `id`. A quick look forgets its opener once it is left. */
+function moveTo(state: TabState, id: string | null): TabState {
+  if (state.activeId === id) return state;
+  if (state.lookup === undefined || state.lookup !== state.activeId) return { ...state, activeId: id };
+  const next: TabState = { ...state, activeId: id, openers: forget(state.openers, state.lookup) };
+  delete next.lookup;
+  return next;
+}
+
+/**
+ * The user brought `id` on screen. A move within a family — to a tab's opener,
+ * a child or a sibling — keeps who opened what; a jump anywhere else forgets it
+ * all, as Chromium does, and closing a tab then hands the screen to its neighbour.
+ */
+function switchTo(state: TabState, id: string | null): TabState {
+  if (state.activeId === id) return state;
+  const openers = state.openers ?? {};
+  const old = state.activeId;
+  const oldOpener = (old !== null && openers[old]) || null;
+  const newOpener = (id !== null && openers[id]) || null;
+  const next = moveTo(state, id);
+  const related = newOpener === oldOpener || newOpener === old || oldOpener === id;
+  if (related || !next.openers || Object.keys(next.openers).length === 0) return next;
+  const forgotten: TabState = { ...next, openers: {} };
+  delete forgotten.lookup;
+  return forgotten;
+}
+
+/**
+ * The openers once `gone` leaves, as Chromium keeps them: the tabs it opened
+ * pass to its own opener.
+ */
+function reparent(openers: Record<string, string>, gone: string): Record<string, string> {
+  const up = openers[gone];
+  const out: Record<string, string> = {};
+  for (const [child, by] of Object.entries(openers)) {
+    if (child === gone) continue;
+    const next = by === gone ? up : by;
+    if (next !== undefined && next !== child) out[child] = next;
+  }
+  return out;
 }
 
 /** What a page writes back to its tab. */
@@ -167,12 +263,15 @@ export function patchBrowserTab(
 }
 
 function withoutTab(state: TabState, id: string, closed: ClosedTab[], visible?: Visible): TabState {
-  return {
+  const next: TabState = {
     ...state,
     tabs: state.tabs.filter((t) => t.id !== id),
     activeId: state.activeId === id ? successorId(state, id, visible) : state.activeId,
     closed,
   };
+  if (state.openers) next.openers = reparent(state.openers, id);
+  if (state.lookup === id) delete next.lookup;
+  return next;
 }
 
 export function closeTab(state: TabState, id: string, visible?: Visible): TabState {
@@ -197,7 +296,10 @@ export function childTabToParent(state: TabState, childTabId: string, parentTab:
   if (!state.tabs.some((t) => t.id === childTabId)) return state;
   const has = state.tabs.some((t) => t.id === parentTab.id);
   const tabs = state.tabs.flatMap((t) => (t.id === childTabId ? (has ? [] : [parentTab]) : [t]));
-  return { ...state, tabs, activeId: state.activeId === childTabId ? parentTab.id : state.activeId };
+  const next: TabState = { ...state, tabs, activeId: state.activeId === childTabId ? parentTab.id : state.activeId };
+  if (state.openers) next.openers = reparent(state.openers, childTabId);
+  if (state.lookup === childTabId) delete next.lookup;
+  return next;
 }
 
 /** The last tab closed, back where it stood, the way a browser's ⌘⇧T brings it. */
@@ -217,13 +319,13 @@ export function stepTab(state: TabState, delta: number, visible: Visible = () =>
   if (tabs.length === 0) return state;
   const index = tabs.findIndex((tab) => tab.id === activeId);
   const next = (((index === -1 ? 0 : index + delta) % tabs.length) + tabs.length) % tabs.length;
-  return { ...state, activeId: tabs[next]?.id ?? activeId };
+  return switchTo(state, tabs[next]?.id ?? activeId);
 }
 
 /** Browser Cmd+1-8; Cmd+9 is the last tab, so pass -1. */
 export function activateTab(state: TabState, index: number): TabState {
   const tab = index < 0 ? state.tabs.at(-1) : state.tabs[index];
-  return tab && tab.id !== state.activeId ? { ...state, activeId: tab.id } : state;
+  return tab ? switchTo(state, tab.id) : state;
 }
 
 /** A strip whose page on screen may be what took the app down: the tab used last that is no page takes over. */
@@ -236,7 +338,7 @@ export function offPages(state: TabState): TabState {
 }
 
 export function selectTab(state: TabState, id: string | null): TabState {
-  return state.activeId === id ? state : { ...state, activeId: id };
+  return switchTo(state, id);
 }
 
 /**
@@ -310,14 +412,22 @@ export function lastUsed(state: TabState, keep: (tab: Tab) => boolean = () => tr
 }
 
 /**
- * After closing the active tab, focus the shown tab last on screen before it,
- * the way an editor does, so a quick look elsewhere hands back where you were.
- * A strip with no such tab in its recent order falls back to the neighbour.
+ * After closing the active tab, the screen goes where Chromium sends it: to a
+ * tab it opened, else to a sibling (a tab its opener opened), else to its
+ * opener; each looked for rightward first, then leftward. With no family left,
+ * to the neighbour. A tab folded away is passed over.
  */
 function successorId(state: TabState, closingId: string, visible: Visible = () => true): string | null {
-  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
-  const previous = recentIds(state).find((id) => id !== closingId && visible(byId.get(id)!));
-  return previous ?? neighbourId(state.tabs, closingId, visible);
+  const index = state.tabs.findIndex((t) => t.id === closingId);
+  const openers = state.openers ?? {};
+  const around = [...state.tabs.slice(index + 1), ...state.tabs.slice(0, index).reverse()].filter(visible);
+  const opener = openers[closingId];
+  const family =
+    around.find((tab) => openers[tab.id] === closingId) ??
+    (opener === undefined
+      ? undefined
+      : (around.find((tab) => openers[tab.id] === opener) ?? around.find((tab) => tab.id === opener)));
+  return family?.id ?? neighbourId(state.tabs, closingId, visible);
 }
 
 /**

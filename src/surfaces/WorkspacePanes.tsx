@@ -39,7 +39,7 @@ type Props = {
   onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   /** A terminal tab's typed command was written: forget it. */
   onClearTerminalInput?: (workspaceId: string, tabId: string) => void;
-  onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
+  onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { opener: string; background: boolean }) => void;
   /** An agent needs this tab in that strip: add it behind the one on screen. */
   onAdoptBrowserTab: (context: string, tab: Tab) => void;
   files: ProjectFile[];

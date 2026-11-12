@@ -111,6 +111,16 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
     return tabs.length === 1 && tabs;
   }, { message: "the strip gains one browser tab" });
   assert.ok(tab);
+  // The page takes the keyboard while it loads: the bar neither takes it nor offers suggestions.
+  await holdsFor(
+    1500,
+    async () => {
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null);
+      const offered = await page.getByRole("option").count();
+      return (focused !== "Address" && offered === 0) || `focus on ${focused}, ${offered} suggestions shown`;
+    },
+    "a link's page put the keyboard in the address bar",
+  );
   await waitFor(
     async () => {
       const strip = await crew.request<string | null>("state_get", { key: `tabs:${workspace.id}` });

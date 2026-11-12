@@ -132,7 +132,13 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [workspaceId, mutateIn, placeOf],
   );
 
-  const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab)), [mutate]);
+  /** A tab opened from the strip, the sidebar or the launcher: closed right away, it hands back the tab it came from. */
+  const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab, { lookup: true })), [mutate]);
+  /** A link followed from the tab on screen: its child, beside it. */
+  const openLink = useCallback(
+    (tab: Tab) => mutate((s) => openTab(s, tab, s.activeId === null ? {} : { opener: s.activeId })),
+    [mutate],
+  );
   const close = useCallback(
     (id: string) => mutate((s) => closeTab(s, id, visibleIn(s, placeOf))),
     [mutate, placeOf],
@@ -187,7 +193,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
   const selectIn = useCallback((id: string, tabId: string) => seedIn(id, (s) => selectTab(s, tabId)), [seedIn]);
   /** A tab for a context other than the one on screen: a page's own, or the worktree about to show. */
   const openIn = useCallback(
-    (id: string, tab: Tab, opts?: { after?: string; background?: boolean }) =>
+    (id: string, tab: Tab, opts?: { after?: string; opener?: string; background?: boolean }) =>
       seedIn(id, (s) => openTab(s, tab, opts)),
     [seedIn],
   );
@@ -298,6 +304,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     collapsed: shown?.collapsed ?? NO_COLLAPSED,
     panes,
     open,
+    openLink,
     close,
     closeForSession,
     childToParent,
