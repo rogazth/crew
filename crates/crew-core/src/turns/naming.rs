@@ -113,9 +113,10 @@ impl Naming {
     }
 }
 
-/// Whether a provider's answer to a name request holds a name.
-fn names(answer: &Result<Value, String>) -> bool {
-    answer.as_ref().ok().and_then(|value| value.get("title")?.as_str()).is_some_and(|title| !title.trim().is_empty())
+/// The name a provider's answer to a name request holds.
+fn answered_title(answer: &Result<Value, String>) -> Option<String> {
+    let title = answer.as_ref().ok()?.get("title")?.as_str()?.trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 impl TurnHost {
@@ -134,6 +135,13 @@ impl TurnHost {
 
     fn sync_title(&self, session_id: &str) -> Result<Option<String>, String> {
         session::sync_title_in(&self.store, session_id.to_string(), self.claude_home_dir().as_deref())
+    }
+
+    /// Adopts the name the provider answered with, and tells every window.
+    fn adopt_answered(&self, session_id: &str, title: String) {
+        if let Ok(Some(_)) = session::adopt_answered_title(&self.store, session_id.to_string(), title) {
+            self.store.session_changed(session_id);
+        }
     }
 
     /// Adopts every name a provider gave while the daemon was down, or that
@@ -219,10 +227,10 @@ impl TurnHost {
         let host = self.clone();
         let id = session.id.clone();
         thread::spawn(move || {
-            let answer = host.claude_control_on(&id, Some(epoch), titles::claude_request(&description));
-            host.naming.answered(&id, names(&answer));
-            if names(&answer) {
-                let _ = host.sync_title(&id).map(|name| name.map(|_| host.store.session_changed(&id)));
+            let title = answered_title(&host.claude_control_on(&id, Some(epoch), titles::claude_request(&description)));
+            host.naming.answered(&id, title.is_some());
+            if let Some(title) = title {
+                host.adopt_answered(&id, title);
             }
         });
     }
@@ -252,10 +260,10 @@ impl TurnHost {
         thread::spawn(move || {
             let _one = host.naming.gate.lock().unwrap_or_else(|e| e.into_inner());
             match host.name_now(&session, &description) {
-                Ok(named) => {
-                    host.naming.answered(&session.id, named);
-                    if named {
-                        let _ = host.sync_title(&session.id).map(|name| name.map(|_| host.store.session_changed(&session.id)));
+                Ok(title) => {
+                    host.naming.answered(&session.id, title.is_some());
+                    if let Some(title) = title {
+                        host.adopt_answered(&session.id, title);
                     }
                 }
                 // The CLI answered without a name, which it does for a greeting: not a fault.
@@ -284,13 +292,13 @@ impl TurnHost {
         }
     }
 
-    /// Asks for the name; whether one came.
-    fn name_now(&self, session: &Session, description: &str) -> Result<bool, String> {
+    /// Asks for the name; the one that came.
+    fn name_now(&self, session: &Session, description: &str) -> Result<Option<String>, String> {
         match session.provider.as_str() {
             "claude" => {
                 let live = matches!(self.lock().get(&session.id), Some(Live::Claude(live)) if live.initialized);
                 if live {
-                    return Ok(names(&self.claude_control(&session.id, titles::claude_request(description))));
+                    return Ok(answered_title(&self.claude_control(&session.id, titles::claude_request(description))));
                 }
                 let cwd = session::cwd(&self.store, session)?;
                 let id = session.provider_session_id.clone().unwrap_or_else(|| session.id.clone());
@@ -300,15 +308,16 @@ impl TurnHost {
                     &id,
                     description,
                 )
-                .map(|_| true)
+                .map(Some)
             }
             "codex" => {
                 let thread = session.provider_session_id.as_deref().ok_or("codex title: no thread")?;
                 let home = crate::provider_session::codex_home().ok_or("no Codex home")?;
                 let name = titles::codex_name(std::path::Path::new(&self.resolve_bin("codex")?), description)?;
-                titles::name_codex(&home.join("session_index.jsonl"), thread, &name).map(|_| true)
+                titles::name_codex(&home.join("session_index.jsonl"), thread, &name)?;
+                Ok(Some(name))
             }
-            _ => Ok(false),
+            _ => Ok(None),
         }
     }
 }
@@ -358,9 +367,9 @@ mod tests {
 
     #[test]
     fn only_a_named_answer_names() {
-        assert!(names(&Ok(serde_json::json!({ "title": "Sidebar" }))));
-        assert!(!names(&Ok(serde_json::json!({}))));
-        assert!(!names(&Ok(serde_json::json!({ "title": "  " }))));
-        assert!(!names(&Err("no answer".into())));
+        assert_eq!(answered_title(&Ok(serde_json::json!({ "title": " Sidebar " }))).as_deref(), Some("Sidebar"));
+        assert_eq!(answered_title(&Ok(serde_json::json!({}))), None);
+        assert_eq!(answered_title(&Ok(serde_json::json!({ "title": "  " }))), None);
+        assert_eq!(answered_title(&Err("no answer".into())), None);
     }
 }

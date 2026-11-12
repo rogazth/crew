@@ -655,6 +655,14 @@ pub fn sync_title_in(store: &Store, id: String, claude_home: Option<&Path>) -> R
     }
 }
 
+/// Adopts `title`, the name the provider has just answered with. Claude answers
+/// before it has written the conversation down, so its transcript cannot
+/// be read for it yet.
+pub fn adopt_answered_title(store: &Store, id: String, title: String) -> Result<Option<String>, String> {
+    let row = get(store, id)?.ok_or("Session not found")?;
+    adopt_title(store, &row, title)
+}
+
 fn provider_title(row: &Session, cwd: &str, claude_home: Option<&Path>) -> Option<String> {
     let bound = row.provider_session_id.as_deref();
     match row.provider.as_str() {
@@ -1069,6 +1077,17 @@ mod tests {
         assert_eq!(adopt(&store, &s.id, "Generated"), None);
         assert_eq!(name_of(&store, &s.id), "Mine");
         assert_eq!(adopt(&store, &s.id, "Renamed in claude").as_deref(), Some("Renamed in claude"));
+    }
+
+    #[test]
+    fn a_title_answered_before_the_transcript_exists_is_adopted_once() {
+        let (store, workspace) = world();
+        let s = terminal(&store, &workspace, PLACEHOLDER_NAME, "claude");
+        let answered = adopt_answered_title(&store, s.id.clone(), "Historia del cobre".into()).expect("adopt");
+        assert_eq!(answered.as_deref(), Some("Historia del cobre"));
+        assert_eq!(name_of(&store, &s.id), "Historia del cobre");
+        // The transcript, written later, holds the same name: nothing changes.
+        assert_eq!(adopt(&store, &s.id, "Historia del cobre"), None);
     }
 
     #[test]
