@@ -199,14 +199,14 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
     [onRenameSettled],
   );
 
-  // The view menu is the sessions': bots keep their own order and every filter passes them by.
+  // The view menu and the find are the sessions': bots keep their own order and every filter passes them by.
   const arranged = useMemo(
     () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [] }, query, prefs.ordering, placeOf) : null),
     [placeOf, prefs, props.sessions, query],
   );
   const bots = useMemo(
-    () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [], hiddenProviders: [] }, query, null).bots : []),
-    [prefs, props.sessions, query],
+    () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [], hiddenProviders: [] }, "", null).bots : []),
+    [prefs, props.sessions],
   );
   const terminals = useMemo(
     () => (arranged?.terminals ?? []).filter((s) => props.home || !hiddenTrees.includes(pathOf(s))),
@@ -345,7 +345,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
     );
   };
 
-  const botsDraggable = !filtering && renaming === null;
+  const botsDraggable = renaming === null;
   const unfold = (key: string, next: boolean) =>
     setExpanded((prev) => {
       const out = new Set(prev);
@@ -370,7 +370,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
         <WorkspacePlaces {...props.nav} />
 
         {/* Bots, as they are today. */}
-        {prefs && !(filtering && bots.length === 0) && (
+        {prefs && (
           <div className="px-2 pb-1">
             <div className="flex h-8 items-center gap-0.5 pl-2">
               <span className="min-w-0 flex-1 truncate text-text-muted">Bots</span>
@@ -387,19 +387,17 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                 </SortableList>
               </div>
             ) : (
-              !filtering && (
-                <button
-                  type="button"
-                  data-nav
-                  onClick={() => props.onNewBot(main)}
-                  className="flex w-full items-center gap-2.5 rounded-chrome px-2 py-2 text-left outline-none hover:bg-hover focus-visible:bg-hover"
-                >
-                  <span className="grid size-8 shrink-0 place-items-center rounded-full border border-dashed border-border-strong text-icon">
-                    <PlusIcon aria-hidden className="size-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[13px]">New bot</span>
-                </button>
-              )
+              <button
+                type="button"
+                data-nav
+                onClick={() => props.onNewBot(main)}
+                className="flex w-full items-center gap-2.5 rounded-chrome px-2 py-2 text-left outline-none hover:bg-hover focus-visible:bg-hover"
+              >
+                <span className="grid size-8 shrink-0 place-items-center rounded-full border border-dashed border-border-strong text-icon">
+                  <PlusIcon aria-hidden className="size-3.5" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px]">New bot</span>
+              </button>
             )}
           </div>
         )}
@@ -417,7 +415,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                   panel.current?.querySelector<HTMLElement>("[data-nav][aria-current]")?.focus();
                 }}
                 onEnter={() => {
-                  const first = [...bots, ...sections.flatMap(visible)][0];
+                  const first = sections.flatMap(visible)[0];
                   if (first) props.onSelect(first);
                 }}
                 onDown={() => panel.current?.querySelector<HTMLElement>("[data-nav][data-session]")?.focus()}
@@ -774,7 +772,7 @@ function SidebarFind({
   return (
     <FindField
       value={query}
-      label="Find bots and sessions"
+      label="Find sessions"
       onChange={onChange}
       onClose={onClose}
       onKeyDown={(event) => {
