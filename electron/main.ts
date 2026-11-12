@@ -431,6 +431,15 @@ function readColorMode(): ColorMode {
 /** The canvas colour in each mode, so the window never flashes the other one. */
 const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff");
 
+/* Prototype: on macOS the window is transparent over the native sidebar
+   material and the page lets it through the chrome. A transparent window
+   cannot turn opaque later, and an opaque background colour set on it would
+   make its page opaque too, so it never gets one. */
+const vibrant = process.platform === "darwin";
+const vibrancyOptions = vibrant
+  ? ({ backgroundColor: "#00000000", transparent: true, vibrancy: "sidebar", visualEffectState: "active" } as const)
+  : null;
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
@@ -445,6 +454,7 @@ function createWindow(): void {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     backgroundColor: windowBackground(),
+    ...vibrancyOptions,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -651,7 +661,9 @@ app.whenReady().then(async () => {
   const icons = iconCache({ dir: path.join(app.getPath("userData"), "icons"), fetch: (url, init) => net.fetch(url, init) });
   session.defaultSession.protocol.handle(ICON_SCHEME, (request) => icons.serve(request));
   nativeTheme.themeSource = readColorMode();
-  nativeTheme.on("updated", () => win?.setBackgroundColor(windowBackground()));
+  nativeTheme.on("updated", () => {
+    if (!vibrant) win?.setBackgroundColor(windowBackground());
+  });
   Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
   registerIpc();
   let notice: string | null;

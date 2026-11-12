@@ -66,7 +66,7 @@ export function Explorer({ root, width, onResize, focus, active, onOpenFile, pla
       data-explorer
       aria-label="Explorer"
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-l border-border bg-sidebar"
+      className="relative flex h-full shrink-0 flex-col border-l border-border bg-chrome"
     >
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-2">
         {places.length > 1 ? (

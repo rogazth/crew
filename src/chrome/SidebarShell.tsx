@@ -54,7 +54,7 @@ export function SidebarShell({ open, width, minWidth, maxWidth, onResize, childr
     <aside
       data-sidebar="sidebar"
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col bg-sidebar"
+      className="relative flex h-full shrink-0 flex-col bg-chrome"
     >
       {children}
       <button

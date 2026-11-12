@@ -14,6 +14,8 @@
   --color-canvas: light-dark(#ffffff, oklch(17% 0 0));
   --color-sidebar: light-dark(oklch(98% 0 0), oklch(13% 0 0));
   --color-rail: light-dark(oklch(96.5% 0 0), oklch(15% 0 0));
+  /* What the chrome's own layers paint: the sidebar's colour, or nothing over macOS vibrancy. */
+  --color-chrome: var(--color-sidebar);
   /* Floating things: menus, the palette, the launcher. */
   --color-surface: light-dark(#ffffff, oklch(21% 0.004 285));
   --color-fill: light-dark(oklch(94% 0 0), oklch(26.9% 0 0));
@@ -96,6 +98,7 @@
      every step is at least 1.1:1 from its neighbour, not 1.05. */
   --color-sidebar: light-dark(oklch(96.6% 0 0), oklch(16% 0 0));
   --color-rail: var(--color-sidebar);
+  --color-chrome: var(--color-sidebar);
   --color-canvas: light-dark(#ffffff, oklch(21% 0 0));
   --color-surface: light-dark(#ffffff, oklch(25% 0 0));
   --color-fill: light-dark(oklch(94% 0 0), oklch(30% 0 0));
@@ -134,7 +137,7 @@ body,
 body {
   margin: 0;
   /* The chrome's ground; the work sits on the canvas as a sheet laid over it. */
-  background: var(--color-sidebar);
+  background: var(--color-chrome);
   color: var(--color-text);
   font-family: ui-sans-serif, -apple-system, system-ui, sans-serif;
   font-size: 13px;
@@ -1563,7 +1566,7 @@ svg.lucide {
   flex: 1;
   height: 100%;
   overflow: clip;
-  background: var(--color-sidebar);
+  background: var(--color-chrome);
 }
 .sbx-under {
   position: absolute;
@@ -1590,7 +1593,7 @@ svg.lucide {
   inset: 0;
   z-index: 1;
   display: flex;
-  background: var(--color-sidebar);
+  background: var(--color-chrome);
   will-change: transform;
 }
 .sbx-content {
@@ -1937,4 +1940,50 @@ button:not(:disabled):active {
   from {
     opacity: 0;
   }
+}
+
+/* ── Vibrancy (prototype) ───────────────────────────────────────────────
+   On macOS the window is transparent over the native "sidebar" material
+   (electron/main.ts) and the preload marks <html data-vibrancy>. The chrome's
+   layers paint nothing; html alone lays one tint over the material, so the
+   rail, sidebar, tabs and the frame round the sheet read as one pane of
+   glass. The sheet, menus and dialogs keep their opaque grounds. */
+html[data-vibrancy] {
+  --color-chrome: transparent;
+  --chrome-tint: light-dark(oklch(100% 0 0 / 0.3), oklch(16% 0 0 / 0.45));
+  background: var(--chrome-tint);
+}
+
+/* The tab strip's overflow: over glass a gradient of the chrome's colour reads
+   as a white block, so the strip fades its own tabs out under the caret instead. */
+@property --tab-fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --tab-fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+html[data-vibrancy] .tab-scroll-control {
+  background-image: none;
+}
+html[data-vibrancy] [data-tab-strip] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--tab-fade-start),
+    #000 calc(100% - var(--tab-fade-end)),
+    transparent
+  );
+  transition:
+    --tab-fade-start 150ms,
+    --tab-fade-end 150ms;
+}
+html[data-vibrancy] [data-tab-strip][data-fade-start] {
+  --tab-fade-start: 40px;
+}
+html[data-vibrancy] [data-tab-strip][data-fade-end] {
+  --tab-fade-end: 40px;
 }

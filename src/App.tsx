@@ -483,7 +483,7 @@ export function App() {
         />
       )}
       >
-      <main className="flex min-w-0 flex-1 flex-col bg-sidebar">
+      <main className="flex min-w-0 flex-1 flex-col bg-chrome">
         <Pages
           page={page}
           workspaces={workspaces.workspaces}

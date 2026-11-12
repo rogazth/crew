@@ -136,7 +136,7 @@ function PageStrip({
   onClose: () => void;
 }) {
   return (
-    <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-1 bg-sidebar pr-2">
+    <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-1 bg-chrome pr-2">
       {inset ? <div className={`shrink-0 ${TOGGLE_RESERVE}`} /> : <div className="w-3 shrink-0" />}
       {trail.length === 0 && heading && (
         <span

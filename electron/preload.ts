@@ -20,6 +20,13 @@ import { APP_INFO_CHANNEL, LICENSES_CHANNEL } from "../src/lib/appInfo";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 import { TRACE_CHANNELS, type TraceRecord } from "../src/lib/trace";
 
+// Prototype: the main window is vibrant on macOS (main.ts); the page lets the material through its chrome.
+if (process.platform === "darwin") {
+  const mark = () => document.documentElement.setAttribute("data-vibrancy", "");
+  if (document.documentElement) mark();
+  else document.addEventListener("DOMContentLoaded", mark, { once: true });
+}
+
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, value: T) => cb(value);
   ipcRenderer.on(channel, handler);

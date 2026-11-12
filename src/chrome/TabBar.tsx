@@ -238,7 +238,7 @@ export function TabBar({
       data-file-drop={dropping || undefined}
       className={`flex h-10 shrink-0 items-stretch border-b border-transparent ${
         // Files held over the strip only tint it; they open as tabs.
-        dropping ? "bg-[color-mix(in_oklab,var(--color-focus)_6%,var(--color-sidebar))]" : "bg-sidebar"
+        dropping ? "bg-[color-mix(in_oklab,var(--color-focus)_6%,var(--color-sidebar))]" : "bg-chrome"
       }`}
     >
       {inset && (
@@ -292,6 +292,8 @@ export function TabBar({
               data-tab-strip
               data-drag-group="strip"
               data-tauri-drag-region={overflowing ? "false" : undefined}
+              data-fade-start={canScrollStart || undefined}
+              data-fade-end={canScrollEnd || undefined}
               className={`no-scrollbar flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden pr-1.5 scroll-px-10 ${pinned.length > 0 ? "" : "pl-2.5"}`}
             >
                 {items.map((item) =>
@@ -632,7 +634,7 @@ function ScrollControl({
       tabIndex={visible ? 0 : -1}
       onClick={onClick}
       data-tauri-drag-region="false"
-      className={`absolute inset-y-0 z-10 flex w-10 items-center transition-opacity duration-150 ${
+      className={`tab-scroll-control absolute inset-y-0 z-10 flex w-10 items-center transition-opacity duration-150 ${
         start ? "left-0 justify-start bg-linear-to-r" : "right-0 justify-end bg-linear-to-l"
       } from-sidebar via-sidebar/95 to-transparent ${
         visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"

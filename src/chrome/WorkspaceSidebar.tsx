@@ -380,7 +380,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
         {/* Bots, as they are today. */}
         {prefs && !(filtering && bots.length === 0) && (
           <div className="px-2 pb-1">
-            <div className={`${STICKY} flex h-8 items-center gap-0.5 pl-2`}>
+            <div className="flex h-8 items-center gap-0.5 pl-2">
               <span className="min-w-0 flex-1 truncate text-text-muted">Bots</span>
               <HeaderButton icon={PlusIcon} label={`New bot ${commandKeys("new-bot")}`} onClick={() => props.onNewBot(main)} />
             </div>
@@ -414,7 +414,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 
         {/* Sessions: search, the view menu and a new one, then the groups. */}
         <div className="px-2">
-          <div className={`${STICKY} -mx-2 px-2`}>
+          <div className="-mx-2 px-2">
             {searching ? (
               <SidebarFind
                 query={query}
@@ -632,8 +632,6 @@ function NameField({ initial, onDone }: { initial: string; onDone: (name: string
 }
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
-
-const STICKY = "sticky top-0 z-10 bg-sidebar";
 
 function HeaderButton({
   icon: Glyph,
