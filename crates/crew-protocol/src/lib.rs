@@ -777,6 +777,14 @@ pub struct WorktreeRemove {
     pub force: bool,
 }
 
+/// The worktrees of the repo a window listed at `path` changed on disk: one
+/// made or removed with git, locked or unlocked, or its folder deleted.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorktreesChanged {
+    pub path: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct PathContents {

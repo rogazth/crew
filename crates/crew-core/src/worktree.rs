@@ -72,6 +72,14 @@ pub fn branches(cwd: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// The repo's own git dir, which every worktree shares: `worktrees/` under it
+/// holds an entry per linked worktree. `None` outside a repository.
+pub fn common_dir(cwd: &str) -> Option<PathBuf> {
+    let out = git(cwd, &["rev-parse", "--git-common-dir"])?;
+    let dir = out.trim();
+    (!dir.is_empty()).then(|| Path::new(cwd).join(dir))
+}
+
 /// The branch checked out in `cwd`; `None` outside a repository or on a
 /// detached HEAD.
 pub fn current_branch(cwd: &str) -> Option<String> {

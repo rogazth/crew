@@ -55,6 +55,7 @@ mod socks;
 mod stall;
 pub mod trace;
 mod vault;
+mod worktree_watch;
 
 pub struct Config {
     pub pty: PtyHost,
@@ -93,6 +94,8 @@ struct Hosts {
     provider_logins: crew_core::provider_login::ProviderLogins,
     /// What each workspace's repo offered as its icon when last looked at.
     icons: Arc<workspace_icon::Looks>,
+    /// The repos whose worktrees a window listed, watched for changes made outside it.
+    worktrees: Arc<worktree_watch::WorktreeWatch>,
 }
 
 /// Where the daemon listens and the token a client has to bring.
@@ -875,6 +878,12 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
         provider_jobs,
         provider_logins,
         icons: Arc::new(workspace_icon::Looks::default()),
+        worktrees: {
+            let changed = hub.clone();
+            Arc::new(worktree_watch::WorktreeWatch::new(move |path| {
+                changed.emit("worktrees-changed", proto::WorktreesChanged { path: path.to_string() })
+            }))
+        },
     };
     // `update_session` deletes: what only the daemon holds is
     // let go as `delete_session` does, and every window forgets the rows.
@@ -1702,41 +1711,42 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_create" => {
             let p: SessionCreate = parse(params)?;
             let store = hosts.store.clone();
-            json(
-                block(move || {
-                    let mut row = session::create_in_worktree(
+            let row = block(move || {
+                let mut row = session::create_in_worktree(
+                    &store,
+                    p.workspace_id,
+                    p.kind,
+                    p.name,
+                    p.provider,
+                    p.model,
+                    p.description,
+                    p.autonomy,
+                    p.worktree,
+                )?;
+                let effort = p.effort.clone().unwrap_or_default();
+                let tier = p.service_tier.clone().unwrap_or_default();
+                if !effort.is_empty() || !tier.is_empty() {
+                    session::set_options(
                         &store,
-                        p.workspace_id,
-                        p.kind,
-                        p.name,
-                        p.provider,
-                        p.model,
-                        p.description,
-                        p.autonomy,
-                        p.worktree,
+                        row.id.clone(),
+                        row.model.clone(),
+                        effort.clone(),
+                        tier.clone(),
+                        row.autonomy.clone(),
                     )?;
-                    let effort = p.effort.clone().unwrap_or_default();
-                    let tier = p.service_tier.clone().unwrap_or_default();
-                    if !effort.is_empty() || !tier.is_empty() {
-                        session::set_options(
-                            &store,
-                            row.id.clone(),
-                            row.model.clone(),
-                            effort.clone(),
-                            tier.clone(),
-                            row.autonomy.clone(),
-                        )?;
-                        if !effort.is_empty() {
-                            row.effort = effort;
-                        }
-                        if !tier.is_empty() {
-                            row.service_tier = tier;
-                        }
+                    if !effort.is_empty() {
+                        row.effort = effort;
                     }
-                    Ok::<_, String>(row)
-                })
-                .await?,
-            )
+                    if !tier.is_empty() {
+                        row.service_tier = tier;
+                    }
+                }
+                Ok::<_, String>(row)
+            })
+            .await?;
+            // Every window lists it, whoever made it; the one that asked already has it.
+            hosts.hub.emit("session-created", SessionCreated { session: proto_session(&row), open: false });
+            json(row)
         }
         "session_set_options" => {
             let p: SessionOptions = parse(params)?;
@@ -1842,7 +1852,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "session_delete" => {
             let Id { id } = parse(params)?;
-            delete_session(hosts, id).await?;
+            delete_session(hosts, id.clone()).await?;
+            hosts.hub.emit("sessions-deleted", SessionsDeleted { ids: vec![id] });
             Ok(Value::Null)
         }
         "sessions_stale" => {
@@ -2053,7 +2064,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "worktree_list" => {
             let PathArg { path } = parse(params)?;
-            json(block(move || Ok::<_, String>(worktree::list(&path))).await?)
+            let watch = hosts.worktrees.clone();
+            json(
+                block(move || {
+                    let listed = worktree::list(&path);
+                    watch.follow(&path, &listed);
+                    Ok::<_, String>(listed)
+                })
+                .await?,
+            )
         }
         "worktree_add" => {
             let WorktreeAdd { path, branch } = parse(params)?;

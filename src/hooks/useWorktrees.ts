@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
+import { client } from "../lib/client";
 import { publishWorktrees } from "../lib/placeStore";
+import type { WorktreesChanged } from "../lib/protocol";
 import type { Workspace, Worktree } from "../lib/types";
 import { asListed } from "../lib/worktrees";
 
@@ -8,9 +10,9 @@ import { asListed } from "../lib/worktrees";
 const standIn = (path: string): Worktree => ({ path, branch: null, main: true, add: 0, del: 0, dirty: 0, locked: null });
 
 /**
- * The workspace's worktrees as git lists them. Read on every workspace switch
- * and whenever the window comes back, since worktrees are made and removed
- * outside crew too. Each workspace's last answer is kept, so switching back
+ * The workspace's worktrees as git lists them. Read on every workspace switch,
+ * whenever the window comes back, and as soon as the daemon sees them change
+ * on disk, since worktrees are made and removed outside crew too. Each workspace's last answer is kept, so switching back
  * shows it while git is asked again, which on a remote machine takes a moment.
  */
 export function useWorktrees(workspace: Workspace | null) {
@@ -48,6 +50,15 @@ export function useWorktrees(workspace: Workspace | null) {
   const main = list.find((tree) => tree.main) ?? list[0] ?? null;
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
+
+  // The daemon watches the repo from its first listing on.
+  useEffect(() => {
+    if (!path) return;
+    const unsubscribe = client.on("worktrees-changed", (payload) => {
+      if ((payload as WorktreesChanged).path === path) refresh();
+    });
+    return () => unsubscribe();
+  }, [path, refresh]);
 
   const create = useCallback(
     async (branch: string) => {

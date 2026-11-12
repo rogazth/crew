@@ -61,9 +61,8 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   await places.getByRole("button", { name: "Services (1)", exact: true }).waitFor();
 
   // The session goes; its server does not, and the page says who left it.
-  // Deleted outside the window, which reloads to read its sessions again.
+  // Deleted outside the window, which hears of it from crewd.
   await crew.request("session_delete", { id: shell.id });
-  await crew.reload();
   await openServices(crew);
   const block = page.getByRole("region", { name: "web" });
   await block.getByText("Left running").waitFor();

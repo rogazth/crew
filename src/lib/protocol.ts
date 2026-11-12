@@ -2203,3 +2203,9 @@ repo?: string,
  * Discards uncommitted changes; without it a dirty worktree is refused.
  */
 force: boolean, };
+
+/**
+ * The worktrees of the repo a window listed at `path` changed on disk: one
+ * made or removed with git, locked or unlocked, or its folder deleted.
+ */
+export type WorktreesChanged = { path: string, };

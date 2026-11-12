@@ -27,6 +27,17 @@ type Registry = Record<string, Session[]>;
 
 const NONE: Session[] = [];
 
+/** Sessions heard of, each added to its workspace's list if that is loaded and lacks it. */
+function withHeard(registry: Registry, sessions: Session[]): Registry {
+  let next = registry;
+  for (const session of sessions) {
+    const list = next[session.workspaceId];
+    if (!list || list.some((s) => s.id === session.id)) continue;
+    next = { ...next, [session.workspaceId]: [...list, session] };
+  }
+  return next;
+}
+
 /**
  * The sessions of every workspace this window has shown. Panes of a hidden
  * workspace stay mounted, so their rows have to stay readable too.
@@ -34,6 +45,10 @@ const NONE: Session[] = [];
 export function useSessions(workspaceId: string | null) {
   const [registry, setRegistry] = useState<Registry>({});
   const asked = useRef(new Set<string>());
+  // Every window hears of a session as the daemon makes it, this one too. While
+  // this window makes one, what it hears waits: its own lands once `settle` has.
+  const making = useRef(0);
+  const heard = useRef<Session[]>([]);
 
   // A workspace on a machine that was down loads once the machine answers.
   const link = useWorkspaceLink(workspaceId);
@@ -114,11 +129,8 @@ export function useSessions(workspaceId: string | null) {
       const session = created.session as unknown as Session;
       // One split off a terminal comes with the face the terminal showed.
       reloadBotFaces();
-      setRegistry((prev) => {
-        const list = prev[session.workspaceId];
-        if (!list || list.some((s) => s.id === session.id)) return prev;
-        return { ...prev, [session.workspaceId]: [...list, session] };
-      });
+      if (making.current > 0) heard.current.push(session);
+      else setRegistry((prev) => withHeard(prev, [session]));
     });
     // A session its provider named comes back renamed, a Claude terminal that
     // moved to a new conversation renamed and rebound; a bot that rewrote its
@@ -137,9 +149,21 @@ export function useSessions(workspaceId: string | null) {
   const create = useCallback(
     async (kind: SessionKind, input: CreateInput, settle?: Promise<unknown>) => {
       if (!workspaceId) return null;
-      const session = await api.createSession(workspaceId, kind, input);
-      await settle;
-      setRegistry((prev) => ({ ...prev, [workspaceId]: [...(prev[workspaceId] ?? []), session] }));
+      making.current += 1;
+      let session: Session | null = null;
+      try {
+        session = await api.createSession(workspaceId, kind, input);
+        await settle;
+      } finally {
+        making.current -= 1;
+        const made = session;
+        const rest = making.current === 0 ? heard.current.splice(0) : [];
+        setRegistry((prev) => {
+          const list = prev[workspaceId] ?? [];
+          const next = made && !list.some((s) => s.id === made.id) ? { ...prev, [workspaceId]: [...list, made] } : prev;
+          return withHeard(next, rest);
+        });
+      }
       return session;
     },
     [workspaceId],

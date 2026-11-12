@@ -835,17 +835,9 @@ export async function newSession(crew: Crew, workspaceId: string, worktree: stri
     autonomy: saved.access,
     worktree,
   });
+  // crewd tells every window of a session it makes.
   const row = sessionRow(crew, made);
-  await waitFor(
-    async () => {
-      // crewd does not tell the window of a session made over RPC; a reload reads the list again.
-      if ((await row.count()) === 0) {
-        await crew.reload();
-      }
-      return (await row.count()) > 0;
-    },
-    { message: "the new session reaches the sidebar" },
-  );
+  await waitFor(async () => (await row.count()) > 0, { message: "the new session reaches the sidebar" });
   // Its sortable wrapper reads aria-disabled when the list is not draggable, which Playwright takes for a disabled button.
   await row.first().click({ force: true });
   await composerOf(crew, made).waitFor();
