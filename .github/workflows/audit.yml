@@ -1,9 +1,16 @@
 # Known vulnerabilities in what ships: Rust crates (RustSec, through cargo-deny)
 # and the app's npm dependencies. Runs on every push to master and weekly, so an
-# advisory published after a release still shows up.
+# advisory published after a release still shows up. release.yml calls it too, on the
+# tag it publishes, and publishes nothing while it fails.
 name: Audit
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The ref to audit; empty audits the ref that started the run.
+        type: string
+        default: ""
   push:
     branches: [master]
   schedule:
@@ -19,6 +26,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref }}
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories
@@ -28,5 +37,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref }}
       # Only what ships; dev tooling never reaches a user. Low and moderate are left to Dependabot.
       - run: npm audit --omit=dev --audit-level=high

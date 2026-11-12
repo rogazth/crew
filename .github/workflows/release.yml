@@ -31,6 +31,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A release with a known vulnerability is never published: the same checks as audit.yml,
+  # on the tag being released. It runs beside the builds and holds back only the publish.
+  audit:
+    if: github.event_name != 'schedule'
+    uses: ./.github/workflows/audit.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   daemon-mac:
     runs-on: macos-15
     timeout-minutes: 30
@@ -100,7 +108,7 @@ jobs:
 
   release:
     if: github.event_name != 'schedule'
-    needs: [daemon-mac, daemon-linux]
+    needs: [audit, daemon-mac, daemon-linux]
     runs-on: macos-15
     timeout-minutes: 30
     # Only this environment holds UPDATE_SIGNING_KEY.

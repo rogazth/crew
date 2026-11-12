@@ -84,6 +84,27 @@ const behind = await run("git", ["rev-list", "--count", `HEAD..origin/${BRANCH}`
 if (behind !== "0") fail(`${BRANCH} is ${behind} commits behind origin. Pull first.`);
 if (await run("git", ["tag", "--list", tag], { capture: true })) fail(`${tag} already exists.`);
 
+// The Release workflow refuses to publish while Audit fails, so a red Audit on master
+// would only burn the version. CI is the real gate; this asks before tagging, when gh is there.
+async function lastAudit() {
+  try {
+    const out = await run(
+      "gh",
+      ["run", "list", "--workflow", "audit.yml", "--branch", BRANCH, "--status", "completed", "--limit", "1",
+        "--json", "conclusion,url"],
+      { capture: true },
+    );
+    return JSON.parse(out)[0] ?? null;
+  } catch {
+    return undefined;
+  }
+}
+const audit = await lastAudit();
+if (audit === undefined) console.warn("Could not ask GitHub for the last Audit run (is gh installed and signed in?). Releasing anyway.");
+else if (audit && audit.conclusion !== "success") {
+  fail(`The last Audit on ${BRANCH} ended in ${audit.conclusion}, and the Release workflow will not publish until it passes:\n  ${audit.url}`);
+}
+
 await edit("package.json", (text) =>
   replaceOnce(text, `^  "version": "${current}",$`, `  "version": "${version}",`, "package.json"),
 );
