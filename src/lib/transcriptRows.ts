@@ -8,7 +8,7 @@
  */
 import { allFailed, type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, isSteering, isWaiting, letterIdOf } from "./letters";
-import { controlOf, isReportLetter, nativeReportAt, startedOf, startNoteTarget } from "./orchestration";
+import { controlOf, isPeek, isReportLetter, nativeReportAt, startedOf, startNoteTarget, waitedReport } from "./orchestration";
 import { agentDetail } from "./subagent";
 import { isAuthFailure } from "./auth";
 import { describeApproval, type ApprovalKind } from "./approvals";
@@ -148,7 +148,8 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       if (block.usage) rows.push(footerFor(block, block.usage));
       continue;
     }
-    if (controlOf(block)) {
+    // A call that only looked is a step of the run; one that changed something is a beat.
+    if (controlOf(block) && !isPeek(block)) {
       flush();
       rows.push({ kind: "control", block });
       if (block.usage) rows.push(footerFor(block, block.usage));
@@ -254,10 +255,14 @@ function rowEndAt(row: Row): number | undefined {
  * A native subagent's report is drawn where it landed, not under the card of
  * the call that started it: three agents asked together answer later, each when
  * it is done, and a report pinned to its start would read out of order.
+ *
+ * A `delegate` that waited brought its report back in its answer, and the agent
+ * went on only once it had it: the report landed before whatever the agent did
+ * next that was not another call of the same batch.
  */
 function withNativeReports(rows: Row[], blocks: readonly Block[]): Row[] {
   const reports = blocks
-    .map((block) => ({ block, at: nativeReportAt(block) }))
+    .map((block, index) => ({ block, at: nativeReportAt(block) ?? waitedReportAt(blocks, index) }))
     .filter((entry): entry is { block: Block; at: number } => entry.at !== undefined)
     .sort((a, b) => a.at - b.at);
   if (reports.length === 0) return rows;
@@ -272,6 +277,28 @@ function withNativeReports(rows: Row[], blocks: readonly Block[]): Row[] {
     out.splice(found < 0 ? out.length : found, 0, report);
   }
   return out;
+}
+
+/**
+ * The report a start row is followed by, when both are about the same agent:
+ * the two read as one beat, "Explore finished". A native subagent's or a waited
+ * `delegate`'s report carries the call's id; a Crew report letter, the session's.
+ */
+export function reportAfter(start: Row | undefined, next: Row | undefined): Block | undefined {
+  if (next?.kind !== "report" || (start?.kind !== "subagent" && start?.kind !== "started")) return undefined;
+  if (next.block.id === `${start.block.id}:report`) return next.block;
+  if (start.kind !== "started") return undefined;
+  const started = startedOf(start.block);
+  const id = started && started.kind !== "sessions" ? started.target.id : undefined;
+  return id && next.block.fromBot?.id === id ? next.block : undefined;
+}
+
+/** Just before the first thing after a waited `delegate` that is not a call: the call returned with its report before it. */
+function waitedReportAt(blocks: readonly Block[], index: number): number | undefined {
+  const block = blocks[index]!;
+  if (!waitedReport(block) || block.at === undefined) return undefined;
+  const next = blocks.slice(index + 1).find((later) => later.role !== "tool" && later.at !== undefined);
+  return next ? next.at! - 1 : Number.MAX_SAFE_INTEGER;
 }
 
 /** The queue at the foot, apart: it goes under the working line, not into a turn. */
@@ -299,12 +326,17 @@ function withoutDuration(usage: TurnUsage): TurnUsage {
   return out;
 }
 
+/** The rows drawn as a beat: who did what to whom, on one centred line. */
+const BEATS = new Set<Row["kind"]>(["subagent", "started", "report", "letter"]);
+
 /** Same speaker 10, a change of speaker 28, meta 16; the footer hugs its reply. */
 export function gapBefore(prev: Row | undefined, current: Row): string {
   if (!prev) return "";
   if (current.kind === "footer") return "mt-2";
   // Calls sit tighter than paragraphs: two runs in a row read as one.
   if (prev.kind === "activity" && current.kind === "activity") return "mt-0.5";
+  // A run of beats is one list, whoever each beat is about: a start, a report, a letter.
+  if (BEATS.has(prev.kind) && BEATS.has(current.kind)) return "mt-2.5";
   const from = speaker(prev);
   const to = speaker(current);
   if (from === "meta" || to === "meta") return "mt-4";
@@ -383,6 +415,7 @@ export function rowBlocks(row: Row): Block[] {
  * happened, and a folded turn must not hide that it did.
  */
 export function foldTurns(rows: Row[], working: boolean): Row[] {
+  rows = withFooters(rows, working);
   const out: Row[] = [];
   let turn: Row[] = [];
   const close = (live: boolean) => {
@@ -402,6 +435,38 @@ export function foldTurns(rows: Row[], working: boolean): Row[] {
   return out;
 }
 
+/**
+ * Every finished answer gets its line (copy, the time), whether or not its
+ * provider reported what the turn cost: Codex and Cursor close a turn with no
+ * usage, and their answers would otherwise end on nothing. A turn ends at the
+ * next thing the user said; the one still running gets its line when it ends.
+ */
+function withFooters(rows: Row[], working: boolean): Row[] {
+  const out: Row[] = [];
+  let start = 0;
+  const close = (live: boolean) => {
+    const turn = out.slice(start);
+    const last = turn.at(-1);
+    if (!live && last?.kind === "message" && last.block.role === "assistant" && !last.block.streaming && !turn.some((row) => row.kind === "footer")) {
+      out.push({
+        kind: "footer",
+        id: `footer-${last.block.id}`,
+        usage: {},
+        ...(last.block.at !== undefined ? { at: last.block.at } : {}),
+        ...(last.block.text.trim() ? { text: last.block.text } : {}),
+      });
+    }
+    start = out.length;
+  };
+  for (const row of rows) {
+    if (row.kind === "date" || isUser(row)) close(false);
+    out.push(row);
+    if (row.kind === "footer") start = out.length;
+  }
+  close(working);
+  return out;
+}
+
 function foldTurn(turn: Row[]): Row[] {
   let opening = 0;
   while (opening < turn.length && isOpening(turn[opening]!)) opening += 1;
@@ -412,29 +477,70 @@ function foldTurn(turn: Row[]): Row[] {
       break;
     }
   }
-  const span = answer >= 0 ? turn.slice(opening, answer) : [];
-  const work = span.filter((row) => !staysOut(row));
-  const out = span.filter(staysOut);
-  if (work.length < 2 || !work.some((row) => row.kind === "activity")) return turn;
+  if (answer < 0) return turn;
+  const span = turn.slice(opening, answer);
   const reply = turn[answer]!;
-  const blocks = work.flatMap(rowBlocks);
   // Its own footer, which closes it: never an earlier turn's.
   const last = turn.at(-1);
   const footer = last?.kind === "footer" ? last : undefined;
   const first = turn[0];
   const started = opening > 0 && (first?.kind === "message" || first?.kind === "letter" || first?.kind === "report") ? first.block.at : undefined;
   const ended = reply.kind === "message" ? reply.block.at : undefined;
-  const durationMs =
-    footer?.usage.durationMs ?? (started !== undefined && ended !== undefined ? ended - started : undefined);
+  // What the agent wrote for the reader on the way stays in sight, where it
+  // said it; the work on either side of it folds on its own.
+  const said = span.filter(isOutputRow);
+  const pieces: Row[][] = [[]];
+  for (const row of span) {
+    if (isOutputRow(row)) pieces.push([]);
+    else pieces.at(-1)!.push(row);
+  }
+  const folded: Row[] = [];
+  let any = false;
+  pieces.forEach((piece, index) => {
+    const from = index === 0 ? started : messageAt(said[index - 1]!);
+    const to = index < said.length ? messageAt(said[index]!) : ended;
+    const between = from !== undefined && to !== undefined ? to - from : undefined;
+    // One piece is the whole turn: its cost already says how long it took.
+    const durationMs = said.length === 0 ? (footer?.usage.durationMs ?? between) : between;
+    const rows = foldPiece(piece, durationMs);
+    if (rows !== piece) any = true;
+    folded.push(...rows);
+    if (index < said.length) folded.push(said[index]!);
+  });
+  if (!any) return turn;
+  const rest = turn.slice(answer).map((row) => (row.kind === "footer" && said.length === 0 ? { ...row, folded: true } : row));
+  return [...turn.slice(0, opening), ...folded, ...rest];
+}
+
+/** The work between two things the reader sees, behind one line; the beats in it stay out, under it. */
+function foldPiece(piece: Row[], durationMs: number | undefined): Row[] {
+  const work = piece.filter((row) => !staysOut(row));
+  if (work.length < 2 || !work.some((row) => row.kind === "activity")) return piece;
   const fold: Row = {
     kind: "fold",
     id: `fold-${rowId(work[0]!)}`,
     rows: work,
     ...(durationMs !== undefined && durationMs > 0 ? { durationMs } : {}),
-    failed: allFailed(blocks),
+    failed: allFailed(work.flatMap(rowBlocks)),
   };
-  const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
-  return [...turn.slice(0, opening), fold, ...out, ...rest];
+  return [fold, ...piece.filter(staysOut)];
+}
+
+/** Longer than a note to self, by this many characters, it was written to be read. */
+const NOTE_MAX = 400;
+
+/**
+ * A message the agent wrote on the way that is output, not a note between two
+ * calls ("Now the tests."): a heading, a list, a table, a quote, code, or long.
+ */
+function isOutputRow(row: Row): boolean {
+  if (row.kind !== "message" || row.block.role !== "assistant") return false;
+  const text = row.block.text.trim();
+  return text.length > NOTE_MAX || /^(?:#{1,6} |```|~~~|\||> |[-*+] |\d+[.)] )/m.test(text);
+}
+
+function messageAt(row: Row): number | undefined {
+  return row.kind === "message" ? row.block.at : undefined;
 }
 
 /**

@@ -24,9 +24,9 @@ import {
   exitedless,
   nativeName,
   nativeReport,
-  nativeReportAt,
   sentOf,
   startedOf,
+  waitedReport,
   startedSession,
   type Started,
 } from "../../lib/orchestration";
@@ -114,15 +114,20 @@ function useOwnerPeer(): Peer | undefined {
   return owner ? peerOf(sessions, owner.id, owner.name) : undefined;
 }
 
+/** The words of a report row, whichever kind brought it. */
+function reportText(block: Block): string {
+  return nativeReport(block) ?? waitedReport(block) ?? exitedless(block);
+}
+
 /**
- * A native subagent's call, whichever CLI ran it: `Lead started [mark] Explore`.
+ * A native subagent's call, whichever CLI ran it: `[mark] Explore started`.
  * It opens the subagent's thread; one the work list has lost shows what it was asked.
+ * With its report right after it (`done`), the two are one beat: `Explore finished`.
  */
-export const SubagentCall = memo(function SubagentCall({ block, marked }: { block: Block; marked: string | null }) {
+export const SubagentCall = memo(function SubagentCall({ block, marked, done }: { block: Block; marked: string | null; done?: Block | undefined }) {
   const entries = useContext(WorkContext);
   const { sessions, owner } = useLetterScope();
   const { openAgent } = useChatActions();
-  const me = useOwnerPeer();
   const detail = agentDetail(block);
   if (!detail) return null;
   const entry = entryOfCall(entries, block);
@@ -135,13 +140,11 @@ export const SubagentCall = memo(function SubagentCall({ block, marked }: { bloc
     <Beat
       id={block.id}
       marked={marked}
-      first={me}
       start
-      verb={resumed ? "resumed" : "started"}
-      second={peer}
-      at={block.at}
+      first={peer}
+      verb={done ? "finished" : resumed ? "resumed" : "started"}
       onOpen={entry ? () => openAgent(entry.id) : undefined}
-      peek={asked ? { title: `What ${peer.name} was asked`, text: asked } : undefined}
+      peek={done ? { title: `What ${peer.name} reported`, text: reportText(done) } : asked ? { title: `What ${peer.name} was asked`, text: asked } : undefined}
     />
   );
 });
@@ -151,7 +154,6 @@ export const SubagentReport = memo(function SubagentReport({ block }: { block: B
   const entries = useContext(WorkContext);
   const { sessions, owner } = useLetterScope();
   const { openAgent } = useChatActions();
-  const me = useOwnerPeer();
   const detail = agentDetail(block);
   const report = nativeReport(block);
   if (!detail || !report) return null;
@@ -162,9 +164,7 @@ export const SubagentReport = memo(function SubagentReport({ block }: { block: B
     <Beat
       report
       first={peer}
-      verb="reported to"
-      second={me}
-      at={nativeReportAt(block) ?? block.at}
+      verb="finished"
       onOpen={entry ? () => openAgent(entry.id) : undefined}
       peek={{ title: `What ${peer.name} reported`, text: report }}
     />
@@ -176,11 +176,10 @@ export const SubagentReport = memo(function SubagentReport({ block }: { block: B
  * a session, `start_sessions` several, a beat each. The prompt is the session's
  * first letter, at the top of its thread.
  */
-export const StartedRow = memo(function StartedRow({ block, marked }: { block: Block; marked: string | null }) {
+export const StartedRow = memo(function StartedRow({ block, marked, done }: { block: Block; marked: string | null; done?: Block | undefined }) {
   const entries = useContext(WorkContext);
   const { openAgent } = useChatActions();
   const { sessions, owner } = useLetterScope();
-  const me = useOwnerPeer();
   const found = startedOf(block);
   // A call still out (a delegate that waits) has no answer to name its session yet: its row does.
   const made = found && found.kind !== "sessions" ? startedSession(sessions, owner?.id, block, found) : undefined;
@@ -221,19 +220,38 @@ export const StartedRow = memo(function StartedRow({ block, marked }: { block: B
             {...(index === 0 ? { id: block.id } : {})}
             marked={marked}
             letter={letter}
-            first={me}
             start={!target.note}
-            verb={target.note ? "could not start" : "started"}
-            second={peer}
+            first={peer}
+            verb={target.note ? "could not start" : done ? "finished" : "started"}
             note={target.note}
             failed={Boolean(target.note)}
-            at={block.at}
             onOpen={target.note ? undefined : (open(target) ?? (pending && started.kind !== "sessions" ? () => setOpening(true) : undefined))}
-            peek={!target.note && prompt ? { title: `What ${peer.name} was asked`, text: prompt } : undefined}
+            peek={done ? { title: `What ${peer.name} reported`, text: reportText(done) } : !target.note && prompt ? { title: `What ${peer.name} was asked`, text: prompt } : undefined}
           />
         );
       })}
     </div>
+  );
+});
+
+/** What a `delegate` that waited got back: the same beat as a report letter, from the call's own answer. */
+export const WaitedReport = memo(function WaitedReport({ block }: { block: Block }) {
+  const { sessions } = useLetterScope();
+  const { openAgent } = useChatActions();
+  const started = startedOf(block);
+  const target = started && started.kind !== "sessions" ? started.target : undefined;
+  const peer = usePeer(target?.id, target?.name ?? "subagent", target?.provider);
+  const report = waitedReport(block);
+  if (!target || !report) return null;
+  const id = target.id;
+  return (
+    <Beat
+      report
+      first={peer}
+      verb="finished"
+      onOpen={id && sessions.some((row) => row.id === id) ? () => openAgent(id) : undefined}
+      peek={{ title: `What ${peer.name} reported`, text: report }}
+    />
   );
 });
 
@@ -243,7 +261,6 @@ export const ReportLetter = memo(function ReportLetter({ block, marked }: { bloc
   const { sessions } = useLetterScope();
   const { openAgent } = useChatActions();
   const peer = usePeer(from?.id, from?.name ?? "agent");
-  const me = useOwnerPeer();
   if (!from || !block.letterId) return null;
   const letter = block.letterId;
   return (
@@ -253,9 +270,7 @@ export const ReportLetter = memo(function ReportLetter({ block, marked }: { bloc
       marked={marked}
       letter={letter}
       first={peer}
-      verb="reported to"
-      second={me}
-      at={block.at}
+      verb="finished"
       onOpen={from.id && sessions.some((row) => row.id === from.id) ? () => openAgent(from.id, { focus: letter }) : undefined}
       peek={{ title: `What ${peer.name} reported`, text: exitedless(block) }}
     />
@@ -278,11 +293,9 @@ const SentRow = memo(function SentRow({ block, marked }: { block: Block; marked:
         id={block.id}
         marked={marked}
         letter={letter}
-        first={me}
-        verb={sent.handoff ? "handed you" : "wrote to"}
+        verb={sent.handoff ? "Handed you" : "Wrote to"}
         second={peer}
         note={sent.delivery ?? undefined}
-        at={block.at}
         onOpen={peer.id && sessions.some((row) => row.id === peer.id) ? () => openAgent(peer.id!, letter ? { focus: letter } : undefined) : undefined}
         peek={words ? { title: `Message to ${peer.name}`, text: sent.text } : undefined}
       />
@@ -342,11 +355,10 @@ function LetterBeat({ block, marked }: { block: Block; marked: string | null }) 
   const { openAgent } = useChatActions();
   const from = block.fromBot;
   const peer = usePeer(from?.id, from?.name ?? "", undefined);
-  const me = useOwnerPeer();
   if (!from) return null;
   const words = exitedless(block);
   if (block.letterKind === "started") {
-    return <Beat id={block.id} marked={marked} letter={block.letterId} first={peer} verb="started" second={me} at={block.at} peek={{ title: `What ${peer.name} asked`, text: words }} />;
+    return <Beat id={block.id} marked={marked} letter={block.letterId} first={peer} verb="started this session" peek={{ title: `What ${peer.name} asked`, text: words }} />;
   }
   const asks = block.letterKind === "question" || block.letterKind === "approval";
   const child = from.id ? sessions.find((row) => row.id === from.id && row.kind !== "bot") : undefined;
@@ -362,10 +374,8 @@ function LetterBeat({ block, marked }: { block: Block; marked: string | null }) 
       marked={marked}
       letter={letter}
       first={peer}
-      verb={asks ? "asked" : "wrote to"}
-      second={me}
+      verb={asks ? "asked" : "wrote"}
       waiting={asks && child?.status === "needs-input"}
-      at={block.at}
       onOpen={child || sessions.some((row) => row.id === from.id) ? open : undefined}
       peek={{ title: `Message from ${peer.name}`, text: words }}
     />
@@ -447,7 +457,7 @@ const WroteLine = memo(function WroteLine({ block, marked }: { block: Block; mar
   const peer = peerOf(sessions, to?.id || undefined, to?.name ?? "");
   if (!mark || mark.from.id !== USER) return block.role === "user" ? <UserMessage block={block} /> : <Note block={block} />;
   const target = peer.id && sessions.some((row) => row.id === peer.id) ? peer.id : undefined;
-  return <Beat id={block.id} marked={marked} letter={mark.letterId} first="you" verb="wrote to" second={peer} at={block.at} onOpen={target ? () => openAgent(target, { focus: mark.letterId }) : undefined} />;
+  return <Beat id={block.id} marked={marked} letter={mark.letterId} first="you" verb="wrote to" second={peer} onOpen={target ? () => openAgent(target, { focus: mark.letterId }) : undefined} />;
 });
 
 /** A letter row: the message this chat sent, the letter it received, or the note a write to a child leaves. */

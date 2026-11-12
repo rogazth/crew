@@ -1838,7 +1838,12 @@ delivery?: string,
 /**
  * Why Crew refused it: no letter was made.
  */
-error?: string, } | { "kind": "crew", 
+error?: string, 
+/**
+ * What a `delegate` that waited got back: the subagent's report. Its
+ * letter went back in the call's answer, so no report letter lands.
+ */
+report?: string, } | { "kind": "crew", 
 /**
  * The tool, without its prefix: `start_sessions`, `interrupt_session`,
  * `read_session`, `list_peers`, `stop_session` or `update_session`.

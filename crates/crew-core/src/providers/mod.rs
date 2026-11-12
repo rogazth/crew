@@ -338,6 +338,7 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
             what: Some(what.into()),
             delivery: None,
             error: None,
+            report: None,
         });
     }
     if is_control_tool(verb) {
@@ -361,6 +362,7 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
         what: None,
         delivery: None,
         error: None,
+        report: None,
     })
 }
 
@@ -388,7 +390,7 @@ pub fn crew_result_detail(
     let crew_protocol::ToolDetail::Message { to, text, what, .. } = call else {
         return None;
     };
-    let row = |letter_id, to_id, to_name, delivery, error| crew_protocol::ToolDetail::Message {
+    let row = |letter_id, to_id, to_name, delivery, error, report| crew_protocol::ToolDetail::Message {
         to: to.clone(),
         text: text.clone(),
         letter_id,
@@ -397,17 +399,23 @@ pub fn crew_result_detail(
         what: what.clone(),
         delivery,
         error,
+        report,
     };
     if failed {
         let error = result.trim();
-        return (!error.is_empty()).then(|| row(None, None, None, None, Some(error.to_string())));
+        return (!error.is_empty()).then(|| row(None, None, None, None, Some(error.to_string()), None));
     }
     let answer: Map<String, Value> = serde_json::from_str(result.trim()).ok()?;
     let field = |key: &str| string_field(Some(&answer), key);
     let letter_id = field("letter_id")?;
     // `send_message` answers the reader's name as `to`, `delegate` and `start_session` as `name`.
     let to_name = if what.is_some() { field("name") } else { field("to") };
-    Some(row(Some(letter_id), field("id"), to_name, field("delivery"), None))
+    // A `delegate` that waited answers with the report itself: no report letter follows it.
+    let report = match field("status").as_deref() {
+        Some("reported" | "stopped" | "failed" | "exited") => field("report").filter(|text| !text.trim().is_empty()),
+        _ => None,
+    };
+    Some(row(Some(letter_id), field("id"), to_name, field("delivery"), None, report))
 }
 
 /// The row line for a Crew call: `Crew message agent abc`, the tool it ran
@@ -925,7 +933,7 @@ mod tests {
         let input = serde_json::json!({ "to": "abc", "text": "green" });
         let input = input.as_object().unwrap();
         let answer = r#"{ "to": "Auth", "id": "abc-1", "letter_id": "L1", "delivery": "queued", "waiting": 1 }"#;
-        let Some(ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error }) =
+        let Some(ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error, .. }) =
             crate::providers::claude::tool_result_detail("mcp__crew__send_message", input, answer, false)
         else {
             panic!("not a message row");
@@ -963,6 +971,21 @@ mod tests {
             started,
             Some(ToolDetail::Message { ref text, letter_id: Some(ref l), to_name: Some(ref n), .. }) if text == "fix it" && l == "L2" && n == "codex: fix it"
         ));
+        // A `delegate` that waited carries the report its answer brought; one that did not, none.
+        let waited = crew_result_detail(
+            "mcp__crew__delegate",
+            start,
+            r#"{ "id": "s9", "letter_id": "L3", "name": "scout", "status": "reported", "report": "3 gaps" }"#,
+            false,
+        );
+        assert!(matches!(waited, Some(ToolDetail::Message { report: Some(ref r), .. }) if r == "3 gaps"));
+        let running = crew_result_detail(
+            "mcp__crew__delegate",
+            start,
+            r#"{ "id": "s9", "letter_id": "L3", "name": "scout", "status": "starting" }"#,
+            false,
+        );
+        assert!(matches!(running, Some(ToolDetail::Message { report: None, .. })));
         // A tool with nothing to add to its row: a letter tool's answer that is not JSON.
         assert_eq!(crew_result_detail("mcp__crew__send_message", input, "ok", false), None);
     }

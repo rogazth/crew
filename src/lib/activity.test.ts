@@ -206,14 +206,14 @@ describe("activityDigest", () => {
     expect(activityDigest(items)).toEqual({ kind: "run", label: "Ran 3 commands, read 2 files" });
   });
 
-  it("drops the third kind rather than running the line long", () => {
+  it("names every kind it did, the biggest first", () => {
     const items = buildActivity([
       tool("Bash", "npm test"),
       tool("Bash", "npm lint"),
       tool("Read", "Read a.ts"),
       tool("Edit", "Edit a.ts"),
     ]);
-    expect(activityDigest(items).label).toBe("Ran 2 commands, read a.ts");
+    expect(activityDigest(items).label).toBe("Ran 2 commands, read a.ts, edited a.ts");
   });
 
   it("names a run of pure thinking", () => {

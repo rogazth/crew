@@ -12,9 +12,9 @@ const tool = (detail: ToolDetail): Block => ({
 });
 
 describe("agent cards", () => {
-  it("names a native subagent by its type, else what it was for", () => {
-    expect(nativeName({ kind: "agent", description: "Explore the repo", agentType: "Explore" })).toBe("Explore");
-    expect(nativeName({ kind: "agent", description: "Explore the repo" })).toBe("Explore the repo");
+  it("names a native subagent by what it was for, else its type", () => {
+    expect(nativeName({ kind: "agent", description: "Explore the repo", agentType: "Explore" })).toBe("Explore the repo");
+    expect(nativeName({ kind: "agent", description: " ", agentType: "Explore" })).toBe("Explore");
   });
 
   it("has a report only once the call brought something back", () => {
@@ -125,7 +125,7 @@ describe("the rows a transcript groups into", () => {
       ]),
       false,
     );
-    expect(kinds(rows)).toEqual(["date", "message", "fold", "subagent", "started", "message", "report", "message"]);
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "subagent", "started", "message", "footer", "report", "message", "footer"]);
   });
 });
 
@@ -161,8 +161,24 @@ describe("control rows", () => {
     expect(controlOf(crew("start_sessions"))).toBeNull();
   });
 
-  it("groups a control call into a row of its own", () => {
-    expect(groupRows([crew("read_session", { count: 3 })]).map((row) => row.kind)).toEqual(["control"]);
+  it("groups a control call that changed something into a row of its own", () => {
+    expect(groupRows([crew("stop_session", { count: 0 })]).map((row) => row.kind)).toEqual(["control"]);
+  });
+
+  it("draws a waited delegate's report before what the agent did next", () => {
+    const delegate: Block = {
+      ...tool({ kind: "message", to: "docs", text: "check", what: "start", toId: "s3", toName: "Docs", letterId: "L9", report: "3 gaps" }),
+      id: "d",
+      at: 10,
+    };
+    const after: Block = { id: "a", role: "assistant", text: "done", at: 50 };
+    const rows = groupRows([delegate, after]);
+    expect(rows.map((row) => row.kind)).toEqual(["started", "report", "message"]);
+  });
+
+  it("keeps a call that only looked in the run, in the order it came", () => {
+    const rows = groupRows([crew("list_peers", { count: 3 }), crew("read_session", { count: 3 })]);
+    expect(rows.map((row) => row.kind)).toEqual(["activity"]);
   });
 });
 

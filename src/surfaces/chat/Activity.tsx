@@ -17,7 +17,9 @@ import {
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
 import { isImage } from "../../lib/attachments";
-import { allFailed, answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type AttachedFile, type Block } from "../../lib/blocks";
+import { controlOf, isPeek } from "../../lib/orchestration";
+import { ControlRow } from "./Orchestration";
+import { answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type AttachedFile, type Block } from "../../lib/blocks";
 import { useImageSrc } from "../../hooks/useImageSrc";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
@@ -40,6 +42,8 @@ type Props = {
   onAnswer: (requestId: number, answers: Answers | null) => void;
   /** When the turn began, for the live line's clock. */
   since?: number | undefined;
+  /** Already behind a fold ("Worked for …"): its steps are listed, never folded a second time. */
+  flat?: boolean | undefined;
 };
 
 const KIND_ICON: Record<PhaseKind, Icon> = {
@@ -103,7 +107,8 @@ function sameBlocks(prev: Props, next: Props): boolean {
     prev.marked !== next.marked ||
     prev.onApprove !== next.onApprove ||
     prev.onAnswer !== next.onAnswer ||
-    prev.since !== next.since
+    prev.since !== next.since ||
+    prev.flat !== next.flat
   ) {
     return false;
   }
@@ -125,6 +130,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   onApprove,
   onAnswer,
   since,
+  flat = false,
 }: Props) {
   const steps = useMemo(() => blocks.filter(shown), [blocks]);
   const captures = useMemo(() => steps.flatMap((block) => (block.files ?? []).filter(isImage)), [steps]);
@@ -144,6 +150,16 @@ export const ActivityGroup = memo(function ActivityGroup({
   const open = pinned ?? (sent(focusId) || sent(marked));
   const [viewing, setViewing] = useState<number | null>(null);
   if (steps.length === 0) return null;
+  // One fold deep at most: the turn's fold already hides the work, so it opens onto the steps themselves.
+  if (flat) {
+    return (
+      <div className="crew-timeline flex flex-col gap-0.5">
+        {steps.map((block) => (
+          <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
+        ))}
+      </div>
+    );
+  }
   return (
     <div>
       <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
@@ -202,16 +218,16 @@ function RunLine({
 }) {
   const now = useNow(1000, live && !waiting && since !== undefined);
   const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
-  const failed = allFailed(blocks);
   const doing = live && !waiting ? nowDoing(steps) : null;
-  const icon: Icon = failed ? XIcon : DIGEST_ICON[digest.kind];
+  // A call that failed says so on its own row; the run's line says what was done.
+  const icon: Icon = DIGEST_ICON[digest.kind];
   return (
     <>
       <span className="crew-node relative">
         {doing ? (
           <WorkOrb state={orbFor(steps.at(-1))} label={doing} className="transition-opacity group-hover:opacity-0" />
         ) : (
-          createElement(icon, { className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}` })
+          createElement(icon, { className: "size-3.5 transition-opacity group-hover:opacity-0" })
         )}
         <ChevronRightIcon
           className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
@@ -227,8 +243,6 @@ function RunLine({
       {doing && since !== undefined ? (
         <span className="shrink-0 text-[11.5px] text-placeholder tabular-nums">{duration(Math.max(0, now - since))}</span>
       ) : null}
-      {/* A folded run hides its rows; a failure inside it may not hide too. */}
-      {failed && !live ? <span className="ml-auto shrink-0 text-[11px] text-danger">failed</span> : null}
     </>
   );
 }
@@ -270,6 +284,8 @@ function StepRow({
     );
   }
   if (block.role === "reasoning") return <ReasoningRow block={block} marked={marked} />;
+  // A Crew call that only looked reads as the sentence it is: whom it read, how many it listed.
+  if (isPeek(block) && controlOf(block)) return <ControlRow block={block} marked={marked} />;
   return (
     <ToolRow
       block={block}

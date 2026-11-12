@@ -582,6 +582,7 @@ mod tests {
                 what: None,
                 delivery: None,
                 error: None,
+                report: None,
             },
             ToolStatus::Completed,
         )];
@@ -731,6 +732,7 @@ mod tests {
                 what: None,
                 delivery: None,
                 error: None,
+                report: None,
             },
             ToolStatus::Completed,
         );

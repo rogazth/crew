@@ -40,6 +40,7 @@ export function phaseKind(block: Block): PhaseKind {
     case "fetch":
       return "research";
     case "message":
+    case "crew":
     case "todo":
     case "agent":
     case "mcp":
@@ -144,7 +145,7 @@ export function phaseLabel(phase: Phase): string {
       return `${live ? "Running" : "Ran"} ${count} commands`;
     default:
       if (count === 1) return prettyTitle(phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text);
-      return `${live ? "Running" : "Ran"} ${count} tools`;
+      return `${live ? "Using" : "Used"} ${count} tools`;
   }
 }
 
@@ -153,8 +154,9 @@ export type ActivityDigest = { label: string; kind: PhaseKind | "thought" };
 
 /**
  * One line for a whole run of activity. Phases of the same kind are counted
- * together however often thinking split them up, and the two biggest kinds
- * carry the line: "Ran 8 commands, read 2 files".
+ * together however often thinking split them up, and every kind is on the
+ * line, the biggest first: "Ran 8 commands, read 2 files, used 3 tools". A
+ * kind left off would be work the line says was never done.
  */
 export function activityDigest(items: ActivityItem[]): ActivityDigest {
   const byKind = new Map<PhaseKind, Block[]>();
@@ -177,12 +179,11 @@ export function activityDigest(items: ActivityItem[]): ActivityDigest {
   // iterates in insertion order.
   const ranked = [...byKind]
     .sort(([, a], [, b]) => b.length - a.length)
-    .slice(0, 2)
     .map(([kind, blocks]) => ({ kind, label: phaseLabel({ id: blocks[0]!.id, kind, blocks }) }));
-  const [first, second] = ranked;
+  const [first, ...rest] = ranked;
   return {
     kind: first!.kind,
-    label: second ? `${first!.label}, ${decap(second.label)}` : first!.label,
+    label: [first!.label, ...rest.map((part) => decap(part.label))].join(", "),
   };
 }
 

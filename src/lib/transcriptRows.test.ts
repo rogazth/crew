@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, TurnUsage } from "./blocks";
-import { foldTurns, gapBefore, groupRows, speaker, splitQueued, threadRows, turnStart, underway, type Row } from "./transcriptRows";
+import { foldTurns, gapBefore, groupRows, reportAfter, speaker, splitQueued, threadRows, turnStart, underway, type Row } from "./transcriptRows";
 
 const COST: TurnUsage = { costUsd: 0.02 };
 
@@ -153,6 +153,15 @@ describe("spacing", () => {
     expect(gapBefore(theirs, theirs)).toBe("mt-2.5");
   });
 
+  it("spaces a run of beats evenly, starts and reports alike", () => {
+    const started = { kind: "started", block: block("tool", "") } as Row;
+    const report = { kind: "report", block: block("user", "") } as Row;
+    const subagent = { kind: "subagent", block: block("tool", "") } as Row;
+    expect(gapBefore(subagent, started)).toBe("mt-2.5");
+    expect(gapBefore(started, report)).toBe("mt-2.5");
+    expect(gapBefore(report, report)).toBe("mt-2.5");
+  });
+
   it("gives a note its own room on both sides", () => {
     const note: Row = { kind: "message", block: block("system", "Stopped") };
     const reply: Row = { kind: "message", block: block("assistant", "ok") };
@@ -282,6 +291,29 @@ describe("foldTurns", () => {
     expect((rows[4] as Extract<Row, { kind: "footer" }>).folded).toBe(true);
   });
 
+  it("leaves output the agent wrote on the way in sight, and folds the work on either side of it", () => {
+    const call = (id: string) => block("tool", id, { tool: { callId: id, name: "Bash", title: id, status: "completed" } });
+    const rows = foldTurns(
+      groupRows([
+        block("user", "show me", { at: 1_000 }),
+        call("c1"),
+        block("assistant", "checking", { at: 1_500 }),
+        call("c2"),
+        block("assistant", "## Blocks\n\n- one\n- two", { at: 2_000 }),
+        call("c3"),
+        block("assistant", "next", { at: 2_500 }),
+        call("c4"),
+        block("assistant", "done", { at: 9_000, usage: { durationMs: 8_000 } }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "message", "fold", "message", "footer"]);
+    expect((rows[2] as Extract<Row, { kind: "fold" }>).durationMs).toBe(1_000);
+    expect((rows[3] as Extract<Row, { kind: "message" }>).block.text).toContain("## Blocks");
+    expect((rows[4] as Extract<Row, { kind: "fold" }>).durationMs).toBe(7_000);
+    expect((rows[6] as Extract<Row, { kind: "footer" }>).folded).toBeUndefined();
+  });
+
   it("reads a run as failed only when every tool in it failed", () => {
     const failing = (id: string) => block("tool", id, { tool: { callId: id, name: "Bash", title: id, status: "failed" } });
     const rows = foldTurns(groupRows([block("user", "fix it", { at: 1_000 }), failing("c1"), block("assistant", "trying again", { at: 2_000 }), failing("c2"), block("assistant", "gave up", { at: 3_000, usage: { durationMs: 2_000 } })]), false);
@@ -301,7 +333,20 @@ describe("foldTurns", () => {
       groupRows([block("user", "run it"), block("tool", "npm test"), block("assistant", "green")]),
       false,
     );
-    expect(kinds(rows)).toEqual(["message", "activity", "message"]);
+    expect(kinds(rows)).toEqual(["message", "activity", "message", "footer"]);
+  });
+
+  it("gives every finished answer its footer, usage or not, and the running one none yet", () => {
+    const blocks = [
+      block("user", "one", { at: 1_000 }),
+      block("assistant", "first", { at: 2_000 }),
+      block("user", "two", { at: 3_000 }),
+      block("assistant", "second", { at: 4_000 }),
+    ];
+    const done = foldTurns(groupRows(blocks), false);
+    expect(kinds(done)).toEqual(["date", "message", "message", "footer", "message", "message", "footer"]);
+    expect(done[3]).toMatchObject({ kind: "footer", at: 2_000, text: "first" });
+    expect(kinds(foldTurns(groupRows(blocks), true))).toEqual(["date", "message", "message", "footer", "message", "message"]);
   });
 
   it("does not fold a turn that never answered", () => {
@@ -475,7 +520,7 @@ describe("letters in the transcript", () => {
       groupRows([block("user", "tell them"), block("tool", "read"), letterCall("L1"), block("assistant", "told")]),
       false,
     );
-    expect(kinds(rows)).toEqual(["message", "activity", "letter", "message"]);
+    expect(kinds(rows)).toEqual(["message", "activity", "letter", "message", "footer"]);
   });
 
   it("groups what waits for the next turn and sets it apart at the foot", () => {
@@ -618,5 +663,22 @@ describe("underway", () => {
     const blocks = [at("user", "done", 0), ended(5_000), letter];
     expect(underway(blocks, true)).toBeUndefined();
     expect(turnStart(blocks)).toBe(5_000);
+  });
+});
+
+describe("reportAfter", () => {
+  const call = block("tool", "Agent");
+  const start: Row = { kind: "subagent", block: call };
+  const report: Row = { kind: "report", block: { ...call, id: `${call.id}:report` } };
+
+  it("pairs a start with the report of the same call right after it", () => {
+    expect(reportAfter(start, report)).toBe(report.block);
+  });
+
+  it("leaves a report of another agent, or a start with nothing after it, apart", () => {
+    const other: Row = { kind: "report", block: { ...call, id: "elsewhere:report" } };
+    expect(reportAfter(start, other)).toBeUndefined();
+    expect(reportAfter(start, undefined)).toBeUndefined();
+    expect(reportAfter({ kind: "message", block: call }, report)).toBeUndefined();
   });
 });

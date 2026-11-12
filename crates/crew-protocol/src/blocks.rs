@@ -271,6 +271,11 @@ pub enum ToolDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         error: Option<String>,
+        /// What a `delegate` that waited got back: the subagent's report. Its
+        /// letter went back in the call's answer, so no report letter lands.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        report: Option<String>,
     },
     /// One of Crew's own tools that acts on sessions without writing a letter:
     /// `start_sessions`, `interrupt_session`, `read_session`, `list_peers`,
@@ -468,7 +473,7 @@ impl ToolDetail {
             ToolDetail::Fetch { url, title, output } => {
                 ToolDetail::Fetch { url, title, output: output.map(|text| clip(&text, limit)) }
             }
-            ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error } => ToolDetail::Message {
+            ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error, report } => ToolDetail::Message {
                 to,
                 text: clip(&text, limit),
                 letter_id,
@@ -477,6 +482,7 @@ impl ToolDetail {
                 what,
                 delivery,
                 error: error.map(|text| clip(&text, limit)),
+                report: report.map(|text| clip(&text, limit)),
             },
             ToolDetail::Crew { verb, targets, text, count, note } => {
                 ToolDetail::Crew { verb, targets, text: text.map(|text| clip(&text, limit)), count, note }

@@ -1077,6 +1077,7 @@ mod crew_row_tests {
                 what: None,
                 delivery: None,
                 error: None,
+                report: None,
             })
         );
     }
@@ -1725,6 +1726,7 @@ mod tests {
                     what: None,
                     delivery: None,
                     error: None,
+                    report: None,
                 }),
             }]
         );

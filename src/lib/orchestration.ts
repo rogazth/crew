@@ -61,9 +61,21 @@ export function startedSession<T extends StartedRowOf>(
     .sort((a, b) => a.createdAt - b.createdAt)[0];
 }
 
-/** The name a native subagent goes by in a row: its type, else what it was for. */
+/** The name a native subagent goes by in a row: what it was for, else its type. Two of one type read apart. */
 export function nativeName(detail: AgentDetail): string {
-  return detail.agentType?.trim() || detail.description.trim() || "subagent";
+  return detail.description.trim() || detail.agentType?.trim() || "subagent";
+}
+
+/**
+ * What a `delegate` that waited got back. The report came in the call's own
+ * answer, so no report letter lands in this chat: the call is where it is.
+ */
+export function waitedReport(block: Block): string | null {
+  if (block.role !== "tool") return null;
+  const detail = block.tool?.detail;
+  if (detail?.kind !== "message" || detail.what !== "start") return null;
+  const text = detail.report?.trim();
+  return text ? text : null;
 }
 
 /** A native subagent call's report, once it has one: the call's output. */
@@ -106,6 +118,15 @@ const START_NOTE = /^(?:Started session|Delegated to subagent) .+ \(([^()]+)\)$/
 export function startNoteTarget(block: Block): string | null {
   if (block.role !== "system") return null;
   return START_NOTE.exec(block.text)?.[1] ?? null;
+}
+
+/**
+ * A Crew call that only looked: `read_session`, `list_peers`. It changed
+ * nothing, so it is a step of the run like a file read, not a beat of its own.
+ */
+export function isPeek(block: Block): boolean {
+  const detail = block.tool?.detail;
+  return detail?.kind === "crew" && (detail.verb === "read_session" || detail.verb === "list_peers");
 }
 
 /** The icon a control row wears, by what it did. */

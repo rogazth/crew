@@ -1,6 +1,7 @@
 /**
- * What a transcript says happened between agents: who, to whom, and when, in
- * the middle of the chat. Never the words of the letter: those are a click away,
+ * What a transcript says happened between agents: who and to whom, in the
+ * middle of the chat. The chat's own agent goes unnamed: the chat is its own.
+ * Never the words of the letter: those are a click away,
  * in the agent's thread, or in a dialog when there is no thread to open.
  */
 import { SquareTerminalIcon } from "lucide-react";
@@ -8,7 +9,6 @@ import { lazy, Suspense, useState, type ReactNode } from "react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { Overlay } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
-import { clock } from "../../lib/time";
 import { useLetterScope } from "./context";
 
 /** streamdown is half a megabyte: a dialog loads it when it first opens. */
@@ -51,7 +51,6 @@ export type BeatProps = {
   waiting?: boolean;
   /** It did not happen. */
   failed?: boolean;
-  at?: number | undefined;
   /** Opens where the words are. */
   onOpen?: (() => void) | undefined;
   /** No thread to open: the words, in a dialog. */
@@ -61,7 +60,7 @@ export type BeatProps = {
   start?: boolean;
 };
 
-export function Beat({ id, marked = null, letter, first, verb, second, note, waiting = false, failed = false, at, onOpen, peek, report = false, start = false }: BeatProps) {
+export function Beat({ id, marked = null, letter, first, verb, second, note, waiting = false, failed = false, onOpen, peek, report = false, start = false }: BeatProps) {
   const [peeking, setPeeking] = useState(false);
   const { openLetter } = useLetterScope();
   const selected = letter !== undefined && letter === openLetter;
@@ -73,10 +72,9 @@ export function Beat({ id, marked = null, letter, first, verb, second, note, wai
       {second ? <Named who={second} /> : null}
       {note ? <span className={`shrink-0 ${failed ? "text-danger" : "text-placeholder"}`}>· {note}</span> : null}
       {waiting ? <span className="shrink-0 text-warning">· waiting for an answer</span> : null}
-      {at !== undefined ? <span className="shrink-0 pl-0.5 text-[11.5px] text-placeholder tabular-nums">{clock(at)}</span> : null}
     </>
   );
-  const shape = "flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] whitespace-nowrap text-text-muted";
+  const shape = "flex h-6 max-w-full min-w-0 items-center gap-1 rounded-full px-2 text-[12px] whitespace-nowrap text-text-muted";
   const open = onOpen ?? (peek ? () => setPeeking(true) : undefined);
   return (
     <div

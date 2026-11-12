@@ -4,7 +4,7 @@ import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState, type ReactNode } from "react";
 import { FileRef } from "../../chrome/FileRef";
-import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
+import type { BotRef, Block } from "../../lib/blocks";
 import { agentRuns, splitAgentNote, type AgentRef } from "../../lib/agentMentions";
 import { looksLikePath, splitMentions } from "../../lib/mentions";
 import { attachedFrom, imageMime } from "../../lib/attachments";
@@ -15,7 +15,7 @@ import { providerOf } from "../../lib/providers";
 import { Beat } from "./Beat";
 import { useChatActions, useChatSession, type ChatSession } from "./context";
 import { CopyButton } from "./CopyButton";
-import { clock, duration } from "../../lib/time";
+import { clock } from "../../lib/time";
 
 /** streamdown and its parsers are half a megabyte; the window opens without them. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -43,10 +43,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
               <MentionText text={body} agents={agents} />
             </p>
           </div>
-          <span className="crew-copy-aside flex items-center gap-2">
-            {block.at !== undefined ? <span className="text-[11.5px] leading-4 text-text-muted tabular-nums">{clock(block.at)}</span> : null}
-            <CopyButton text={body} className="crew-copy" />
-          </span>
+          <MessageActions text={body} at={block.at} side="end" className="crew-copy-aside" />
         </div>
       ) : null}
       {block.files && block.files.length > 0 ? (
@@ -69,7 +66,6 @@ function Letter({ block, from }: { block: Block; from: BotRef }) {
       id={block.id}
       first={you ? "you" : { id: from.id, name: from.name, bot: from.kind === undefined }}
       verb={you ? "sent this from the command line" : "wrote to you"}
-      at={block.at}
       peek={{
         title: you ? "From the command line" : `Message from ${from.name}`,
         text: block.text,
@@ -231,26 +227,34 @@ export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
  * Closes a turn: how long it took, when. Memoised because every footer above
  * the live turn would otherwise rebuild on each streamed token.
  */
-export const TurnFooter = memo(function TurnFooter({
-  usage,
-  at,
-  text,
-  folded,
-}: {
-  usage: TurnUsage;
-  at?: number;
-  text?: string;
-  /** The fold above already says how long the turn took. */
-  folded?: boolean;
-}) {
-  const worked = usage.durationMs !== undefined && !folded ? `Worked for ${duration(usage.durationMs)}` : null;
-  const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
-  if (parts.length === 0 && !text) return null;
-  // The reply's actions, as ChatGPT sets them under an answer: copy first, then how long it took.
-  return (
-    <div className="-ml-1 flex items-center gap-2.5">
-      {text ? <CopyButton text={text.trim()} className="crew-copy" /> : null}
-      <span className="cursor-default text-[11.5px] leading-4 text-text-muted tabular-nums">{parts.join(" · ")}</span>
-    </div>
-  );
+export const TurnFooter = memo(function TurnFooter({ at, text }: { at?: number; text?: string }) {
+  if (at === undefined && !text) return null;
+  // The reply's actions, as ChatGPT sets them under an answer: copy, then when it was said.
+  return <MessageActions text={text?.trim()} at={at} side="start" className="-ml-1" />;
 });
+
+/**
+ * A message's copy button and the time it was said: the same pair beside your
+ * bubble and under the agent's answer, read from the side the message sits on.
+ */
+function MessageActions({
+  text,
+  at,
+  side,
+  className,
+}: {
+  text?: string | undefined;
+  at?: number | undefined;
+  /** `end`: right of the chat, the time before the button; `start`: the button first. */
+  side: "start" | "end";
+  className?: string;
+}) {
+  const copy = text ? <CopyButton text={text} className="crew-copy" /> : null;
+  const time = at !== undefined ? <span className="cursor-default text-[11.5px] leading-4 text-text-muted tabular-nums">{clock(at)}</span> : null;
+  return (
+    <span className={`flex items-center gap-2${className ? ` ${className}` : ""}`}>
+      {side === "end" ? time : copy}
+      {side === "end" ? copy : time}
+    </span>
+  );
+}

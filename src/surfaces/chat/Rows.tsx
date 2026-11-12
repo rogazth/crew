@@ -3,14 +3,15 @@ import { ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayName } from "../../lib/time";
-import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
+import { gapBefore, reportAfter, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
-import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport } from "./Orchestration";
+import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport, WaitedReport } from "./Orchestration";
 import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter } from "./Message";
 import { SIGNED_IN_NOTE } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
+import { waitedReport } from "../../lib/orchestration";
 import { SettledCard } from "./SettledCard";
 
 type Props = {
@@ -22,6 +23,8 @@ type Props = {
   onAnswer: (requestId: number, answers: Answers | null) => void;
   /** When the running turn began, for the clock on its live line. */
   since?: number | undefined;
+  /** Drawn inside a turn's fold: runs list their steps instead of folding them again. */
+  inFold?: boolean | undefined;
 };
 
 /** A login's note stands later in the rows: the sign-in prompt at `index` is answered. */
@@ -30,7 +33,7 @@ function signedAfter(rows: Row[], index: number): boolean {
 }
 
 /** The transcript's rows, in order. A fold holds rows of its own and draws them the same way. */
-export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Props) {
+export function Rows({ rows, working, focusId, onApprove, onAnswer, since, inFold = false }: Props) {
   return <>{rows.map((row, index) => {
     const className = gapBefore(rows[index - 1], row);
     switch (row.kind) {
@@ -45,6 +48,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Pro
               onApprove={onApprove}
               onAnswer={onAnswer}
               since={working && index === rows.length - 1 ? since : undefined}
+              flat={inFold}
             />
           </div>
         );
@@ -52,7 +56,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Pro
         return (
           <div key={row.id} className={className}>
             <TurnFold row={row} focusId={focusId}>
-              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
+              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} inFold />
             </TurnFold>
           </div>
         );
@@ -60,10 +64,8 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Pro
         return (
           <div key={row.id} className={className}>
             <TurnFooter
-              usage={row.usage}
               {...(row.at !== undefined ? { at: row.at } : {})}
               {...(row.text !== undefined ? { text: row.text } : {})}
-              {...(row.folded ? { folded: true } : {})}
             />
           </div>
         );
@@ -100,20 +102,24 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since }: Pro
       case "subagent":
         return (
           <div key={row.block.id} className={className}>
-            <SubagentCall block={row.block} marked={focusId} />
+            <SubagentCall block={row.block} marked={focusId} done={reportAfter(row, rows[index + 1])} />
           </div>
         );
       case "started":
         return (
           <div key={row.block.id} className={className}>
-            <StartedRow block={row.block} marked={focusId} />
+            <StartedRow block={row.block} marked={focusId} done={reportAfter(row, rows[index + 1])} />
           </div>
         );
       case "report":
+        // Right after its agent's start, it is drawn in that start's beat.
+        if (reportAfter(rows[index - 1], row)) return null;
         return (
           <div key={row.block.id} className={className}>
             {agentDetail(row.block) ? (
               <SubagentReport block={row.block} />
+            ) : waitedReport(row.block) ? (
+              <WaitedReport block={row.block} />
             ) : (
               <ReportLetter block={row.block} marked={focusId} />
             )}
@@ -190,7 +196,6 @@ export function TurnFold({
       <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-1.5 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="text-text-muted tabular-nums transition-colors group-hover:text-text">{label}</span>
         <ChevronRightIcon className={`size-3 text-icon opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90 opacity-100" : ""}`} />
-        {row.failed ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
         <span className="h-px flex-1 bg-hairline" />
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
