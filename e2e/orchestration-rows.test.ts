@@ -267,3 +267,15 @@ test("A background subagent that finishes is said once, by its call's beat: what
   await beat.scrollIntoViewIfNeeded();
   await shoot("transcript-subagent-finished");
 });
+
+test("a finished turn that folds behind \"Worked for\" keeps what it captured in sight under the line", async () => {
+  await send("shots");
+  await crew.window.getByText(/Reply \d+: shots/).waitFor({ timeout: 30_000 });
+  await idle();
+  const fold = crew.window.getByRole("button", { name: /^Worked/ }).last();
+  await fold.waitFor();
+  const captures = crew.window.locator(".crew-captures").last().locator(".crew-capture");
+  await waitFor(async () => (await captures.count()) === 2, { message: "both screenshots under the fold's line" });
+  await fold.scrollIntoViewIfNeeded();
+  await shoot("transcript-fold-captures");
+});

@@ -1499,6 +1499,10 @@ svg.lucide {
   gap: 6px;
   padding: 4px 0 2px 27px;
 }
+/* Under a turn's fold, whose line has no icon before its words. */
+.crew-captures-flush {
+  padding-left: 0;
+}
 .crew-capture {
   width: 72px;
   height: 46px;

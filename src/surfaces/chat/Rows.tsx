@@ -1,10 +1,11 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { ChevronRightIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayName } from "../../lib/time";
 import { gapBefore, reportAfter, rowBlocks, type Row } from "../../lib/transcriptRows";
-import { ActivityGroup } from "./Activity";
+import { ActivityGroup, Captures } from "./Activity";
+import { capturesOf } from "../../lib/attachments";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
 import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport, WaitedReport } from "./Orchestration";
@@ -170,7 +171,8 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, since, inFol
 
 /**
  * A finished turn's work, behind the line that says how long it took. Opens
- * for a search hit inside it; otherwise it stays as the reader left it.
+ * for a search hit inside it; otherwise it stays as the reader left it. What
+ * the work captured stays in sight under the line, as under a run's.
  */
 export function TurnFold({
   row,
@@ -190,6 +192,7 @@ export function TurnFold({
     if (holds) setPinned(null);
   }
   const open = pinned ?? holds;
+  const captures = useMemo(() => capturesOf(row.rows.flatMap(rowBlocks)), [row.rows]);
   const label = row.durationMs !== undefined ? `Worked for ${duration(row.durationMs)}` : "Worked";
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
@@ -201,6 +204,7 @@ export function TurnFold({
       <Collapsible.Panel className="crew-phase-panel">
         <div className="pt-2.5">{children}</div>
       </Collapsible.Panel>
+      {!open ? <Captures files={captures} flush /> : null}
     </Collapsible.Root>
   );
 }

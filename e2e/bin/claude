@@ -131,6 +131,9 @@ serve();
  *   turn: `task_notification` `completed`, its summary the report `Found 3
  *   files.`, and a turn of the model's own that it woke, answering `Report
  *   read.`
+ * - `shots` is a turn that takes two browser screenshots, each result an
+ *   image, with a note to self between them (`First one taken.`), so the
+ *   finished turn folds behind "Worked for".
  * - `shell` is a turn that sends a shell, `npm test`, to the background
  *   (`sh1`) beside the subagents that run; it runs until the session ends.
  * - `ask` is a turn that asks Crew, as a `can_use_tool` control request, to
@@ -315,6 +318,27 @@ function serve() {
    * `start_sessions`, `send_message`, then the control tools, and a subagent
    * that answers with a report.
    */
+  /** Two screenshots and a note between: work that folds once the turn is over. */
+  function shots() {
+    // A 1×1 PNG.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const shot = (k) => {
+      const id = `toolu_shot${k}`;
+      emit({ type: "assistant", session_id: sessionId, message: { id: `msg_shot${k}`, role: "assistant", content: [{ type: "tool_use", id, name: "mcp__crew__browser_screenshot", input: { tab: "browser:a" } }] } });
+      emit({
+        type: "user",
+        session_id: sessionId,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: false, content: [
+          { type: "text", text: "Took a screenshot" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: png } },
+        ] }] },
+      });
+    };
+    shot(1);
+    emit({ type: "assistant", session_id: sessionId, message: { id: "msg_shot_note", role: "assistant", content: [{ type: "text", text: "First one taken." }] } });
+    shot(2);
+  }
+
   function crewCalls(sent) {
     let k = 0;
     const call = (name, input, result) => {
@@ -483,6 +507,7 @@ function serve() {
       setTimeout(finish, 1000);
     }
     if (command === "shell") startShell();
+    if (command === "shots") shots();
     if (command === "crew") crewCalls();
     if (command === "crewsent") crewCalls(text.trim().split(/\s+/).slice(1));
     if (text.startsWith("!")) {

@@ -16,7 +16,7 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { isImage } from "../../lib/attachments";
+import { capturesOf } from "../../lib/attachments";
 import { controlOf, isPeek } from "../../lib/orchestration";
 import { ControlRow } from "./Orchestration";
 import { answerSummary, awaitsUser, isOpen, type Answers, type ApprovalDecision, type AttachedFile, type Block } from "../../lib/blocks";
@@ -133,7 +133,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   flat = false,
 }: Props) {
   const steps = useMemo(() => blocks.filter(shown), [blocks]);
-  const captures = useMemo(() => steps.flatMap((block) => (block.files ?? []).filter(isImage)), [steps]);
+  const captures = useMemo(() => capturesOf(steps), [steps]);
   const waiting = blocks.filter(awaitsUser);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
@@ -148,7 +148,6 @@ export const ActivityGroup = memo(function ActivityGroup({
     if (sent(focusId)) setPinned(null);
   }
   const open = pinned ?? (sent(focusId) || sent(marked));
-  const [viewing, setViewing] = useState<number | null>(null);
   if (steps.length === 0) return null;
   // One fold deep at most: the turn's fold already hides the work, so it opens onto the steps themselves.
   if (flat) {
@@ -174,13 +173,7 @@ export const ActivityGroup = memo(function ActivityGroup({
           </div>
         </Collapsible.Panel>
       </Collapsible.Root>
-      {!open && captures.length > 0 ? (
-        <div className="crew-captures">
-          {captures.map((file, index) => (
-            <Capture key={file.path} file={file} onOpen={() => setViewing(index)} />
-          ))}
-        </div>
-      ) : null}
+      {!open ? <Captures files={captures} /> : null}
       {!open && waiting.length > 0 ? (
         <div className="mt-1.5 flex flex-col gap-1.5">
           {waiting.map((block) => (
@@ -188,12 +181,27 @@ export const ActivityGroup = memo(function ActivityGroup({
           ))}
         </div>
       ) : null}
-      {viewing !== null ? (
-        <Lightbox images={captures} index={Math.min(viewing, captures.length - 1)} onIndex={setViewing} onClose={() => setViewing(null)} />
-      ) : null}
     </div>
   );
 }, sameBlocks);
+
+/** The images the work captured, small under its line while it is closed; each opens in the viewer. */
+export function Captures({ files, flush = false }: { files: AttachedFile[]; flush?: boolean }) {
+  const [viewing, setViewing] = useState<number | null>(null);
+  if (files.length === 0) return null;
+  return (
+    <>
+      <div className={flush ? "crew-captures crew-captures-flush" : "crew-captures"}>
+        {files.map((file, index) => (
+          <Capture key={file.path} file={file} onOpen={() => setViewing(index)} />
+        ))}
+      </div>
+      {viewing !== null ? (
+        <Lightbox images={files} index={Math.min(viewing, files.length - 1)} onIndex={setViewing} onClose={() => setViewing(null)} />
+      ) : null}
+    </>
+  );
+}
 
 /**
  * The run's one line. While the agent works it names the newest thing it is

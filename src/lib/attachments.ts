@@ -1,5 +1,5 @@
 import { readFileBase64 } from "./api";
-import type { AttachedFile } from "./blocks";
+import type { AttachedFile, Block } from "./blocks";
 
 /** What Claude's image blocks accept; anything else travels as a path. */
 const INLINE_IMAGE: Record<string, string> = {
@@ -75,4 +75,9 @@ export function formatBytes(size: number): string {
   if (size < 10 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Every image the blocks captured, in order: what a run or a turn's fold shows under its line. */
+export function capturesOf(blocks: readonly Block[]): AttachedFile[] {
+  return blocks.flatMap((block) => (block.files ?? []).filter(isImage));
 }
