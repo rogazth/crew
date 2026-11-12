@@ -7,8 +7,8 @@ export type Detail = "names" | "diff" | "updated" | "status";
 /** How the sessions are laid out; each says on a session's second line only what its group does not. */
 export type Grouping = "none" | "worktree" | "status";
 
-/** Sessions under their worktree until the view menu says otherwise. */
-export const DEFAULT_GROUPING: Grouping = "worktree";
+/** Sessions in one flat list until the view menu says otherwise. */
+export const DEFAULT_GROUPING: Grouping = "none";
 
 /** Which worktrees the panel lists: every one, the one on screen, or those with something running. */
 export type Scope = "all" | "current" | "busy";
