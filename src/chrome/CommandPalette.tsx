@@ -30,8 +30,10 @@ const NAME_LIMIT = 5;
 /** Lines shown per conversation; more of one is a search inside it. */
 const HITS_PER_SESSION = 3;
 const HIT_LIMIT = 300;
-/** Long enough that a held key does not fire a query per character. */
-const DEBOUNCE_MS = 120;
+/** A pause in typing, not a key: the search waits for it. */
+const DEBOUNCE_MS = 250;
+/** Blocks read from a session found by name alone, to find the last thing said in it. */
+const LAST_PAGE = 8;
 /** The roles a reader sees as the conversation; tool output is left out. */
 const SAID = new Set(["user", "assistant"]);
 /** What a snippet's marks are, from FTS5's snippet(): characters no text can hold. */
@@ -61,6 +63,8 @@ type ChatRow = {
   session: Session;
   /** The line the search found; none for a name match or a suggestion. */
   hit?: SearchHit;
+  /** Found by name alone: the last thing said in it, for its second line. */
+  last?: string;
   run: () => void;
 };
 
@@ -103,25 +107,64 @@ const TABS: { mode: PaletteMode; label: string }[] = [
 /** Waiting on you first: paused, asking, failed, or with news you have not read. */
 const needsYou = (s: Session) => Boolean(s.paused) || s.status === "needs-input" || s.status === "error" || failedUnseen(s) || unseen(s);
 
-/** What was said that matches, a few lines per conversation, the debounce's worth late. */
-function useContentHits(query: string, enabled: boolean): { hits: SearchHit[]; busy: boolean } {
-  const [state, setState] = useState<{ query: string; hits: SearchHit[] }>({ query: "", hits: [] });
+/** A chat search, answered whole: names, the lines that matched, and the last line of each found by name alone. */
+type ChatAnswer = {
+  query: string;
+  hits: SearchHit[];
+  /** Sessions found by name, best first, with the score that ranks them. */
+  named: { id: string; score: number }[];
+  /** What was last said in each one found only by name, for its second line. */
+  last: Map<string, string>;
+};
+
+/** The last thing said in a page of a transcript, on one line, its markdown marks dropped. */
+function lastSaid(blocks: { role: string; text: string; hidden?: boolean }[]): string {
+  const said = [...blocks].reverse().find((block) => SAID.has(block.role) && !block.hidden && block.text.trim());
+  return said ? said.text.replace(/[#*_`>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 240) : "";
+}
+
+/**
+ * The chat search, a pause after the last key: one query per word typed, not per letter. Its answer
+ * lands whole, so a result never shows half drawn; until it does, the one before stays on screen.
+ */
+function useChatSearch(query: string, enabled: boolean, sessions: Session[]): [ChatAnswer | null, () => void] {
+  const [answer, setAnswer] = useState<ChatAnswer | null>(null);
+  const pool = useRef(sessions);
+  useEffect(() => {
+    pool.current = sessions;
+  }, [sessions]);
   useEffect(() => {
     if (!enabled || !query) return;
     let live = true;
     const timer = window.setTimeout(() => {
-      void api
-        .searchMessages({ query, sessionIds: [], limit: HIT_LIMIT, sort: "relevance" })
-        .then((hits) => live && setState({ query, hits }))
-        .catch(() => live && setState({ query, hits: [] }));
+      void (async () => {
+        const named = pool.current
+          .flatMap((s) => {
+            const hit = fuzzyMatch(query, s.name);
+            return hit ? [{ id: s.id, score: hit.score }] : [];
+          })
+          .sort((a, b) => b.score - a.score)
+          .slice(0, NAME_LIMIT);
+        const hits = await api.searchMessages({ query, sessionIds: [], limit: HIT_LIMIT, sort: "relevance" }).catch(() => []);
+        const spoken = new Set(hits.filter((hit) => SAID.has(hit.role)).map((hit) => hit.sessionId));
+        const nameOnly = named.filter((entry) => !spoken.has(entry.id));
+        const last = new Map(
+          await Promise.all(
+            nameOnly.map(async ({ id }) => {
+              const page = await api.transcriptTail({ sessionId: id, limit: LAST_PAGE }).catch(() => null);
+              return [id, page ? lastSaid(page.blocks) : ""] as const;
+            }),
+          ),
+        );
+        if (live) setAnswer({ query, hits, named, last });
+      })();
     }, DEBOUNCE_MS);
     return () => {
       live = false;
       window.clearTimeout(timer);
     };
   }, [enabled, query]);
-  const fresh = enabled && Boolean(query) && state.query === query;
-  return { hits: fresh ? state.hits : [], busy: enabled && Boolean(query) && !fresh };
+  return [answer, () => setAnswer(null)];
 }
 
 /** Commands run from here, newest first, kept by crewd. */
@@ -167,7 +210,9 @@ export function CommandPalette(props: Props) {
 
   const query = raw.trim();
   const shown = mode;
-  const content = useContentHits(query, shown === "chats");
+  const [answer, forgetAnswer] = useChatSearch(query, shown === "chats", props.allSessions);
+  // Typed into, the list stays as it was until the whole answer is in; emptied, it is the suggestions again.
+  const found = query ? answer : null;
 
   const rows = useMemo<Row[]>(() => {
     const close = (act: () => void) => () => {
@@ -178,48 +223,48 @@ export function CommandPalette(props: Props) {
     const here = (s: Session) => (s.workspaceId === activeWorkspaceId ? 0 : 1);
 
     if (shown === "chats") {
-      const chat = (session: Session, group?: string, hit?: SearchHit): Row => ({
+      const chat = (session: Session, group?: string, hit?: SearchHit, last?: string): Row => ({
         kind: "chat",
         row: {
           key: hit ? `hit:${hit.id}` : `session:${session.id}`,
           group,
           session,
           ...(hit ? { hit } : {}),
+          ...(last !== undefined ? { last } : {}),
           run: close(() => props.onOpenSession(session, hit ? hit.pos : null)),
         },
       });
-      if (!query) {
+      if (!found) {
         const listed = props.sessions.filter((s) => s.id !== props.activeSessionId && !isOwnedChild(s));
         const ranked = [...listed].sort((a, b) => Number(needsYou(b)) - Number(needsYou(a)) || b.updatedAt - a.updatedAt);
         return ranked.slice(0, SUGGESTED).map((s) => chat(s, "Recent"));
       }
       // One list: a session whose name matches and one where something said does are the same kind of
-      // result. Each session once: its matching lines (its name marked too, when it matches), or its name alone.
-      const titled = new Map(
-        props.allSessions
-          .flatMap((s) => {
-            const hit = fuzzyMatch(query, s.name);
-            return hit ? [{ s, score: hit.score }] : [];
-          })
-          .sort((a, b) => b.score - a.score)
-          .slice(0, NAME_LIMIT)
-          .map(({ s, score }) => [s.id, score]),
-      );
+      // result. Each session once: its matching lines (its name marked too, when it matches), or its name
+      // with the last thing said in it.
+      const titled = new Map(found.named.map(({ id, score }) => [id, score]));
       const byId = new Map(props.allSessions.map((s) => [s.id, s]));
-      const found = new Map<string, { session: Session; hits: SearchHit[]; order: number }>();
-      for (const id of titled.keys()) found.set(id, { session: byId.get(id)!, hits: [], order: Number.POSITIVE_INFINITY });
-      content.hits.forEach((hit, order) => {
+      const entries = new Map<string, { session: Session; hits: SearchHit[]; order: number }>();
+      for (const id of titled.keys()) {
+        const session = byId.get(id);
+        if (session) entries.set(id, { session, hits: [], order: Number.POSITIVE_INFINITY });
+      }
+      found.hits.forEach((hit, order) => {
         const session = byId.get(hit.sessionId);
         if (!session || !SAID.has(hit.role)) return;
-        const entry = found.get(session.id) ?? { session, hits: [], order };
+        const entry = entries.get(session.id) ?? { session, hits: [], order };
         entry.order = Math.min(entry.order, order);
         if (entry.hits.length < HITS_PER_SESSION) entry.hits.push(hit);
-        found.set(session.id, entry);
+        entries.set(session.id, entry);
       });
       const title = (s: Session) => titled.get(s.id) ?? Number.NEGATIVE_INFINITY;
-      return [...found.values()]
+      return [...entries.values()]
         .sort((a, b) => here(a.session) - here(b.session) || title(b.session) - title(a.session) || a.order - b.order)
-        .flatMap((entry) => (entry.hits.length ? entry.hits.map((hit) => chat(entry.session, undefined, hit)) : [chat(entry.session)]));
+        .flatMap((entry) =>
+          entry.hits.length
+            ? entry.hits.map((hit) => chat(entry.session, undefined, hit))
+            : [chat(entry.session, undefined, undefined, found.last.get(entry.session.id) ?? "")],
+        );
     }
 
     if (shown === "files") {
@@ -273,7 +318,7 @@ export function CommandPalette(props: Props) {
     const byId = new Map(commands.map((item) => [item.key, item]));
     const suggested = [...new Set([...recentCommands, ...STARTER_COMMANDS])].flatMap((id) => byId.get(`command:${id}`) ?? []);
     return items(suggested.slice(0, SUGGESTED));
-  }, [activeWorkspaceId, content.hits, props, query, recentCommands, rememberCommand, shown, workspaces]);
+  }, [activeWorkspaceId, found, props, query, recentCommands, rememberCommand, shown, workspaces]);
 
   useEffect(() => {
     list.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
@@ -286,6 +331,7 @@ export function CommandPalette(props: Props) {
   function switchTo(next: PaletteMode) {
     setMode(next);
     setRaw("");
+    forgetAnswer();
     setCursor(0);
     search.current?.focus();
   }
@@ -346,6 +392,8 @@ export function CommandPalette(props: Props) {
             onChange={(event) => {
               setRaw(event.target.value);
               setCursor(0);
+              // Emptied, the last answer goes: the next word typed starts from the suggestions, not from it.
+              if (!event.target.value.trim()) forgetAnswer();
             }}
             className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-placeholder"
           />
@@ -365,7 +413,7 @@ export function CommandPalette(props: Props) {
               <div key={row.kind === "chat" ? row.row.key : row.item.key}>
                 {header && <GroupHeader>{header}</GroupHeader>}
                 {row.kind === "chat" ? (
-                  <ChatResult row={row.row} index={index} on={on} query={query} place={placeOf(row.row.session)} onHover={() => setCursor(index)} />
+                  <ChatResult row={row.row} index={index} on={on} query={found?.query ?? ""} place={placeOf(row.row.session)} onHover={() => setCursor(index)} />
                 ) : (
                   <button
                     type="button"
@@ -383,7 +431,7 @@ export function CommandPalette(props: Props) {
               </div>
             );
           })}
-          {rows.length === 0 && (content.busy ? <ListNote>Searching…</ListNote> : <ListNote>{query ? "No matches" : EMPTY[shown]}</ListNote>)}
+          {rows.length === 0 && <ListNote>{query ? "No matches" : EMPTY[shown]}</ListNote>}
         </div>
       </div>
     </div>
@@ -444,11 +492,14 @@ function ChatResult({ row, index, on, query, place, onHover }: { row: ChatRow; i
         <span className="truncate">
           <NameMarks text={session.name} query={query} />
         </span>
-        {hit && place && <span className="truncate text-[12px] text-text-muted">{place}</span>}
+        {place && <span className="truncate text-[12px] text-text-muted">{place}</span>}
       </span>
       {when}
       <span />
-      <span className="col-span-2 truncate text-[12.5px] text-text-muted">{hit ? <Snippet text={hit.snippet} /> : place || "\u00a0"}</span>
+      {/* The second line is what was said: the line that matched, or the last one. Never where it lives. */}
+      <span className="col-span-2 truncate text-[12.5px] text-text-muted">
+        {hit ? <Snippet text={hit.snippet} /> : row.last || <span className="text-placeholder">Nothing said yet</span>}
+      </span>
     </button>
   );
 }
