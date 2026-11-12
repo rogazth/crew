@@ -26,6 +26,9 @@ function freePort() {
 const linked = git("--git-dir") !== git("--git-common-dir");
 const PORT = Number(process.env.CREW_PORT) || (linked ? await freePort() : 1420);
 const env = { ...process.env, CREW_PORT: String(PORT) };
+// DevTools on a port of its own, for agents and people to drive the running window:
+// the main checkout's is its dev port + 8000 (1420 → 9420), a worktree takes a free one.
+env.CREW_CDP_PORT ||= String(linked ? await freePort() : PORT + 8000);
 if (linked && !env.CREW_USER_DATA) env.CREW_USER_DATA = path.join(git("--show-toplevel"), ".crew-dev");
 // Its worktrees go beside the other dev builds' rather than inside the checkout,
 // where every tool that walks it would meet a second copy of the repo.
@@ -124,6 +127,7 @@ function watchRust() {
 if (env.CREW_RUST_WATCH !== "0") watchRust();
 
 if (env.CREW_USER_DATA) console.log(`crew: data in ${env.CREW_USER_DATA}, dev server on ${PORT}`);
+console.log(`crew: DevTools on http://127.0.0.1:${env.CREW_CDP_PORT}`);
 const app = spawn(electron, ["."], { stdio: "inherit", env });
 app.on("exit", (code) => shutdown(code ?? 0));
 app.on("error", (error) => {

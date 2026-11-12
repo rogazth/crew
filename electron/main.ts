@@ -164,6 +164,11 @@ const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
 const e2e = process.env.CREW_E2E === "1";
 // e2e plays no sound: specs finish turns and ring bells all day, in the background.
 if (e2e) app.commandLine.appendSwitch("mute-audio");
+// A dev build takes DevTools connections on CREW_CDP_PORT (scripts/app.mjs always
+// sets one), so an agent can drive the window the maintainer has open, and the
+// other way round. e2e attaches its own way.
+if (!app.isPackaged && !e2e && process.env.CREW_CDP_PORT)
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.CREW_CDP_PORT);
 
 // Two checkouts can run side by side: each takes its own dev port (CREW_PORT);
 // scripts/app.mjs picks a free one for a git worktree.
