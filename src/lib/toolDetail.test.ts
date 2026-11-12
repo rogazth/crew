@@ -2,7 +2,7 @@ import { rememberBots } from "./botNames";
 import { describe, expect, it } from "vitest";
 import { applyEvent, newBlock } from "./blocks";
 import type { Block, ToolDetail, ToolStatus } from "./protocol";
-import { hasBody, splitClip, toolLine } from "./toolDetail";
+import { hasBody, prettyTitle, splitClip, toolLine } from "./toolDetail";
 
 function tool(detail: ToolDetail | undefined, status: ToolStatus = "completed", title = "Bash"): Block {
   const block = newBlock("tool", title);
@@ -192,8 +192,8 @@ describe("REVIEW: the live client store and ToolDetail", () => {
 
 describe("a result with no shape of its own", () => {
   it("is named by its tool, not by the first line of what it answered", () => {
-    const row = tool({ kind: "output", text: '[\n  {"id": "a"}\n]' }, "completed", "Crew list agents");
-    expect(toolLine(row).text).toBe("Crew list agents");
+    const row = tool({ kind: "output", text: '[\n  {"id": "a"}\n]' }, "completed", "List agents");
+    expect(toolLine(row).text).toBe("List agents");
     expect(hasBody(row)).toBe(true);
   });
 
@@ -231,5 +231,22 @@ describe("the shaped tools", () => {
     const row = tool({ kind: "mcp", server: "claude_ai_Notion", tool: "notion-fetch", output: "{}" });
     expect(toolLine(row).text).toBe("Notion · notion fetch");
     expect(hasBody(row)).toBe(true);
+  });
+});
+
+describe("a Crew tool's title", () => {
+  it("drops the app's name that older transcripts put in front", () => {
+    expect(prettyTitle("Crew start process web", "mcp__crew__control_process")).toBe("Start process web");
+    expect(prettyTitle("Crew browser click", "crew_browser_act")).toBe("Browser click");
+    expect(prettyTitle("mcp__crew__list_peers")).toBe("List peers");
+    expect(prettyTitle("crew_read_logs")).toBe("Read logs");
+  });
+
+  it("leaves every other title as it was", () => {
+    expect(prettyTitle("Start process web")).toBe("Start process web");
+    expect(prettyTitle("Crew")).toBe("Crew");
+    expect(prettyTitle("Crew Release notes", "mcp__crew__start_session")).toBe("Crew Release notes");
+    expect(prettyTitle("Crew daemon is not reachable", "Bash")).toBe("Crew daemon is not reachable");
+    expect(prettyTitle("mcp__chrome-devtools__take_snapshot")).toBe("chrome-devtools · take snapshot");
   });
 });

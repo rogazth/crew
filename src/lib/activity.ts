@@ -144,7 +144,7 @@ export function phaseLabel(phase: Phase): string {
       if (count === 1) return live ? "Running a command" : "Ran a command";
       return `${live ? "Running" : "Ran"} ${count} commands`;
     default:
-      if (count === 1) return prettyTitle(phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text);
+      if (count === 1) return prettyTitle(phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text, phase.blocks[0]!.tool?.name);
       return `${live ? "Using" : "Used"} ${count} tools`;
   }
 }

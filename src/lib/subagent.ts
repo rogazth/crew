@@ -75,7 +75,7 @@ export function currentStep(steps: Block[]): string | null {
     case "fetch":
       return `Fetching ${detail.url}`;
     default:
-      return prettyTitle(last.tool?.title ?? last.text) || null;
+      return prettyTitle(last.tool?.title ?? last.text, last.tool?.name) || null;
   }
 }
 

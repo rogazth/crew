@@ -47,9 +47,25 @@ export function mcpLabel(server: string, tool: string): string {
   return `${host} · ${tool.replace(/[_-]/g, " ")}`;
 }
 
-export function prettyTitle(title: string): string {
+export function prettyTitle(title: string, name?: string): string {
+  const crew = crewTitle(title, name);
+  if (crew) return crew;
   const mcp = /^mcp__(.+?)__(.+)$/.exec(title);
   return mcp ? mcpLabel(mcp[1]!, mcp[2]!) : title;
+}
+
+const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
+
+/**
+ * A Crew tool's title from before crewd stopped putting the app's name in
+ * front of its own tools: `Crew start process web` reads `Start process web`,
+ * and an older transcript's raw `mcp__crew__list_peers` reads `List peers`.
+ */
+function crewTitle(title: string, name: string | undefined): string | null {
+  const signed = name && /^(?:mcp__crew__|crew_)/.test(name) ? /^Crew ([a-z].*)$/.exec(title) : null;
+  if (signed) return capitalized(signed[1]!);
+  const raw = /^(?:mcp__crew__|crew_)([a-z][a-z_]*)$/.exec(title);
+  return raw ? capitalized(raw[1]!.replace(/_/g, " ")) : null;
 }
 
 export function todoTally(items: TodoItem[]): string {
@@ -64,7 +80,7 @@ export function todoTally(items: TodoItem[]): string {
 export function toolLine(block: Block): ToolLine {
   const detail = detailOf(block);
   const failed = block.tool?.status === "failed";
-  const title = prettyTitle(block.tool?.title ?? block.text);
+  const title = prettyTitle(block.tool?.title ?? block.text, block.tool?.name);
   if (!detail) return { text: title, mono: false, failed };
 
   switch (detail.kind) {
