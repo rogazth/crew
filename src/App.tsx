@@ -114,7 +114,6 @@ export function App() {
     forget,
     reorder,
     dropWorkspace: forgetSessions,
-    reload: reloadSessions,
   } = useSessions(workspaceId);
   const { blank, markBlank } = useBlankSessions(all);
   const listed = useMemo(() => sessions.filter((session) => !blank.has(session.id)), [blank, sessions]);
@@ -477,8 +476,6 @@ export function App() {
             onRenameWorkspace: (name) => void workspaces.rename(active.id, name),
             renameWanted,
             onRenameSettled: () => setRenameWanted(null),
-            // A refusal from either still lets the other land; the button stops spinning either way.
-            onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
         />
       )}

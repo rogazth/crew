@@ -77,8 +77,6 @@ export type WorkspaceSidebarProps = {
   onRenameSettled: () => void;
   /** The workspace's places under its name: Services, Routines, Settings. */
   nav: WorkspacePlacesProps;
-  /** Reads the worktrees and sessions again, for changes made outside this window; the view menu's Refresh. */
-  onRefresh: () => Promise<void>;
   /** Home's panel: no path, no worktrees and no places, its sessions in one list, and `foot` under them. */
   home?: { foot: ReactNode } | undefined;
 };
@@ -172,7 +170,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const [naming, setNaming] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
 
-  const [refreshing, setRefreshing] = useState(false);
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
@@ -268,22 +265,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const openMenu = (point: MenuPoint, session: Session) => {
     if (!selected.has(session.id)) setSelection({ ids: [session.id], anchor: session.id });
     setMenu({ kind: "session", point, session });
-  };
-
-  const again = useRef(false);
-  const refresh = () => {
-    if (refreshing) {
-      again.current = true;
-      return;
-    }
-    setRefreshing(true);
-    const run = (): Promise<void> =>
-      props.onRefresh().then(() => {
-        if (!again.current) return;
-        again.current = false;
-        return run();
-      });
-    void run().finally(() => setRefreshing(false));
   };
 
   const closeSearch = () => {
@@ -439,8 +420,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                     onChange={setPrefs}
                     grouping={mode}
                     worktrees={props.home ? [] : props.worktrees}
-                    refreshing={refreshing}
-                    onRefresh={refresh}
                   />
                 )}
                 <HeaderButton icon={PlusIcon} label={`New session ${commandKeys("new-session")}`} onClick={() => props.onNewSession()} />

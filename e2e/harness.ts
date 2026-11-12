@@ -799,16 +799,6 @@ export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   await input.waitFor({ state: "detached" });
 }
 
-/**
- * The sidebar's Refresh, at the foot of its view menu: git and crewd read again, for what changed outside the window.
- * The menu stays open on it, so Escape closes it after.
- */
-export async function refreshSidebar(crew: Crew): Promise<void> {
-  await crew.window.locator("[data-sidebar-panel]").getByRole("button", { name: "Customize sidebar" }).click();
-  await crew.window.getByRole("menuitem", { name: "Refresh" }).click();
-  await crew.window.keyboard.press("Escape");
-}
-
 /** Settings › Connectors, from the rail's gear: the app's connectors live among its settings. */
 export async function openConnectorSettings(crew: Crew): Promise<void> {
   await workspaceRail(crew).getByRole("button", { name: "Settings", exact: true }).click();
@@ -848,8 +838,9 @@ export async function newSession(crew: Crew, workspaceId: string, worktree: stri
   const row = sessionRow(crew, made);
   await waitFor(
     async () => {
+      // crewd does not tell the window of a session made over RPC; a reload reads the list again.
       if ((await row.count()) === 0) {
-        await refreshSidebar(crew);
+        await crew.reload();
       }
       return (await row.count()) > 0;
     },

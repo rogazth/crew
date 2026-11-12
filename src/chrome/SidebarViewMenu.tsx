@@ -2,7 +2,6 @@
 // a line shows, and which ones are listed. It never touches the bots: their
 // names, status and order are their own. Which worktrees the sessions come
 // from stands in for "current only", since no worktree is current any more.
-// Its foot reads git and crewd again, for what changed outside the window.
 import { Menu } from "@base-ui/react/menu";
 import {
   ALargeSmallIcon,
@@ -20,7 +19,6 @@ import {
   LayoutListIcon,
   ListFilterIcon,
   ListOrderedIcon,
-  RotateCwIcon,
   RowsIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
@@ -74,12 +72,9 @@ type Props = {
   /** The layout on screen: Home always lists its sessions flat, whatever the pick. */
   grouping: Grouping;
   worktrees: Worktree[];
-  /** A read is under way: the item spins, and another press waits for it. */
-  refreshing: boolean;
-  onRefresh: () => void;
 };
 
-export function SidebarViewMenu({ prefs, onChange, grouping, worktrees, refreshing, onRefresh }: Props) {
+export function SidebarViewMenu({ prefs, onChange, grouping, worktrees }: Props) {
   const { hiddenTrees, showWorktree } = prefs;
   const filtered = prefs.recency !== DEFAULT_PREFS.recency || prefs.limit !== DEFAULT_PREFS.limit || prefs.hiddenProviders.length > 0 || hiddenTrees.length > 0;
   // Reset puts back the grouping and the ordering too, whatever the layout on screen.
@@ -222,13 +217,6 @@ export function SidebarViewMenu({ prefs, onChange, grouping, worktrees, refreshi
                 />
               ))}
             </Submenu>
-
-            <Menu.Separator className="mx-2 my-1 h-px bg-border" />
-            {/* Worktrees git made and sessions crewd made or deleted, which the window did not hear about. */}
-            <Menu.Item closeOnClick={false} onClick={onRefresh} className={ROW}>
-              <RotateCwIcon className={`size-4 shrink-0 text-icon ${refreshing ? "animate-spin motion-reduce:animate-none" : ""}`} />
-              <span className="min-w-0 flex-1 truncate">Refresh</span>
-            </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

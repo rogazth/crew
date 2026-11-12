@@ -10,7 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Process } from "../src/lib/protocol.ts";
-import { launchCrew, MOD, newSession, newWorktree, openServices, pressChord, refreshSidebar, sendInChat, waitFor, worktreeHeader } from "./harness.ts";
+import { launchCrew, MOD, newSession, newWorktree, openServices, pressChord, sendInChat, waitFor, worktreeHeader } from "./harness.ts";
 
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
 
@@ -61,9 +61,9 @@ test("C1: a session's dev server in its worktree is in plain sight, and the user
   await places.getByRole("button", { name: "Services (1)", exact: true }).waitFor();
 
   // The session goes; its server does not, and the page says who left it.
-  // Deleted outside the window, which re-reads its sessions to see it.
+  // Deleted outside the window, which reloads to read its sessions again.
   await crew.request("session_delete", { id: shell.id });
-  await refreshSidebar(crew);
+  await crew.reload();
   await openServices(crew);
   const block = page.getByRole("region", { name: "web" });
   await block.getByText("Left running").waitFor();
