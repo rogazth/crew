@@ -99,6 +99,14 @@ describe("children in the sidebar", () => {
     expect(terminals.map((s) => s.id)).toEqual(["c1"]);
   });
 
+  it("finds a session by its worktree, a name match ranked first", () => {
+    const sessions = [session("fix login", "terminal", 1), session("other", "terminal", 2), session("feat-voice", "terminal", 3)];
+    const trees: Record<string, string> = { "fix login": "main", other: "feat-voice", "feat-voice": "main" };
+    const { terminals } = arrangeSessions(sessions, DEFAULT_PREFS, "feat-voice", DEFAULT_PREFS.ordering, (s) => trees[s.name]);
+    expect(terminals.map((s) => s.id)).toEqual(["feat-voice", "other"]);
+    expect(arrangeSessions(sessions, DEFAULT_PREFS, "feat-voice").terminals.map((s) => s.id)).toEqual(["feat-voice"]);
+  });
+
   it("lets an exited child age out like an idle one", () => {
     const exited = { ...child("old", "shell", 1), status: "exited" as const, updatedAt: 1 };
     const { shown } = trimSection([exited], { ...DEFAULT_PREFS, recency: "day" }, null, 10 * 24 * 60 * 60 * 1000);

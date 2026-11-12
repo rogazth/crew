@@ -178,6 +178,15 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
   const pathOf = useCallback((s: Session) => sessionPath(s, props.workspace, props.worktrees), [props.workspace, props.worktrees]);
   const treeOf = (s: Session) => props.worktrees.find((t) => t.path === pathOf(s));
+  // A search finds a session by the worktree its second line names; a bot's tile names none. Home has none.
+  const placeOf = useCallback(
+    (s: Session) => {
+      if (props.home) return undefined;
+      const tree = props.worktrees.find((t) => t.path === pathOf(s));
+      return tree && worktreeLabel(tree);
+    },
+    [pathOf, props.home, props.worktrees],
+  );
 
   // "Rename" on the rail's mark lands here, on the name it renames.
   const wanted = props.renameWanted === props.workspace.id;
@@ -191,7 +200,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   );
 
   // The view menu is the sessions': bots keep their own order and every filter passes them by.
-  const arranged = useMemo(() => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [] }, query) : null), [prefs, props.sessions, query]);
+  const arranged = useMemo(
+    () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [] }, query, prefs.ordering, placeOf) : null),
+    [placeOf, prefs, props.sessions, query],
+  );
   const bots = useMemo(
     () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [], hiddenProviders: [] }, query, null).bots : []),
     [prefs, props.sessions, query],
@@ -394,7 +406,8 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 
         {/* Sessions: search, the view menu and a new one, then the groups. */}
         <div className="px-2">
-          <div className="-mx-2 px-2">
+          {/* Its own row of space under it: ungrouped, the first session would sit flush against the find's fill. */}
+          <div className="-mx-2 px-2 pb-1">
             {searching ? (
               <SidebarFind
                 query={query}

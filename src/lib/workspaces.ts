@@ -41,17 +41,24 @@ export function filterWorkspaces(
   return scored.map((entry) => entry.workspace);
 }
 
-/** Inline sidebar filter. Matches the name first, then provider + model. */
-export function filterSessions(sessions: Session[], query: string): Session[] {
+/**
+ * Inline sidebar filter. Matches the name first, then the worktree `placeOf`
+ * names (its branch or folder), then provider + model.
+ */
+export function filterSessions(
+  sessions: Session[],
+  query: string,
+  placeOf?: (session: Session) => string | undefined,
+): Session[] {
   if (!query.trim()) return sessions;
   const scored: { session: Session; score: number }[] = [];
   for (const session of sessions) {
     const byName = fuzzyMatch(query, session.name);
-    const byProvider = byName
-      ? null
-      : fuzzyMatch(query, providerLine(session.provider, session.model));
-    const hit = byName ?? byProvider;
-    if (hit) scored.push({ session, score: hit.score + (byName ? 100 : 0) });
+    const place = byName ? undefined : placeOf?.(session);
+    const byPlace = place ? fuzzyMatch(query, place) : null;
+    const byProvider = byName ?? byPlace ? null : fuzzyMatch(query, providerLine(session.provider, session.model));
+    const hit = byName ?? byPlace ?? byProvider;
+    if (hit) scored.push({ session, score: hit.score + (byName ? 100 : byPlace ? 50 : 0) });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.map((entry) => entry.session);

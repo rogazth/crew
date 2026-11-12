@@ -158,17 +158,19 @@ function kept(sessions: Session[], prefs: SidebarPrefs): Session[] {
  * Filter, search and order in one pass, then split by kind. A search ranks by match, not by ordering.
  * A child its starter owns lives in that one's chat, not here: it is left out unless its starter is
  * gone, when it stands among the sessions as one the user started would. A handoff is the user's
- * and is listed like any of theirs. A search lists every match, children too.
+ * and is listed like any of theirs. A search lists every match, children too, and finds a session
+ * by the worktree `placeOf` names as well.
  */
 export function arrangeSessions(
   sessions: Session[],
   prefs: SidebarPrefs,
   query: string,
   ordering: Ordering | null = prefs.ordering,
+  placeOf?: (session: Session) => string | undefined,
 ): Arranged {
   const listed = kept(sessions, prefs);
   const searching = query.trim().length > 0;
-  const ordered = searching ? filterSessions(listed, query) : sort(listed, ordering);
+  const ordered = searching ? filterSessions(listed, query, placeOf) : sort(listed, ordering);
   const present = new Set(sessions.map((session) => session.id));
   const housed = (session: Session) => !searching && isOwnedChild(session) && present.has(session.parentId!);
   return {
