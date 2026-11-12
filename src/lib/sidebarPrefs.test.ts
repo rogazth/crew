@@ -13,7 +13,7 @@ const session = (
 describe("parsePrefs", () => {
   it("drops what older builds stored and keeps what still means something", () => {
     const raw = JSON.stringify({ grouping: "tree", ordering: "manual", show: ["avatar", "status"] });
-    expect(parsePrefs(raw)).toEqual({ ...DEFAULT_PREFS, ordering: "manual", show: ["status"] });
+    expect(parsePrefs(raw)).toEqual({ ...DEFAULT_PREFS, show: ["status"] });
   });
 
   it("keeps only the limits and spans the menu offers", () => {

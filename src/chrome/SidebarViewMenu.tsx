@@ -15,7 +15,6 @@ import {
   FolderIcon,
   GitBranchIcon,
   GitCompareArrowsIcon,
-  HandGrabIcon,
   LayoutListIcon,
   ListFilterIcon,
   ListOrderedIcon,
@@ -36,7 +35,6 @@ const GROUPINGS: { id: Grouping; label: string; hint: string; icon: Icon }[] = [
 ];
 
 const ORDERINGS: { id: Ordering; label: string; icon: Icon }[] = [
-  { id: "manual", label: "Manual", icon: HandGrabIcon },
   { id: "updated", label: "Updated", icon: ClockIcon },
   { id: "name", label: "Name", icon: ALargeSmallIcon },
 ];

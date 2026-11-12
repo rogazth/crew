@@ -49,7 +49,7 @@ import {
 } from "../lib/menu";
 import { providerLine } from "../lib/providers";
 import { NO_SELECTION, pruneSelection, selectClick, type ClickModifiers, type Selection } from "../lib/selection";
-import { arrangeSessions, canReorder, DEFAULT_PREFS, shows, trimSection, type Grouping, type SidebarPrefs, type Trimmed } from "../lib/sidebarPrefs";
+import { arrangeSessions, DEFAULT_PREFS, shows, trimSection, type Grouping, type SidebarPrefs, type Trimmed } from "../lib/sidebarPrefs";
 import { statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
@@ -193,7 +193,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   // The view menu is the sessions': bots keep their own order and every filter passes them by.
   const arranged = useMemo(() => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [] }, query) : null), [prefs, props.sessions, query]);
   const bots = useMemo(
-    () => (prefs ? arrangeSessions(props.sessions, { ...prefs, ordering: "manual", hiddenKinds: [], hiddenProviders: [] }, query).bots : []),
+    () => (prefs ? arrangeSessions(props.sessions, { ...prefs, hiddenKinds: [], hiddenProviders: [] }, query, null).bots : []),
     [prefs, props.sessions, query],
   );
   const terminals = useMemo(
@@ -333,7 +333,6 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
     );
   };
 
-  const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null && mode !== "status";
   const botsDraggable = !filtering && renaming === null;
   const unfold = (key: string, next: boolean) =>
     setExpanded((prev) => {
@@ -464,13 +463,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                     <div className={section.tree ? "pl-6" : ""}>
                       {mine.shown.length > 0 && (
                         <div className="flex flex-col gap-0.5">
-                          <SortableList ids={mine.shown.map((s) => s.id)} disabled={!draggable || mine.hidden > 0} onReorder={props.onReorder}>
-                            {mine.shown.map((session, at) => (
-                              <SortableItem key={session.id} id={session.id} index={at} group={section.key} disabled={!draggable || mine.hidden > 0}>
-                                {sessionRow(session)}
-                              </SortableItem>
-                            ))}
-                          </SortableList>
+                          {mine.shown.map(sessionRow)}
                         </div>
                       )}
                       <MoreRow hidden={mine.hidden} open={expanded.has(section.key)} onToggle={(next) => unfold(section.key, next)} />

@@ -2,7 +2,7 @@ import type { Session, SessionKind } from "./types";
 import { isOwnedChild } from "./letters";
 import { filterSessions } from "./workspaces";
 
-export type Ordering = "manual" | "updated" | "name";
+export type Ordering = "updated" | "name";
 export type Detail = "names" | "diff" | "updated" | "status";
 /** How the sessions are laid out; each says on a session's second line only what its group does not. */
 export type Grouping = "none" | "worktree" | "status";
@@ -76,11 +76,6 @@ export function toggle<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 }
 
-/** Manual order is the only one the store persists, so only it can be dragged. */
-export function canReorder(prefs: SidebarPrefs, filtering: boolean): boolean {
-  return !filtering && prefs.ordering === "manual";
-}
-
 const KNOWN_DETAILS = new Set<unknown>(DEFAULT_PREFS.show);
 
 /** Unknown keys from older builds — grouping, the avatar detail — fall away. */
@@ -90,7 +85,7 @@ export function parsePrefs(raw: string | null): SidebarPrefs {
     const parsed = JSON.parse(raw) as Partial<SidebarPrefs>;
     return {
       scope: pick(parsed.scope, ["all", "current", "busy"], "all"),
-      ordering: pick(parsed.ordering, ["manual", "updated", "name"], "updated"),
+      ordering: pick(parsed.ordering, ["updated", "name"], DEFAULT_PREFS.ordering),
       show: Array.isArray(parsed.show)
         ? (parsed.show.filter((d) => KNOWN_DETAILS.has(d)) as Detail[])
         : DEFAULT_PREFS.show,
@@ -144,8 +139,9 @@ function pick<T extends string>(value: unknown, allowed: T[], fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
-function sort(sessions: Session[], ordering: Ordering): Session[] {
-  if (ordering === "manual") return sessions;
+/** `null` keeps the store's order: the bots', which the user drags. */
+function sort(sessions: Session[], ordering: Ordering | null): Session[] {
+  if (ordering === null) return sessions;
   const next = [...sessions];
   if (ordering === "updated") next.sort((a, b) => b.updatedAt - a.updatedAt);
   else next.sort((a, b) => a.name.localeCompare(b.name));
@@ -164,10 +160,15 @@ function kept(sessions: Session[], prefs: SidebarPrefs): Session[] {
  * gone, when it stands among the sessions as one the user started would. A handoff is the user's
  * and is listed like any of theirs. A search lists every match, children too.
  */
-export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query: string): Arranged {
+export function arrangeSessions(
+  sessions: Session[],
+  prefs: SidebarPrefs,
+  query: string,
+  ordering: Ordering | null = prefs.ordering,
+): Arranged {
   const listed = kept(sessions, prefs);
   const searching = query.trim().length > 0;
-  const ordered = searching ? filterSessions(listed, query) : sort(listed, prefs.ordering);
+  const ordered = searching ? filterSessions(listed, query) : sort(listed, ordering);
   const present = new Set(sessions.map((session) => session.id));
   const housed = (session: Session) => !searching && isOwnedChild(session) && present.has(session.parentId!);
   return {
