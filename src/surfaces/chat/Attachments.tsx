@@ -123,7 +123,11 @@ function FileTile({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) 
   );
 }
 
-/** An image a tool showed, at size. */
+/**
+ * An image a tool showed, in a box of one size whether it has loaded or not:
+ * the image arrives a tick after the row mounts, and a box that changed size
+ * then would move everything under it, and cut short a panel opening onto it.
+ */
 function Thumbnail({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) {
   const src = useImageSrc(file.path);
   return (
@@ -132,9 +136,9 @@ function Thumbnail({ file, onOpen }: { file: AttachedFile; onOpen: () => void })
       onClick={onOpen}
       title={file.name}
       aria-label={`Open ${file.name}`}
-      className="inline-flex max-h-40 max-w-[240px] overflow-hidden rounded-lg bg-card focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
+      className="inline-flex h-40 w-60 shrink-0 overflow-hidden rounded-lg bg-card focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
     >
-      {src ? <img src={src} alt={file.name} className="block max-h-40 max-w-[240px] object-contain" /> : <span className="block h-24 w-32" />}
+      {src ? <img src={src} alt={file.name} className="block size-full object-contain" /> : null}
     </button>
   );
 }

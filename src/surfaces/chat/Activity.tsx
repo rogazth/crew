@@ -1,6 +1,6 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { createElement, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createElement, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { OrbState } from "thinking-orbs";
 import { TypingDots } from "../../chrome/StatusDot";
 import { WorkOrb } from "../../chrome/WorkOrb";
@@ -172,8 +172,10 @@ export const ActivityGroup = memo(function ActivityGroup({
             ))}
           </div>
         </Collapsible.Panel>
+        <Under folded={open}>
+          <Captures files={captures} enter={live} />
+        </Under>
       </Collapsible.Root>
-      {!open ? <Captures files={captures} enter={live} /> : null}
       {!open && waiting.length > 0 ? (
         <div className="mt-1.5 flex flex-col gap-1.5">
           {waiting.map((block) => (
@@ -184,6 +186,19 @@ export const ActivityGroup = memo(function ActivityGroup({
     </div>
   );
 }, sameBlocks);
+
+/**
+ * What stays under a fold's line while it is closed, placed after the fold's
+ * panel: it folds away as the panel opens and back as it closes, in step with
+ * it (`.crew-under`). Folded, it is out of reach of the keyboard and the mouse.
+ */
+export function Under({ folded, children }: { folded: boolean; children: ReactNode }) {
+  return (
+    <div className="crew-under" inert={folded}>
+      <div>{children}</div>
+    </div>
+  );
+}
 
 /** The images the work captured, small under its line while it is closed; each opens in the viewer. */
 export function Captures({ files, flush = false, enter = false }: { files: AttachedFile[]; flush?: boolean; /** Captures arrive as the agent takes them: each new one eases in. */ enter?: boolean }) {

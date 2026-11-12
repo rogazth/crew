@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayName } from "../../lib/time";
 import { gapBefore, reportAfter, rowBlocks, type Row } from "../../lib/transcriptRows";
-import { ActivityGroup, Captures } from "./Activity";
+import { ActivityGroup, Captures, Under } from "./Activity";
 import { capturesOf } from "../../lib/attachments";
 import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
@@ -204,7 +204,9 @@ export function TurnFold({
       <Collapsible.Panel className="crew-phase-panel">
         <div className="pt-2.5">{children}</div>
       </Collapsible.Panel>
-      {!open ? <Captures files={captures} flush /> : null}
+      <Under folded={open}>
+        <Captures files={captures} flush />
+      </Under>
     </Collapsible.Root>
   );
 }
