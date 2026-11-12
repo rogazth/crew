@@ -1300,6 +1300,49 @@ html:has(body > :not(#root) :is([role="dialog"], [role="alertdialog"], [role="me
 @media (prefers-reduced-motion: reduce) {
   .crew-found { animation: none; background: var(--color-card); }
 }
+/* A message is marked where it is drawn, not across its row, in the chrome's
+   own greys: a hover's wash a step outside an answer's text with a thin bar in
+   its gutter, and a hairline ring on the bubble of what you wrote. It holds a
+   moment, then goes. */
+@keyframes crew-found-wash {
+  0%, 35% {
+    background: var(--color-hover);
+    box-shadow: inset 2px 0 0 var(--color-border-strong);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+@keyframes crew-found-ring {
+  0%, 35% { box-shadow: 0 0 0 1.5px var(--color-border-strong); }
+  100% { box-shadow: 0 0 0 1.5px transparent; }
+}
+[data-message].crew-found {
+  position: relative;
+  isolation: isolate;
+  animation: none;
+  background: none;
+}
+[data-message].crew-found::before {
+  content: "";
+  position: absolute;
+  inset: -6px -12px -6px -16px;
+  z-index: -1;
+  border-radius: 4px 10px 10px 4px;
+  pointer-events: none;
+  animation: crew-found-wash 2.6s ease-out forwards;
+}
+[data-message="user"].crew-found::before {
+  display: none;
+}
+[data-message="user"].crew-found [data-bubble] {
+  animation: crew-found-ring 2.6s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-message].crew-found::before { animation: none; box-shadow: inset 2px 0 0 var(--color-border-strong); }
+  [data-message="user"].crew-found [data-bubble] { animation: none; box-shadow: 0 0 0 1.5px var(--color-border-strong); }
+}
 
 /* A chat's ⌘F: every match on screen, and brighter, the message the reader is
    on. The word is the mark, so its row does not light too: not while the bar
@@ -1310,9 +1353,14 @@ html:has(body > :not(#root) :is([role="dialog"], [role="alertdialog"], [role="me
 ::highlight(crew-find-current) {
   background-color: var(--color-find-current);
 }
-[data-quiet-found] .crew-found {
+[data-quiet-found] .crew-found,
+[data-quiet-found] .crew-found::before {
   animation: none;
   background: none;
+}
+[data-quiet-found] .crew-found [data-bubble] {
+  animation: none;
+  box-shadow: none;
 }
 
 /* One icon set, one weight: Lucide at 1.75 reads a touch lighter than text at 13px. */
