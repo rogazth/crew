@@ -106,6 +106,8 @@ const STATUS_GROUPS = [
   { id: "idle", label: "Idle" },
 ] as const;
 
+const IDLE_KEY = "status:idle";
+
 function bucketOf(s: Session, activeId: string | null): (typeof STATUS_GROUPS)[number]["id"] {
   if (urgent(s)) return "needs";
   if (running(s)) return "running";
@@ -220,13 +222,15 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   }, [props.sessions]);
 
   const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
+  const mode: Grouping = props.home ? "none" : grouping;
+  // By status, only Idle grows without end: what needs you, runs or waits unread is never folded.
   const trim = useCallback(
     (sessions: Session[], key: string): Trimmed =>
-      !prefs || filtering || expanded.has(key) ? { shown: sessions, hidden: 0 } : trimSection(sessions, prefs, activeId, now),
-    [activeId, expanded, filtering, now, prefs],
+      !prefs || filtering || expanded.has(key) || (mode === "status" && key !== IDLE_KEY)
+        ? { shown: sessions, hidden: 0 }
+        : trimSection(sessions, prefs, activeId, now),
+    [activeId, expanded, filtering, mode, now, prefs],
   );
-
-  const mode: Grouping = props.home ? "none" : grouping;
   const sections = useMemo<Section[]>(() => {
     if (mode === "worktree")
       return props.worktrees

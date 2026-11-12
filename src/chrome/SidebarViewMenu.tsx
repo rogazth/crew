@@ -46,6 +46,9 @@ const RECENCIES: { id: Recency; label: string; short: string }[] = [
   { id: "week", label: "Last week", short: "Week" },
 ];
 
+/** Under "status" only Idle folds; the other groups list every row. */
+const LIMIT_LABELS: Record<Grouping, string> = { none: "Show at most", worktree: "Per group", status: "Idle at most" };
+
 const limitLabel = (limit: Limit) => (limit === 0 ? "No limit" : String(limit));
 
 const DETAILS: { id: Detail; label: string; icon: Icon }[] = [
@@ -196,7 +199,7 @@ export function SidebarViewMenu({ prefs, onChange, grouping, worktrees }: Props)
               </Menu.RadioGroup>
             </Submenu>
 
-            <Submenu icon={ListOrderedIcon} label={grouping === "none" ? "Show at most" : "Per group"} value={limitLabel(prefs.limit)}>
+            <Submenu icon={ListOrderedIcon} label={LIMIT_LABELS[grouping]} value={limitLabel(prefs.limit)}>
               <Menu.RadioGroup value={prefs.limit} onValueChange={(value) => onChange({ ...prefs, limit: value as Limit })}>
                 {LIMITS.map((limit) => (
                   <Radio key={limit} value={limit} label={limitLabel(limit)} />
