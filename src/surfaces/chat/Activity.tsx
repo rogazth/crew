@@ -1,6 +1,6 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparklesIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { createElement, lazy, memo, Suspense, useMemo, useState } from "react";
+import { createElement, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { OrbState } from "thinking-orbs";
 import { TypingDots } from "../../chrome/StatusDot";
 import { WorkOrb } from "../../chrome/WorkOrb";
@@ -173,7 +173,7 @@ export const ActivityGroup = memo(function ActivityGroup({
           </div>
         </Collapsible.Panel>
       </Collapsible.Root>
-      {!open ? <Captures files={captures} /> : null}
+      {!open ? <Captures files={captures} enter={live} /> : null}
       {!open && waiting.length > 0 ? (
         <div className="mt-1.5 flex flex-col gap-1.5">
           {waiting.map((block) => (
@@ -186,21 +186,51 @@ export const ActivityGroup = memo(function ActivityGroup({
 }, sameBlocks);
 
 /** The images the work captured, small under its line while it is closed; each opens in the viewer. */
-export function Captures({ files, flush = false }: { files: AttachedFile[]; flush?: boolean }) {
+export function Captures({ files, flush = false, enter = false }: { files: AttachedFile[]; flush?: boolean; /** Captures arrive as the agent takes them: each new one eases in. */ enter?: boolean }) {
   const [viewing, setViewing] = useState<number | null>(null);
+  const row = useRef<HTMLDivElement>(null);
+  const fit = useFit(row, files.length > 0);
   if (files.length === 0) return null;
+  // One row at most: what does not fit folds into its last tile, which counts the rest.
+  const folded = files.length > fit;
+  const shown = folded ? files.slice(0, Math.max(0, fit - 1)) : files;
+  const rest = files.length - shown.length;
   return (
     <>
-      <div className={flush ? "crew-captures crew-captures-flush" : "crew-captures"}>
-        {files.map((file, index) => (
-          <Capture key={file.path} file={file} onOpen={() => setViewing(index)} />
+      <div ref={row} className={flush ? "crew-captures crew-captures-flush" : "crew-captures"}>
+        {shown.map((file, index) => (
+          <Capture key={file.path} file={file} enter={enter} onOpen={() => setViewing(index)} />
         ))}
+        {folded ? <Capture key="more" file={files[shown.length]!} enter={enter} more={rest} onOpen={() => setViewing(shown.length)} /> : null}
       </div>
       {viewing !== null ? (
         <Lightbox images={files} index={Math.min(viewing, files.length - 1)} onIndex={setViewing} onClose={() => setViewing(null)} />
       ) : null}
     </>
   );
+}
+
+/** A capture tile's width and the gap between tiles, as `.crew-capture` and `.crew-captures` draw them. */
+const CAPTURE_W = 72;
+const CAPTURE_GAP = 6;
+
+/** How many capture tiles fit on one line of the row, measured before it paints and again as it resizes. */
+function useFit(row: React.RefObject<HTMLDivElement | null>, present: boolean): number {
+  const [fit, setFit] = useState(Infinity);
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const measure = () => {
+      const style = getComputedStyle(el);
+      const width = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      setFit(Math.max(1, Math.floor((width + CAPTURE_GAP) / (CAPTURE_W + CAPTURE_GAP))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [row, present]);
+  return fit;
 }
 
 /**
@@ -242,9 +272,7 @@ function RunLine({
         />
       </span>
       {doing ? (
-        <span key={doing} className="crew-shimmer crew-line-in min-w-0 truncate" title={doing}>
-          {doing}
-        </span>
+        <RollingLine text={doing} />
       ) : (
         <span className="min-w-0 truncate text-text-muted transition-colors group-hover:text-text">{digest.label}</span>
       )}
@@ -255,12 +283,79 @@ function RunLine({
   );
 }
 
-/** A capture the run took, small under its line; it opens in the viewer. */
-function Capture({ file, onOpen }: { file: AttachedFile; onOpen: () => void }) {
-  const src = useImageSrc(file.path);
+/** How long a sweep of the shimmer takes; `.crew-shimmer` in index.css runs on it. */
+const SHIMMER_MS = 1600;
+
+/**
+ * Shimmering words. Every sweep runs on one clock, so words that replace
+ * others pick up the light where it was instead of starting it over.
+ */
+function Shimmer({ children, className = "" }: { children: string; className?: string }) {
+  const [phase] = useState<CSSProperties>(() => ({ animationDelay: `-${Math.round(performance.now() % SHIMMER_MS)}ms` }));
   return (
-    <button type="button" onClick={onOpen} title={file.name} aria-label={`Open ${file.name}`} className="crew-capture">
-      {src ? <img src={src} alt={file.name} /> : null}
+    <span className={`crew-shimmer ${className}`} style={phase}>
+      {children}
+    </span>
+  );
+}
+
+/** How long a line rolls, and how long it stays before the next may push it out. */
+const ROLL_MS = 320;
+const HOLD_MS = 700;
+
+/**
+ * What the agent is on, as one line that rolls: the new one rises in as the
+ * last rises out. A burst of steps settles on the newest instead of flickering
+ * through each.
+ */
+function RollingLine({ text }: { text: string }) {
+  const [frame, setFrame] = useState({ current: text, previous: null as string | null, seq: 0 });
+  const shownAt = useRef(0);
+  useEffect(() => {
+    shownAt.current = performance.now();
+  }, []);
+  const current = frame.current;
+  useEffect(() => {
+    if (text === current) return;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const roll = () => {
+      shownAt.current = performance.now();
+      setFrame((f) => ({ current: text, previous: still ? null : f.current, seq: f.seq + 1 }));
+    };
+    const wait = still ? 0 : HOLD_MS - (performance.now() - shownAt.current);
+    if (wait <= 0) return roll();
+    const timer = window.setTimeout(roll, wait);
+    return () => window.clearTimeout(timer);
+  }, [text, current]);
+  useEffect(() => {
+    if (frame.previous === null) return;
+    const seq = frame.seq;
+    const timer = window.setTimeout(() => setFrame((f) => (f.seq === seq ? { ...f, previous: null } : f)), ROLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [frame.seq, frame.previous]);
+  // The outgoing line keeps its key, so its node and its light carry on as it leaves.
+  return (
+    <span className="crew-roll" title={frame.current}>
+      {frame.previous !== null ? (
+        <span key={frame.seq - 1} className="crew-roll-out" aria-hidden>
+          <Shimmer className="truncate">{frame.previous}</Shimmer>
+        </span>
+      ) : null}
+      <span key={frame.seq} className={frame.seq === 0 ? "crew-line-in" : "crew-roll-in"}>
+        <Shimmer className="truncate">{frame.current}</Shimmer>
+      </span>
+    </span>
+  );
+}
+
+/** A capture the run took, small under its line; it opens in the viewer. */
+function Capture({ file, enter, more, onOpen }: { file: AttachedFile; enter: boolean; /** The tile stands for this many captures, itself among them: it shows the count over its picture. */ more?: number; onOpen: () => void }) {
+  const src = useImageSrc(file.path);
+  const label = more ? `${more} more captures` : `Open ${file.name}`;
+  return (
+    <button type="button" onClick={onOpen} title={more ? label : file.name} aria-label={label} className={enter ? "crew-capture crew-capture-in" : "crew-capture"}>
+      {src ? <img src={src} alt="" /> : null}
+      {more ? <span className="crew-capture-more">+{more}</span> : null}
     </button>
   );
 }
@@ -542,7 +637,7 @@ export function WorkingLine({ since }: { since: number | undefined }) {
       <span className="crew-node">
         <WorkOrb state="breathing" label="Working" />
       </span>
-      <span className="crew-shimmer tabular-nums">{label}</span>
+      <Shimmer className="tabular-nums">{label}</Shimmer>
     </div>
   );
 }

@@ -284,7 +284,7 @@ html[data-sidebar-resize="active"] * {
   inset: 0;
   z-index: 60;
   background: color-mix(in srgb, var(--color-text) 72%, transparent);
-  transition: opacity 150ms ease;
+  transition: opacity 200ms ease;
 }
 .crew-lightbox-scrim[data-starting-style],
 .crew-lightbox-scrim[data-ending-style] {
@@ -298,12 +298,15 @@ html[data-sidebar-resize="active"] * {
   align-items: center;
   justify-content: center;
   outline: none;
-  transition: opacity 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 200ms ease, transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .crew-lightbox[data-starting-style],
 .crew-lightbox[data-ending-style] {
   opacity: 0;
-  transform: scale(0.98);
+  transform: scale(0.985);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-lightbox-scrim, .crew-lightbox { transition: none; }
 }
 /* Held back from the edges, so the scrim around it reads as the way out.
    Zoomed, it grows from its centre and drags. */
@@ -1488,8 +1491,46 @@ svg.lucide {
 .crew-line-in {
   animation: crew-line-in 220ms ease-out;
 }
+/* The line of what the agent is on rolls: the new one rises in as the last
+   rises out, clipped to the line, the outgoing one laid over it so the line
+   takes the new one's width at once. */
+.crew-roll {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+.crew-roll > span {
+  display: flex;
+  min-width: 0;
+}
+.crew-roll-out {
+  position: absolute;
+  inset: 0;
+  animation: crew-roll-out 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.crew-roll-in {
+  animation: crew-roll-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes crew-roll-out {
+  to { opacity: 0; transform: translateY(-75%); }
+}
+@keyframes crew-roll-in {
+  from { opacity: 0; transform: translateY(75%); }
+}
+@keyframes crew-fade-in {
+  from { opacity: 0; }
+}
+/* A capture the agent just took eases in; its picture fades up once it loads. */
+@keyframes crew-capture-in {
+  from { opacity: 0; transform: translateY(3px) scale(0.96); }
+}
+.crew-capture-in {
+  animation: crew-capture-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 @media (prefers-reduced-motion: reduce) {
-  .crew-line-in { animation: none; }
+  .crew-line-in, .crew-roll-in, .crew-capture-in, .crew-capture img { animation: none; }
+  .crew-roll-out { display: none; }
 }
 
 /* What a run captured, small under its line where the words start. */
@@ -1497,13 +1538,15 @@ svg.lucide {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 4px 0 2px 27px;
+  /* The row stops short of the right edge: a safe area the captures never run into. */
+  padding: 4px 64px 2px 27px;
 }
 /* Under a turn's fold, whose line has no icon before its words. */
 .crew-captures-flush {
   padding-left: 0;
 }
 .crew-capture {
+  position: relative;
   width: 72px;
   height: 46px;
   overflow: hidden;
@@ -1520,11 +1563,25 @@ svg.lucide {
   outline-offset: 1px;
 }
 .crew-capture img {
+  animation: crew-fade-in 160ms ease-out both;
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
   object-position: top;
+}
+
+/* The last tile when the row is full: the next capture, dimmed, under how many more there are. */
+.crew-capture-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 /* A background command still running: a green dot that breathes. */

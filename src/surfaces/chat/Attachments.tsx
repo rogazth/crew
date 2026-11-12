@@ -225,7 +225,18 @@ export function Lightbox({
   onClose: () => void;
 }) {
   const file = images[index]!;
-  const src = useImageSrc(file.path);
+  const loaded = useImageSrc(file.path);
+  // Moving to another image keeps the last one up until the next has loaded: the switch is a cut, never a blank.
+  const [held, setHeld] = useState<string | null>(null);
+  if (loaded && loaded !== held) setHeld(loaded);
+  const src = loaded ?? held;
+  // Opened a beat after it mounts, so it fades in; closing lets it fade out before the caller drops it.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const close = () => setOpen(false);
   const many = images.length > 1;
   const [view, setView] = useState<View>(AT_REST);
   // Another image starts whole.
@@ -277,7 +288,7 @@ export function Lightbox({
   };
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+    <Dialog.Root open={open} onOpenChange={(next) => !next && close()} onOpenChangeComplete={(next) => !next && onClose()}>
       <Dialog.Portal>
         <Dialog.Backdrop className="crew-lightbox-scrim" />
         <Dialog.Popup
@@ -287,7 +298,7 @@ export function Lightbox({
           aria-label={file.name}
           onWheel={onWheel}
           // The popup fills the viewport above the scrim, so the empty space around the image is the outside.
-          onClick={(event) => event.target === event.currentTarget && !drag.current?.moved && onClose()}
+          onClick={(event) => event.target === event.currentTarget && !drag.current?.moved && close()}
         >
           {src ? (
             <img
