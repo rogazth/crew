@@ -54,7 +54,7 @@ function SiteRow({ site, decided }: { site: string; decided: Partial<Record<Site
     <div className="py-2">
       <div className="flex min-h-8 items-center gap-2.5">
         <span className="grid size-4 shrink-0 place-items-center [&_.crew-site-icon]:size-4">
-          <SiteIcon url={site} />
+          <SiteIcon url={site} globe />
         </span>
         <span className="min-w-0 flex-1 truncate font-medium" data-selectable>
           {name}
