@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
-import { routeLinks } from "../lib/external";
+import { routeLinks, type LinkOpen } from "../lib/external";
 
 /** While the setting is on, chat and terminal links become Crew pages instead of leaving the app. */
-export function LinkRouter({ open }: { open: (url: string) => void }) {
+export function LinkRouter({ open }: { open: (url: string, how: LinkOpen) => void }) {
   const { prefs } = useBrowserPrefs();
 
   useEffect(() => {

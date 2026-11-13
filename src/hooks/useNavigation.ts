@@ -170,11 +170,14 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
-  /** A link from a chat or a terminal: a page beside the tab it was followed from, which closing it hands back. */
+  /**
+   * A link from a chat or a terminal: a page beside the tab it was followed
+   * from, which closing it hands back. Behind, it leaves the screen as it is.
+   */
   const openLink = useCallback(
-    (url: string) => {
-      closePage();
-      tabs.openLink(newBrowserTab(url));
+    (url: string, { background = false }: { background?: boolean } = {}) => {
+      if (!background) closePage();
+      tabs.openLink(newBrowserTab(url), background);
     },
     [closePage, tabs],
   );

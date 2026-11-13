@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  composerOf,
   externalOpens,
   holdsFor,
   launchCrew,
@@ -14,9 +15,12 @@ import {
   pressChord,
   savedStrip,
   servePages,
+  sessions,
+  startChat,
   stripTabIds,
   terminalOnLinkIn,
   terminalScreenIn,
+  turnOver,
   typeInTerminal,
   waitFor,
   type Crew,
@@ -155,4 +159,87 @@ test("L1: a terminal link goes to the default browser, or to a Crew page when li
       `opens ${JSON.stringify(await externalOpens(crew))}, Crew pages ${JSON.stringify(await browserTabs(crew))}, loads ${JSON.stringify(server.requests)}`,
     "the chord's link also opened in Crew, or went out twice",
   );
+});
+
+/** Settings › General › Open links in Crew, on, and back to what was on screen. */
+async function linksInCrew(crew: Crew): Promise<void> {
+  const page = crew.window;
+  await pressChord(crew, `${MOD}+,`);
+  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.locator('[data-setting="links-in-crew"]').getByRole("switch").click();
+  await waitFor(
+    async () => {
+      const raw = await crew.request<string | null>("settings_get", { key: "browser:prefs" });
+      return raw !== null && (JSON.parse(raw) as { openLinksInCrew?: boolean }).openLinksInCrew === true;
+    },
+    { message: "crewd keeps the setting on" },
+  );
+  await pressChord(crew, `${MOD}+,`);
+}
+
+// L2: with links in Crew, ⌘-click (Ctrl off macOS) on a chat's link opens its
+// page behind, as a browser does: the chat stays on screen with the keyboard
+// where it was. A plain click still brings the page up.
+test("L2: ⌘-click on a chat link opens its Crew page behind the chat", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const server = await servePages({ "/behind": "Behind page", "/front": "Front page" });
+  t.after(() => server.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const page = crew.window;
+
+  await linksInCrew(crew);
+  const behind = `${server.origin}/behind`;
+  const front = `${server.origin}/front`;
+  const session = await startChat(crew, `see ${behind} or ${front}`, () => sessions(crew, workspace.id));
+  await turnOver(crew);
+  const reply = page.locator("[data-message]:visible").filter({ hasText: "Reply 1:" });
+  const link = (url: string) => reply.locator(`a[data-streamdown="link"][href="${url}"]`);
+  await link(behind).waitFor();
+
+  const chatTab = await waitFor(async () => (await savedStrip(crew, workspace.id))?.activeId, {
+    message: "the chat's tab is on screen",
+  });
+  assert.ok(chatTab.includes(session.id), "the chat is the tab on screen");
+  // The keyboard in the chat's field; the click hands it to the link, still in the transcript.
+  await composerOf(crew, session).click();
+  const focusMark = () =>
+    page.evaluate((url) => {
+      const el = document.activeElement;
+      if (el?.closest("[data-message]") && el.getAttribute("href") === url) return "link";
+      return el?.closest("form[data-session]")?.getAttribute("data-session") ?? el?.tagName ?? null;
+    }, behind);
+  assert.equal(await focusMark(), session.id);
+
+  await link(behind).click({ modifiers: [MOD] });
+  const [tab] = await waitFor(async () => {
+    const tabs = await browserTabs(crew);
+    return tabs.length === 1 && tabs;
+  }, { message: "the strip gains one browser tab" });
+  assert.ok(tab);
+  await holdsFor(
+    1500,
+    async () => {
+      const strip = await savedStrip(crew, workspace.id);
+      const focus = await focusMark();
+      const shown = await reply.isVisible();
+      return (strip?.activeId === chatTab && focus === "link" && shown) || `on screen ${strip?.activeId}, focus on ${focus}, reply shown ${shown}`;
+    },
+    "the ⌘-clicked page took the screen or the keyboard from the chat",
+  );
+  const strip = await savedStrip(crew, workspace.id);
+  assert.ok(strip);
+  assert.equal(strip.ids.indexOf(tab), strip.ids.indexOf(chatTab) + 1, "the page lands beside the chat");
+  assert.deepEqual(await externalOpens(crew), [], "nothing left the app");
+
+  // A plain click brings its page up.
+  await link(front).click();
+  const opened = await waitFor(async () => {
+    const tabs = await browserTabs(crew);
+    return tabs.length === 2 && tabs.find((id) => id !== tab);
+  }, { message: "the strip gains a second browser tab" });
+  await waitFor(async () => (await savedStrip(crew, workspace.id))?.activeId === opened, {
+    message: "a plain click puts the page on screen",
+  });
 });

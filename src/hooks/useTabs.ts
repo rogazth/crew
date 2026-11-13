@@ -134,9 +134,10 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
 
   /** A tab opened from the strip, the sidebar or the launcher: closed right away, it hands back the tab it came from. */
   const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab, { lookup: true })), [mutate]);
-  /** A link followed from the tab on screen: its child, beside it. */
+  /** A link followed from the tab on screen: its child, beside it; `background` keeps the screen where it is. */
   const openLink = useCallback(
-    (tab: Tab) => mutate((s) => openTab(s, tab, s.activeId === null ? {} : { opener: s.activeId })),
+    (tab: Tab, background = false) =>
+      mutate((s) => openTab(s, tab, s.activeId === null ? {} : { opener: s.activeId, background })),
     [mutate],
   );
   const close = useCallback(

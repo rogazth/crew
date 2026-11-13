@@ -23,7 +23,7 @@ describe("openLink", () => {
     const inCrew = vi.fn();
     routeLinks(inCrew);
     openLink("https://example.com", click());
-    expect(inCrew).toHaveBeenCalledWith("https://example.com");
+    expect(inCrew).toHaveBeenCalledWith("https://example.com", { background: false });
     expect(openUrl).not.toHaveBeenCalled();
   });
 
@@ -35,12 +35,15 @@ describe("openLink", () => {
     expect(openUrl).toHaveBeenCalledWith("https://example.com");
   });
 
-  it("keeps ⌘-click and ⇧-click alone in Crew", () => {
+  it("keeps ⌘-click and ⇧-click alone in Crew, ⌘-click behind", () => {
     const inCrew = vi.fn();
     routeLinks(inCrew);
     openLink("https://example.com", click({ metaKey: true }));
     openLink("https://example.com", click({ shiftKey: true }));
-    expect(inCrew).toHaveBeenCalledTimes(2);
+    expect(inCrew.mock.calls).toEqual([
+      ["https://example.com", { background: true }],
+      ["https://example.com", { background: false }],
+    ]);
     expect(openUrl).not.toHaveBeenCalled();
   });
 
