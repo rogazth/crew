@@ -1,3 +1,5 @@
 [toolchain]
-channel = "1.86"
+channel = "1.89"
+# minimal skips rust-docs, which nothing here needs and which can stall a fresh install.
+profile = "minimal"
 components = ["clippy", "rustfmt"]
