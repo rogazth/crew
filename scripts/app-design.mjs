@@ -10,12 +10,23 @@
 // is, and the crew workspace's process runs.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
-const data = process.env.CREW_USER_DATA || join(homedir(), "Library/Application Support/Crew Design");
-const env = { ...process.env, CREW_USER_DATA: data, CREW_PORT: process.env.CREW_PORT || "1421", CREW_KEEP_STATUS: "1" };
+// A linked worktree keeps a design profile of its own and lets app.mjs take a free
+// port, so it runs beside the main checkout's app:design instead of colliding on 1421.
+const git = (...args) => resolve(root, execFileSync("git", ["rev-parse", ...args], { cwd: root, encoding: "utf8" }).trim());
+const linked = git("--git-dir") !== git("--git-common-dir");
+const data =
+  process.env.CREW_USER_DATA ||
+  (linked ? join(git("--show-toplevel"), ".crew-dev-design") : join(homedir(), "Library/Application Support/Crew Design"));
+const env = { ...process.env, CREW_USER_DATA: data, CREW_KEEP_STATUS: "1" };
+if (!linked) env.CREW_PORT ||= "1421";
+// The seed's devbox takes 1431 in the main checkout, a free port in a worktree;
+// seed-live.json keeps whichever it took for the runs after.
+if (linked) env.CREW_DEVBOX_PORT ||= String(await freePort());
 
 // Providers by id, as Settings names them; the daemon checks binaries.
 const BINARIES = { claude: "claude", codex: "codex", cursor: "cursor-agent", opencode: "opencode", grok: "grok" };
@@ -42,6 +53,16 @@ app.on("exit", (code) => {
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => app.kill(signal));
 
 startRuns().catch((error) => console.warn(`app:design: the seeded processes did not start: ${error.message ?? error}`));
+
+function freePort() {
+  return new Promise((done, fail) => {
+    const server = createServer().once("error", fail);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => done(port));
+    });
+  });
+}
 
 /** Starts the seeded process runs once the app's crewd is up, and stops the ones meant to read as stopped. */
 async function startRuns() {

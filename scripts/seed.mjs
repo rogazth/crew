@@ -429,7 +429,7 @@ const tunnel = await processDef("Tunnel", "cloudflared tunnel --url http://local
 // (`crewd serve`), with workspaces of its own: app-design.mjs keeps it up next
 // to the app, so it reads as a machine that is online. gpu-box is an address
 // nobody answers at: offline, with the workspace the window last saw there.
-const MACHINE_PORT = 1431;
+const MACHINE_PORT = Number(process.env.CREW_DEVBOX_PORT) || 1431;
 const MACHINE_TOKEN = "seed-devbox-token";
 // A devbox left up by another app:design would answer instead, and take the seed.
 const taken = await new Promise((resolve) => {

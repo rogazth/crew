@@ -18,6 +18,7 @@ out/
 
 # Per-worktree dev data (database, socket), see scripts/app.mjs
 .crew-dev/
+.crew-dev-design/
 
 # tsc incremental cache
 *.tsbuildinfo
