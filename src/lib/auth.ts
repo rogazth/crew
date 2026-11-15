@@ -50,3 +50,10 @@ export function loginArgv(provider: string, remote: boolean): string[] | null {
 
 /** What the session notes once a login restarted its CLI; the sign-in prompt before it is done. */
 export const SIGNED_IN_NOTE = "Signed in. Send a message to continue.";
+/** The same, when the turn the login interrupted goes again by itself. */
+export const RESUMED_NOTE = "Signed in. Continuing.";
+
+/** Whether a system line is a login's note, which answers the sign-in prompt above it. */
+export function isSignedInNote(text: string): boolean {
+  return text === SIGNED_IN_NOTE || text === RESUMED_NOTE;
+}

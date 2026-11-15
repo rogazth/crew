@@ -2667,6 +2667,12 @@ while True:
         out({"type": "assistant", "message": {"id": "msyn", "model": "<synthetic>", "role": "assistant", "usage": {"input_tokens": 0, "output_tokens": 0}, "content": [{"type": "text", "text": "Current session: 29% used"}]}, "session_id": sid})
         result("Current session: 29% used")
         continue
+    # SIGNEDOUT fails as an expired login does, before any work, until a file
+    # `signed-in` says the user signed in again.
+    if "SIGNEDOUT" in heard[0] and not os.path.exists(os.path.join(HERE, "signed-in")):
+        running[0] = False
+        out({"type": "result", "subtype": "success", "is_error": True, "result": "Failed to authenticate: OAuth session expired and could not be refreshed", "session_id": sid, "total_cost_usd": 0, "usage": {}})
+        continue
     # COMMANDS finds a skill in a folder mid-session: the whole list again.
     if "COMMANDS" in heard[0]:
         out({"type": "system", "subtype": "commands_changed", "session_id": sid, "commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "deploy", "description": "Ship it", "argumentHint": "<env>"}]})
@@ -4216,6 +4222,58 @@ time.sleep(600)
         w.turns.session_signed_in(&mine.id).expect("restart");
         assert!(says(&w, &mine.id, "Signed in. Send a message to continue."));
         assert!(!says(&w, &mine.id, "Nothing was running; the CLI starts with the next message."));
+    }
+
+    /// A turn that stopped on a login goes again once the login is done: the
+    /// CLI is handed the message again, and the user does not see it twice.
+    #[test]
+    fn a_sign_in_picks_up_the_turn_it_interrupted() {
+        let w = world();
+        let mine = users_claude(&w);
+        assert_eq!(w.say(&mine, "SIGNEDOUT fix the build").status, "error");
+        assert!(!says(&w, &mine.id, "report: SIGNEDOUT fix the build"));
+
+        std::fs::write(w.dir.join("signed-in"), "").expect("signed in");
+        w.turns.session_signed_in(&mine.id).expect("restart");
+        assert_eq!(w.settle(&mine.id).status, "done");
+        assert!(says(&w, &mine.id, "Signed in. Continuing."));
+        assert!(says(&w, &mine.id, "report: SIGNEDOUT fix the build"));
+        let shown: Vec<String> = w
+            .blocks(&mine.id)
+            .into_iter()
+            .filter(|block| block.role == BlockRole::User && block.hidden != Some(true))
+            .map(|block| block.text)
+            .collect();
+        assert_eq!(shown, ["SIGNEDOUT fix the build"]);
+        // Answered: a second login finds nothing to pick up.
+        w.turns.session_signed_in(&mine.id).expect("restart");
+        assert!(says(&w, &mine.id, "Signed in. Send a message to continue."));
+        w.turns.release(&mine.id);
+    }
+
+    /// The login is the machine's: every other session of the same provider
+    /// that stopped on it goes on too, and one that did not is left alone.
+    #[test]
+    fn a_sign_in_picks_up_every_session_it_stopped() {
+        let w = world();
+        let mine = users_claude(&w);
+        let other = w.user_session("claude", "", "full");
+        assert_eq!(w.say(&mine, "SIGNEDOUT fix the build").status, "error");
+        assert_eq!(w.say(&other, "SIGNEDOUT run the tests").status, "error");
+        let fine = users_claude(&w);
+        w.say(&fine, "hello");
+
+        std::fs::write(w.dir.join("signed-in"), "").expect("signed in");
+        w.turns.session_signed_in(&mine.id).expect("restart");
+        w.settle(&mine.id);
+        w.settle(&other.id);
+        assert!(says(&w, &other.id, "Signed in. Continuing."));
+        assert!(says(&w, &other.id, "report: SIGNEDOUT run the tests"));
+        assert!(!says(&w, &fine.id, "Signed in. Continuing."));
+        assert_eq!(w.row(&fine.id).status, "done", "a session the login did not stop started a turn");
+        for id in [&mine.id, &other.id, &fine.id] {
+            w.turns.release(id);
+        }
     }
 
     /// A turn is stopped first: restarting under it would take its process.

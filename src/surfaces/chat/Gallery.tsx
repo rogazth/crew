@@ -2,7 +2,7 @@
 import { preloadHighlighter } from "@pierre/diffs";
 import { useEffect, useMemo, useState } from "react";
 import type { Answers, ApprovalDecision, Block } from "../../lib/blocks";
-import { SIGNED_IN_NOTE } from "../../lib/auth";
+import { RESUMED_NOTE } from "../../lib/auth";
 import { THEME } from "../../lib/highlighting";
 import { groupRows } from "../../lib/transcriptRows";
 import { AlwaysAllow, ChatSessionContext } from "./context";
@@ -324,11 +324,11 @@ const EXAMPLES: Example[] = [
   {
     group: "Sign-in",
     title: "Signed in again",
-    note: "The card goes once the login's note follows it.",
+    note: "After the login: the card goes and the turn goes on.",
     blocks: [
       ask("l3", "Run the migrations."),
       { id: "l3-s", role: "system", text: "Failed to authenticate. API Error: 401 OAuth token has expired.", at: at(2) },
-      { id: "l3-n", role: "system", text: SIGNED_IN_NOTE, at: at(1) },
+      { id: "l3-n", role: "system", text: RESUMED_NOTE, at: at(1) },
     ],
   },
   {

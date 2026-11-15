@@ -16,6 +16,9 @@
 //   /clear        moves the process to a new, empty conversation
 //   anything else a short turn that answers `Reply <n>: <message>`
 //
+// While $HOME/fake-claude-signed-out exists, every turn fails as an expired
+// login does, before any work. `claude auth login` removes it and exits 0.
+//
 // Every launch appends its argv, cwd and pid as one JSON line to
 // $HOME/fake-claude.log.
 //
@@ -35,6 +38,13 @@ fs.appendFileSync(
   path.join(HOME, "fake-claude.log"),
   `${JSON.stringify({ argv, cwd: CWD, pid: process.pid, at: Date.now() })}\n`,
 );
+
+const signedOut = path.join(HOME, "fake-claude-signed-out");
+if (argv[0] === "auth" && argv[1] === "login") {
+  fs.rmSync(signedOut, { force: true });
+  process.stdout.write("Login successful.\n");
+  process.exit(0);
+}
 
 function flag(name) {
   const at = argv.indexOf(name);
@@ -485,6 +495,13 @@ function serve() {
     emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS, mcp_servers: servers() });
     if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
     record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
+    if (fs.existsSync(signedOut)) {
+      const why = "Failed to authenticate: OAuth session expired and could not be refreshed";
+      current = null;
+      emit({ type: "result", subtype: "error_during_execution", is_error: true, result: why, session_id: sessionId, total_cost_usd: 0, usage: {} });
+      next();
+      return;
+    }
 
     const [command, seconds] = text.trim().split(/\s+/);
     let reply = `Reply ${n}: ${text.trim().replace(/\s*\n\s*/g, " / ")}`;

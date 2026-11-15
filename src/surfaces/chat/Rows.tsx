@@ -10,7 +10,7 @@ import { BackgroundMarker } from "./Background";
 import { QueuedGroup, RefusedRow } from "./Letters";
 import { AgentAnswer, AskedOrSaid, ControlRow, LetterRow, ReportLetter, StartedRow, SubagentCall, SubagentReport, WaitedReport } from "./Orchestration";
 import { AssistantMessage, DateBreak, SharedFiles, SystemLine, TurnFooter } from "./Message";
-import { SIGNED_IN_NOTE } from "../../lib/auth";
+import { isSignedInNote } from "../../lib/auth";
 import { agentDetail } from "../../lib/subagent";
 import { waitedReport } from "../../lib/orchestration";
 import { SettledCard } from "./SettledCard";
@@ -30,7 +30,7 @@ type Props = {
 
 /** A login's note stands later in the rows: the sign-in prompt at `index` is answered. */
 function signedAfter(rows: Row[], index: number): boolean {
-  return rows.slice(index + 1).some((row) => row.kind === "message" && row.block.role === "system" && row.block.text === SIGNED_IN_NOTE);
+  return rows.slice(index + 1).some((row) => row.kind === "message" && row.block.role === "system" && isSignedInNote(row.block.text));
 }
 
 /** The transcript's rows, in order. A fold holds rows of its own and draws them the same way. */

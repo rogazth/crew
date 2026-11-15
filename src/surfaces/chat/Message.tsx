@@ -176,9 +176,10 @@ export const Note = memo(function Note({ block }: { block: Block }) {
 });
 
 /**
- * A turn that stopped because the CLI is signed out: nothing ran, and the
- * session waits on a login. A card, not a quiet line, so it reads as the
- * thing to do next. The CLI's own sentence stays on the card, for the hover.
+ * A turn that stopped because the CLI is signed out: the session waits on a
+ * login, and a clean one has the turn go again by itself. A card, not a quiet
+ * line, so it reads as the thing to do next. The CLI's own sentence stays on
+ * the card, for the hover.
  */
 export const AuthNote = memo(function AuthNote({ block, session }: { block: Block; session: ChatSession }) {
   const { openLogin } = useChatActions();
@@ -193,7 +194,7 @@ export const AuthNote = memo(function AuthNote({ block, session }: { block: Bloc
         </span>
         <div className="min-w-0 flex-1" title={block.text}>
           <p className="truncate font-medium">{label} is signed out</p>
-          <p className="truncate text-[12px] leading-4 text-text-muted">Sign in and send your message again to continue.</p>
+          <p className="truncate text-[12px] leading-4 text-text-muted">Sign in to continue.</p>
         </div>
         {command && (
           <Button variant="primary" className="h-7 shrink-0 px-2.5" onClick={() => openLogin(session.id, session.provider, command)}>

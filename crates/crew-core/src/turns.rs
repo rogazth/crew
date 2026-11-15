@@ -44,6 +44,7 @@ mod mcp;
 mod naming;
 mod opencode;
 mod opencode_server;
+mod sign_in;
 #[cfg(test)]
 pub(crate) use codex::fake_codex;
 use codex::CodexLive;
@@ -55,9 +56,6 @@ use grok::GrokLive;
 #[cfg(test)]
 pub(crate) use opencode::fake_opencode_server;
 use opencode::OpencodeLive;
-
-/// The note a provider's login leaves; the client matches it to retire the sign-in prompt above.
-const SIGNED_IN_NOTE: &str = "Signed in. Send a message to continue.";
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
@@ -1645,16 +1643,12 @@ impl TurnHost {
     /// 2026-10-09), and the binding is let go, taken up again by the next
     /// message. The server itself restarts only from Settings.
     pub fn session_restart(&self, session_id: &str, force: bool) -> Result<(), String> {
-        self.restart(session_id, force, false)
+        self.restart(session_id, force, None)
     }
 
-    /// The restart a provider's login asks for: the CLI lets go of the
-    /// credentials it failed to refresh, and the one note says so.
-    pub fn session_signed_in(&self, session_id: &str) -> Result<(), String> {
-        self.restart(session_id, false, true)
-    }
-
-    fn restart(&self, session_id: &str, force: bool, signed_in: bool) -> Result<(), String> {
+    /// `signed_in` is the note a provider's login leaves in place of the
+    /// restart's own (see `turns/sign_in.rs`).
+    fn restart(&self, session_id: &str, force: bool, signed_in: Option<&str>) -> Result<(), String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
         let running: Vec<String> = self
             .background
@@ -1689,11 +1683,11 @@ impl TurnHost {
         if session.provider == "opencode" {
             let cwd = if session.kind == "bot" { String::new() } else { session::cwd(&self.store, &session)? };
             let note = self.reload_opencode(&session, &cwd)?;
-            self.transcripts.append_system(session_id, &note);
+            self.transcripts.append_system(session_id, signed_in.unwrap_or(&note));
             return Ok(());
         }
-        let note = if signed_in {
-            SIGNED_IN_NOTE
+        let note = if let Some(note) = signed_in {
+            note
         } else if had {
             "Restarted. The CLI starts again with the next message."
         } else {
