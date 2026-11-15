@@ -48,6 +48,7 @@ pub mod rules;
 pub mod schedule;
 pub mod scheduler;
 pub mod session;
+pub mod session_context;
 pub mod session_events;
 pub mod session_history;
 pub mod session_tools;

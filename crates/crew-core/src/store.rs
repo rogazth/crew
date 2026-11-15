@@ -628,6 +628,13 @@ fn migrate_all(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (53, ?1)", params![now_millis()])?;
         tx.commit()?;
     }
+    if current < 54 {
+        let tx = conn.unchecked_transaction()?;
+        // How full each session's context window last was, for the meter after a restart.
+        tx.execute_batch(crate::session_context::MIGRATION_V54)?;
+        tx.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (54, ?1)", params![now_millis()])?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

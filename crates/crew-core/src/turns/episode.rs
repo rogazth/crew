@@ -107,7 +107,7 @@ impl TurnHost {
             let _ = session::clear_provider_session(&self.store, &session.id);
             session.provider_session_id = None;
             let _ = bot_episode::clear(&self.store, &session.id);
-            self.contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&session.id);
+            self.forget_context(&session.id);
             self.bot_windows.lock().unwrap_or_else(|e| e.into_inner()).remove(&session.id);
         }
         self.episode_turns
@@ -162,7 +162,7 @@ impl TurnHost {
             return;
         }
         let previous = turn.carried.as_ref().map(|(episode, _, _)| episode);
-        let reading = self.contexts.lock().unwrap_or_else(|e| e.into_inner()).get(&row.id).cloned();
+        let reading = self.context(&row.id);
         let window = reading.as_ref().and_then(|reading| reading.window);
         let reading = reading.map(|reading| reading.used);
         // A provider that says nothing of its context: its last request's

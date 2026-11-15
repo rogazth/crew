@@ -821,8 +821,9 @@ pub struct TurnHost {
     opencode: opencode_server::OpencodeServer,
     /// What the providers' plans have spent, as turns and probes report it.
     usage: crate::usage::UsageHost,
-    /// The newest context reading of each session, merged as they come.
-    contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
+    /// The newest context reading of each session, merged as they come and
+    /// kept in the store; `None` for one the store had nothing of.
+    contexts: Arc<Mutex<HashMap<String, Option<ContextReading>>>>,
     /// Sessions whose process is up with no turn on it, since when. Apart from
     /// the process entries so the drivers' match arms do not all change.
     idle: Arc<Mutex<HashMap<String, Instant>>>,
@@ -1739,17 +1740,47 @@ impl TurnHost {
         self.commands.catalog(provider, cwd, crate::commands::crew_actions(offers_fast(provider)), crate::store::now_millis())
     }
 
-    /// The session's newest context reading, if one came.
+    /// The session's newest context reading, if one came, in this run or a
+    /// past one.
     pub fn context(&self, session_id: &str) -> Option<ContextReading> {
-        self.contexts.lock().unwrap_or_else(|e| e.into_inner()).get(session_id).cloned()
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        self.loaded_context(&mut contexts, session_id).cloned()
+    }
+
+    /// The session's reading in `contexts`, read from the store the first
+    /// time it is asked for: what the last daemon left there.
+    fn loaded_context<'a>(
+        &self,
+        contexts: &'a mut HashMap<String, Option<ContextReading>>,
+        session_id: &str,
+    ) -> Option<&'a ContextReading> {
+        contexts
+            .entry(session_id.to_string())
+            .or_insert_with(|| self.store.with(|conn| crate::session_context::get(conn, session_id)).ok().flatten())
+            .as_ref()
+    }
+
+    /// Keeps `reading` as the session's newest, here and in the store.
+    fn keep_context(&self, contexts: &mut HashMap<String, Option<ContextReading>>, session_id: &str, reading: ContextReading) {
+        if let Err(error) = self.store.with(|conn| crate::session_context::put(conn, session_id, &reading)) {
+            tracing::debug!(session_id, error = %crate::trace::error_text(&error), "context.unsaved");
+        }
+        contexts.insert(session_id.to_string(), Some(reading));
+    }
+
+    /// Forgets the session's reading: its conversation starts anew.
+    pub(crate) fn forget_context(&self, session_id: &str) {
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = self.store.with(|conn| crate::session_context::clear(conn, session_id));
+        contexts.insert(session_id.to_string(), None);
     }
 
     /// Keeps a reading as the session's newest and returns the merged one: a
     /// reading without a window keeps the last window and auto-compact point.
     pub fn record_context(&self, session_id: &str, reading: ContextReading) -> ContextReading {
         let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
-        let merged = merge_context(contexts.get(session_id), reading);
-        contexts.insert(session_id.to_string(), merged.clone());
+        let merged = merge_context(self.loaded_context(&mut contexts, session_id), reading);
+        self.keep_context(&mut contexts, session_id, merged.clone());
         merged
     }
 
@@ -1760,7 +1791,7 @@ impl TurnHost {
     /// the other's.
     fn publish_context(&self, session_id: &str, next: impl FnOnce(Option<&ContextReading>) -> Option<ContextReading>) {
         let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
-        let last = contexts.get(session_id);
+        let last = self.loaded_context(&mut contexts, session_id);
         let Some(reading) = next(last) else {
             return;
         };
@@ -1768,7 +1799,7 @@ impl TurnHost {
         if last == Some(&merged) {
             return;
         }
-        contexts.insert(session_id.to_string(), merged.clone());
+        self.keep_context(&mut contexts, session_id, merged.clone());
         // A reading of the moment, not history: it does not go in the transcript.
         self.transcripts.emit_live(
             session_id,
@@ -5763,6 +5794,59 @@ mod context_tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert_eq!(host.context("s"), Some(reading(1115, Some(1_000_000), None)));
+    }
+
+    /// A host on the same store, as the next daemon is.
+    fn restarted(host: &TurnHost) -> TurnHost {
+        let dir = std::path::PathBuf::from(format!("/tmp/c{}", &uuid::Uuid::new_v4().simple().to_string()[..10]));
+        let _ = std::fs::create_dir_all(&dir);
+        let store = host.test_store().clone();
+        let transcripts = crate::transcript::TranscriptHub::new(store.clone());
+        let bridge = crate::bridge::Bridge::start(dir).expect("bridge");
+        TurnHost::new(crate::agent::AgentHost::new(), store, transcripts, bridge)
+    }
+
+    fn a_session(host: &TurnHost) -> String {
+        let store = host.test_store();
+        let dir = std::env::temp_dir().join(format!("ctx-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let ws = crate::workspace::create(store, "ctx".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
+        crate::session::create(store, ws, "bot".into(), "S".into(), "claude".into(), "".into(), "".into(), "ask".into())
+            .expect("session")
+            .id
+    }
+
+    /// The meter has a reading on a restart, before the CLI says one again,
+    /// and the next reading without a window keeps the one that was kept.
+    #[test]
+    fn a_reading_outlives_the_daemon() {
+        let host = TurnHost::test_new();
+        let id = a_session(&host);
+        host.record_context(&id, reading(10, Some(200_000), Some(160_000)));
+        host.record_context(&id, ContextReading { stale: Some(true), ..reading(30, None, None) });
+        let next = restarted(&host);
+        assert_eq!(next.context(&id), Some(ContextReading { stale: Some(true), ..reading(30, Some(200_000), Some(160_000)) }));
+        let applied = next.test_capture();
+        next.test_install_claude(&id);
+        next.handle_claude_line(&id, &assistant("m1", None, 100, 5));
+        assert!(applied.take().iter().any(|event| matches!(
+            event,
+            HarnessEvent::ContextUpdated { used: 1115, window: Some(200_000), auto_compact_at: Some(160_000), stale: None }
+        )));
+        assert_eq!(restarted(&next).context(&id), Some(reading(1115, Some(200_000), Some(160_000))));
+    }
+
+    #[test]
+    fn a_forgotten_reading_stays_forgotten_and_goes_with_its_session() {
+        let host = TurnHost::test_new();
+        let id = a_session(&host);
+        host.record_context(&id, reading(10, Some(200_000), None));
+        host.forget_context(&id);
+        assert_eq!(host.context(&id), None);
+        assert_eq!(restarted(&host).context(&id), None);
+        host.record_context(&id, reading(20, Some(200_000), None));
+        crate::session::delete(host.test_store(), id.clone()).expect("delete");
+        assert_eq!(restarted(&host).context(&id), None);
     }
 
     #[test]
