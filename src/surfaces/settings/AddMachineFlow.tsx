@@ -92,6 +92,9 @@ export function AddMachineFlow({
   const [tailnet, setTailnet] = useState<Tailnet | null>(known);
   const [looking, setLooking] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  // The machine the install runs on, fixed when it starts: `chosen` follows the list, which changes under a
+  // running install (the machine shows as added once it pairs, and the first free one is then another).
+  const [target, setTarget] = useState<Choice | null>(null);
   const [advanced, setAdvanced] = useState<Advanced>(FRESH);
   const [stage, setStage] = useState<Stage>("connect");
   const [steps, setSteps] = useState<Steps>({});
@@ -178,8 +181,9 @@ export function AddMachineFlow({
       ? null
       : (Object.values(steps).find((step) => step.state === "error")?.failure ?? { code: "other", message: error, hint: "" });
 
-  const start = () => {
-    if (!host || !chosen || !ready) return;
+  const start = (choice: Choice | null) => {
+    if (!host || !choice || !portOk) return;
+    setTarget(choice);
     const mine = ++run.current;
     running.current = true;
     setStage("setup");
@@ -187,12 +191,12 @@ export function AddMachineFlow({
     setError(null);
     setCreated(null);
     // Named at the end; until then it goes by its host.
-    const derived = suggestName(chosen.label);
+    const derived = suggestName(choice.label);
     host
       .install({
         name: derived,
-        ssh: chosen.destination,
-        tailnetIp: chosen.detail,
+        ssh: choice.destination,
+        tailnetIp: choice.detail,
         user: advanced.user.trim(),
         port: portNumber,
       })
@@ -262,8 +266,8 @@ export function AddMachineFlow({
       ? { title: "Add a machine", subtitle: "Pick a device on your Tailscale network." }
       : stage === "setup"
         ? failure
-          ? { title: `Couldn't set up ${chosen?.label ?? "the machine"}`, subtitle: undefined }
-          : { title: `Setting up ${chosen?.label ?? "the machine"}`, subtitle: "This takes a minute." }
+          ? { title: `Couldn't set up ${target?.label ?? "the machine"}`, subtitle: undefined }
+          : { title: `Setting up ${target?.label ?? "the machine"}`, subtitle: "This takes a minute." }
         : stage === "name"
           ? { title: "Name this machine", subtitle: "You can change this later." }
           : {
@@ -312,7 +316,7 @@ export function AddMachineFlow({
           <Button variant="ghost" onClick={close}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!host || !ready} onClick={start}>
+          <Button variant="primary" disabled={!host || !ready} onClick={() => start(chosen)}>
             Connect
           </Button>
         </DialogFooter>
@@ -326,7 +330,7 @@ export function AddMachineFlow({
           }
         >
           {failure ? (
-            <Button variant="primary" disabled={!ready} onClick={start}>
+            <Button variant="primary" disabled={!target || !portOk} onClick={() => start(target)}>
               Try again
             </Button>
           ) : (
