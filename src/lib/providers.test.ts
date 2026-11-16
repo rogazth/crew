@@ -189,6 +189,14 @@ describe("searchModels", () => {
     expect(hits[0]?.model.label).toContain("Sonnet");
   });
 
+  it("puts the provider a query names ahead of another's model of the same name", () => {
+    setListedModels("cursor", LISTED);
+    setListedModels("grok", [{ id: "grok-4.7", label: "Grok 4.7" }, { id: "grok-4.6", label: "Grok 4.6" }]);
+    expect(searchModels(PROVIDERS, "grok").slice(0, 2).map((hit) => hit.provider)).toEqual(["grok", "grok"]);
+    expect(searchModels(PROVIDERS, "codex")[0]?.provider).toBe("codex");
+    expect(searchModels(PROVIDERS, "cursor grok")[0]?.provider).toBe("cursor");
+  });
+
   it("matches nothing for a blank query", () => {
     expect(searchModels(PROVIDERS, "   ")).toEqual([]);
   });

@@ -249,6 +249,11 @@ export function modelsOf(providerId: string): Model[] {
 
 /** A query that appears whole in a field beats one whose letters are merely in order. */
 const CONTIGUOUS = 40;
+/** A query word that starts the provider's name ("grok", "codex") asks for that
+ *  provider: its models go ahead of another's model of the same name. */
+const PROVIDER_NAMED = 40;
+/** Shorter words say too little: "op" is as much Opus as opencode. */
+const PROVIDER_WORD_MIN = 3;
 
 export type ModelMatch = { provider: ProviderId; model: Model };
 
@@ -256,7 +261,8 @@ export type ModelMatch = { provider: ProviderId; model: Model };
 export function searchModels(providers: readonly ProviderDef[], query: string): ModelMatch[] {
   if (!query.trim()) return [];
   // fuzzyMatch charges the length once per word of the query.
-  const words = query.trim().split(/\s+/).length;
+  const tokens = query.trim().toLowerCase().split(/\s+/);
+  const words = tokens.length;
   const scored: { match: ModelMatch; score: number }[] = [];
   for (const provider of providers) {
     for (const model of modelsOf(provider.id)) {
@@ -276,7 +282,9 @@ export function searchModels(providers: readonly ProviderDef[], query: string): 
         const score = hit.score + text.length * words + contiguous;
         if (best === null || score > best) best = score;
       }
-      if (best !== null) scored.push({ match: { provider: provider.id, model }, score: best });
+      if (best === null) continue;
+      const named = tokens.some((token) => token.length >= PROVIDER_WORD_MIN && provider.label.toLowerCase().startsWith(token));
+      scored.push({ match: { provider: provider.id, model }, score: best + (named ? PROVIDER_NAMED : 0) });
     }
   }
   // Equal matches of one family (Grok 4.5, Grok 4.7) go newest first: cursor's
