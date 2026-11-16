@@ -32,7 +32,10 @@ export function resolveAddress(input: string, searchTemplate: string = DEFAULT_S
     return href ? { kind: "url", url: href } : search(text, searchTemplate);
   }
   if (text === "about:blank") return { kind: "url", url: text };
-  // javascript:, file:, mailto: and the rest never navigate from the bar.
+  // A file opens as a preview tab, served by Crew's own scheme: never through `file:` in a page.
+  const file = fileHref(text);
+  if (file) return { kind: "url", url: file };
+  // javascript:, mailto: and the rest never navigate from the bar.
   if (SCHEME.test(text) && !HOST_PORT.test(text)) return search(text, searchTemplate);
   if (/\s/.test(text)) return search(text, searchTemplate);
   if (HOST.test(text)) return navigable(`https://${text}`) ?? search(text, searchTemplate);
@@ -51,6 +54,25 @@ function search(query: string, template: string): Address {
 function parse(url: string): URL | null {
   try {
     return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+/** `file:///a/b.html` or a pasted `/a/b.html`: the file's URL, without query or fragment. */
+function fileHref(text: string): string | null {
+  const local = /^file:\/\//i.test(text) ? parse(text) : text.startsWith("/") && !text.startsWith("//") ? parse(`file://${text}`) : null;
+  if (!local || local.protocol !== "file:" || (local.host !== "" && local.host !== "localhost")) return null;
+  if (local.pathname === "/" || local.pathname.endsWith("/")) return null;
+  return `file://${local.pathname}`;
+}
+
+/** The path a `file:` URL names, or null for anything else. */
+export function filePathOf(url: string): string | null {
+  const parsed = parse(url);
+  if (parsed?.protocol !== "file:" || (parsed.host !== "" && parsed.host !== "localhost")) return null;
+  try {
+    return decodeURIComponent(parsed.pathname);
   } catch {
     return null;
   }

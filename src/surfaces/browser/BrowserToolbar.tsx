@@ -3,6 +3,7 @@ import type { ReactNode, Ref } from "react";
 import type { DevToolsDock } from "../../lib/browserPrefs";
 import type { CookieSource } from "../../lib/protocol";
 import { commandKeys, type CommandId } from "../../lib/commands";
+import { fileAddress } from "../../lib/browser/files";
 import type { PageState } from "../../lib/browser/pageStore";
 import { zoomLabel } from "../../lib/browser/zoom";
 import { AddressBar, type AddressBarHandle } from "./AddressBar";
@@ -103,7 +104,7 @@ export function BrowserToolbar({
       <div className="mx-1 flex min-w-0 flex-1">
         <AddressBar
           ref={addressRef}
-          url={page.pending ?? page.url}
+          url={page.pending ?? fileAddress(page.url, page.served) ?? page.url}
           searchTemplate={searchTemplate}
           onNavigate={onNavigate}
           onLeave={onLeaveAddress}

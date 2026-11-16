@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SEARCH, displayUrl, isWebUrl, resolveAddress, sameDocument, type Address } from "./url";
+import { DEFAULT_SEARCH, displayUrl, filePathOf, isWebUrl, resolveAddress, sameDocument, type Address } from "./url";
 
 const go = (url: string): Address => ({ kind: "url", url });
 const google = (query: string): Address => ({
@@ -34,9 +34,17 @@ describe("resolveAddress", () => {
 
     ["about:blank", go("about:blank")],
 
+    // A file, by URL or by absolute path, opens in its preview tab.
+    ["file:///etc/passwd", go("file:///etc/passwd")],
+    ["file:///tmp/a%20b/index.html?x#y", go("file:///tmp/a%20b/index.html")],
+    ["/tmp/report/index.html", go("file:///tmp/report/index.html")],
+    ["/tmp/my report.html", go("file:///tmp/my%20report.html")],
+    ["file://server/share/a.html", google("file://server/share/a.html")],
+    ["file:///tmp/", google("file:///tmp/")],
+    ["/", google("/")],
+
     // Anything else with a scheme is searched for, never opened.
     ["javascript:alert(1)", google("javascript:alert(1)")],
-    ["file:///etc/passwd", google("file:///etc/passwd")],
     ["mailto:x@y", google("mailto:x@y")],
     ["chrome://settings", google("chrome://settings")],
     ["data:text/html,<b>hi</b>", google("data:text/html,<b>hi</b>")],
@@ -101,6 +109,8 @@ describe("isWebUrl", () => {
     expect(isWebUrl("http://localhost:3000/")).toBe(true);
     expect(isWebUrl("about:blank")).toBe(false);
     expect(isWebUrl("file:///etc/passwd")).toBe(false);
+    expect(filePathOf("file:///tmp/a%20b/index.html")).toBe("/tmp/a b/index.html");
+    expect(filePathOf("https://example.com/a.html")).toBeNull();
     expect(isWebUrl("javascript:alert(1)")).toBe(false);
     expect(isWebUrl("not a url")).toBe(false);
   });

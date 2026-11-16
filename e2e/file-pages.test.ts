@@ -40,6 +40,7 @@ before(async () => {
         files: {
           "docs/manual.pdf": onePagePdf(),
           "notes.md": "# Notes\n",
+          "start.html": "<!doctype html><title>Start</title>",
         },
       },
     ],
@@ -154,6 +155,59 @@ test("files dropped on the strip open, each where ⌘K's Files would open it", a
   await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "invoice.pdf" }).click();
   await waitFor(async () => (await fileGuests("/invoice.pdf")).some((g) => g.viewer && g.filesSession), {
     message: "it renders, served from its own folder",
+  });
+});
+
+/** What a file's page says about itself, once its script has run. */
+const pageTitles = (suffix: string) =>
+  crew.app.evaluate(
+    ({ webContents }, suffix) =>
+      webContents
+        .getAllWebContents()
+        .filter((wc) => wc.getURL().startsWith("crew-file://") && wc.getURL().endsWith(suffix))
+        .map((wc) => wc.getTitle()),
+    suffix,
+  );
+
+test("a file: URL or a path pasted into the browser opens the file's page, its assets beside it", async () => {
+  const report = path.join(crew.home, "scratch", "report");
+  await mkdir(path.join(report, "assets"), { recursive: true });
+  await writeFile(path.join(report, "index.html"), '<!doctype html><title>static</title><script src="assets/app.js"></script>');
+  await writeFile(path.join(report, "assets", "app.js"), 'document.title = "Report ran";');
+  await writeFile(path.join(report, "other page.html"), "<!doctype html><title>Other</title>");
+
+  // A page tab to type into: the repo's notes, rendered.
+  await openFile("start", "start.html");
+  await crew.window.getByRole("button", { name: "Open in browser" }).click();
+  await waitFor(async () => (await fileGuests("/start.html")).length > 0, { message: "a page tab is on screen" });
+  const bar = crew.window.getByLabel("Address", { exact: true }).locator("visible=true");
+  const enter = async (text: string) => {
+    await bar.click();
+    await bar.fill(text);
+    await bar.dispatchEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  };
+
+  // The URL Chrome shows for a file outside any workspace.
+  await enter(`file://${report}/index.html`);
+  await waitFor(async () => (await pageTitles("/index.html")).includes("Report ran"), {
+    message: "the page renders and its relative script loads",
+  });
+  assert.equal(await activeTabId(), `browser:file:${report}/index.html`);
+  const [guest] = await fileGuests("/index.html");
+  assert.ok(guest?.filesSession, "the page holds none of the pages' sign-ins");
+  // The bar names the file on disk, not the preview's URL of the run.
+  await waitFor(async () => (await bar.inputValue()) === `file://${report}/index.html`, {
+    message: "the bar shows the file's own address",
+  });
+
+  // The address bar takes a bare path, spaces and all.
+  await enter(`${report}/other page.html`);
+  await waitFor(async () => (await pageTitles("/other%20page.html")).includes("Other"), {
+    message: "the second file opens in a page of its own",
+  });
+  assert.equal(await activeTabId(), `browser:file:${report}/other page.html`);
+  await waitFor(async () => (await bar.inputValue()) === `file://${report}/other%20page.html`, {
+    message: "the bar shows the second file's address, encoded as Chrome would",
   });
 });
 

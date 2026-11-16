@@ -1,4 +1,5 @@
 import { fileView } from "./browser/files";
+import { filePathOf } from "./browser/url";
 import { STUB_KINDS } from "./types";
 import type { Session, SignInRun, StubKind, Tab } from "./types";
 
@@ -10,7 +11,10 @@ export const processTabId = (processId: string, worktree: string | null) => `pro
 /** Unlike the other kinds, a page has no natural key: two tabs can show the same URL. */
 export const browserTabId = () => `browser:${crypto.randomUUID()}`;
 
+/** A `file:` URL becomes that file's preview tab: no page ever loads `file:` itself. */
 export function newBrowserTab(url = "", incognito = false): Tab {
+  const path = filePathOf(url);
+  if (path) return newFileBrowserTab(path, path);
   return { id: browserTabId(), kind: "browser", url, title: "", ...(incognito && { incognito: true as const }) };
 }
 

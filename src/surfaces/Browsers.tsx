@@ -258,6 +258,7 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
             searchTemplate={prefs.searchTemplate}
             sessions={sessions}
             onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
+            onOpenFile={(url) => onOpenTab(pane.workspaceId, newBrowserTab(url), { opener: pane.tab.id, background: false })}
             onPinned={(on) =>
               setPinned((current) => {
                 if (current.has(pane.id) === on) return current;

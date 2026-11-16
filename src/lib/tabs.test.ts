@@ -8,6 +8,7 @@ import {
   isTurnTab,
   isTerminalTab,
   lastUsed,
+  newBrowserTab,
   newFileBrowserTab,
   newSignInTab,
   offPages,
@@ -44,6 +45,15 @@ const visit = (state: TabState, ...ids: string[]) =>
 const bot = (id: string, name = id): Session =>
   ({ id, kind: "bot", name }) as Session;
 const terminal = (id: string): Session => ({ id, kind: "terminal", name: id, provider: "claude" }) as Session;
+
+describe("newBrowserTab", () => {
+  it("turns a file: URL into that file's preview tab", () => {
+    expect(newBrowserTab("file:///tmp/my%20report/index.html")).toEqual(
+      newFileBrowserTab("/tmp/my report/index.html", "/tmp/my report/index.html"),
+    );
+    expect(newBrowserTab("https://example.com")).not.toHaveProperty("file");
+  });
+});
 
 describe("offPages", () => {
   const page = { id: "browser:a", kind: "browser", url: "https://a.com", title: "" } as const;

@@ -26,6 +26,12 @@ describe("launcherAddress", () => {
     expect(launcherAddress("about:blank", false)).toBeNull();
   });
 
+  it("opens a file by URL or by path, labelled by its path", () => {
+    const report = { url: "file:///tmp/report/index.html", label: "/tmp/report/index.html", lead: true };
+    expect(launcherAddress("file:///tmp/report/index.html", true)).toEqual(report);
+    expect(launcherAddress("/tmp/report/index.html", true)).toEqual(report);
+  });
+
   it("leads with a bare dotted name only while nothing else matches", () => {
     expect(launcherAddress("notes.md", false)?.lead).toBe(true);
     expect(launcherAddress("notes.md", true)?.lead).toBe(false);

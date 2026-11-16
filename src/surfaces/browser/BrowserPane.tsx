@@ -8,7 +8,7 @@ import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { pages, type PageState } from "../../lib/browser/pageStore";
 import { originOf } from "../../lib/browser/permissions";
-import { isWebUrl } from "../../lib/browser/url";
+import { filePathOf, isWebUrl } from "../../lib/browser/url";
 import { fitScale, preset, type Viewport } from "../../lib/browser/viewport";
 import { stepZoom } from "../../lib/browser/zoom";
 import type { DevToolsDock } from "../../lib/browserPrefs";
@@ -51,6 +51,8 @@ type Props = {
   /** The workspace's sessions, to show whoever drives the page. */
   sessions: Session[];
   onPatch: (patch: BrowserTabPatch) => void;
+  /** A `file:` URL typed into the bar: the file opens in a preview tab of its own. */
+  onOpenFile: (url: string) => void;
   /** DevTools open or audio playing: discarding the guest would lose what it's doing. */
   onPinned: (pinned: boolean) => void;
 };
@@ -67,6 +69,7 @@ export function BrowserPane({
   searchTemplate,
   sessions,
   onPatch,
+  onOpenFile,
   onPinned,
 }: Props) {
   const page = useBrowserPage(pageId);
@@ -293,7 +296,7 @@ export function BrowserPane({
         incognito={incognito}
         responsive={viewport !== null}
         onResponsive={() => setViewport((current) => (current ? null : preset("phone")))}
-        onNavigate={handle.navigate}
+        onNavigate={(next) => (filePathOf(next) ? onOpenFile(next) : handle.navigate(next))}
         onLeaveAddress={() => guest.current?.focus()}
       />
       {lease && lease.sessionId && (

@@ -1,3 +1,4 @@
+import type { ServedRoot } from "./files";
 import type { LoadError } from "./loadError";
 
 /**
@@ -24,6 +25,8 @@ export type PageState = {
   /** Chromium keeps zoom per origin, so this is read back after each navigation. */
   zoom: number;
   webContentsId: number | null;
+  /** A file's page: the folder its preview host serves, so the bar can name the file on disk. */
+  served: ServedRoot | null;
 };
 
 export const BLANK_PAGE: PageState = Object.freeze({
@@ -40,6 +43,7 @@ export const BLANK_PAGE: PageState = Object.freeze({
   devtools: false,
   zoom: 1,
   webContentsId: null,
+  served: null,
 });
 
 export type PageStore = {

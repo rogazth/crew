@@ -1,5 +1,5 @@
 import { sameUrlKey } from "./suggest";
-import { isLocalAddress, isWebUrl, resolveAddress } from "./url";
+import { filePathOf, isLocalAddress, isWebUrl, resolveAddress } from "./url";
 
 /** What the tab launcher offers for a query that reads as an address. */
 export type LauncherAddress = {
@@ -20,7 +20,11 @@ export type LauncherAddress = {
 export function launcherAddress(query: string, contested: boolean): LauncherAddress | null {
   const text = query.trim();
   const address = resolveAddress(text);
-  if (address.kind !== "url" || !isWebUrl(address.url)) return null;
+  if (address.kind !== "url") return null;
+  // A file opens in its preview tab, labelled by the path it was given.
+  const path = filePathOf(address.url);
+  if (path) return { url: address.url, label: path, lead: true };
+  if (!isWebUrl(address.url)) return null;
   const certain = /^https?:\/\//i.test(text) || /[:/]/.test(text) || isLocalAddress(text);
   return {
     url: address.url,

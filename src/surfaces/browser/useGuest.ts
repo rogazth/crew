@@ -6,7 +6,7 @@ import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
 import { openingSrc } from "../../lib/browser/opening";
-import { FILES_PARTITION, isFileUrl, previewRoot } from "../../lib/browser/files";
+import { FILES_PARTITION, isFileUrl, previewRoot, servedRoot } from "../../lib/browser/files";
 import { createGuest, type Guest } from "../../lib/browser/webview";
 import { envOfPath } from "../../lib/client/registry";
 import { browserHost, filesHost } from "../../lib/host";
@@ -243,6 +243,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         }
         // A file's page is the file: a URL typed meanwhile is not its to load.
         queued = null;
+        update({ served: servedRoot(src, file.path) });
         build({ src, restoring: false });
         return;
       }
