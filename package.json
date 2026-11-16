@@ -164,7 +164,8 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
-      "identity": "-"
+      "identity": "-",
+      "notarize": false
     },
     "afterSign": "scripts/sign-mac.cjs"
   }

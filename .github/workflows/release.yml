@@ -158,16 +158,20 @@ jobs:
       # The menu bar extra, macOS only: it rides in the bundle as crew-menubar.
       - run: swift build -c release --package-path macos/menubar
 
-      # The certificate scripts/signing-cert.mjs made, in a keychain of the run's own.
-      # scripts/sign-mac.cjs signs with it; without it the app is signed ad hoc, and
-      # macOS asks for the keychain password again after every update.
+      # The Developer ID certificate, in a keychain of the run's own, and the App Store
+      # Connect key that notarizes. scripts/sign-mac.cjs signs and notarizes with them;
+      # without the certificate the app is signed ad hoc, and macOS asks for the keychain
+      # password again after every update.
       - name: Load the signing certificate
         env:
           MAC_SIGNING_P12: ${{ secrets.MAC_SIGNING_P12 }}
           MAC_SIGNING_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           if [ -z "$MAC_SIGNING_P12" ]; then
-            echo "::warning::No MAC_SIGNING_P12 secret: this release is signed ad hoc. Run node scripts/signing-cert.mjs --github once."
+            echo "::warning::No MAC_SIGNING_P12 secret: this release is signed ad hoc."
             exit 0
           fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
@@ -178,16 +182,28 @@ jobs:
           security unlock-keychain -p "$password" "$keychain"
           security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$MAC_SIGNING_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/signing.p12"
+          # The p12 holds the leaf only; the identity is valid once Apple's intermediate is beside it.
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 -c -
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
           # codesign only finds an identity in a keychain on the search list.
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          identity="$(security find-identity -p codesigning "$keychain" | awk '/"Crew Code Signing"/ { print $2; exit }')"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')"
           if [ -z "$identity" ]; then
-            echo "::error::MAC_SIGNING_P12 holds no \"Crew Code Signing\" identity."
+            echo "::error::MAC_SIGNING_P12 holds no valid \"Developer ID Application\" identity."
             exit 1
           fi
           echo "CREW_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "CREW_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          if [ -z "$APPLE_API_KEY_P8" ] || [ -z "$APPLE_API_KEY_ID" ] || [ -z "$APPLE_API_ISSUER" ]; then
+            echo "::warning::No APPLE_API_KEY, APPLE_API_KEY_ID or APPLE_API_ISSUER secret: this release is signed but not notarized."
+            exit 0
+          fi
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
 
       - name: Build and publish
         run: node scripts/release-publish.mjs
@@ -197,4 +213,6 @@ jobs:
 
       - name: Remove the signing keychain
         if: always() && env.CREW_SIGN_KEYCHAIN != ''
-        run: security delete-keychain "$CREW_SIGN_KEYCHAIN"
+        run: |
+          security delete-keychain "$CREW_SIGN_KEYCHAIN"
+          rm -f "$RUNNER_TEMP/notary.p8"

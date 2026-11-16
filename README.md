@@ -58,7 +58,7 @@ ditto -x -k Crew-0.1.0-arm64.zip /Applications
 
 From there Crew updates itself. It reads `latest.signed.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. A manifest whose signature does not verify is refused, and the zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
 
-The bundle is signed with Crew's own self-signed certificate (`scripts/signing-cert.mjs`, applied by `scripts/sign-mac.cjs`), or ad hoc without it, and runs with the hardened runtime. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
+The bundle is signed with a Developer ID and notarized by `scripts/sign-mac.cjs`, and runs with the hardened runtime. A build on a Mac without a Developer ID keeps an ad-hoc signature. Locally, the hook signs with the first valid `Developer ID Application` in the keychain and notarizes when `APPLE_KEYCHAIN_PROFILE` names a profile saved with `xcrun notarytool store-credentials`. Releases take the certificate from `MAC_SIGNING_P12` and `MAC_SIGNING_PASSWORD`, and the App Store Connect key from `APPLE_API_KEY` (the .p8's contents), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`.
 
 ## The `crew` command
 
