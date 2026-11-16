@@ -39,6 +39,25 @@ describe("splitMentions", () => {
       { kind: "text", text: " and @nope" },
     ]);
   });
+
+  it("leaves a dot that ends the sentence out of the path", () => {
+    const paths = { has: (token: string) => looksLikePath(token, []) };
+    expect(splitMentions("la app en @crew-app/. Revisa", paths)).toEqual([
+      { kind: "text", text: "la app en " },
+      { kind: "mention", path: "crew-app/", text: "@crew-app/" },
+      { kind: "text", text: ". Revisa" },
+    ]);
+    expect(splitMentions("mira @src/a.ts.", new Set(["src/a.ts"]))).toEqual([
+      { kind: "text", text: "mira " },
+      { kind: "mention", path: "src/a.ts", text: "@src/a.ts" },
+      { kind: "text", text: "." },
+    ]);
+    expect(splitMentions("@. y @../", paths)).toEqual([
+      { kind: "text", text: "@. y " },
+      { kind: "mention", path: "../", text: "@../" },
+    ]);
+    expect(mentionTokens("en @crew-app/. y @.env")).toEqual(["crew-app/", ".env"]);
+  });
 });
 
 describe("splitMentions in an email", () => {

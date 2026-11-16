@@ -5,8 +5,11 @@ import type { ProjectFile } from "./types";
 /** A file or a folder the `@` menu offers; a folder's `relative` ends in `/`. */
 export type MentionChoice = ProjectFile & { dir?: boolean };
 
-/** `@src/lib/tabs.ts` in a draft: the path characters after an at sign that opens a word, so `me@mail.com` is no mention. */
-const MENTION = /(?<![^\s])@([\w./~-]+)/g;
+/**
+ * `@src/lib/tabs.ts` in a draft: the path characters after an at sign that opens a word, so `me@mail.com` is no
+ * mention. A dot it ends on closes the sentence, so `@crew-app/.` names `crew-app/` and `@.` names nothing.
+ */
+const MENTION = /(?<![^\s])@([\w./~-]*[\w/~-])/g;
 
 export type Segment = { kind: "text"; text: string } | { kind: "mention"; path: string; text: string };
 
