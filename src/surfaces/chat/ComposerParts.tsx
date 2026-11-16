@@ -336,10 +336,9 @@ const C = 2 * Math.PI * R;
 
 /**
  * How full the context window is, as a ring by the send button; the numbers
- * on hover. Nothing until the CLI has reported a window. A bot's session is
- * never compacted: Crew starts it a new one first.
+ * on hover. Nothing until the CLI has reported a window.
  */
-export function ContextRing({ sessionId, provider, bot = false }: { sessionId: string; provider: string; bot?: boolean }) {
+export function ContextRing({ sessionId, provider }: { sessionId: string; provider: string }) {
   const reading = useContextMeter(sessionId);
   if (!reading?.window) return null;
   const share = Math.min(1, reading.used / reading.window);
@@ -376,9 +375,7 @@ export function ContextRing({ sessionId, provider, bot = false }: { sessionId: s
         <span className="mt-2 block text-[11.5px] leading-4 text-text-muted">
           {reading.stale
             ? "From before the last compaction. Updates on the next answer."
-            : bot
-              ? "Crew starts the bot a new session before it fills."
-              : reading.autoCompactAt
+            : reading.autoCompactAt
               ? `Auto-compacts at ${tokenCount(reading.autoCompactAt)}.`
               : `${label} auto-compacts near the limit.`}
         </span>

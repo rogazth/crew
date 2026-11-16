@@ -178,8 +178,8 @@ export function Composer({
         onSend={sendAs}
         trailing={
           <>
-            {/* A bot starts every message blank, so its context never fills. */}
-            <ContextRing sessionId={session.id} provider={session.provider} bot={!!session.botId} />
+            {/* No ring for a bot: Crew starts it a new session well before its window fills. */}
+            {!session.botId && <ContextRing sessionId={session.id} provider={session.provider} />}
             <SendButton
               stopping={stopping}
               canSend={canSend}
