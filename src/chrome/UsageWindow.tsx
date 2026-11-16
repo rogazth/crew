@@ -1,14 +1,13 @@
 // One plan window as the rail's card and Settings › Usage both draw it: what
-// is left, when it resets, a bar with a tick where an even pace would stand,
+// is left, when it resets, a progress bar with a tick where an even pace would stand,
 // and a line saying whether the spend is in reserve, on pace, or ahead of it.
-import { paceOf, span, tone, type Pace, type Window } from "../lib/usage";
+import { paceOf, span, type Pace, type Window } from "../lib/usage";
 
 /** Points either side of the even pace that still count as on it. */
 const ON_PACE = 2;
 
 /** `at` says when it resets as a time of day or a weekday; otherwise as a countdown. */
-export function WindowRow({ window, color, at = false }: { window: Window; color: string; at?: boolean }) {
-  const level = tone(window.used);
+export function WindowRow({ window, at = false }: { window: Window; at?: boolean }) {
   const left = 100 - window.used;
   const pace = paceOf(window);
   return (
@@ -22,7 +21,7 @@ export function WindowRow({ window, color, at = false }: { window: Window; color
           </span>
         )}
       </div>
-      <PaceBar left={left} pace={window.used >= 100 ? null : pace} fill={level === "neutral" ? color : `var(--color-${level})`} />
+      <PaceBar left={left} pace={window.used >= 100 ? null : pace} />
       <PaceLine window={window} pace={pace} />
     </div>
   );
@@ -37,31 +36,39 @@ function resetAt(minutes: number): string {
   return at.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-const MARKS = "repeating-linear-gradient(to right, #000 0 3px, transparent 3px 5px)";
-
 /**
- * What is left, as thin marks filled from the start; the caret is where an even
- * pace would leave it now. A fill that reaches past the caret is in reserve, one
- * that stops short of it is spending ahead. Hovering anywhere on the bar says what
- * the caret means, over the caret itself; it is drawn here, not in a portal, so it
- * shows at once on the page and in the rail's popup alike.
+ * What is left, as a plain rounded bar filled from the start; the tick is where
+ * an even pace would leave it now. A fill that reaches past the tick is in
+ * reserve, one that stops short of it is spending ahead. Hovering anywhere on the
+ * bar says what the tick means, over the tick itself; it is drawn here, not in a
+ * portal, so it shows at once on the page and in the rail's popup alike.
  */
-function PaceBar({ left, pace, fill }: { left: number; pace: Pace | null; fill: string }) {
+function PaceBar({ left, pace }: { left: number; pace: Pace | null }) {
   const mark = pace && 100 - pace.expected;
   const say = mark === null ? null : `Even pace: ${Math.round(mark)}% left`;
   const side = mark === null ? "" : mark < 18 ? "left-0" : mark > 82 ? "right-0" : "-translate-x-1/2";
   return (
-    <div data-pace-bar className="group/pace relative h-4" role="img" aria-label={say ? `${left}% left. ${say}` : `${left}% left`}>
-      <div className="absolute inset-x-0 top-1.5 bottom-0" style={{ maskImage: MARKS, WebkitMaskImage: MARKS }}>
-        <div className="absolute inset-0 bg-text/12" />
-        <div className="absolute inset-y-0 left-0 transition-[width] duration-500" style={{ width: `${left}%`, background: fill }} />
+    <div
+      data-pace-bar
+      className="group/pace relative flex h-3 items-center"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={left}
+      aria-valuetext={say ? `${left}% left. ${say}` : `${left}% left`}
+    >
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-text/10">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-text/40 transition-[width] duration-500"
+          style={{ width: `${left}%` }}
+        />
       </div>
       {mark !== null && (
         <>
           <span
             data-pace-caret
-            className="absolute top-0 h-[5px] w-2 -translate-x-1/2 bg-danger transition-[left] duration-500 [clip-path:polygon(0_0,100%_0,50%_100%)]"
-            style={{ left: `clamp(4px, ${mark}%, calc(100% - 4px))` }}
+            className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-text transition-[left] duration-500"
+            style={{ left: `clamp(1px, ${mark}%, calc(100% - 1px))` }}
           />
           <span
             data-pace-tip
@@ -77,7 +84,7 @@ function PaceBar({ left, pace, fill }: { left: number; pace: Pace | null; fill: 
 }
 
 function PaceLine({ window, pace }: { window: Window; pace: Pace | null }) {
-  if (window.used >= 100) return <span className="text-[11.5px] text-danger">Limit reached</span>;
+  if (window.used >= 100) return <span className="text-[11.5px] text-warning">Limit reached</span>;
   // Too early in the window for its pace to say anything.
   if (!pace || pace.expected < 3) return null;
   const points = Math.round(Math.abs(pace.reserve));
@@ -86,7 +93,7 @@ function PaceLine({ window, pace }: { window: Window; pace: Pace | null }) {
       ? [`${points}% in reserve`, "text-text"]
       : pace.reserve > -ON_PACE
         ? ["On pace", "text-text"]
-        : [`${points}% over pace`, "text-warning"];
+        : [`${points}% in deficit`, "text-warning"];
   const out = pace.runsOutIn;
   return (
     <span className="text-[11.5px] text-text-muted tabular-nums">

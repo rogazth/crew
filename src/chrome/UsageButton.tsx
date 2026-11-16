@@ -73,7 +73,6 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
                 <ProviderUsage
                   key={`${reading.provider}|${reading.account ?? ""}`}
                   reading={reading}
-                  color={colorOf(rings, reading.provider)}
                 />
               ))}
             </div>
@@ -91,7 +90,7 @@ export function UsageButton({ onOpenSettings }: { onOpenSettings: () => void }) 
   );
 }
 
-function ProviderUsage({ reading, color }: { reading: Reading; color: string }) {
+function ProviderUsage({ reading }: { reading: Reading }) {
   if (!hasWindows(reading) && reading.tokens === null) {
     return (
       <div className="flex items-center gap-2 px-2 py-2.5 opacity-55">
@@ -109,7 +108,7 @@ function ProviderUsage({ reading, color }: { reading: Reading; color: string }) 
         {reading.plan && <span className="truncate text-[11.5px] text-text-muted capitalize">{reading.plan}</span>}
       </div>
       {reading.windows.map((window) => (
-        <WindowRow key={window.id} window={window} color={color} />
+        <WindowRow key={window.id} window={window} />
       ))}
       <Tokens reading={reading} />
     </div>

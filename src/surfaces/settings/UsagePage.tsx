@@ -90,7 +90,7 @@ function PlanLimits() {
             </div>
           )}
           {shown.map((reading) => (
-            <ProviderCard key={cardKey(reading)} reading={reading} color={colorOf(rings, reading.provider)} />
+            <ProviderCard key={cardKey(reading)} reading={reading} />
           ))}
           {silent.map((reading) => (
             <div key={cardKey(reading)} className="flex items-center gap-3 rounded-xl bg-card px-4 py-3 text-text-muted">
@@ -106,8 +106,8 @@ function PlanLimits() {
 
 /* ── One provider ───────────────────────────────────────────────────── */
 
-/** Memoised: a reorder or another provider's colour change leaves this card alone. */
-const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: Reading; color: string }) {
+/** Memoised: a reorder or a provider's colour change leaves this card alone. */
+const ProviderCard = memo(function ProviderCard({ reading }: { reading: Reading }) {
   const longest = reading.windows.reduce<Window | null>(
     (best, window) => (!best || (window.length ?? 0) > (best.length ?? 0) ? window : best),
     null,
@@ -126,7 +126,7 @@ const ProviderCard = memo(function ProviderCard({ reading, color }: { reading: R
       {longest && (
         <div className="grid grid-cols-1 gap-x-6 gap-y-3 @[560px]:grid-cols-2">
           {reading.windows.map((window) => (
-            <WindowRow key={window.id} window={window} color={color} at />
+            <WindowRow key={window.id} window={window} at />
           ))}
         </div>
       )}
