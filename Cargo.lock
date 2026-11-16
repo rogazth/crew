@@ -318,6 +318,7 @@ dependencies = [
  "cbc",
  "crew-core",
  "crew-protocol",
+ "futures-util",
  "globset",
  "grep-matcher",
  "grep-regex",

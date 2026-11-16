@@ -77,11 +77,11 @@ impl App {
 
     pub fn description(self) -> &'static str {
         match self {
-            App::Gmail => "Search and read mail, draft and send messages, and sort threads with labels.",
-            App::Drive => "Search, read and upload files, make folders, and share or trash files.",
+            App::Gmail => "Search, read and send mail with attachments, sort many messages at once with labels, trash or spam, and manage drafts, labels and filters.",
+            App::Drive => "Search, read, download and upload files of any kind, move, copy, trash or restore many at once, and share them.",
             App::Calendar => "List events, find free time, and create, change or delete events.",
-            App::Docs => "Read documents, create new ones, and edit their text.",
-            App::Sheets => "Read and write ranges, list a spreadsheet's sheets, and create spreadsheets.",
+            App::Docs => "Read documents as text or structure, create them, and edit them by text, by position or with the API's own requests.",
+            App::Sheets => "Read, write and append to many ranges at once, add and change sheets, and format with the API's own requests.",
         }
     }
 
@@ -107,10 +107,14 @@ impl App {
     }
 
     /// What the app asks Google for. Gmail's and Drive's are restricted
-    /// scopes; Calendar's, Docs' and Sheets' only sensitive.
+    /// scopes; Calendar's, Docs' and Sheets' only sensitive. Gmail's filters
+    /// need `gmail.settings.basic` besides: an account signed in before it
+    /// was asked for is asked to sign in again (`covers`).
     pub fn scopes(self) -> &'static [&'static str] {
         match self {
-            App::Gmail => &["https://www.googleapis.com/auth/gmail.modify"],
+            App::Gmail => {
+                &["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.settings.basic"]
+            }
             App::Drive => &["https://www.googleapis.com/auth/drive"],
             App::Calendar => &["https://www.googleapis.com/auth/calendar"],
             App::Docs => &["https://www.googleapis.com/auth/documents"],
@@ -171,7 +175,13 @@ pub fn discovery(app: App, at: &Endpoints, client: &Client) -> Discovery {
 /// The page the sign-in opens: a refresh token always (`access_type`,
 /// `prompt=consent`), the scopes granted before kept (`include_granted_scopes`),
 /// and the account already signed in offered first when there is one.
-pub fn authorize_url(d: &Discovery, client: &Client, redirect_uri: &str, pkce: &Pkce, login_hint: Option<&str>) -> Result<String, String> {
+pub fn authorize_url(
+    d: &Discovery,
+    client: &Client,
+    redirect_uri: &str,
+    pkce: &Pkce,
+    login_hint: Option<&str>,
+) -> Result<String, String> {
     let url = oauth::authorize_url(d, &client.id, redirect_uri, pkce).map_err(|e| e.to_string())?;
     let mut url = url::Url::parse(&url).map_err(|e| e.to_string())?;
     {
@@ -253,8 +263,10 @@ mod tests {
 
     #[test]
     fn scopes_join_once_and_an_app_is_covered_only_by_its_own() {
-        let both = scope_union(Some("openid https://www.googleapis.com/auth/gmail.modify"), Some("openid https://www.googleapis.com/auth/drive"));
-        assert_eq!(both.as_deref(), Some("openid https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive"));
+        let gmail = "openid https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic";
+        let both = scope_union(Some(gmail), Some("openid https://www.googleapis.com/auth/drive"));
+        assert_eq!(both.as_deref(), Some(format!("{gmail} https://www.googleapis.com/auth/drive").as_str()));
+        assert!(!covers(Some("openid https://www.googleapis.com/auth/gmail.modify"), App::Gmail), "filters need their own scope");
         assert!(covers(both.as_deref(), App::Gmail));
         assert!(covers(both.as_deref(), App::Drive));
         assert!(!covers(both.as_deref(), App::Sheets));

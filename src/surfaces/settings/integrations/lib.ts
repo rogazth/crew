@@ -128,10 +128,11 @@ export const ACCOUNT_TONE: Record<AccountState, Tone> = {
   pending: "neutral",
 };
 
-/** What's off, in a word; all well says nothing but who it is. */
+/** What's off, in a word; all well says nothing but who it is. A grant that ran out and one short of
+ * access ask the same of the person, a sign-in, so they read the same. */
 export const ACCOUNT_PROBLEM: Partial<Record<AccountState, string>> = {
   expired: "Sign in required",
-  "needs-scope": "Needs more access",
+  "needs-scope": "Sign in required",
   failed: "Can’t connect",
   pending: "Sign in required",
 };

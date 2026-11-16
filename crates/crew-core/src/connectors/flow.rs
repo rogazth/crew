@@ -306,7 +306,7 @@ impl Connectors {
         drop(_held);
         super::set_identity(&self.store, &flow.account_id, Some(&identity))?;
         super::set_state(&self.store, &flow.account_id, AccountState::Connected, None)?;
-        super::set_raw_tools(&self.store, &flow.account_id, &builtin.tool_defs())?;
+        super::set_builtin_tools(&self.store, &flow.account_id, &builtin.tool_defs())?;
         // Another app of the same account may have waited on this consent.
         self.changed();
         super::account(&self.store, &flow.account_id)?.ok_or_else(|| "The account is gone".into())
@@ -523,7 +523,7 @@ impl Connectors {
 
     fn expired(&self, account_id: &str) -> Unavailable {
         self.mark(account_id, AccountState::Expired, Some("Its sign-in ran out"));
-        Unavailable(format!("{} needs a sign-in again: Settings › Integrations › Reconnect.", self.label(account_id)))
+        Unavailable(format!("{} needs a sign-in again: Settings › Integrations › Sign in.", self.label(account_id)))
     }
 
     fn mark(&self, account_id: &str, state: AccountState, error: Option<&str>) {
@@ -582,10 +582,7 @@ impl Connectors {
             Err(RemoteError::Unauthorized { .. }) => Err(self.expired(account_id)),
             Err(RemoteError::InsufficientScope { .. }) => {
                 self.mark(account_id, AccountState::NeedsScope, Some("The service asks for more access"));
-                Err(Unavailable(format!(
-                    "{} needs more access for this: Settings › Integrations › Reconnect.",
-                    self.label(account_id)
-                )))
+                Err(Unavailable(format!("{} needs a sign-in again: Settings › Integrations › Sign in.", self.label(account_id))))
             }
             Err(e) => {
                 let line = e.to_string();
@@ -604,7 +601,7 @@ impl Connectors {
             return Ok(());
         }
         if let Some(builtin) = super::connector_of(&self.store, account_id)?.as_ref().and_then(Builtin::of) {
-            super::set_raw_tools(&self.store, account_id, &builtin.tool_defs())?;
+            super::set_builtin_tools(&self.store, account_id, &builtin.tool_defs())?;
             self.changed();
             // Every built-in is one of Google's apps, run with `gws`.
             let Builtin::Google(_) = builtin;
@@ -729,7 +726,7 @@ impl Connectors {
         if !google::covers(scope.as_deref(), app) {
             self.mark(account_id, AccountState::NeedsScope, Some("Google hasn't allowed this app for the account yet"));
             return Err(Unavailable(format!(
-                "{} needs a sign-in to allow it: Settings › Integrations › Reconnect.",
+                "{} needs a sign-in again: Settings › Integrations › Sign in.",
                 self.label(account_id)
             )));
         }
@@ -917,8 +914,8 @@ mod tests {
         let (c, vault, fake, _store) = google();
         let gmail = sign_in_google(&c, "builtin:google.gmail", None).unwrap();
         assert_eq!((gmail.state, gmail.label.as_str()), (AccountState::Connected, "ada@example.com"));
-        assert!(gmail.tools.iter().any(|t| t.name == "search_threads"));
-        assert!(gmail.tools_off.contains(&"send_message".to_string()), "what sends starts off");
+        assert!(gmail.tools.iter().any(|t| t.name == "search_emails"));
+        assert!(gmail.tools_off.contains(&"send_email".to_string()), "what sends starts off");
         let first = vault.get("google:ada@example.com").unwrap().expect("one grant for the Google account");
         assert!(!first.scope.as_deref().unwrap().contains("auth/drive"));
 
@@ -930,11 +927,11 @@ mod tests {
         );
         assert!(vault.get(&gmail.id).unwrap().is_none() && vault.get(&drive.id).unwrap().is_none(), "no grant per app");
 
-        let answer = c.block_on(c.call(&gmail.id, "search_threads", json!({ "query": "is:unread" })));
+        let answer = c.block_on(c.call(&drive.id, "search_files", json!({ "query": "name contains 'x'" })));
         let text: Value =
             serde_json::from_str(answer["content"][0]["text"].as_str().unwrap()).unwrap_or_else(|_| panic!("{answer}"));
         assert_eq!(text["token"], grant.access_token.as_str());
-        assert!(text["args"].as_str().unwrap().starts_with("gmail users threads list"));
+        assert!(text["args"].as_str().unwrap().starts_with("drive files list"));
 
         let again = sign_in_google(&c, "builtin:google.gmail", Some("ada@example.com"));
         assert_eq!(again.unwrap_err(), "ada@example.com is already added to Gmail.");

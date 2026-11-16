@@ -487,6 +487,10 @@ impl ToolDispatch {
             map.remove(crew_core::mcp::CONNECTOR_PARAM);
             map.remove(crew_core::mcp::CONNECTOR_WORKSPACE_PARAM);
         }
+        let session = match caller {
+            Some(Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session)) => Some(session),
+            _ => None,
+        };
         let server = match caller {
             Some(Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session)) => {
                 connectors::resolve(&self.store, session, name)?
@@ -516,8 +520,24 @@ impl ToolDispatch {
                     }));
                 };
                 let tool = params.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-                let arguments = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
-                Ok(self.connectors.block_on(self.connectors.call(&server.account_id, &tool, arguments)))
+                let mut arguments = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
+                // A built-in's files come from and go to the session's folder.
+                let folder = match session {
+                    Some(session) if server.connector_id.starts_with("builtin:") => {
+                        Some(connectors::local_files::session_folder(&self.store, session)?)
+                    }
+                    _ => None,
+                };
+                if let Some(folder) = &folder {
+                    if let Err(line) = connectors::local_files::read_paths(&mut arguments, folder) {
+                        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": line }], "isError": true }));
+                    }
+                }
+                let mut answer = self.connectors.block_on(self.connectors.call(&server.account_id, &tool, arguments));
+                if let Some(folder) = &folder {
+                    connectors::local_files::write_saved(&mut answer, folder);
+                }
+                Ok(answer)
             }
             other => Err(format!("A connector's server has no {other}")),
         }
