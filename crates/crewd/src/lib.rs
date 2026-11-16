@@ -847,6 +847,8 @@ pub fn serve_on(mut config: Config, listen: Listen) -> Result<Handle, String> {
     if let Some(dir) = tools_dir {
         connectors.set_gws(connectors::gws::Gws::kept_in(dir));
     }
+    // A release may ask an app for more than its grant holds.
+    connectors.check_google_scopes();
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,

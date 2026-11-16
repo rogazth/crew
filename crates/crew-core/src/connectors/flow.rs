@@ -604,7 +604,10 @@ impl Connectors {
             super::set_builtin_tools(&self.store, account_id, &builtin.tool_defs())?;
             self.changed();
             // Every built-in is one of Google's apps, run with `gws`.
-            let Builtin::Google(_) = builtin;
+            let Builtin::Google(app) = builtin;
+            if super::account(&self.store, account_id)?.is_some_and(|a| a.state == AccountState::Connected) {
+                self.check_google_scope(account_id, app);
+            }
             return self.check_gws(account_id).await;
         }
         let listed = self
@@ -614,6 +617,31 @@ impl Connectors {
         super::set_raw_tools(&self.store, account_id, &listed)?;
         self.changed();
         Ok(())
+    }
+
+    /// Marks each Google account whose grant lacks what its app asks for now
+    /// as needing a sign-in, so a release that asks an app for more (Gmail's
+    /// filters) shows it in Settings at once, not at the first call. Only
+    /// the vault knows the grants; a machine shows what the vault marked.
+    pub fn check_google_scopes(&self) {
+        if self.link().is_some() {
+            return;
+        }
+        let Ok(all) = super::list(&self.store) else { return };
+        for connector in all {
+            let Some(Builtin::Google(app)) = Builtin::of(&connector) else { continue };
+            for account in connector.accounts.iter().filter(|a| a.state == AccountState::Connected) {
+                self.check_google_scope(&account.id, app);
+            }
+        }
+    }
+
+    fn check_google_scope(&self, account_id: &str, app: google::App) {
+        let Ok(Some(key)) = self.grant_key(account_id) else { return };
+        let Ok(Some(grant)) = self.vault.get(&key) else { return };
+        if !google::covers(grant.scope.as_deref(), app) {
+            self.mark(account_id, AccountState::NeedsScope, Some("Google hasn't allowed this app for the account yet"));
+        }
     }
 
     /// Tries `gws` again for a Google account: a setup that failed before
@@ -956,6 +984,24 @@ mod tests {
         let answer = c.block_on(c.call(&gmail.id, "list_labels", json!({})));
         assert_eq!(answer["isError"], true);
         assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope);
+    }
+
+    /// A release that asks an app for more shows the sign-in at start, before any call.
+    #[test]
+    fn an_app_that_asks_for_more_shows_its_sign_in_at_start() {
+        let (c, vault, _fake, store) = google();
+        let gmail = sign_in_google(&c, "builtin:google.gmail", None).unwrap();
+        let drive = sign_in_google(&c, "builtin:google.drive", Some("ada@example.com")).unwrap();
+        let mut grant = vault.get("google:ada@example.com").unwrap().unwrap();
+        grant.scope =
+            Some("openid email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive".into());
+        vault.put("google:ada@example.com", &grant).unwrap();
+        c.check_google_scopes();
+        assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope, "filters' scope is missing");
+        assert_eq!(c.account(&drive.id).unwrap().state, AccountState::Connected);
+        super::super::set_state(&store, &gmail.id, AccountState::Connected, None).unwrap();
+        c.block_on(c.list_tools(&gmail.id)).unwrap();
+        assert_eq!(c.account(&gmail.id).unwrap().state, AccountState::NeedsScope, "a refresh checks it too");
     }
 
     /// How the vault answers another machine, in this process.
