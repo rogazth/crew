@@ -110,6 +110,8 @@ export function SidePanel({ open, active, onHost, children }: { open: boolean; a
     hideHost(host, !active);
     // Out of sight: the slot is the next chat's, and closes unless that chat holds a panel open.
     if (!active && slot) shutSlot(slot);
+    // The chat on screen going away takes its panel's room with it: a tab closed with the panel open.
+    return active && slot ? () => shutSlot(slot) : undefined;
   }, [active, host, slot]);
 
   // Shut, it is past the window's edge: nothing in it can be reached or read.

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Process } from "../src/lib/protocol.ts";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeOpencode, launchCrew, newSession, sessions, waitFor, type Crew, composerOf, turnOver } from "./harness.ts";
+import { installFakeOpencode, launchCrew, newSession, sessions, sessionTab, waitFor, type Crew, composerOf, turnOver } from "./harness.ts";
 
 const run = promisify(execFile);
 const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
@@ -506,4 +506,18 @@ test("x on a session the chat launched interrupts its turn and leaves the sessio
   assert.equal(await row.getByRole("button", { name: "Stop" }).count(), 0);
   await crew.window.keyboard.press("Escape");
   await list().waitFor({ state: "hidden" });
+});
+
+// Last: it closes the chat. The panel goes with its tab, and so does the room it took.
+test("closing a tab with its right panel open gives the panel's room back", async () => {
+  const slot = crew.window.locator("[data-side-slot]");
+  const slotWidth = async () => (await slot.evaluate((el) => el.getBoundingClientRect().width));
+  await agentsSegment().click();
+  await list().waitFor();
+  await waitFor(async () => (await slotWidth()) > 0, { message: "the panel opens" });
+
+  const tab = sessionTab(crew, chat);
+  await tab.getByRole("button", { name: "Close tab" }).click();
+  await tab.waitFor({ state: "detached" });
+  await waitFor(async () => (await slotWidth()) === 0, { message: "the slot closes with the tab" });
 });
