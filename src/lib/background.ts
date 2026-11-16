@@ -1,13 +1,12 @@
 import { client } from "./client";
 import type { BackgroundCommand, BackgroundList } from "./protocol";
 import { elapsed } from "./time";
-import type { Session } from "./types";
 
 /**
  * What each session's turn left running in the background (plan §7e.10): the
- * panel under the composer, the marker where a command started, the count on
- * the tab. The daemon pushes `background-changed`; this keeps the latest per
- * session, read the first time a view asks.
+ * panel under the composer and the marker where a command started. The
+ * daemon pushes `background-changed`; this keeps the latest per session, read
+ * the first time a view asks.
  */
 
 type Listener = () => void;
@@ -73,21 +72,6 @@ export const isRunning = (command: BackgroundCommand) => command.state === "runn
  */
 export function turnTray(list: BackgroundList | null): BackgroundCommand[] {
   return list?.commands ?? [];
-}
-
-/**
- * The count on a session's tab: only once its turn is over (or answered and
- * waiting on them), with commands still running. While it works, the spinner
- * already says so.
- */
-export function tabCount(list: BackgroundList | null, working: boolean): number {
-  if (!list || (working && !list.waiting)) return 0;
-  return list.commands.filter(isRunning).length;
-}
-
-/** The count on a session's tab, from its list. */
-export function tabBackgroundCount(session: Pick<Session, "status">, list: BackgroundList | null): number {
-  return tabCount(list, session.status === "working" || session.status === "needs-input" || session.status === "starting");
 }
 
 /** One command's state, the way the tray's row says it. */

@@ -19,7 +19,6 @@ import { useCommand } from "../hooks/useCommand";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { useTabDrag } from "../hooks/useTabDrag";
 import { useTabOverflow } from "../hooks/useTabOverflow";
-import { useTabBackground } from "../hooks/useBackground";
 import {
   CLOSE_OTHERS,
   CLOSE_RIGHT,
@@ -449,8 +448,6 @@ const TabPill = memo(function TabPill({
   onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
   const status = tabStatus(tab, sessions);
-  // A turn that ended with commands still running: their count beside the title.
-  const background = useTabBackground(tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined);
   const tone = toneOf(status);
   const signal = status !== null && status !== "idle" && status !== "exited";
   return (
@@ -486,7 +483,6 @@ const TabPill = memo(function TabPill({
           <span data-text={tabTitle(tab, sessions)} className="crew-steady-title flex-1">
             <span className={tone.bold ? "font-semibold text-text" : undefined}>{tabTitle(tab, sessions)}</span>
           </span>
-          <BackgroundCount count={background} />
         </>
       )}
       {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[110px]" />}
@@ -667,16 +663,6 @@ function ScrollControl({
         <Caret className="size-3.5" />
       </span>
     </button>
-  );
-}
-
-/** How many commands a finished turn left running, beside the title. */
-function BackgroundCount({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span aria-label={`${count} background ${count === 1 ? "command" : "commands"} running`} className="shrink-0 text-[11px] text-text-muted tabular-nums">
-      {count}
-    </span>
   );
 }
 

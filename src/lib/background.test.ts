@@ -3,8 +3,6 @@ import {
   markedCalls,
   plainText,
   stateLabel,
-  tabBackgroundCount,
-  tabCount,
   turnTray,
 } from "./background";
 import type { BackgroundCommand, BackgroundList } from "./protocol";
@@ -44,23 +42,5 @@ describe("the tray", () => {
     expect(plainText("\x1b[32mok\x1b[0m\r\n")).toBe("ok\n");
     expect(plainText("10%\r50%\r100%\ndone")).toBe("100%\ndone");
     expect(plainText("\x1b]0;title\x07hi")).toBe("hi");
-  });
-});
-
-describe("the tab's count", () => {
-  it("counts only once the turn is over, or answered and waiting on them", () => {
-    const running = list([command("a"), command("b", { state: "completed" }), command("c")]);
-    expect(tabCount(running, true)).toBe(0);
-    expect(tabCount(running, false)).toBe(2);
-    expect(tabCount({ ...running, waiting: true }, true)).toBe(2);
-    expect(tabCount(null, false)).toBe(0);
-    expect(tabCount(list([command("a", { state: "stopped" })]), false)).toBe(0);
-  });
-
-  it("reads a session's count from its list", () => {
-    expect(tabBackgroundCount({ status: "working" }, list([command("a")], { waiting: true }))).toBe(1);
-    expect(tabBackgroundCount({ status: "working" }, list([command("a")]))).toBe(0);
-    expect(tabBackgroundCount({ status: "done" }, list([command("a")]))).toBe(1);
-    expect(tabBackgroundCount({ status: "idle" }, null)).toBe(0);
   });
 });
