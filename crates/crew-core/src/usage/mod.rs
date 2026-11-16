@@ -1,6 +1,6 @@
 //! What each provider account has spent: the latest reading of its plan per
 //! provider and account, and the tokens of the last days, kept in the store.
-//! Claude reports its windows with a turn, Codex can be asked at any time,
+//! Claude and Codex can be asked at any time (Claude is asked again after each turn),
 //! Cursor, Grok and opencode are read from their CLIs; each adapter lives in a
 //! module of its own and hands `record` a [`PlanUsage`], and its tokens to
 //! `refresh_tokens` as a [`Tally`].
@@ -61,6 +61,8 @@ pub const MIGRATION_V49: &str = "CREATE TABLE IF NOT EXISTS usage_tokens (
 const HISTORY_DAYS: i64 = 30;
 /// How long `claude auth status` is trusted before it is asked again.
 const AUTH_TTL: Duration = Duration::from_secs(10 * 60);
+/// The least time between two of Claude's `get_usage`, however many turns end.
+const CLAUDE_ASK_GAP: Duration = Duration::from_secs(30);
 
 type Listener = Arc<dyn Fn(&UsageSnapshot) + Send + Sync>;
 
@@ -72,11 +74,18 @@ pub struct UsageHost {
     store: Store,
     listener: Arc<Mutex<Option<Listener>>>,
     claude_account: Arc<Mutex<Signed>>,
+    /// When Claude was last asked after a turn, and whether a turn ended since.
+    claude_asked: Arc<Mutex<(Option<Instant>, bool)>>,
 }
 
 impl UsageHost {
     pub fn new(store: Store) -> Self {
-        Self { store, listener: Arc::new(Mutex::new(None)), claude_account: Arc::new(Mutex::new(None)) }
+        Self {
+            store,
+            listener: Arc::new(Mutex::new(None)),
+            claude_account: Arc::new(Mutex::new(None)),
+            claude_asked: Arc::new(Mutex::new((None, false))),
+        }
     }
 
     /// Told the machine's whole snapshot each time a reading changes.
@@ -116,8 +125,8 @@ impl UsageHost {
         })
     }
 
-    /// Keeps a reading and tells the listener when it differs from what was held. With `merge`, windows the reading does
-    /// not name stay as they were (Claude reports one window at a time).
+    /// Keeps a reading and tells the listener when it differs from what was held. With `merge`, a reading that brings
+    /// no windows (Claude could not be asked) keeps the windows held, and when they were heard.
     pub fn record(&self, mut reading: PlanUsage, merge: bool) {
         match self.write(&mut reading, merge) {
             Ok(true) => self.tell(),
@@ -236,24 +245,11 @@ impl UsageHost {
                 if reading.plan.is_none() {
                     reading.plan = held.plan.clone();
                 }
-                if merge {
-                    if reading.status.is_none() {
-                        reading.status = held.status.clone();
-                    }
-                    if reading.overage_status.is_none() {
-                        reading.overage_status = held.overage_status.clone();
-                    }
-                    if reading.windows.is_empty() {
-                        // Nothing new was heard: the held windows are no fresher than they were.
-                        reading.updated_at = held.updated_at;
-                        reading.source = held.source.clone();
-                    }
-                    for window in &held.windows {
-                        if !reading.windows.iter().any(|new| new.id == window.id) {
-                            reading.windows.push(window.clone());
-                        }
-                    }
-                    reading.windows.sort_by_key(|w| (w.window_minutes.unwrap_or(i64::MAX), w.id.clone()));
+                if merge && reading.windows.is_empty() {
+                    // Nothing new was heard: the held windows are no fresher than they were.
+                    reading.windows = held.windows.clone();
+                    reading.updated_at = held.updated_at;
+                    reading.source = held.source.clone();
                 }
             }
             let changed = held.as_ref().is_none_or(|held| !same_reading(held, reading));
@@ -270,33 +266,23 @@ impl UsageHost {
         })
     }
 
-    /// A `rate_limit_event` from Claude's stream-json. The windows are read at
-    /// once; who is signed in is asked on a thread of its own, once in a while.
-    pub fn claude_event(&self, rec: &serde_json::Map<String, serde_json::Value>) {
-        let now = now_millis();
-        let windows = claude::parse_rate_limit(rec, now);
-        if windows.is_empty() {
-            return;
-        }
-        let (status, overage_status) = claude::parse_status(rec);
+    /// A Claude turn ended: its plan has moved, so Claude is asked again, on a
+    /// thread of its own, at most once in [`CLAUDE_ASK_GAP`]; a turn that ends
+    /// inside the gap is asked for when it closes.
+    pub fn claude_turn_ended(&self) {
+        let wait = {
+            let mut asked = self.claude_asked.lock().unwrap_or_else(|e| e.into_inner());
+            if asked.1 {
+                return;
+            }
+            asked.1 = true;
+            asked.0.map_or(Duration::ZERO, |at| CLAUDE_ASK_GAP.saturating_sub(at.elapsed()))
+        };
         let host = self.clone();
         std::thread::spawn(move || {
-            let (account, plan) = host.claude_signed_in().unwrap_or((String::new(), None));
-            host.record(
-                PlanUsage {
-                    provider: "claude".into(),
-                    account: Some(account).filter(|a| !a.is_empty()),
-                    plan,
-                    windows,
-                    tokens: None,
-                    cost: None,
-                    updated_at: now,
-                    source: "stream".into(),
-                    status,
-                    overage_status,
-                },
-                true,
-            );
+            std::thread::sleep(wait);
+            *host.claude_asked.lock().unwrap_or_else(|e| e.into_inner()) = (Some(Instant::now()), false);
+            host.ask_claude();
         });
     }
 
@@ -316,8 +302,6 @@ impl UsageHost {
                 cost: None,
                 updated_at: now_millis(),
                 source: "app-server".into(),
-                status: None,
-                overage_status: None,
             },
             false,
         );
@@ -373,25 +357,35 @@ impl UsageHost {
         }
     }
 
-    /// Claude's windows only come with a turn, so asking tells who is signed
-    /// in and keeps the windows last heard.
     fn refresh_claude(&self) {
         *self.claude_account.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let Some((account, plan)) = self.claude_signed_in() else {
+        self.ask_claude();
+    }
+
+    /// Asks Claude who is signed in and, with `get_usage`, every window of the
+    /// plan; when that fails, keeps the windows last heard.
+    fn ask_claude(&self) {
+        let Ok(bin) = AgentHost::resolve("claude") else {
             return;
         };
+        let (who, probed) = std::thread::scope(|scope| {
+            let probed = scope.spawn(|| claude::probe(&bin.path));
+            (self.claude_signed_in(), probed.join().ok().flatten())
+        });
+        let Some((account, plan)) = who else {
+            return;
+        };
+        let (windows, probed_plan) = probed.unwrap_or_default();
         self.record(
             PlanUsage {
                 provider: "claude".into(),
                 account: Some(account),
-                plan,
-                windows: Vec::new(),
+                plan: plan.or(probed_plan),
+                windows,
                 tokens: None,
                 cost: None,
                 updated_at: now_millis(),
                 source: "cli".into(),
-                status: None,
-                overage_status: None,
             },
             true,
         );
@@ -537,8 +531,6 @@ mod tests {
             cost: None,
             updated_at: at,
             source: "stream".into(),
-            status: None,
-            overage_status: None,
         }
     }
 
@@ -565,23 +557,24 @@ mod tests {
     }
 
     #[test]
-    fn a_reading_merges_windows_and_tells_only_of_a_change() {
+    fn a_reading_replaces_the_windows_keeps_them_when_silent_and_tells_only_of_a_change() {
         let host = host();
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         host.set_listener(Arc::new(move |_| *count.lock().unwrap() += 1));
         let day = now_millis().div_euclid(DAY_MS) * DAY_MS;
-        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 10.0, 10080)], day), true);
-        host.record(reading(Some("a@x.dev"), vec![window("five_hour", 40.0, 300)], day + 1000), true);
-        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 25.0, 10080)], day + 2000), true);
-        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 20.0, 10080)], day + 3000), true);
-        // The same reading again is not news.
-        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 20.0, 10080)], day + 4000), true);
+        let both = |weekly: f64| vec![window("five_hour", 40.0, 300), window("seven_day", weekly, 10080)];
+        host.record(reading(Some("a@x.dev"), both(10.0), day), true);
+        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 20.0, 10080)], day + 1000), true);
+        // The same reading again is not news, nor is one that brings no windows.
+        host.record(reading(Some("a@x.dev"), vec![window("seven_day", 20.0, 10080)], day + 2000), true);
+        host.record(reading(Some("a@x.dev"), Vec::new(), day + 3000), true);
         let snapshot = host.snapshot().unwrap();
         assert_eq!(snapshot.readings.len(), 1);
         let ids: Vec<_> = snapshot.readings[0].windows.iter().map(|w| (w.id.as_str(), w.used_percent)).collect();
-        assert_eq!(ids, vec![("five_hour", 40.0), ("seven_day", 20.0)]);
-        assert_eq!(*told.lock().unwrap(), 4);
+        assert_eq!(ids, vec![("seven_day", 20.0)]);
+        assert_eq!(snapshot.readings[0].updated_at, day + 2000);
+        assert_eq!(*told.lock().unwrap(), 2);
     }
 
     #[test]
@@ -592,7 +585,7 @@ mod tests {
         let snapshot = host.snapshot().unwrap();
         assert_eq!(snapshot.readings.len(), 1);
         assert_eq!(snapshot.readings[0].account.as_deref(), Some("a@x.dev"));
-        assert_eq!(snapshot.readings[0].windows.len(), 2);
+        assert_eq!(snapshot.readings[0].windows.len(), 1);
     }
 
     fn spent(input: u64) -> Spent {

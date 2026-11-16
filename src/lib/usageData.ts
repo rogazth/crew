@@ -32,8 +32,6 @@ export type Reading = {
   /** What the provider spent day by day and model by model, oldest first, today last; on one account of each provider, and none with nothing spent. */
   tokenDays: TokenDay[] | null;
   cost: number | null;
-  /** Claude's own verdict on the plan limit. */
-  status: string | null;
   updatedAt: number;
 };
 
@@ -43,14 +41,23 @@ export function providerName(provider: string): string {
   return NAMES[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
+/**
+ * A window whose reset has passed was last heard before it: nothing has been
+ * spent since, or a fresher reading would say so. It reads as empty, and its
+ * reset moves on by whole windows when its length is known.
+ */
 export function windowOf(window: UsageWindow, now: number): Window {
-  return {
+  const length = window.windowMinutes ?? null;
+  const base = {
     id: window.id,
     label: window.label,
     used: Math.min(100, Math.max(0, Math.round(window.usedPercent))),
-    length: window.windowMinutes ?? null,
-    resetsIn: window.resetsAt == null ? null : Math.max(0, (window.resetsAt - now) / MINUTE),
+    length,
+    resetsIn: window.resetsAt == null ? null : (window.resetsAt - now) / MINUTE,
   };
+  if (base.resetsIn === null || base.resetsIn > 0) return base;
+  const resetsIn = length ? base.resetsIn + Math.ceil((-base.resetsIn || 1) / length) * length : null;
+  return { ...base, used: 0, resetsIn };
 }
 
 /** How many days of usage are kept and drawn. */
@@ -171,7 +178,6 @@ export function mergeSnapshots(snapshots: Iterable<UsageSnapshot>, now: number):
         tokens: reading.tokens ?? null,
         tokenDays: null,
         cost: reading.cost ?? null,
-        status: reading.status ?? null,
         updatedAt: reading.updatedAt,
       };
     })

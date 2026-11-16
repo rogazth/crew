@@ -3894,9 +3894,9 @@ impl TurnHost {
         if string_field(Some(&rec), "type").as_deref() == Some("keep_alive") {
             return;
         }
-        // The plan's windows, which the CLI only reports with a turn.
+        // A turn spent some of the plan: Claude is asked for it again.
         if string_field(Some(&rec), "type").as_deref() == Some("rate_limit_event") {
-            self.usage.claude_event(&rec);
+            self.usage.claude_turn_ended();
         }
         if let Some(cancel_id) = parse_control_cancel_id(&rec) {
             let mut map = self.lock();

@@ -47,16 +47,8 @@ pub struct PlanUsage {
     /// When it was read, in milliseconds since the epoch.
     #[ts(type = "number")]
     pub updated_at: i64,
-    /// Where it came from: `stream`, `app-server`, `api` or `cli`.
+    /// Where it came from: `app-server`, `api` or `cli`.
     pub source: String,
-    /// Claude's own verdict on the plan limit (`allowed`, `allowed_warning`, `rejected`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub status: Option<String>,
-    /// The same for the overage (extra usage) allowance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub overage_status: Option<String>,
 }
 
 /// What one model of a provider spent on a day, on the calendar of the machine

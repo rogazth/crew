@@ -1,59 +1,150 @@
-//! Claude: windows from the `rate_limit_event` its stream-json emits (Claude
-//! Code 2.1.299), who is signed in from `claude auth status`.
+//! Claude: the plan's windows from its `get_usage` control request (Claude
+//! Code 2.1.322), who is signed in from `claude auth status`.
 
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crew_protocol::UsageWindow;
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::tokens::{jsonl_files, lines_with, Since, Spent, Tally};
 use super::{local_day_of, parse_iso_ms, window_label};
 
-/// The windows a `rate_limit_event` names. It only comes with a turn:
-/// `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":
-/// {"five_hour":{"utilization":0.53,"resetsAt":1792470000},"seven_day":{...}}}}`.
-/// `utilization` is a share of 1; `resetsAt` is in seconds.
-pub fn parse_rate_limit(rec: &Map<String, Value>, _now_ms: i64) -> Vec<UsageWindow> {
-    if rec.get("type").and_then(Value::as_str) != Some("rate_limit_event") {
-        return Vec::new();
-    }
-    let Some(windows) = rec.get("rate_limit_info").and_then(|info| info.get("unifiedWindows")).and_then(Value::as_object) else {
-        return Vec::new();
+/// How long a `get_usage` may take: the CLI starts, then asks claude.ai.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Every window of the plan, without a turn: a short-lived `claude -p` in
+/// stream-json answers `get_usage` and exits. It writes no transcript and
+/// spends nothing. None when the CLI fails, is signed out of claude.ai, or
+/// says no rate limits are available.
+pub fn probe(bin: &str) -> Option<(Vec<UsageWindow>, Option<String>)> {
+    let mut child = Command::new(bin)
+        .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
+        .args(["--no-session-persistence", "--strict-mcp-config"])
+        .env("PATH", crate::shell_path::joined())
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .ok()?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        // SAFETY: the group is the child's own, spawned above.
+        unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+        let _ = child.wait();
+        return None;
     };
-    let mut out: Vec<UsageWindow> = windows
-        .iter()
-        .filter_map(|(id, window)| {
-            let used = window.get("utilization").and_then(Value::as_f64)?;
-            let minutes = match id.as_str() {
-                "five_hour" => Some(300),
-                other if other.starts_with("seven_day") => Some(10080),
-                _ => None,
-            };
-            let mut label = minutes.map(window_label).unwrap_or_else(|| id.replace('_', " "));
-            if let Some(model) = id.strip_prefix("seven_day_") {
-                label = format!("{label} {}", capitalized(model));
+    let (tx, rx) = mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                if tx.send(message).is_err() {
+                    break;
+                }
             }
-            Some(UsageWindow {
-                id: id.clone(),
-                label,
-                used_percent: (used * 100.0).clamp(0.0, 100.0),
-                window_minutes: minutes,
-                resets_at: window.get("resetsAt").and_then(Value::as_f64).map(|s| (s * 1000.0) as i64),
-            })
-        })
-        .collect();
-    out.sort_by_key(|w| (w.window_minutes.unwrap_or(i64::MAX), w.id.clone()));
-    out
+        }
+    });
+    let request = serde_json::json!({
+        "type": "control_request", "request_id": "crew-usage",
+        "request": { "subtype": "get_usage", "skip_behaviors": true },
+    });
+    let answer = writeln!(stdin, "{request}").ok().and_then(|_| {
+        let deadline = Instant::now() + PROBE_TIMEOUT;
+        loop {
+            let message = rx.recv_timeout(deadline.checked_duration_since(Instant::now())?).ok()?;
+            let response = message.get("response");
+            if message.get("type").and_then(Value::as_str) == Some("control_response")
+                && response.and_then(|r| r.get("request_id")).and_then(Value::as_str) == Some("crew-usage")
+            {
+                break response.cloned();
+            }
+        }
+    });
+    drop(stdin);
+    // SAFETY: the group is the child's own, spawned above.
+    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+    let _ = child.wait();
+    let answer = answer?;
+    if answer.get("subtype").and_then(Value::as_str) != Some("success") {
+        return None;
+    }
+    parse_usage(answer.get("response")?)
 }
 
-/// The plan limit's and the overage's verdicts of a `rate_limit_event`
-/// (`rate_limit_info.status` and `.overageStatus`).
-pub fn parse_status(rec: &Map<String, Value>) -> (Option<String>, Option<String>) {
-    let info = rec.get("rate_limit_info");
-    let get = |key: &str| info.and_then(|i| i.get(key)).and_then(Value::as_str).map(str::to_string);
-    (get("status"), get("overageStatus"))
+/// `get_usage`'s answer. `rate_limits` keys the plan's windows by the ids the
+/// stream uses, `utilization` 0 to 100 and `resets_at` in ISO 8601; its
+/// `limits` rows add the weekly windows scoped to one model (`weekly_scoped`,
+/// `percent`), as does `model_scoped` when the answer is fresh. The scoped
+/// window of a model whose use past it is billed as overage (Fable) is the one
+/// the stream calls `seven_day_overage_included`.
+pub fn parse_usage(usage: &Value) -> Option<(Vec<UsageWindow>, Option<String>)> {
+    if usage.get("rate_limits_available").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let plan = usage.get("subscription_type").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let week = window_label(10080);
+    let mut out: Vec<UsageWindow> = Vec::new();
+    let mut add = |id: String, label: String, minutes: i64, used: Option<f64>, resets_at: Option<&Value>| {
+        let Some(used) = used else { return };
+        if out.iter().any(|w| w.id == id) {
+            return;
+        }
+        out.push(UsageWindow {
+            id,
+            label,
+            used_percent: used.clamp(0.0, 100.0),
+            window_minutes: Some(minutes),
+            resets_at: resets_at.and_then(Value::as_str).and_then(parse_iso_ms),
+        });
+    };
+    let rate_limits = usage.get("rate_limits");
+    for (id, limit) in rate_limits.and_then(Value::as_object).into_iter().flatten() {
+        let (minutes, label) = match id.as_str() {
+            "five_hour" => (300, window_label(300)),
+            "seven_day" => (10080, week.clone()),
+            "seven_day_opus" | "seven_day_sonnet" => (10080, format!("{week} {}", capitalized(&id["seven_day_".len()..]))),
+            // The rest are named for experiments, not for windows.
+            _ => continue,
+        };
+        add(id.clone(), label, minutes, limit.get("utilization").and_then(Value::as_f64), limit.get("resets_at"));
+    }
+    let scoped_id = |name: &str| match name.to_lowercase().as_str() {
+        model @ ("opus" | "sonnet") => format!("seven_day_{model}"),
+        _ => "seven_day_overage_included".to_string(),
+    };
+    let rows = rate_limits.and_then(|r| r.get("limits")).and_then(Value::as_array).into_iter().flatten();
+    for row in rows.filter(|row| row.get("kind").and_then(Value::as_str) == Some("weekly_scoped")) {
+        let name = row.pointer("/scope/model/display_name").and_then(Value::as_str).filter(|s| !s.is_empty());
+        if let Some(name) = name {
+            add(
+                scoped_id(name),
+                format!("{week} {name}"),
+                10080,
+                row.get("percent").and_then(Value::as_f64),
+                row.get("resets_at"),
+            );
+        }
+    }
+    for scoped in usage.get("model_scoped").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(name) = scoped.get("display_name").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            add(
+                scoped_id(name),
+                format!("{week} {name}"),
+                10080,
+                scoped.get("utilization").and_then(Value::as_f64),
+                scoped.get("resets_at"),
+            );
+        }
+    }
+    out.sort_by_key(|w| (w.window_minutes.unwrap_or(i64::MAX), w.id.clone()));
+    (!out.is_empty()).then_some((out, plan))
 }
 
 fn capitalized(text: &str) -> String {
@@ -171,34 +262,38 @@ mod tests {
     }
 
     #[test]
-    fn a_rate_limit_event_gives_its_unified_windows() {
-        let rec = json!({
-            "type": "rate_limit_event",
-            "rate_limit_info": {
-                "status": "allowed", "resetsAt": 1792470000, "rateLimitType": "five_hour", "overageStatus": "rejected",
-                "unifiedWindows": {
-                    "seven_day": { "utilization": 0.1, "resetsAt": 1792900000 },
-                    "five_hour": { "utilization": 0.53, "resetsAt": 1792470000 },
-                    "seven_day_opus": { "utilization": 2.0 }
-                }
+    fn get_usage_gives_the_plan_windows_and_the_ones_scoped_to_a_model() {
+        let usage = json!({
+            "subscription_type": "max", "rate_limits_available": true,
+            "rate_limits": {
+                "five_hour": { "utilization": 41, "resets_at": "2026-11-16T17:10:00.897098+00:00" },
+                "seven_day": { "utilization": 8, "resets_at": "2026-11-20T10:00:00.897119+00:00" },
+                "seven_day_opus": null, "tangelo": { "utilization": 5 }, "extra_usage": { "is_enabled": false },
+                "limits": [
+                    { "kind": "session", "percent": 41, "resets_at": "2026-11-16T17:10:00.897098+00:00", "scope": null },
+                    { "kind": "weekly_scoped", "percent": 0, "resets_at": "2026-11-20T10:00:00.897287+00:00",
+                      "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } }
+                ]
             }
         });
-        let windows = parse_rate_limit(rec.as_object().unwrap(), 0);
-        let got: Vec<_> =
-            windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.used_percent, w.window_minutes, w.resets_at)).collect();
-        assert_eq!(got[0], ("five_hour", "5 hours", 53.0, Some(300), Some(1_792_470_000_000)));
-        assert_eq!(got[1].0, "seven_day");
-        assert_eq!(got[1].1, "Weekly");
-        assert!((got[1].2 - 10.0).abs() < 1e-9);
-        assert_eq!(got[2], ("seven_day_opus", "Weekly Opus", 100.0, Some(10080), None));
-    }
-
-    #[test]
-    fn events_without_windows_or_of_another_kind_give_none() {
-        let no_windows = json!({ "type": "rate_limit_event", "rate_limit_info": { "status": "allowed" } });
-        assert!(parse_rate_limit(no_windows.as_object().unwrap(), 0).is_empty());
-        let other = json!({ "type": "result", "rate_limit_info": { "unifiedWindows": { "five_hour": { "utilization": 0.5 } } } });
-        assert!(parse_rate_limit(other.as_object().unwrap(), 0).is_empty());
+        let (windows, plan) = parse_usage(&usage).expect("windows");
+        assert_eq!(plan.as_deref(), Some("max"));
+        let got: Vec<_> = windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.used_percent, w.window_minutes)).collect();
+        assert_eq!(
+            got,
+            [
+                ("five_hour", "5 hours", 41.0, Some(300)),
+                ("seven_day", "Weekly", 8.0, Some(10080)),
+                ("seven_day_overage_included", "Weekly Fable", 0.0, Some(10080)),
+            ]
+        );
+        assert_eq!(windows[1].resets_at, parse_iso_ms("2026-11-20T10:00:00.897Z"));
+        // A fresh answer names the same window again in `model_scoped`; it counts once.
+        let mut fresh = usage.clone();
+        fresh["model_scoped"] = json!([{ "display_name": "Fable", "utilization": 0, "resets_at": "2026-11-20T10:00:00Z" }]);
+        assert_eq!(parse_usage(&fresh).expect("windows").0.len(), 3);
+        let unavailable = json!({ "rate_limits_available": false, "rate_limits": null });
+        assert!(parse_usage(&unavailable).is_none());
     }
 
     #[test]

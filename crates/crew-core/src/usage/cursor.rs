@@ -47,8 +47,6 @@ pub fn read(bin: &str) -> Option<PlanUsage> {
         account: email,
         plan: tier.or(plan),
         source: if windows.is_empty() { "cli" } else { "api" }.into(),
-        status: None,
-        overage_status: None,
         windows,
         tokens: None,
         cost: None,

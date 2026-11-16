@@ -11,7 +11,7 @@ const plan = (patch: Partial<PlanUsage> = {}): PlanUsage => ({
   plan: "Max",
   windows: [{ id: "five_hour", label: "5 hours", usedPercent: 40.4, windowMinutes: 300, resetsAt: NOW + 60 * MIN }],
   updatedAt: NOW - 10 * MIN,
-  source: "stream",
+  source: "cli",
   ...patch,
 });
 
@@ -24,6 +24,16 @@ describe("windowOf", () => {
     const w = windowOf({ id: "cycle", label: "Monthly", usedPercent: 130 }, NOW);
     expect(w).toMatchObject({ used: 100, length: null, resetsIn: null });
     expect(runsOutIn(w)).toBeNull();
+  });
+  it("reads a window whose reset has passed as empty, its reset moved on by whole windows", () => {
+    const week = 7 * 24 * 60;
+    const stale = windowOf({ id: "seven_day_overage_included", label: "Weekly Fable", usedPercent: 2, windowMinutes: week, resetsAt: NOW - 79 * 60 * MIN }, NOW);
+    expect(stale).toMatchObject({ used: 0, length: week });
+    expect(stale.resetsIn).toBeCloseTo(week - 79 * 60);
+    const atReset = windowOf({ id: "five_hour", label: "5 hours", usedPercent: 90, windowMinutes: 300, resetsAt: NOW }, NOW);
+    expect(atReset).toMatchObject({ used: 0, resetsIn: 300 });
+    const unknownLength = windowOf({ id: "cycle", label: "Monthly", usedPercent: 50, resetsAt: NOW - MIN }, NOW);
+    expect(unknownLength).toMatchObject({ used: 0, resetsIn: null });
   });
 });
 
