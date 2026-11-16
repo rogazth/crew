@@ -147,6 +147,14 @@ export function showStandIn(row: RemoteEnv) {
   publish();
 }
 
+/**
+ * Settles once the address book was read, so every machine in it is in
+ * `getLinks()`, online or not. Before that the links hold this Mac alone.
+ */
+export function remotesLoaded(): Promise<void> {
+  return bootRemotes().catch(() => {});
+}
+
 /** Opens a link to each machine in the address book, and drops the ones no longer in it. */
 export function refreshRemotes(): Promise<void> {
   booted = null;

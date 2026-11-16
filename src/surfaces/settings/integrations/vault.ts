@@ -20,7 +20,7 @@ import {
   vaultStart,
   vaultStatus,
 } from "../../../lib/api";
-import { getLinks, subscribeLinks, type EnvLink } from "../../../lib/client/registry";
+import { getLinks, remotesLoaded, subscribeLinks, type EnvLink } from "../../../lib/client/registry";
 import { LOCAL } from "../../../lib/client/route";
 import { remotesHost } from "../../../lib/host";
 import type { VaultStatus } from "../../../lib/protocol";
@@ -120,9 +120,13 @@ export async function refreshVault(): Promise<void> {
   set({ machines });
 }
 
-/** The vault this Mac remembers; a machine that was removed gives it back to this Mac. */
+/**
+ * The vault this Mac remembers; a machine that was removed gives it back to this Mac.
+ * Read once the address book is: before that the links hold this Mac alone, and a
+ * vault elsewhere would look removed, sending every sign-in to this Mac.
+ */
 export async function loadVault(): Promise<string> {
-  const kept = await stateGet(VAULT_STATE).catch(() => null);
+  const [kept] = await Promise.all([stateGet(VAULT_STATE).catch(() => null), remotesLoaded()]);
   const env = kept && (kept === LOCAL || getLinks().some((l) => l.id === kept)) ? kept : LOCAL;
   setVaultEnv(env);
   set({ vaultEnv: env });

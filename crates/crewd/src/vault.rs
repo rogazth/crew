@@ -235,6 +235,18 @@ impl VaultHost {
         Ok(())
     }
 
+    /// Refuses a change to the connectors on a member: its copy is the vault's,
+    /// replaced whole at the vault's next change, and a sign-in here would keep
+    /// a grant no call ever uses, since every call runs on the vault.
+    pub fn owns_config(&self) -> Result<(), String> {
+        match self.link.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some(link) => {
+                Err(format!("This machine uses the vault on {}: its connectors are changed there.", link.config.vault_name))
+            }
+            None => Ok(()),
+        }
+    }
+
     /// This machine becomes the vault: no grant comes with it. `config` is the
     /// old vault's, when it could give it.
     pub async fn start(&self, config: Option<machines::Snapshot>) -> Result<(), String> {

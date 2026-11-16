@@ -2531,6 +2531,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "builtin_list" => json(connectors::builtin::Builtin::all().map(|b| b.listing()).collect::<Vec<_>>()),
         "connector_add" => {
+            hosts.vault.owns_config()?;
             let add: proto::ConnectorAdd = parse(params)?;
             if let Some(id) = add.builtin.clone().filter(|id| !id.is_empty()) {
                 let store = hosts.store.clone();
@@ -2546,14 +2547,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(connector)
         }
         "connector_remove" => {
+            hosts.vault.owns_config()?;
             let proto::ConnectorRef { connector_id } = parse(params)?;
             json(hosts.connectors.run(move |c| async move { c.remove_connector(&connector_id).await }).await?)
         }
         "connector_connect" => {
+            hosts.vault.owns_config()?;
             let req: proto::ConnectorConnect = parse(params)?;
             json(hosts.connectors.run(move |c| async move { c.connect(req).await }).await?)
         }
         "vault_callback" => {
+            hosts.vault.owns_config()?;
             let proto::VaultCallback { state, url } = parse(params)?;
             json(hosts.connectors.run(move |c| async move { c.callback(&state, &url).await }).await?)
         }
@@ -2563,6 +2567,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "account_rename" => {
+            hosts.vault.owns_config()?;
             let proto::AccountRename { account_id, label } = parse(params)?;
             let store = hosts.store.clone();
             block(move || connectors::rename(&store, &account_id, &label)).await?;
@@ -2570,6 +2575,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "account_remove" => {
+            hosts.vault.owns_config()?;
             let proto::AccountRef { account_id } = parse(params)?;
             json(hosts.connectors.run(move |c| async move { c.remove_account(&account_id).await }).await?)
         }
@@ -2586,6 +2592,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             )
         }
         "account_workspaces_set" => {
+            hosts.vault.owns_config()?;
             let proto::AccountWorkspaces { account_id, workspaces } = parse(params)?;
             let store = hosts.store.clone();
             block(move || connectors::set_workspaces(&store, &account_id, workspaces.as_deref())).await?;
@@ -2593,6 +2600,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "tool_set" => {
+            hosts.vault.owns_config()?;
             let proto::ToolSet { account_id, tool, on } = parse(params)?;
             let store = hosts.store.clone();
             block(move || connectors::set_tool(&store, &account_id, &tool, on)).await?;
@@ -3627,6 +3635,18 @@ mod tests {
         let status: proto::VaultStatus =
             serde_json::from_value(rpc(&mut wb, 7, "vault_status", Value::Null).await.result.unwrap()).unwrap();
         assert!(!status.holds && status.online && status.grants == 0, "{status:?}");
+
+        // B's copy is A's: a sign-in or a change made on B is refused, so no
+        // grant lands where no call uses it and no account vanishes at A's next change.
+        let again = serde_json::json!({ "connectorId": connector.id, "accountId": account.id });
+        let refused = rpc(&mut wb, 70, "connector_connect", again).await;
+        assert!(refused.error.as_deref().is_some_and(|e| e.contains("uses the vault on this Mac")), "{:?}", refused.error);
+        let refused = rpc(&mut wb, 71, "connector_add", serde_json::json!({ "url": fake.mcp_url, "name": "Other" })).await;
+        assert!(refused.error.is_some(), "a member adds no connector");
+        let refused = rpc(&mut wb, 72, "account_remove", serde_json::json!({ "accountId": account.id })).await;
+        assert!(refused.error.is_some(), "a member removes no account");
+        let refused = rpc(&mut wb, 73, "vault_callback", serde_json::json!({ "state": "s", "url": "u" })).await;
+        assert!(refused.error.as_deref().is_some_and(|e| e.contains("uses the vault")), "{:?}", refused.error);
 
         // A session on B calls the connector: the call runs on A.
         let session_id = seed_bot(&mut wb, dir_b.to_str().unwrap()).await;
