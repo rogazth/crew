@@ -100,7 +100,6 @@ contextBridge.exposeInMainWorld("crewHost", {
     check: () => ipcRenderer.invoke(UPDATE_CHANNELS.check),
     download: () => ipcRenderer.invoke(UPDATE_CHANNELS.download),
     restart: () => ipcRenderer.invoke(UPDATE_CHANNELS.restart),
-    setAutoDownload: (on: boolean) => ipcRenderer.invoke(UPDATE_CHANNELS.auto, on),
     releases: () => ipcRenderer.invoke(UPDATE_CHANNELS.releases),
     dismiss: () => ipcRenderer.invoke(UPDATE_CHANNELS.dismiss),
     cancel: () => ipcRenderer.invoke(UPDATE_CHANNELS.cancel),

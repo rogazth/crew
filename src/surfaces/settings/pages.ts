@@ -113,7 +113,6 @@ const SETTINGS: IndexEntry[] = [
   { id: "provider-cursor", label: "Cursor", page: "providers", keywords: "cursor-agent" },
   { id: "provider-grok", label: "Grok Build", page: "providers", keywords: "xai x.ai grok sign in" },
   { id: "updates", label: "Check for updates", page: "about", keywords: "version upgrade release" },
-  { id: "auto-download", label: "Download updates automatically", page: "about", keywords: "update upgrade background" },
   { id: "build", label: "Build", page: "about", keywords: "commit electron node version" },
   { id: "changelog", label: "What's new", page: "about", keywords: "changelog release notes" },
   { id: "licenses", label: "Licenses", page: "about", keywords: "open source third party notices acknowledgements" },

@@ -146,8 +146,6 @@ export type UpdateHost = {
   cancel(): Promise<void>;
   /** The menu asked for a check: show About. */
   onShow(cb: () => void): () => void;
-  /** Tells main whether to download an offered release on its own. */
-  setAutoDownload(on: boolean): Promise<void>;
   releases(): Promise<ReleaseList>;
 };
 

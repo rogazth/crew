@@ -135,4 +135,4 @@ if (exists) {
   ]);
 }
 
-console.log(`\nReleased ${tag}. Installed copies pick it up within 6 hours, or from Crew › Check for Updates.`);
+console.log(`\nReleased ${tag}. Installed copies pick it up within half an hour, or from Crew › Check for Updates.`);

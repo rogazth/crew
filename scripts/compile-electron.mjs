@@ -10,7 +10,8 @@ function sha() {
 }
 
 /** `release` marks the published build, the only one on the installed app's data. */
-export async function compileElectron({ release = false } = {}) {
+/** `updateFeed` ({ releases, key }) and `outdir` are for scripts/update-e2e.mjs only: a local feed, its signing key, and a folder of its own. */
+export async function compileElectron({ release = false, updateFeed = null, outdir = "electron-dist" } = {}) {
   await build({
     entryPoints: [
       { in: "electron/main.ts", out: "main" },
@@ -18,14 +19,18 @@ export async function compileElectron({ release = false } = {}) {
       { in: "electron/browser/guest-preload.ts", out: "guest-preload" },
       { in: "electron/browser/popup-preload.ts", out: "popup-preload" },
     ],
-    outdir: "electron-dist",
+    outdir,
     outExtension: { ".js": ".cjs" },
     bundle: true,
     platform: "node",
     format: "cjs",
     target: "node20",
     external: ["electron"],
-    define: { __CREW_SHA__: JSON.stringify(sha()), __CREW_RELEASE__: JSON.stringify(release) },
+    define: {
+      __CREW_SHA__: JSON.stringify(sha()),
+      __CREW_RELEASE__: JSON.stringify(release),
+      __CREW_UPDATE_FEED__: JSON.stringify(updateFeed),
+    },
     logLevel: "warning",
   });
 }

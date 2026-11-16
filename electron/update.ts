@@ -5,7 +5,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, powerMonitor } from "electron";
 import {
   notesOf,
   UPDATE_CHANNELS,
@@ -15,7 +15,7 @@ import {
   type UpdateOffer,
   type UpdatePhase,
 } from "../src/lib/update";
-import { release } from "./build-info";
+import { release, updateFeed } from "./build-info";
 import { openSigned } from "./update-signature";
 import { errorText, trace } from "./trace";
 
@@ -23,10 +23,16 @@ const REPO = "rogazth/crew";
 const RELEASES = `https://github.com/${REPO}/releases`;
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=12`;
 const RELEASES_TTL = 30 * 60 * 1000;
+// Where releases are downloaded from; a stand-in only in the update e2e build.
+const FEED = updateFeed?.releases ?? RELEASES;
 // latest.json signed; copies from before signing still read latest.json itself.
-const MANIFEST = `${RELEASES}/latest/download/latest.signed.json`;
+const MANIFEST = `${FEED}/latest/download/latest.signed.json`;
+// The published build, or the update e2e build: any other local build stays put.
+const updates = release || updateFeed !== null;
 const FIRST_CHECK = 15_000;
-const EVERY = 6 * 60 * 60 * 1000;
+const EVERY = 30 * 60 * 1000;
+// Waking the Mac or coming back to Crew checks again, but not more often than this.
+const NUDGE_GAP = 5 * 60 * 1000;
 const PROGRESS_EVERY = 100;
 
 /** `size`, `date` and `notes` are optional in latest.json: releases cut before they were added lack them. */
@@ -49,7 +55,8 @@ let checkedAt: number | null = null;
 let offered: Manifest | null = null;
 let staged: Staged | null = null;
 let applied = false;
-let auto = false;
+// A newer release downloading while an older one waits for a restart.
+let replacing = false;
 let aborting: AbortController | null = null;
 let ensureWindow: (() => void) | null = null;
 
@@ -73,7 +80,7 @@ function parseManifest(value: unknown): Manifest | null {
   if (!/^[0-9a-f]{64}$/.test(sha256)) return null;
   // The url ends up as an argument to a shell script that replaces the bundle;
   // anything outside the release host is a redirect we did not publish.
-  if (!zip.startsWith(`${RELEASES}/download/`)) return null;
+  if (!zip.startsWith(`${FEED}/download/`)) return null;
   return {
     version,
     zip,
@@ -122,7 +129,7 @@ async function fetchManifest(): Promise<Manifest> {
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`${MANIFEST} answered ${response.status}`);
-  const parsed = parseManifest(JSON.parse(openSigned(await response.json())));
+  const parsed = parseManifest(JSON.parse(openSigned(await response.json(), updateFeed?.key)));
   if (!parsed) throw new Error("latest.json is not a manifest Crew can use");
   return parsed;
 }
@@ -218,25 +225,36 @@ function inFlight(): boolean {
   );
 }
 
-/** Downloads, verifies and unpacks the release next to the installed one; nothing is replaced yet. */
-async function stage(manifest: Manifest, target: string): Promise<void> {
-  const controller = new AbortController();
-  aborting = controller;
+/**
+ * Removes a staging folder, quietly. Not fs.rm: Electron's fs reads the
+ * bundle's app.asar as a folder and gives up on it, leaving the folder behind.
+ */
+async function discard(dir: string): Promise<void> {
+  await run("/bin/rm", ["-rf", dir]).catch((error: unknown) =>
+    trace.warn("update.cleanup_failed", { error: errorText(error instanceof Error ? error.message : String(error)) }),
+  );
+}
+
+/** Downloads, verifies and unpacks a release next to the installed one; nothing is replaced yet. */
+async function prepare(
+  manifest: Manifest,
+  target: string,
+  signal: AbortSignal,
+  report: (next: UpdatePhase) => void,
+): Promise<Staged> {
   const offer = offerOf(manifest);
-  let dir: string | null = null;
+  const dir = await mkdtemp(path.join(tmpdir(), "crew-update-"));
   try {
-    dir = await mkdtemp(path.join(tmpdir(), "crew-update-"));
     const zip = path.join(dir, path.basename(manifest.zip));
     let sent = 0;
-    await download(manifest.zip, zip, manifest.sha256, controller.signal, (received, total) => {
+    await download(manifest.zip, zip, manifest.sha256, signal, (received, total) => {
       // A chunk lands every few kilobytes; the bar only needs a few frames a second.
       const now = Date.now();
       if (now - sent < PROGRESS_EVERY && received !== total) return;
       sent = now;
-      set({ phase: "downloading", offer, received, total });
+      report({ phase: "downloading", offer, received, total });
     });
-    aborting = null;
-    set({ phase: "staging", offer });
+    report({ phase: "staging", offer });
     const unpacked = path.join(dir, "unpacked");
     await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
     const bundled = path.join(unpacked, path.basename(target));
@@ -244,11 +262,26 @@ async function stage(manifest: Manifest, target: string): Promise<void> {
     const script = path.join(dir, "swap.sh");
     await writeFile(script, SWAP, { mode: 0o755 });
     await rm(zip, { force: true });
-    staged = { stage: dir, script, app: bundled, target };
+    return { stage: dir, script, app: bundled, target };
+  } catch (error) {
+    await discard(dir);
+    throw error;
+  }
+}
+
+async function stage(manifest: Manifest, target: string): Promise<void> {
+  const controller = new AbortController();
+  aborting = controller;
+  const offer = offerOf(manifest);
+  try {
+    staged = await prepare(manifest, target, controller.signal, (next) => {
+      // Unpacking can't be cancelled.
+      if (next.phase === "staging") aborting = null;
+      set(next);
+    });
     applied = false;
     set({ phase: "ready", offer });
   } catch (error) {
-    if (dir) await rm(dir, { recursive: true, force: true });
     if (controller.signal.aborted) {
       set({ phase: "available", offer });
       return;
@@ -257,6 +290,32 @@ async function stage(manifest: Manifest, target: string): Promise<void> {
   } finally {
     aborting = null;
   }
+}
+
+/**
+ * A newer release came out while another waits for a restart. It downloads
+ * quietly; the waiting one stays installable until this one takes its place,
+ * and a failure leaves it there.
+ */
+async function restage(manifest: Manifest, waiting: Staged): Promise<void> {
+  replacing = true;
+  trace.info("update.restage", { version: manifest.version });
+  try {
+    const next = await prepare(manifest, waiting.target, new AbortController().signal, () => {});
+    // Restarted or quit meanwhile: the waiting one went in.
+    if (applied || staged !== waiting) {
+      await discard(next.stage);
+      return;
+    }
+    staged = next;
+    set({ phase: "ready", offer: offerOf(manifest) });
+  } catch (error) {
+    trace.warn("update.restage_failed", { error: errorText(error instanceof Error ? error.message : String(error)) });
+    return;
+  } finally {
+    replacing = false;
+  }
+  await discard(waiting.stage);
 }
 
 /** Hands the swap to a shell that outlives this process. Once only. */
@@ -287,18 +346,27 @@ function startDownload(): void {
 }
 
 export async function checkForUpdates(manual = false): Promise<void> {
-  if (inFlight()) return;
-  if (busy) return;
+  // A staged release keeps looking for a newer one; the card stays on it meanwhile.
+  const waiting = phase.phase === "ready" && !applied ? staged : null;
+  if (busy || replacing || (inFlight() && !waiting)) return;
   // A local build updating itself would turn into the release, on the installed app's data.
-  if (!app.isPackaged || !release || !bundle()) {
+  if (!app.isPackaged || !updates || !bundle()) {
     if (manual) set({ phase: "unpackaged" });
     return;
   }
   busy = true;
-  if (manual) set({ phase: "checking" });
+  if (manual && !waiting) set({ phase: "checking" });
   try {
     const manifest = await fetchManifest();
     checkedAt = Date.now();
+    if (waiting) {
+      // Restarted, or quit, while the feed answered: nothing to replace.
+      if (phase.phase === "ready" && !applied && staged === waiting && newer(manifest.version, phase.offer.version)) {
+        void restage(manifest, waiting);
+      }
+      set(phase);
+      return;
+    }
     if (!newer(manifest.version, app.getVersion())) {
       // A quiet check that finds nothing leaves the page as it was.
       set(manual || phase.phase === "available" ? { phase: "latest", version: app.getVersion() } : phase);
@@ -310,10 +378,11 @@ export async function checkForUpdates(manual = false): Promise<void> {
     }
     offered = manifest;
     set({ phase: "available", offer: offerOf(manifest) });
-    if (auto) startDownload();
+    // Always fetched ahead: the user only restarts to install.
+    startDownload();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (manual) set({ phase: "error", message });
+    if (manual && !waiting) set({ phase: "error", message });
     else {
       trace.warn("update.check_failed", { error: errorText(message) });
       console.error(`update check failed: ${message}`);
@@ -418,11 +487,6 @@ function registerIpc(): void {
     set({ phase: "idle" });
   });
   ipcMain.handle(UPDATE_CHANNELS.cancel, () => aborting?.abort());
-  ipcMain.handle(UPDATE_CHANNELS.auto, (_event, on: unknown) => {
-    auto = on === true;
-    // Switched on while a release is waiting to be asked for: take it now.
-    if (auto) startDownload();
-  });
   ipcMain.handle(UPDATE_CHANNELS.releases, () => publishedReleases());
 }
 
@@ -430,8 +494,20 @@ function registerIpc(): void {
 export function watchForUpdates(open: () => void): void {
   ensureWindow = open;
   registerIpc();
-  if (!app.isPackaged || !release) return;
-  const tick = () => void checkForUpdates();
+  if (!app.isPackaged || !updates) return;
+  // Launching focuses a window: the first check waits for FIRST_CHECK all the same.
+  let last = Date.now();
+  const tick = () => {
+    last = Date.now();
+    void checkForUpdates();
+  };
+  // The interval's clock stops while the Mac sleeps, so a laptop that sleeps
+  // often would wait days; waking and focusing catch up.
+  const nudge = () => {
+    if (Date.now() - last >= NUDGE_GAP) tick();
+  };
   setTimeout(tick, FIRST_CHECK).unref();
   setInterval(tick, EVERY).unref();
+  powerMonitor.on("resume", nudge);
+  app.on("browser-window-focus", nudge);
 }

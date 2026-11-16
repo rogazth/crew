@@ -18,8 +18,8 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { CrewGlyph } from "../../chrome/CrewGlyph";
-import { Button, IconButton, Overlay, Switch } from "../../chrome/kit";
-import { useAppInfo, useAutoDownload, useReleases, useUpdateActions, useUpdateState } from "../../hooks/useUpdate";
+import { Button, IconButton, Overlay } from "../../chrome/kit";
+import { useAppInfo, useReleases, useUpdateActions, useUpdateState } from "../../hooks/useUpdate";
 import { useNow } from "../../hooks/useNow";
 import type { AppInfo } from "../../lib/appInfo";
 import { openLicenses, openUrl } from "../../lib/host";
@@ -110,7 +110,6 @@ function Spinner() {
 function UpdateCard() {
   const state = useUpdateState();
   const { check, download, restart, skip, cancel } = useUpdateActions();
-  const [auto, setAuto] = useAutoDownload();
   const info = useAppInfo();
   const now = useNow(30_000);
   const checked = state.checkedAt === null ? null : `checked ${ago(state.checkedAt, now)}`;
@@ -235,14 +234,6 @@ function UpdateCard() {
         )}
         {notes.length > 0 && <Notes notes={notes} />}
       </section>
-      <div className="rounded-[14px] bg-card px-4">
-        <label data-setting="auto-download" className="flex min-h-11 cursor-pointer items-center gap-6 py-2">
-          <div className="min-w-0 flex-1">
-            <p>Download updates automatically</p>
-            </div>
-          <Switch checked={auto} onChange={setAuto} label="Download updates automatically" />
-        </label>
-      </div>
     </div>
   );
 }

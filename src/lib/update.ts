@@ -18,8 +18,6 @@ export const UPDATE_CHANNELS = {
   /** window → main: an offered version is not offered again until asked; anything else goes back to idle. */
   dismiss: "update:dismiss",
   cancel: "update:cancel",
-  /** window → main: the "download automatically" preference, which the window persists. */
-  auto: "update:auto",
   /** main → window: the menu asked for a check; show the About page. */
   show: "update:show",
   /** window → main: the published releases, newest first. */

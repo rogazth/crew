@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { updateHost } from "../lib/host";
 import type { AppInfo } from "../lib/appInfo";
-import { autoDownload, loadAutoDownload, saveAutoDownload, subscribeAutoDownload } from "../lib/updatePrefs";
 import type { SettingsSectionId } from "../lib/settings";
 import { READS, keep, peek, refresh, useRead } from "../lib/settingsReads";
 import type { ReleaseList, UpdateState } from "../lib/update";
@@ -45,12 +44,6 @@ export function useUpdateActions() {
   };
 }
 
-/** The "download automatically" choice, persisted; the updater in main is told on every change. */
-export function useAutoDownload(): [boolean, (on: boolean) => void] {
-  useEffect(() => void loadAutoDownload(), []);
-  return [useSyncExternalStore(subscribeAutoDownload, autoDownload), saveAutoDownload];
-}
-
 /** The build About describes; null until read, and outside Electron. */
 export function useAppInfo(): AppInfo | null {
   return useRead(READS.appInfo) ?? null;
@@ -69,8 +62,7 @@ export function useReleases(): { list: ReleaseList | null; reload: () => void } 
   };
 }
 
-/** App-level: hands the saved auto-download choice to the updater, and opens About when the menu checks for updates. */
+/** App-level: opens About when the menu checks for updates. */
 export function useUpdateWiring(openSettings: (section: SettingsSectionId) => void) {
-  useEffect(() => void loadAutoDownload(), []);
   useEffect(() => updateHost()?.onShow(() => openSettings("about")), [openSettings]);
 }
