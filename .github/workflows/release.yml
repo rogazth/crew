@@ -86,10 +86,16 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' }}
 
       # zig links against an old glibc, so the daemon runs on older distributions than the runner's.
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: latest
-          use-cache: false
+      # Fetched straight from ziglang.org at a pinned version and checksum: setup-zig still runs on Node 20.
+      - name: Install zig
+        env:
+          ZIG: zig-x86_64-linux-0.17.1
+          ZIG_SHA256: 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/zig.tar.xz" "https://ziglang.org/download/0.17.1/$ZIG.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$ZIG" >> "$GITHUB_PATH"
 
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
