@@ -97,7 +97,7 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "open_tab",
-            description: "Open a new browser tab in Crew at a URL. It shows in the user's tab strip and is yours to drive.",
+            description: "Open a new browser tab in Crew at a URL. It stays in the user's tab strip after you are done, so use a tab from list_tabs when one is already on the page.",
             schema: json!({
                 "type": "object",
                 "properties": { "url": { "type": "string", "description": "http(s) URL." } },
@@ -157,7 +157,7 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "browser_screenshot",
-            description: "A PNG of the tab: what is in view, or the whole page.",
+            description: "A PNG of the tab: what is in view, or the whole page. The result also gives the path of a copy saved to disk.",
             schema: with_tab(json!({ "full_page": { "type": "boolean" } }), &[]),
             audience: Audience::EVERYONE,
             cli: vec![cli("tabs", "screenshot").eg("crew tabs screenshot --full-page")],
@@ -468,7 +468,7 @@ impl BrowserTools {
 
     fn tab_for(&self, holder: &Holder, args: &Value) -> Result<String, String> {
         arg(args, "tab")
-            .map(str::to_string)
+            .map(tab_id)
             .or_else(|| self.leases.last_tab(&holder.key))
             .ok_or_else(|| "Name a tab: list_tabs shows this workspace's tabs, and open_tab makes one.".into())
     }
@@ -552,10 +552,80 @@ impl ToolFamily for BrowserTools {
         }
         let workspace_id = caller.workspace_id()?;
         let out = self.call(workspace_id, &Self::holder(caller), name, args)?;
-        Ok(ToolOutput::Content(match out {
+        let mut blocks = match out {
             Value::Array(blocks) => blocks,
             other => vec![json!({ "type": "text", "text": other.to_string() })],
-        }))
+        };
+        if name == "browser_screenshot" {
+            if let Some(note) = self.keep_screenshot(workspace_id, &blocks) {
+                blocks.push(json!({ "type": "text", "text": note }));
+            }
+        }
+        Ok(ToolOutput::Content(blocks))
+    }
+
+    /// A user's session is told this in `initialize`; a bot's and a
+    /// subagent's prompt says it in its own browser block.
+    fn instructions(&self, caller: &Caller) -> Option<String> {
+        let Caller::Terminal(session) = caller else { return None };
+        let harness = crate::prompts::Harness::for_provider(&session.provider);
+        Some(crate::prompts::spell(crate::prompts::BROWSER_USE, harness))
+    }
+}
+
+/// Where a workspace's screenshots go: `~/.crew/workspaces/<workspace>/screenshots`,
+/// beside its bots' folders. The work dir, not the data dir: on a Mac the data
+/// dir's path has spaces, and a path with spaces is neither a link nor an image
+/// in Markdown.
+pub fn screenshots(workspace_name: &str) -> std::path::PathBuf {
+    crate::bot_folder::workspace_root(&crate::paths::layout().work, workspace_name).join("screenshots")
+}
+
+fn workspace_name(store: &Store, workspace_id: &str) -> Option<String> {
+    store.with(|conn| conn.query_row("SELECT name FROM workspaces WHERE id = ?1", [workspace_id], |row| row.get(0))).ok()
+}
+
+/// Screenshots older than this are deleted when a new one is saved.
+const SCREENSHOT_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+impl BrowserTools {
+    /// Writes the screenshot in `blocks` to a folder of its own: the image
+    /// block alone reaches only the model, and a reply needs a path to show it. The note says where, or nothing when there was no image to keep
+    /// or nowhere to put it.
+    fn keep_screenshot(&self, workspace_id: &str, blocks: &[Value]) -> Option<String> {
+        use base64::Engine as _;
+        let data = blocks.iter().find(|block| block["type"] == "image")?["data"].as_str()?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+        let name = workspace_name(&self.store, workspace_id)?;
+        let dir = screenshots(&name);
+        std::fs::create_dir_all(&dir).ok()?;
+        prune(&dir, SCREENSHOT_KEEP);
+        let path = dir.join(format!("{}.png", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).ok()?;
+        let path = path.display();
+        Some(format!("Saved to {path}"))
+    }
+}
+
+/// Deletes the files in `dir` last changed longer than `keep` ago.
+fn prune(dir: &std::path::Path, keep: Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let old =
+            entry.metadata().and_then(|meta| meta.modified()).ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age > keep);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// A tab id as the strip keeps it: `browser:<uuid>`. Models pass the bare
+/// uuid often enough that it is taken for the same tab.
+fn tab_id(given: &str) -> String {
+    if given.starts_with("browser:") {
+        given.to_string()
+    } else {
+        format!("browser:{given}")
     }
 }
 
@@ -908,6 +978,14 @@ mod tests {
     #[test]
     fn a_screenshot_goes_out_as_an_image_block_not_as_text() {
         let store = store();
+        store
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO workspaces (id, name, path, created_at, sort_order) VALUES ('w1', 'Work', '/work', 0, 0)",
+                    [],
+                )
+            })
+            .expect("workspace");
         strip(&store, "w1", &["browser:a"]);
         let relay = BrowserRelay::new();
         let answer = relay.clone();
@@ -935,8 +1013,17 @@ mod tests {
         let me = Caller::User { workspace_id: Some("w1".into()) };
         let call = json!({ "name": "browser_screenshot", "arguments": { "tab": "browser:a" } });
         let out = crate::tools::handle(&host, &me, "tools/call", call).expect("call");
-        assert_eq!(out["content"], json!([{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]));
+        assert_eq!(out["content"][0], json!({ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }));
         assert!(out.get("isError").is_none());
+        // The same PNG, on disk, for a reply to show with `![…](path)`.
+        let note = out["content"][1]["text"].as_str().expect("a note with the path");
+        let path = note.strip_prefix("Saved to ").expect("path");
+        assert!(path.starts_with(screenshots("Work").to_str().unwrap()), "{note}");
+        assert_eq!(std::fs::read(path).expect("saved"), b"\x89PNG\r\n\x1a\n");
+        // The bare uuid names the same tab.
+        let call = json!({ "name": "browser_screenshot", "arguments": { "tab": "a" } });
+        let out = crate::tools::handle(&host, &me, "tools/call", call).expect("call");
+        assert!(out.get("isError").is_none(), "{out}");
     }
 
     fn hosted(id: &str, workspace: &str, title: &str) -> OpenPage {

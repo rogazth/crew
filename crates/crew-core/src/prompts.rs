@@ -124,7 +124,7 @@ are and your job: change it with `update_description` only when that changes.
 
 A turn with no header is from the user. A turn under a `## ` header (Message, Report, Question, Approval, Routine) \
 comes from another bot, a session or Crew, not from the user, and says how to answer it. What you write in the chat \
-reaches only the user.
+reaches only the user. {renders}
 
 ### Handing off work
 
@@ -155,8 +155,7 @@ Background commands in your shell end with your turn, after ten minutes at most.
 
 const BOT_BROWSER: &str = "### Browser
 
-Crew has a browser the user sees as tabs; use it for any web page. Open one with `open_tab` or reuse one from \
-`list_tabs`, read it with `browser_snapshot`, act on the `uid`s it returns with `browser_act`, check errors with \
+{browser_use} Read a tab with `browser_snapshot`, act on the `uid`s it returns with `browser_act`, check errors with \
 `browser_activity`, and `release_tab` when done. If a call fails, read the error and retry; use another browser only \
 when these tools are absent or the job asks for one. If a call says Crew is not open, say so.";
 
@@ -198,8 +197,8 @@ Do not start a server from your shell with `&` or `nohup`: nobody can see it, st
 
 const SESSION_BROWSER: &str = "### Browser
 
-Crew has a browser the user sees as tabs. For anything in a web page: `open_tab` \
-`{\"url\": \"http://localhost:3000\"}` (or reuse one from `list_tabs`), `browser_snapshot`, then act on the `uid`s it \
+{browser_use} In it: `open_tab` `{\"url\": \"http://localhost:3000\"}` when no tab fits, \
+`browser_snapshot`, then act on the `uid`s it \
 returns with `browser_act` `{\"action\": \"click\", \"uid\": \"4_17\"}`. `browser_activity` `{\"kind\": \"console\"}` \
 shows errors; `release_tab` when you are done. If a call fails, read the error and retry rather than switching to \
 another browser. If a call says Crew is not open, say so.";
@@ -227,7 +226,20 @@ an approval with its decision, or pass it to the user with the decision `ask_use
 turns in a row that letters started, until the user writes to it.";
 
 const TERMINAL_CHAT: &str = ", which Crew drives in the chat, a turn at a time. A message sent to you arrives \
-as a turn, so bots and sessions you write to can write back with `send_message`.";
+as a turn, so bots and sessions you write to can write back with `send_message`. {renders}";
+
+/// What the chat shows of a reply, for whoever writes in one.
+const RENDERS: &str = "Your replies show in Crew's chat as Markdown. When the user asks to see something you have as \
+an image, such as a screenshot, put it in your reply as `![what it shows](/absolute/path.png)`: a path alone shows \
+as a link, not the image. A ```mermaid fence draws a diagram, and an absolute file path, linked or in backticks, \
+opens that file in Crew.";
+
+/// When to reach for the browser at all, said to every reader that has it:
+/// its tabs are the user's, and an agent that browses unasked fills them.
+pub const BROWSER_USE: &str = "Crew has a browser the user sees as tabs, and every tab you open stays in their tab \
+strip. Use it when the request asks for browser work or names a page or tab, not to check your own change unasked. \
+Before opening one, call `list_tabs`: work in the tab the user named, or one already on that page, and open a new \
+tab only when none is.";
 
 // ---- rendering ---------------------------------------------------------------
 
@@ -272,8 +284,9 @@ fn blocks(tools: &[&str], processes: &str, browser: &str) -> String {
         if mine.is_empty() {
             continue;
         }
+        let block = block.replace("{browser_use}", BROWSER_USE);
         out.push_str("\n\n");
-        out.push_str(block);
+        out.push_str(&block);
         let unnamed: Vec<&str> = mine.into_iter().filter(|name| !block.contains(&format!("`{name}`"))).collect();
         if !unnamed.is_empty() {
             out.push_str(&format!("\n\nAlso: {}.", listed(&unnamed)));
@@ -397,6 +410,7 @@ pub fn bot(bot: &Bot) -> String {
             ("source", bot.harness.source()),
             ("deferred", &harness_deferred),
             ("tools", &format!("Yours, besides the process and browser tools below: {}.", listed(&others(bot.tools)))),
+            ("renders", RENDERS),
             // Last: they are the user's and the bot's text, and may hold anything.
             ("workspace", &workspace(bot.workspace)),
             ("rules", &crate::rules::lines(crate::rules::Owner::Bot(bot.id), bot.rules)),
@@ -496,7 +510,10 @@ pub fn terminal(name: &str, harness: Harness) -> String {
     let place = TERMINAL_CHAT;
     let reports = REPORTS_WAKE;
     spell(
-        &fill(TERMINAL, &[("glossary", crate::tools::GLOSSARY), ("name", name), ("where", place), ("reports", reports)]),
+        &fill(
+            TERMINAL,
+            &[("glossary", crate::tools::GLOSSARY), ("name", name), ("where", place), ("reports", reports), ("renders", RENDERS)],
+        ),
         harness,
     )
 }
@@ -534,6 +551,25 @@ mod tests {
 
     /// Each reader is told every tool `tools/list` gives it, spelled the way
     /// its harness lists them, and none it does not have.
+    /// Whoever writes in a chat the user reads is told what it shows, and
+    /// whoever has the browser is told its tabs are the user's.
+    #[test]
+    fn chat_readers_are_told_what_the_chat_shows_and_browser_holders_when_to_browse() {
+        let bot_tools = every(CallerKind::Bot);
+        let child_tools = every(CallerKind::Child);
+        let bot = render_bot(Harness::Mcp, &bot_tools);
+        let child = render_session(Harness::Mcp, Parent::Bot { name: "Lead", id: "b0b" }, true, &child_tools);
+        let shell = terminal("New session", Harness::Mcp);
+        for text in [&bot, &shell] {
+            assert!(text.contains("![what it shows](/absolute/path.png)") && text.contains("```mermaid"), "{text}");
+        }
+        for text in [&bot, &child] {
+            assert!(text.contains("names a page or tab") && !text.contains("{browser_use}"), "{text}");
+            assert!(text.contains("`mcp__crew__list_tabs`"), "{text}");
+        }
+        assert!(!render_bot(Harness::Mcp, &[]).contains("names a page or tab"), "no browser, no rule");
+    }
+
     #[test]
     fn every_prompt_names_the_tools_its_reader_has_as_its_harness_spells_them() {
         let bot_tools = every(CallerKind::Bot);

@@ -128,6 +128,8 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     }
     // Its bots go with it, and their folders with them.
     let folders = crate::bot_folder::of_workspace(store, &id)?;
+    let name: Option<String> = store
+        .with(|conn| conn.query_row("SELECT name FROM workspaces WHERE id = ?1", params![id], |row| row.get(0)).optional())?;
     store.with(|conn| {
         conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         conn.execute(
@@ -137,6 +139,15 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     })?;
     for folder in folders {
         crate::bot_folder::remove(&folder);
+    }
+    // Its screenshots too, unless another workspace's name makes the same folder.
+    if let Some(name) = name {
+        let shots = crate::browser_tools::screenshots(&name);
+        let names: Vec<String> =
+            store.with(|conn| conn.prepare("SELECT name FROM workspaces")?.query_map([], |row| row.get(0))?.collect())?;
+        if !names.iter().any(|other| crate::browser_tools::screenshots(other) == shots) {
+            let _ = std::fs::remove_dir_all(&shots);
+        }
     }
     crate::workspace_icon::forget_upload(store, &id);
     Ok(())
@@ -216,6 +227,23 @@ mod tests {
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).expect("dir");
         dir.to_string_lossy().into_owned()
+    }
+
+    /// A workspace's screenshots go with it, unless another workspace's name
+    /// makes the same folder and they may be its.
+    #[test]
+    fn deleting_a_workspace_takes_its_screenshots_unless_another_shares_the_folder() {
+        let store = store();
+        let name = format!("Shots {}", uuid::Uuid::new_v4());
+        let first = create(&store, name.clone(), a_folder()).expect("first");
+        let second = create(&store, name.clone(), a_folder()).expect("second");
+        let shots = crate::browser_tools::screenshots(&name);
+        std::fs::create_dir_all(&shots).expect("shots");
+        std::fs::write(shots.join("a.png"), b"png").expect("shot");
+        delete(&store, first.id).expect("delete first");
+        assert!(shots.join("a.png").exists(), "the other workspace may still show it");
+        delete(&store, second.id).expect("delete second");
+        assert!(!shots.exists(), "the last one takes the folder");
     }
 
     #[test]

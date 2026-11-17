@@ -50,7 +50,7 @@ fn assign(store: &Store, bot_id: &str, work: &Path) -> Result<Option<PathBuf>, S
         if let Some(stored) = stored.filter(|path| !path.is_empty()) {
             return Ok(Some(PathBuf::from(stored)));
         }
-        let base = work.join("workspaces").join(slug(&workspace, "workspace")).join("bots").join(slug(&bot, "bot"));
+        let base = workspace_root(work, &workspace).join("bots").join(slug(&bot, "bot"));
         let taken = |path: &Path| -> rusqlite::Result<bool> {
             tx.prepare_cached("SELECT 1 FROM bots WHERE folder = ?1")?.exists(params![path.to_string_lossy()])
         };
@@ -64,6 +64,13 @@ fn assign(store: &Store, bot_id: &str, work: &Path) -> Result<Option<PathBuf>, S
         tx.commit()?;
         Ok(Some(folder))
     })
+}
+
+/// A workspace's folder under the work dir, from the name it has now:
+/// `<work>/workspaces/<workspace>/`. Its bots' folders and its screenshots go
+/// in it.
+pub fn workspace_root(work: &Path, workspace_name: &str) -> PathBuf {
+    work.join("workspaces").join(slug(workspace_name, "workspace"))
 }
 
 /// The bot's folder as stored, without making one.
