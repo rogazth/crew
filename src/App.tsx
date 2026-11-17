@@ -38,7 +38,7 @@ import * as api from "./lib/api";
 import { peekUnsent } from "./lib/firstPrompt";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab, tabFile } from "./lib/tabs";
-import { worktreeLabel, worktreeOf } from "./lib/worktrees";
+import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { useConnectorsAlert } from "./surfaces/settings/integrations/alert";
 import { usePages } from "./hooks/usePages";
@@ -562,11 +562,6 @@ export function App() {
               onSwitch: () => openPalette("context"),
             }}
             groups={null}
-            branchOfSession={(session) => {
-              if (!active || session.workspaceId !== active.id) return null;
-              const tree = worktreeOf(session, active, worktrees.list);
-              return tree && !(tree.main && !tree.branch) ? worktreeLabel(tree) : null;
-            }}
             onDropFiles={openDropped}
           />
 

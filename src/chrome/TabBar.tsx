@@ -12,7 +12,6 @@ import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
 import { useLease } from "../hooks/useBrowserLeases";
-import { TabPeek, type PeekAnchor } from "./TabPeek";
 import { toneOf } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
@@ -76,8 +75,6 @@ type Props = {
   /** Said on the strip while the sidebar is away: where you are, in the worktree's hue, and the door to switch. */
   context: { workspace: string; branch: string; hue?: number | undefined; onSwitch: () => void };
   groups: TabGroups | null;
-  /** The branch a session works on, from its worktree; null when it has none to name. */
-  branchOfSession?: ((session: Session) => string | null) | undefined;
   /** Files dropped on the strip from Finder, each to open in a tab. */
   onDropFiles: (paths: string[]) => void;
 };
@@ -161,25 +158,12 @@ export function TabBar({
   onLaunch,
   context,
   groups,
-  branchOfSession,
   onDropFiles,
 }: Props) {
   const bar = useRef<HTMLDivElement>(null);
   const dropping = useFileDrop(bar, onDropFiles);
   const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
-  // A tab held still under the pointer for a beat shows what its session is doing.
-  const [peek, setPeek] = useState<{ tabId: string; anchor: PeekAnchor } | null>(null);
-  const peekTimer = useRef<number | undefined>(undefined);
-  const onPeek = useCallback((tabId: string, el: HTMLElement | null) => {
-    window.clearTimeout(peekTimer.current);
-    if (!el || document.documentElement.dataset.tabDragging !== undefined) return setPeek(null);
-    peekTimer.current = window.setTimeout(() => {
-      const rect = el.getBoundingClientRect();
-      setPeek({ tabId, anchor: { left: Math.min(rect.left, window.innerWidth - 312), top: rect.bottom + 6 } });
-    }, 450);
-  }, []);
-  useEffect(() => () => window.clearTimeout(peekTimer.current), []);
   // The shell's close is remade with every tab and session; the pills get one
   // that is not, so a tab opened does not redraw every pill in the strip.
   const latestClose = useRef(onClose);
@@ -199,7 +183,6 @@ export function TabBar({
   useTabDrag(bar, {
     onReorder: (group, next) =>
       onReorder(group === "pins" ? [...next, ...tabs.flatMap((tab) => (tab.pinned ? [] : [tab.id]))] : [...pinnedIds, ...itemOrder(next, items)]),
-    onStart: () => onPeek("", null),
   });
   const { ref, endRef, overflowing, canScrollStart, canScrollEnd, scroll } = useTabOverflow(itemIds.join("|"));
   const branchOf = (tab: Tab): Branch | null => {
@@ -298,7 +281,6 @@ export function TabBar({
                     onClose={closePill}
                     onMenu={setMenu}
                     branch={branchOf(tab)}
-                    onPeek={onPeek}
                   />
                 ))}
               <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-border" />
@@ -328,7 +310,6 @@ export function TabBar({
                       onClose={closePill}
                       onMenu={setMenu}
                       branch={branchOf(item.tab)}
-                      onPeek={onPeek}
                     />
                   ) : (
                     <GroupChip
@@ -367,16 +348,6 @@ export function TabBar({
           </div>
         </Tabs.List>
       </Tabs.Root>
-
-      {peek && !menu && (
-        <PeekFor
-          tabId={peek.tabId}
-          anchor={peek.anchor}
-          tabs={tabs}
-          sessions={sessions}
-          branchOf={(tab, session) => branchOf(tab)?.label ?? branchOfSession?.(session) ?? null}
-        />
-      )}
 
       {menu?.group && (
         <ActionMenu
@@ -437,7 +408,6 @@ const TabPill = memo(function TabPill({
   onClose,
   onMenu,
   branch,
-  onPeek,
 }: {
   tab: Tab;
   active: boolean;
@@ -445,7 +415,6 @@ const TabPill = memo(function TabPill({
   onClose: (id: string) => void;
   onMenu: (menu: Menu) => void;
   branch: Branch | null;
-  onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
   const status = tabStatus(tab, sessions);
   const tone = toneOf(status);
@@ -460,14 +429,8 @@ const TabPill = memo(function TabPill({
       data-incognito={isIncognitoTab(tab) || undefined}
       data-tauri-drag-region="false"
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
-      onContextMenu={(event) => {
-        onPeek(tab.id, null);
-        onMenu({ point: menuFromEvent(event), tab });
-      }}
-      onMouseEnter={(event) => tab.kind === "session" && onPeek(tab.id, event.currentTarget)}
-      onMouseLeave={() => onPeek(tab.id, null)}
-      onPointerDown={() => onPeek(tab.id, null)}
-      title={tab.kind === "session" ? undefined : tabTitle(tab, sessions)}
+      onContextMenu={(event) => onMenu({ point: menuFromEvent(event), tab })}
+      title={tabTitle(tab, sessions)}
       /* The card (crew-tab in index.css) marks the one on screen. */
       data-on={active || undefined}
       className={`crew-tab group w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} shrink-0 touch-none gap-1 pr-1 pl-2.5 ${
@@ -524,7 +487,6 @@ const PinnedPill = memo(function PinnedPill({
   onClose,
   onMenu,
   branch,
-  onPeek,
 }: {
   tab: Tab;
   active: boolean;
@@ -532,7 +494,6 @@ const PinnedPill = memo(function PinnedPill({
   onClose: (id: string) => void;
   onMenu: (menu: Menu) => void;
   branch: Branch | null;
-  onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
   const status = tabStatus(tab, sessions);
   const title = tabTitle(tab, sessions);
@@ -547,14 +508,8 @@ const PinnedPill = memo(function PinnedPill({
       data-tauri-drag-region="false"
       aria-label={title}
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
-      onContextMenu={(event) => {
-        onPeek(tab.id, null);
-        onMenu({ point: menuFromEvent(event), tab });
-      }}
-      onMouseEnter={(event) => tab.kind === "session" && onPeek(tab.id, event.currentTarget)}
-      onMouseLeave={() => onPeek(tab.id, null)}
-      onPointerDown={() => onPeek(tab.id, null)}
-      title={tab.kind === "session" ? undefined : title}
+      onContextMenu={(event) => onMenu({ point: menuFromEvent(event), tab })}
+      title={title}
       data-on={active || undefined}
       className="crew-tab w-8 shrink-0 touch-none justify-center"
     >
@@ -767,24 +722,4 @@ function PageIcon({
 
 function IncognitoIcon() {
   return <HatGlassesIcon role="img" aria-label="Incognito" className="size-3.5 text-text" />;
-}
-
-/** The hover card for whichever tab asked, if it still holds a session. */
-function PeekFor({
-  tabId,
-  anchor,
-  tabs,
-  sessions,
-  branchOf,
-}: {
-  tabId: string;
-  anchor: PeekAnchor;
-  tabs: Tab[];
-  sessions: Session[];
-  branchOf: (tab: Tab, session: Session) => string | null;
-}) {
-  const tab = tabs.find((t) => t.id === tabId);
-  const session = tab?.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
-  if (!tab || !session) return null;
-  return <TabPeek session={session} branch={branchOf(tab, session)} anchor={anchor} />;
 }
