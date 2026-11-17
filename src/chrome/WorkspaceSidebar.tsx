@@ -22,7 +22,7 @@ import {
   SearchIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { applyHeld, holdOrder, type HeldOrder } from "../lib/heldOrder";
 import { WorkspaceTile } from "./WorkspaceTile";
@@ -176,6 +176,12 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  // One panel serves every workspace: another workspace's list starts at its top, not at the offset the last one was left at.
+  const place = props.home ? "home" : props.workspace.id;
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = 0;
+  }, [place]);
   const filtering = query.trim().length > 0;
   const activeId = props.activeSessionId;
   const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
@@ -374,7 +380,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3" onPointerEnter={onPointerEnter} onPointerLeave={() => setPointing(false)}>
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto pb-3" onPointerEnter={onPointerEnter} onPointerLeave={() => setPointing(false)}>
         {props.home ? (
           <div className="flex h-12 items-center pr-2 pl-3">
             <span className={`${NAME_TYPE} min-w-0 truncate`}>Home</span>
