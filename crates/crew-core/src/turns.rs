@@ -1127,9 +1127,6 @@ impl TurnHost {
         if drive.is_none() || params.hidden == Some(true) || params.from_bot.is_some() {
             return self.start(params);
         }
-        if drive == Some(Driven::Child) && session.status == "exited" {
-            return Err("This session has exited. Start another one.".into());
-        }
         self.user_wrote(&session.id);
         let mode = match params.mode.as_deref() {
             None | Some("auto") => SendMode::Auto,
@@ -1305,9 +1302,6 @@ impl TurnHost {
         let Some(drive) = driven(&session) else {
             return Err(format!("{} is not a session Crew drives.", session.name));
         };
-        if drive == Driven::Child && session.status == "exited" {
-            return Err("This session has exited. Start another one.".into());
-        }
         {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             let live = self.lock().get(&params.session_id).is_some_and(|live| match live {
@@ -2449,12 +2443,12 @@ impl TurnHost {
     }
 
     /// Whether a session's process stays up past [`RELEASE_AFTER`]: its
-    /// background board has commands running, or a child it started has not
-    /// exited. A store that cannot say counts as pinned, so nothing is let go
+    /// background board has commands running, or a child it started is in
+    /// the middle of a turn, whose report would wake it. A store that cannot say counts as pinned, so nothing is let go
     /// on a guess; [`PIN_CAP`] still ends it.
     pub fn is_pinned(&self, session_id: &str) -> bool {
         let running = self.background.read(session_id, |board| !board.running().is_empty()).unwrap_or(false);
-        running || session::has_live_children(&self.store, session_id).unwrap_or(true)
+        running || session::has_working_children(&self.store, session_id).unwrap_or(true)
     }
 
     /// Lets go of the processes that have been idle too long: past `limit`

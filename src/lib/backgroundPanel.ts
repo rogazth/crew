@@ -37,7 +37,7 @@ export type PanelEntry = {
   id: string;
   kind: PanelKind;
   origin: PanelOrigin;
-  /** Whether the user may write to it: a Crew subagent that has not exited, and an independent session. */
+  /** Whether the user may write to it: any Crew subagent or independent session, exited ones too. */
   writable: boolean;
   /** Set while the agent waits on a question or an approval; its state is still running. */
   attention?: PanelAttention;
@@ -164,8 +164,8 @@ function fromChild(session: Session, kind: "subagent" | "session"): PanelEntry {
     id: `session:${session.id}`,
     kind,
     origin: "crew",
-    // A subagent that exited has no process to hear it; a session of the user's is always theirs to write to.
-    writable: kind === "session" || reason !== "exited",
+    // Exited or not, a message resumes it on its conversation.
+    writable: true,
     title: session.name,
     detail: session.description,
     state,

@@ -1020,18 +1020,13 @@ async fn run(
             leases.sweep(app_state::now_millis());
         }
     });
-    // A session nobody has given work for a while exits and frees its
-    // parent's slot, and an idle process is let go long before that.
-    let children = hosts.children.clone();
+    // An idle process is let go; its session stays, and the next message
+    // resumes it on its conversation.
     let turns = hosts.turns.clone();
     tokio::spawn(async move {
-        let mut every = tokio::time::interval(REAP_EVERY);
+        let mut every = tokio::time::interval(RELEASE_EVERY);
         loop {
             every.tick().await;
-            let children = children.clone();
-            if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
-                tracing::warn!(error = %crew_core::trace::error_text(&error.to_string()), "sessions.reap_failed");
-            }
             let turns = turns.clone();
             let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
         }
@@ -1576,8 +1571,8 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
 const EXPIRE_GRACE: Duration = Duration::from_secs(15 * 60);
 
-/// How often idle child sessions are looked at.
-const REAP_EVERY: Duration = Duration::from_secs(20);
+/// How often idle processes are looked at.
+const RELEASE_EVERY: Duration = Duration::from_secs(20);
 
 fn stale_before(days: u32) -> i64 {
     app_state::now_millis() - i64::from(days) * DAY_MS

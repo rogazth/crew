@@ -57,12 +57,7 @@ const open: symbol[] = [];
 
 /** Why there is nothing to write to, and the keys the thread answers to. */
 function ReadOnlyFooter({ entry, parent, stoppable }: { entry: PanelEntry; parent: string; stoppable: boolean }) {
-  const why =
-    entry.kind === 'shell'
-      ? 'Output of a shell'
-      : entry.origin === 'crew'
-        ? 'Exited · start another with delegate'
-        : `Read only · its report goes to ${parent}`;
+  const why = entry.kind === 'shell' ? 'Output of a shell' : `Read only · its report goes to ${parent}`;
   return (
     <div
       className="mx-auto flex h-11 w-full max-w-chat shrink-0 items-center gap-2 px-6 text-[11.5px] text-placeholder"

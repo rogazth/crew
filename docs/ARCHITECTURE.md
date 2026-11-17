@@ -34,7 +34,7 @@ These are said the same way here, in the MCP `instructions()` and in every sessi
 
 - **Bot**: a persistent identity with a name, a description, an autonomy, a mailbox and a history. It outlives its sessions.
 - **Session**: one provider CLI running a conversation, driven over the provider's protocol. It belongs to a bot, to the session that started it, or to the user.
-- **Subagent**: a session started with `delegate` to do one job for its parent. Nested, disposable, reports to its parent.
+- **Subagent**: a session started with `delegate` to do one job for its parent. Nested, reports to its parent, and keeps its conversation: a message resumes it.
 - **Independent session**: a session started with `start_session`. It belongs to the user and reports to nobody. `launched_by` records who started it and grants nothing.
 - **Message**: a letter written with `send_message`. It arrives as a turn, in an envelope naming the writer.
 - **Report**: a subagent's last message of a turn its parent started. It needs no tool.
@@ -154,7 +154,7 @@ sequenceDiagram
   D->>C: next turn, same process
 ```
 
-Limits: subagents work at depth one, a parent has at most four live, and a subagent's autonomy is at most its parent's. Idle subagents exit after 30 minutes and stay exited.
+Limits: subagents work at depth one, and a subagent's autonomy is at most its parent's. A parent has no cap on how many it starts. An idle subagent's process is let go after 30 minutes; the subagent stays, and a message resumes it on its conversation, as it does one stopped with `stop_session`.
 
 ## Writing to each other
 

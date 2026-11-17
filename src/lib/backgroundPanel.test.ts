@@ -286,13 +286,13 @@ describe("panelEntries kinds", () => {
     expect(panelEntries(null, [handed], [], S1)).toEqual([]);
   });
 
-  it("makes a Crew subagent writable until it exits, and a session always", () => {
+  it("makes a Crew subagent or session writable, exited or not", () => {
     const exited = session("gone", { name: "gone", status: "exited", lastEvent: { kind: "exited", at: 1, cursor: 1 } });
     const reported = session("done", { name: "done", status: "idle", lastEvent: { kind: "report", at: 1, cursor: 1 } });
     const sessionGone = { ...launched, id: "g2", name: "g2", status: "exited", lastEvent: { kind: "exited", at: 1, cursor: 1 } } as Session;
     const by = Object.fromEntries(panelEntries(null, [exited, reported, sessionGone], [], S1).map((e) => [e.title, e.writable]));
 
-    expect(by).toEqual({ gone: false, done: true, g2: true });
+    expect(by).toEqual({ gone: true, done: true, g2: true });
   });
 
   it("makes a process never writable", () => {

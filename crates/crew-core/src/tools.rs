@@ -688,7 +688,7 @@ pub fn on_demand(name: &str) -> bool {
 
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
-pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor, grok) running a conversation; a bot outlives its sessions, and a session can be thrown away. A subagent is a session started with delegate to do one job for the session that started it, with any provider: nested under its parent, reporting to it, disposable. A session of the user's, an independent one, is started with start_session: it shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. A message is a letter written with send_message; it arrives as a turn, in an envelope that names who wrote it. A report is a subagent's last message of a turn its parent started; it needs no tool. A subagent works for the session that started it; a session works for the user.";
+pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor, grok) running a conversation; a bot outlives its sessions, and a session can be thrown away. A subagent is a session started with delegate to do one job for the session that started it, with any provider: nested under its parent and reporting to it, it keeps its conversation, so a message resumes it later. A session of the user's, an independent one, is started with start_session: it shows in the sidebar like one the user opened, starts on the prompt it was given and reports to nobody. A message is a letter written with send_message; it arrives as a turn, in an envelope that names who wrote it. A report is a subagent's last message of a turn its parent started; it needs no tool. A subagent works for the session that started it; a session works for the user.";
 
 /// Every tool a caller of this kind is listed once every family is
 /// registered, as the daemon has them.
@@ -1504,7 +1504,6 @@ mod tests {
         assert!(visible_names(CallerKind::Bot).contains(&"rules"));
         assert!(!visible_names(CallerKind::Bot).contains(&"memory"));
     }
-
 
     /// A description written by another model is fine; one the bot cannot
     /// revise is a persona it is stuck with.

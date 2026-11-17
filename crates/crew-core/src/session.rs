@@ -295,12 +295,15 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     })
 }
 
-/// Whether a session started a child that has not exited: the child may still
-/// report to it, so the session's process stays up for it.
-pub fn has_live_children(store: &Store, parent: &str) -> Result<bool, String> {
+/// Whether a session started a child that is in the middle of a turn: its
+/// report is on the way, so the session's process stays up for it. An idle
+/// child does not count: a message resumes it, and its parent, whenever.
+pub fn has_working_children(store: &Store, parent: &str) -> Result<bool, String> {
     store.with(|conn| {
-        conn.prepare_cached("SELECT EXISTS (SELECT 1 FROM sessions WHERE parent_id = ?1 AND status != 'exited')")?
-            .query_row(params![parent], |row| row.get(0))
+        conn.prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM sessions WHERE parent_id = ?1 AND status IN ('starting', 'working', 'needs-input'))",
+        )?
+        .query_row(params![parent], |row| row.get(0))
     })
 }
 

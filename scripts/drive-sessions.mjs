@@ -918,7 +918,7 @@ const scenarios = {
     return "no letter; the user's card allowed it; the report woke the bot";
   },
 
-  // Stopped mid-turn, the transcript stays.
+  // Stopped mid-turn, the transcript stays, and a message resumes it.
   async g(provider) {
     const shell = await terminal(`g-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 90`, then reply with the word DONE.");
@@ -928,10 +928,12 @@ const scenarios = {
     const read = await must(shell.token, "read_session", { session: id, include_tools: true });
     assert(/sleep 90/.test(read.text) && /Stopped by/.test(read.text), read.text);
     assert(!/\[assistant\]\W*DONE\W*$/m.test(read.text), "the turn had finished before the stop");
-    const sent = await tool(shell.token, "send_message", { to: id, text: "more" });
-    assert(!sent.ok && /exited/.test(sent.text), "an exited session took a message");
     assert((await row(id)).status === "exited", "not exited");
-    return "exited; transcript kept and readable";
+    const sent = await must(shell.token, "send_message", { to: id, text: "Do not run anything. Reply with just the word AGAIN." });
+    assert(sent.delivery === "resumed", `not resumed: ${JSON.stringify(sent)}`);
+    const again = (await waitEvent(shell.token, id)).sessions[0];
+    assert(again.event === "turn" && /AGAIN/.test(again.report), `after the resume: ${JSON.stringify(again)}`);
+    return "exited; transcript kept; a message resumed it";
   },
 
   // The limits: depth, the cap, autonomy, ownership.
@@ -950,11 +952,9 @@ const scenarios = {
     assert(!names.includes("delegate") && !names.includes("start_session"), `a child is offered the start tools: ${names}`);
     const call = await tool(childToken, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt: "x" });
     assert(!call.ok && /Unknown tool|yourself|ask your parent/.test(call.text), `a child delegated: ${call.text}`);
-    // The cap: three more make four live; a fifth is refused.
+    // No cap: four more make five live.
     const more = [];
-    for (let n = 0; n < 3; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
-    const fifth = await tool(shell.token, "delegate", { provider, model: MODELS[provider], effort: effortFor(provider), prompt: "Reply with OK." });
-    assert(!fifth.ok && /4 live subagents/.test(fifth.text), `a fifth started: ${fifth.text}`);
+    for (let n = 0; n < 4; n++) more.push(await start(shell.token, provider, "Reply with the word OK."));
     // Autonomy never grows.
     const careful = await terminal(`h-ask-${provider}`);
     await setAutonomy(careful, "ask");
@@ -969,7 +969,7 @@ const scenarios = {
     assert(!stop.ok && /not by you/.test(stop.text), `stop_session as a stranger: ${stop.text}`);
     await waitAll(shell.token, more);
     for (const other of [id, ...more]) await must(shell.token, "stop_session", { session: other });
-    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger reads, cannot stop`;
+    return `child tools: ${names.join(", ")}; five live; full refused; stranger reads, cannot stop`;
   },
 
   // The CLI dies mid-turn: an error.

@@ -12,8 +12,8 @@
 //! session that is the user's, reports to nobody and records who launched it.
 //!
 //! `send_message` writes to any bot or session in the workspace but the
-//! caller itself and an exited subagent, as long as the target's autonomy is
-//! not above the caller's (the user is exempt). The mailbox is the queue:
+//! caller itself, as long as the target's autonomy is not above the caller's
+//! (the user is exempt); one that has exited is resumed on its conversation. The mailbox is the queue:
 //! idle, the reader starts on it now; busy, it waits for the turn to end;
 //! `steer` puts it into the running turn where the CLI can take that. To a
 //! subagent waiting on a question, it is the answer.
@@ -49,8 +49,6 @@ fn request_id(args: &Value) -> Result<Option<String>, String> {
     }
 }
 
-/// Live sessions one parent may have: anything not exited counts.
-pub const LIVE_CAP: usize = 4;
 /// How long `start_session` with `wait` blocks by default, and at most. The
 /// MCP shim gives the call that long and a margin more (`mcp::call_timeout`).
 pub const WAIT_DEFAULT_S: u64 = 600;
@@ -69,9 +67,6 @@ const SNIPPET_TOKENS: u32 = 40;
 const WHOLE_CHARS: usize = 1_500;
 /// The neighbours the best hit comes with, either side.
 const TOP_WINDOW: usize = 3;
-/// How long an idle child is kept before it exits, unless
-/// `CREW_SESSION_IDLE_MINUTES` says otherwise.
-pub const IDLE_MINUTES: u64 = 30;
 
 /// Which of the two tools is starting a session.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -143,39 +138,11 @@ impl SessionTools {
         let _ = self.retirement.set(retirement);
     }
 
-    /// How long an idle child is kept.
-    pub fn idle_limit() -> Duration {
-        let minutes = std::env::var("CREW_SESSION_IDLE_MINUTES")
-            .ok()
-            .and_then(|raw| raw.trim().parse::<f64>().ok())
-            .filter(|minutes| *minutes > 0.0)
-            .unwrap_or(IDLE_MINUTES as f64);
-        Duration::from_secs_f64(minutes * 60.0)
-    }
-
-    /// Children idle (or failed) for longer than `limit` exit: they hold a slot
-    /// under their parent's cap, and their process, which goes with them. A
-    /// child that background work or a child of its own still pins is not idle.
-    /// Returns the ids that went.
-    pub fn reap(&self, limit: Duration) -> Result<Vec<String>, String> {
-        let before = now_millis() - limit.as_millis() as i64;
-        let idle: Vec<Session> = session::list_all(&self.store)?
+    fn live_children(&self, workspace: &str, parent: &str) -> Result<Vec<Session>, String> {
+        Ok(session::list(&self.store, workspace.to_string())?
             .into_iter()
-            .filter(|row| row.kind == "child" && matches!(row.status.as_str(), "idle" | "error"))
-            .filter(|row| row.updated_at < before && !self.turns.is_running(&row.id))
-            .filter(|row| !self.turns.is_pinned(&row.id))
-            .collect();
-        let minutes = (limit.as_secs_f64() / 60.0).round().max(1.0) as u64;
-        let mut gone = Vec::new();
-        for row in idle {
-            self.turns.exit_idle_child(
-                &row,
-                &format!("idle for {minutes} minutes"),
-                &format!("Ended after {minutes} minutes idle. Its transcript stays here."),
-            );
-            gone.push(row.id);
-        }
-        Ok(gone)
+            .filter(|row| row.kind == "child" && row.parent_id.as_deref() == Some(parent) && row.status != "exited")
+            .collect())
     }
 
     /// The subagent `id`, if this caller may drive it: one it started, or any
@@ -252,13 +219,6 @@ impl SessionTools {
         }
     }
 
-    fn live_children(&self, workspace: &str, parent: &str) -> Result<Vec<Session>, String> {
-        Ok(session::list(&self.store, workspace.to_string())?
-            .into_iter()
-            .filter(|row| row.kind == "child" && row.parent_id.as_deref() == Some(parent) && row.status != "exited")
-            .collect())
-    }
-
     /// The question a session is waiting on, as it asked it: only while it
     /// waits, and only one it asked with its question tool (an approval is
     /// the user's).
@@ -331,19 +291,19 @@ impl SessionTools {
     }
 
     /// Whether `caller` may write to `target`, and if not, why. Any bot or
-    /// session in the workspace takes a letter, but not from itself, not once
-    /// a subagent has exited (subagents are disposable: start another with
-    /// `delegate`), and not from a caller with less autonomy than the target
-    /// has: a session that has to ask could otherwise hand work to one that
-    /// does not. The user is exempt.
+    /// session in the workspace takes a letter, but not from itself, and not
+    /// from a caller with less autonomy than the target has: a session that
+    /// has to ask could otherwise hand work to one that does not. The user is
+    /// exempt. A session that has exited has no turn to interrupt.
     fn may_write(&self, caller: &Caller, target: &Session) -> Result<(), String> {
         self.reach(caller, target, false)
     }
 
     /// Whether `caller` may send `target` a letter: as `may_write`, except
-    /// that a letter to an independent session that has exited resumes it
-    /// (plan decision 14), and a subagent may always write to the
-    /// session that started it, since its reports reach that parent anyway.
+    /// that a letter to a session that has exited, subagent or not, resumes
+    /// it on its conversation (plan decision 14), and a subagent may always
+    /// write to the session that started it, since its reports reach that
+    /// parent anyway.
     fn may_send(&self, caller: &Caller, target: &Session) -> Result<(), String> {
         self.reach(caller, target, true)
     }
@@ -354,16 +314,11 @@ impl SessionTools {
                  offer the user a routine with a once schedule."
                 .into());
         }
-        if target.status == "exited" && (target.kind == "child" || !letter) {
-            return Err(if target.kind == "child" {
-                format!(
-                    "{} is a subagent that has exited, and a subagent stays exited. read_session still reads it; start \
-                     another with delegate.",
-                    target.name
-                )
-            } else {
-                format!("{} has exited, so nothing can reach it.", target.name)
-            });
+        if target.status == "exited" && !letter {
+            return Err(format!(
+                "{} has exited, so there is no turn to reach. A message with send_message resumes it.",
+                target.name
+            ));
         }
         let to_my_parent = letter
             && match caller {
@@ -425,11 +380,6 @@ impl SessionTools {
         let listed: Vec<Value> = rows
             .iter()
             .filter(|row| Some(row.id.as_str()) != me)
-            .filter(|row| match row.kind.as_str() {
-                // A subagent that has exited is listed only to whoever started it.
-                "child" => (row.parent_id.is_some() && row.parent_id.as_deref() == me) || row.status != "exited",
-                _ => true,
-            })
             .map(|row| {
                 let kind = if row.kind == "bot" { "bot" } else { "session" };
                 let mut out = json!({
@@ -517,8 +467,8 @@ impl SessionTools {
                 target.name
             ));
         };
-        // An independent session that has exited takes the letter as a turn
-        // on the conversation it left (plan decision 14).
+        // A session that has exited, subagent or not, takes the letter as a
+        // turn on the conversation it left (plan decision 14).
         let resuming = target.status == "exited";
         let mut fell_back = None;
         // The letter a steer that did not go through left in the box.
@@ -919,19 +869,6 @@ impl SessionTools {
             },
         };
         let name = text(args.get("name")).unwrap_or_else(|| default_name(&provider, &prompt));
-        if how == Start::Delegate {
-            if let Some(me) = caller.session() {
-                let live = self.live_children(&workspace, &me.id)?;
-                if live.len() >= LIVE_CAP {
-                    return Err(format!(
-                        "You already have {LIVE_CAP} live subagents: {}. Stop one with stop_session first; one idle \
-                         for {} minutes ends on its own.",
-                        live.iter().map(|row| format!("{} {} ({})", row.name, row.id, row.status)).collect::<Vec<_>>().join(", "),
-                        Self::idle_limit().as_secs() / 60
-                    ));
-                }
-            }
-        }
         let (worktree, made_tree) = self.worktree(caller, &workspace, args.get("worktree"), &name)?;
         if made_tree {
             *kept = worktree.clone();
@@ -2165,7 +2102,7 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "send_message",
             description: concat!(
-                "Write to a bot or a session in this workspace: any but yourself and a subagent that has exited (start another with delegate), and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A letter to an independent session that has exited resumes it (the result says resumed); a subagent may always write to the session that started it. ",
+                "Write to a bot or a session in this workspace: any but yourself, and none that runs with more autonomy than you have (list_peers says write for each; the user can write to any). A letter to a session that has exited, a subagent included, resumes it on its conversation (the result says resumed); a subagent may always write to the session that started it. ",
                 "It arrives as a turn, in an envelope naming you: your name and id, and that a model wrote it. Idle, the reader starts on it now; busy, it waits until the current turn ends. ",
                 "steer: true puts it into the running turn instead, to correct its course, where the CLI can take that (Claude and Codex); anywhere else it is queued. ",
                 "To a subagent that is waiting on a question, it answers the question, from anyone who may write to it: text answers a single question (free text is fine), answers gives one answer per question, in order. ",
@@ -2189,10 +2126,10 @@ pub fn catalog() -> Vec<Tool> {
         Tool {
             name: "delegate",
             description: concat!(
-                "Hand one job to a subagent: a provider CLI (claude, codex, opencode, cursor or grok) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you and disposable. It sees nothing of your conversation: put everything it needs in the prompt. ",
+                "Hand one job to a subagent: a provider CLI (claude, codex, opencode, cursor or grok) working on prompt, in this workspace, for you, as a harness's own subagent would. It is nested under you. It sees nothing of your conversation: put everything it needs in the prompt. ",
                 "Each time it ends a turn you started, its final message, its report, comes back to you; a bot or a session is woken by it as a turn of its own (reports that come close together are one turn), so end your turn rather than wait or poll. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
-                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. ",
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. A subagent keeps its conversation: one that finished, sat idle or was stopped picks up where it left off on your next send_message, so give it follow-up work rather than start another. ",
                 "request_id makes the call safe to retry: the same id from you returns the subagent the first call made. Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
             ),
             schema: start_schema(true),
@@ -5728,23 +5665,6 @@ time.sleep(600)
         assert!(!w.turns.background_list(&id).live, "its tray is still open");
     }
 
-    /// The reaper frees a slot by exiting an idle child, but a child that a
-    /// background terminal still pins is not idle.
-    #[test]
-    fn the_reaper_leaves_a_child_whose_background_terminal_still_runs() {
-        let w = world();
-        let parent = w.session("terminal", "shell", "full");
-        let (id, _) = w.codex(&parent, "BGKEEP 30", None);
-        w.wait(&parent, &id, json!({}));
-        w.settle(&id);
-        until_background(&w, &id, |list| !list.commands.is_empty());
-        std::thread::sleep(Duration::from_millis(5));
-        assert!(w.tools.reap(Duration::from_millis(1)).unwrap().is_empty(), "a pinned child was reaped");
-        assert_eq!(w.row(&id).status, "idle");
-        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
-        w.turns.release(&id);
-    }
-
     /// Esc on an idle Claude child stops nothing: its process and its tray
     /// stay, with whatever runs in the background. `stop_session` ends the
     /// child, and closes the tray with its process.
@@ -5824,9 +5744,10 @@ time.sleep(600)
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
         let text = read["text"].as_str().unwrap();
         assert!(text.contains("SLEEP 30") && text.contains("Stopped by shell"), "{text}");
-        let refused = w.call(&parent, "send_message", json!({ "to": id, "text": "more" }));
-        assert!(refused.is_err_and(|e| e.contains("has exited")));
-        assert_eq!(w.settle(&id).status, "exited");
+        let resumed = w.call(&parent, "send_message", json!({ "to": id, "text": "more" })).expect("send");
+        assert_eq!(resumed["delivery"], "resumed", "{resumed}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: more");
+        assert_eq!(w.settle(&id).status, "idle");
     }
 
     #[test]
@@ -6161,22 +6082,17 @@ time.sleep(600)
         }
     }
 
+    /// A parent has no cap on its subagents: what runs at once is the
+    /// environment's to bound, not the relation's.
     #[test]
-    fn the_fifth_live_session_is_refused_until_one_stops() {
+    fn a_parent_may_start_as_many_subagents_as_it_needs() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let ids: Vec<String> = (0..LIVE_CAP).map(|n| w.start(&parent, &format!("job {n}"))).collect();
-        let fifth = w.call(&parent, "delegate", json!({ "provider": "opencode", "prompt": "one more" }));
-        assert!(fifth.is_err_and(|e| e.contains("already have 4 live subagents")), "the cap let a fifth through");
+        let ids: Vec<String> = (0..6).map(|n| w.start(&parent, &format!("job {n}"))).collect();
         for id in &ids {
             w.settle(id);
         }
-        w.call(&parent, "stop_session", json!({ "session": ids[0] })).expect("stop");
-        let id = w.start(&parent, "now there is room");
-        w.settle(&id);
-        // Another parent has its own four; the user has no cap.
-        let other = w.session("terminal", "other", "full");
-        w.settle(&w.start(&other, "mine"));
+        assert_eq!(w.live_of(parent.session_id().unwrap()).len(), 6);
     }
 
     #[test]
@@ -6214,20 +6130,28 @@ time.sleep(600)
         assert_eq!(launches.len(), 1);
     }
 
+    /// A subagent keeps its conversation: stopped, it takes its parent's
+    /// next message as a turn on it, and reports to the parent as before.
     #[test]
-    fn an_idle_session_is_reaped_and_frees_its_slot() {
+    fn a_stopped_subagent_resumes_on_a_message_and_reports_to_its_parent() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let id = w.start(&parent, "x");
         w.wait(&parent, &id, json!({}));
         w.settle(&id);
-        assert!(w.tools.reap(Duration::from_secs(3600)).unwrap().is_empty(), "a fresh session went");
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(w.tools.reap(Duration::from_millis(1)).unwrap(), vec![id.clone()]);
+        w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
         assert_eq!(w.row(&id).status, "exited");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["event"], "exited");
+        let out = w.call(&parent, "send_message", json!({ "to": id, "text": "and this" })).expect("send");
+        assert_eq!(out["delivery"], "resumed", "{out}");
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!(out["sessions"][0]["event"], "exited");
-        assert!(out["sessions"][0]["outcome"].as_str().unwrap().contains("idle"));
+        assert_eq!(out["sessions"][0]["report"], "report: and this", "{out}");
+        w.settle(&id);
+        assert_eq!(w.row(&id).status, "idle");
+        // Nothing to interrupt in one that exited, but a message still reaches it.
+        w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
+        let interrupted = w.call(&parent, "interrupt_session", json!({ "session": id }));
+        assert!(interrupted.is_err_and(|e| e.contains("send_message resumes it")));
     }
 
     impl World {
@@ -6269,32 +6193,24 @@ time.sleep(600)
         assert_eq!(left, [message.id]);
     }
 
-    /// A child that goes idle and is reaped, or stopped while idle, has
-    /// nothing new for its bot parent: the report of its last turn already
-    /// reached it, so the exit wakes no one.
+    /// A child stopped while idle has nothing new for its bot parent: the
+    /// report of its last turn already reached it, so the exit wakes no one.
     #[test]
     fn an_idle_child_that_exits_does_not_wake_its_bot_parent() {
         let w = world();
         let bot = w.session("bot", "Planner", "full");
         let me = bot.session_id().unwrap().to_string();
-        let reaped = w.start(&bot, "x");
         let stopped = w.start(&bot, "y");
-        w.settle(&reaped);
         w.settle(&stopped);
-        w.heard(&me, &reaped);
         w.heard(&me, &stopped);
         w.settle(&me);
         let launched = w.launches().len();
-        std::thread::sleep(Duration::from_millis(30));
         w.call(&bot, "stop_session", json!({ "session": stopped })).expect("stop");
-        assert_eq!(w.tools.reap(Duration::from_millis(1)).unwrap(), vec![reaped.clone()]);
-        for id in [&reaped, &stopped] {
-            assert_eq!(w.row(id).status, "exited");
-        }
+        assert_eq!(w.row(&stopped).status, "exited");
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(crate::mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0, "an exit left a letter");
         assert_eq!(w.launches().len(), launched, "an exit woke the bot");
-        let out = w.wait(&bot, &reaped, json!({ "timeout_s": 1 }));
+        let out = w.wait(&bot, &stopped, json!({ "timeout_s": 1 }));
         assert_eq!(out["sessions"][0]["event"], "exited", "{out}");
     }
 
@@ -6514,9 +6430,8 @@ time.sleep(600)
         w.settle(&to);
     }
 
-    /// Who may write to whom (decision 11): any bot or session but itself and
-    /// an exited subagent, none that has more autonomy than the caller; the
-    /// user may write to any.
+    /// Who may write to whom (decision 11): any bot or session but itself,
+    /// none that has more autonomy than the caller; the user may write to any.
     #[test]
     fn who_may_write_to_whom() {
         let w = world();
@@ -6587,13 +6502,15 @@ time.sleep(600)
             (json!("session"), json!(true))
         );
         assert!(w.peer(&bot, bot.session_id().unwrap()).is_null(), "a caller is not its own peer");
-        // An exited subagent takes nothing, and only its parent still lists it.
+        // An exited subagent is listed to everyone and takes a letter as before.
         w.call(&shell, "stop_session", json!({ "session": child })).expect("stop");
-        refused(&shell, &child, "start another with delegate");
-        refused(&other, &child, "start another with delegate");
-        assert!(w.peer(&other, &child).is_null() && w.peer(&bot, &child).is_null());
-        assert_eq!(w.peer(&shell, &child)["status"], "exited");
-        assert_eq!(w.peer(&shell, &child)["write"], json!(false));
+        for caller in [&shell, &other, &bot] {
+            assert_eq!(w.peer(caller, &child)["status"], "exited");
+            assert_eq!(w.peer(caller, &child)["write"], json!(true));
+        }
+        let resumed = w.call(&other, "send_message", json!({ "to": child, "text": "more" })).expect("send");
+        assert_eq!(resumed["delivery"], "resumed", "{resumed}");
+        w.settle(&child);
     }
 
     /// Decision 12: whoever may write to a subagent waiting on a question may
@@ -7048,9 +6965,9 @@ time.sleep(600)
     }
 
     /// Decisions 1 and 6: no `owner`, no wait; and a separate session is not
-    /// capped, not counted against anyone, and not reaped when idle.
+    /// counted against anyone.
     #[test]
-    fn independent_sessions_are_not_capped_not_counted_and_not_reaped() {
+    fn independent_sessions_are_not_counted_against_their_launcher() {
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         w.turns.override_claude_home(w.dir.join("home"));
@@ -7059,7 +6976,7 @@ time.sleep(600)
             let out = w.call(&shell, tool, json!({ "provider": "claude", "prompt": "x", "owner": "user" }));
             assert!(out.is_err_and(|e| e.contains("owner is gone")), "{tool}");
         }
-        let ids: Vec<String> = (0..=LIVE_CAP)
+        let ids: Vec<String> = (0..5)
             .map(|n| {
                 let out = w
                     .call(&shell, "start_session", json!({ "provider": "claude", "prompt": format!("job {n}") }))
@@ -7070,19 +6987,8 @@ time.sleep(600)
         for id in &ids {
             w.settle(id);
         }
-        assert_eq!(ids.len(), LIVE_CAP + 1);
         assert!(w.live_of(shell.session_id().unwrap()).is_empty(), "a session of the user's counted against its launcher");
-        // The cap still holds for subagents beside them.
-        let subagents: Vec<String> = (0..LIVE_CAP).map(|n| w.start(&shell, &format!("sub {n}"))).collect();
-        assert!(w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "one more" })).is_err());
-        for id in subagents.iter().chain(&ids) {
-            w.settle(id);
-        }
-        let gone = w.tools.reap(Duration::ZERO).expect("reap");
-        assert!(ids.iter().all(|id| !gone.contains(id)), "an independent session was reaped: {gone:?}");
         assert!(ids.iter().all(|id| w.row(id).status != "exited"));
-        // A fifth subagent started, and a session started by one the cap forbade, are not the same thing.
-        w.call(&shell, "start_session", json!({ "provider": "claude", "prompt": "and another" })).expect("still open");
     }
 
     /// Decision 3: a report goes to whoever started the turn. The parent's
@@ -7177,7 +7083,7 @@ time.sleep(600)
         let listed = crate::tools::handle(&host, &shell, "tools/list", json!({})).expect("list");
         let send = listed["tools"].as_array().unwrap().iter().find(|t| t["name"] == "send_message").expect("send_message");
         let said = send["description"].as_str().unwrap();
-        assert!(said.contains("any but yourself and a subagent that has exited") && said.contains("more autonomy"), "{send}");
+        assert!(said.contains("any but yourself, and none") && said.contains("more autonomy"), "{send}");
         assert!(!said.contains("You cannot receive a reply"), "{send}");
         for caller in [&shell, &bot, &w.user()] {
             let said = format!(
@@ -8634,7 +8540,7 @@ time.sleep(600)
     }
 
     /// A real child of `provider` runs one turn for a bot parent, whose
-    /// report wakes it; then the child goes idle and is reaped, and the
+    /// report wakes it; then the child is stopped while idle, and the
     /// parent is not woken again for it: no letter, no turn. The parent runs
     /// on a fake CLI of another provider, so the real one never stands in
     /// for it and every turn it takes is in a launch log.
@@ -8689,8 +8595,7 @@ time.sleep(600)
         let woken = turns_of_parent();
         let heard = w.blocks(&me).len();
 
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(w.tools.reap(Duration::from_millis(1)).unwrap(), vec![id.clone()]);
+        w.call(&bot, "stop_session", json!({ "session": id })).expect("stop");
         assert_eq!(w.row(&id).status, "exited");
         assert!(w.turns.test_agents().pid_of(&id).is_none(), "{provider}'s process outlived the exit");
         std::thread::sleep(Duration::from_secs(3));
@@ -8700,7 +8605,7 @@ time.sleep(600)
         assert_eq!(w.blocks(&me).len(), heard, "the exit reached the parent's transcript");
         let out = w.wait(&bot, &id, json!({ "timeout_s": 1 }));
         assert_eq!(out["sessions"][0]["event"], "exited", "{out}");
-        eprintln!("{provider}: reaped without waking the parent");
+        eprintln!("{provider}: stopped without waking the parent");
     }
 
     /// Runs the real `claude` on haiku, low effort. Needs `claude auth login`.
@@ -10331,10 +10236,10 @@ time.sleep(600)
         assert!(!w.turns.is_running(&mine.id), "the same failing turn started again");
     }
 
-    /// Decision 14: a letter to an exited independent session is a turn on
-    /// its conversation.
+    /// Decision 14: a letter to a session that exited, independent or a
+    /// subagent, is a turn on its conversation.
     #[test]
-    fn a_message_to_an_exited_independent_session_resumes_it() {
+    fn a_message_to_an_exited_session_resumes_it() {
         let w = world();
         let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
         w.say(&mine, "first");
@@ -10348,13 +10253,15 @@ time.sleep(600)
         w.settle(&mine.id);
         assert_eq!(prompts(&w).last().map(|p| p.contains("and now this")), Some(true), "{:?}", prompts(&w));
         assert_eq!(w.row(&mine.id).provider_session_id, bound, "it resumed the conversation it had");
-        // A subagent that exited stays exited.
+        // So does a subagent, from anyone who may write to it.
         let lead = w.session("terminal", "shell", "full");
         let kid = w.start(&lead, "x");
         w.settle(&kid);
         w.call(&lead, "stop_session", json!({ "session": kid })).expect("stop");
-        let refused = w.call(&bot, "send_message", json!({ "to": kid, "text": "again" }));
-        assert!(refused.is_err_and(|e| e.contains("start another with delegate")));
+        let again = w.call(&bot, "send_message", json!({ "to": kid, "text": "again" })).expect("send");
+        assert_eq!(again["delivery"], "resumed", "{again}");
+        w.settle(&kid);
+        assert_eq!(w.row(&kid).status, "idle");
     }
 
     /// Decision 18: the startup sweep also hands a top-level session the
