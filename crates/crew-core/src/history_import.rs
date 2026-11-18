@@ -7,10 +7,12 @@
 //! made every session a chat, which reads `messages` only, so those sessions
 //! opened empty. This reads each one's file once and stores what it said.
 //!
-//! It runs at every start and is a no-op once done: a session's history goes
-//! in only ahead of the first block Crew stored for it, and only when that
-//! block is from after migration 38 (a session already in the chat before it
-//! has its whole conversation in `messages`).
+//! It runs at every start and is a no-op once done. Only a session made
+//! before migration 38 is looked at: one made since has been a chat from its
+//! first turn, and its CLI's file is never read. A session's history goes in
+//! only ahead of the first block Crew stored for it, and only when that block
+//! is from after migration 38 (a session already in the chat before it has
+//! its whole conversation in `messages`).
 
 use std::path::{Path, PathBuf};
 
@@ -68,17 +70,16 @@ pub fn import_all(store: &Store, sources: &Sources) -> Result<usize, String> {
     };
     let mut imported = 0;
     for row in session::list_all(store)? {
-        if row.kind != "terminal" {
+        // Made since migration 38: all it said is in `messages` already, and
+        // reading its file at every start would cost the whole of it for nothing.
+        if row.kind != "terminal" || row.created_at >= cutoff {
             continue;
         }
-        let existing = store.with(|conn| messages::all(conn, &row.id))?;
-        let first_at = match existing.first() {
+        let first_at = match store.with(|conn| messages::first_at(conn, &row.id))? {
             None => None,
-            Some(first) => match first.at {
-                Some(at) if at >= cutoff => Some(at),
-                // Already in the chat before migration 38: it is all there.
-                _ => continue,
-            },
+            Some(at) if at >= cutoff => Some(at),
+            // Already in the chat before migration 38: it is all there.
+            Some(_) => continue,
         };
         let Some(history) = read(store, sources, &row) else { continue };
         let earlier: Vec<Block> = match first_at {
@@ -90,7 +91,7 @@ pub fn import_all(store: &Store, sources: &Sources) -> Result<usize, String> {
             continue;
         }
         let mut blocks = earlier;
-        blocks.extend(existing);
+        blocks.extend(store.with(|conn| messages::all(conn, &row.id))?);
         store.with(|conn| messages::sync(conn, &row.id, &blocks, &mut Vec::new()))?;
         imported += 1;
     }
@@ -199,7 +200,8 @@ mod tests {
     /// A Claude session from the terminal view has its history only in
     /// Claude's file: it comes in whole, once. A session already in the chat
     /// before migration 38 keeps what it has, and one used since gets its
-    /// history ahead of the turns Crew stored.
+    /// history ahead of the turns Crew stored. A session made since the
+    /// migration is not looked at, whatever its file holds.
     #[test]
     fn brings_each_terminal_sessions_claude_history_into_the_chat() {
         let dir = temp_dir("history-import");
@@ -219,10 +221,13 @@ mod tests {
             .expect("session")
         };
         let (old, chat, used, missing) = (make("old"), make("chat"), make("used"), make("missing"));
+        // Those four are from before migration 38, which opening the store just applied.
+        store.with(|conn| conn.execute("UPDATE sessions SET created_at = 0", [])).expect("backdate");
+        let since_migration = make("since");
         let projects = dir.join("projects");
         let folder = projects.join(crate::claude_title::project_slug(&ws.path));
         std::fs::create_dir_all(&folder).expect("folder");
-        for row in [&old, &chat, &used] {
+        for row in [&old, &chat, &used, &since_migration] {
             std::fs::write(folder.join(format!("{}.jsonl", row.id)), FIXTURE).expect("fixture");
         }
         let mut before = new_block(BlockRole::User, "said in the chat before migration 38");
@@ -250,6 +255,7 @@ mod tests {
         assert_eq!(used_blocks.len(), history.len() + 1);
         assert_eq!(used_blocks.last(), Some(&since));
         assert!(stored(&store, &missing.id).is_empty());
+        assert!(stored(&store, &since_migration.id).is_empty(), "its file is not read");
 
         // Run again, nothing moves.
         assert_eq!(import_all(&store, &sources).expect("again"), 0);

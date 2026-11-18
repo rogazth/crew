@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crew_core::agent::AgentHost;
 use crew_core::bridge::{Bridge, StartError};
@@ -361,10 +361,16 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     let registry = std::sync::Arc::new(crew_core::agent_groups::Registry::new(groups));
     let pty = PtyHost::with_registry(registry.clone());
     let agents = AgentHost::with_shared_registry(registry);
+    // Each step up to the WebSocket says how long it took: the window waits on all of them.
+    let step = Instant::now();
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
+    tracing::info!(target: "daemon", took_ms = crew_core::trace::ms(step.elapsed()), "daemon.store_opened");
     // Before anything reads a transcript: a session from before migration 38
     // has its history only in its CLI's files.
-    match crew_core::history_import::import_all(&store, &crew_core::history_import::Sources::from_env()) {
+    let step = Instant::now();
+    let imported = crew_core::history_import::import_all(&store, &crew_core::history_import::Sources::from_env());
+    tracing::info!(target: "daemon", took_ms = crew_core::trace::ms(step.elapsed()), "daemon.history_checked");
+    match imported {
         Ok(0) => {}
         Ok(n) => tracing::info!(sessions = n, "history.imported"),
         Err(e) => tracing::warn!(error = %crew_core::trace::error_text(&e.to_string()), "history.import_failed"),
@@ -375,6 +381,7 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
     if !listen.wait_for_addr {
         crew_core::registry::start_sync(store.clone());
     }
+    let step = Instant::now();
     let handle = serve_on(
         Config {
             pty: pty.clone(),
@@ -390,6 +397,7 @@ fn start(dir: &Path, bridge: &Bridge, listen: Listen) -> Result<(PtyHost, AgentH
         listen,
     )
     .map_err(Failure::Transient)?;
+    tracing::info!(target: "daemon", took_ms = crew_core::trace::ms(step.elapsed()), "daemon.serving");
     // On every machine: its CLIs are the ones its sessions run.
     handle.read_provider_servers();
     Ok((pty, agents, processes, handle))

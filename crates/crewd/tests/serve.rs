@@ -162,6 +162,8 @@ fn a_daemon_that_imports_a_terminal_history_traces_how_many_sessions_it_brought_
             "ask".into(),
         )
         .expect("session");
+        // From before migration 38, which opening the store just applied: one made since is not looked at.
+        store.with(|conn| conn.execute("UPDATE sessions SET created_at = 0", [])).expect("backdate");
         let folder = home.join(".claude/projects").join(crew_core::claude_title::project_slug(&workspace.path));
         std::fs::create_dir_all(&folder).expect("folder");
         std::fs::write(

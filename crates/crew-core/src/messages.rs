@@ -431,6 +431,13 @@ pub fn all(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<Block>> 
     rows.collect()
 }
 
+/// When a session's first block was said, or `None` when it has no blocks.
+pub fn first_at(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<i64>> {
+    let mut stmt = conn.prepare_cached("SELECT at FROM messages WHERE session_id = ?1 ORDER BY pos ASC LIMIT 1")?;
+    let mut rows = stmt.query(params![session_id])?;
+    rows.next()?.map(|row| row.get(0)).transpose()
+}
+
 /// Read back the fingerprints of what is already stored, so a hub that just
 /// hydrated does not rewrite a whole transcript on its first flush.
 pub fn fingerprints(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<u64>> {
