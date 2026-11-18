@@ -69,6 +69,8 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
   const [carried] = useState(() => takeCarried(session.id));
   const [draft, setDraft] = useState(carried?.draft ?? "");
   const [files, setFiles] = useState<AttachedFile[]>(carried?.files ?? []);
+  /** Bumped by each message the user sends: the transcript goes back to its foot. */
+  const [sent, setSent] = useState(0);
   useEffect(() => {
     noteUnsent(session.id, { draft, files });
   }, [session.id, draft, files]);
@@ -296,6 +298,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
       const sent = command ? text : text + agentNote(mentionedAgents(text, agents), mentionedTrees(text, worktrees, agents));
       setDraft("");
       setFiles([]);
+      setSent((count) => count + 1);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
       if (working || waiting.length > 0) void pass(session, cwd, sent, attached, mode ?? "queue", asked);
       else void send(session, cwd, sent, attached, asked);
@@ -528,6 +531,7 @@ export function TurnChat({ session, sessions, cwd, active, trail, readOnly = fal
               field={field}
               onDraft={setDraft}
               onSend={submit}
+              sent={sent}
               onStop={() => void stop(session)}
               work={work}
               whileWorking={whileWorking}

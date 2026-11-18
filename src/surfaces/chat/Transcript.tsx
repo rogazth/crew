@@ -39,6 +39,8 @@ type Props = {
   placeFocus?: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** Counts the messages the user has sent: a new one follows the foot again, wherever the reader was. */
+  sent?: number;
   /** What closes the transcript, after the queue. */
   foot?: ReactNode;
   /** When the running turn began, for blocks that carry no time (a subagent's thread). */
@@ -79,6 +81,7 @@ export function Transcript({
   onAnswer,
   foot,
   since,
+  sent = 0,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -190,6 +193,18 @@ export function Transcript({
   }, [endHold]);
 
   useLayoutEffect(place, [place, blocks, working, active]);
+
+  // Sending is the reader asking to see their message and its answer: follow the foot again.
+  // Set before the message lands, so the render that brings it scrolls to it.
+  const lastSent = useRef(sent);
+  useLayoutEffect(() => {
+    if (sent === lastSent.current) return;
+    lastSent.current = sent;
+    endHold();
+    pinned.current = true;
+    reading.current = null;
+    place();
+  }, [sent, endHold, place]);
 
   // Shiki answering, an image resolving, a webfont landing: each one grows the
   // transcript after the paint that placed the reader. The observer runs

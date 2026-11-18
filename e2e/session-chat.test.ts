@@ -151,6 +151,32 @@ test("a second message runs on the same process, and the context meter follows t
   assert.ok(alive(launches[0]!.pid), "the CLI that started first is still the one running");
 });
 
+test("a message sent from further up the transcript takes it back to its foot", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await newChat(workspace.id);
+  // One word the fake streams at once, long enough that its bubble and its reply wrap past the window.
+  const long = "scroll".repeat(1500);
+  await send(long);
+  await crew.window.getByText(/^Reply 1: scroll/).waitFor();
+  await turnOver(crew);
+
+  const transcript = crew.window.locator('[data-selectable="blocks"]:visible').first();
+  const gap = () => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  assert.ok(await transcript.evaluate((el) => el.scrollHeight > el.clientHeight * 1.5), "the transcript does not scroll");
+  await transcript.evaluate((el) => {
+    el.scrollTop = 0;
+    el.dispatchEvent(new Event("scroll"));
+  });
+  await waitFor(async () => (await gap()) > 100, { message: "the reader is up the transcript" });
+
+  await send("back to the foot");
+  await said("back to the foot").waitFor();
+  await waitFor(async () => (await gap()) <= 16, { message: "the transcript follows the foot after a send" });
+  await said("Reply 2: back to the foot").waitFor();
+  assert.ok((await gap()) <= 16, "the reply landed under the reader");
+});
+
 test("the access and effort chips reach the running CLI as control requests, with no restart", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);

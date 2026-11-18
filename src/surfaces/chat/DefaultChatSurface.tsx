@@ -24,6 +24,7 @@ export function DefaultChatSurface({
   field,
   onDraft,
   onSend,
+  sent = 0,
   onStop,
   whileWorking,
   queue,
@@ -90,6 +91,7 @@ export function DefaultChatSurface({
             placeFocus={finding === null}
             onApprove={onApprove}
             onAnswer={onAnswer}
+            sent={sent}
             foot={session.paused ? <PausedRow sessionId={session.id} /> : null}
           />
         )}

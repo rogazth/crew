@@ -29,6 +29,8 @@ export type ChatSurfaceProps = {
   onDraft: (draft: string) => void;
   /** `mode` is how a message written while a turn runs goes: absent when no turn runs. */
   onSend: (mode?: "steer" | "queue") => void;
+  /** Counts the messages the user has sent: each one takes the transcript back to its foot. */
+  sent?: number;
   onStop: () => void;
   onAttach: () => void;
   onPasteFiles: (files: File[]) => void;
