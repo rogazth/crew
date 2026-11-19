@@ -150,7 +150,10 @@ export const ActivityGroup = memo(function ActivityGroup({
   const open = pinned ?? (sent(focusId) || sent(marked));
   if (steps.length === 0) return null;
   // One fold deep at most: the turn's fold already hides the work, so it opens onto the steps themselves.
-  if (flat) {
+  // A settled run of one step is that step: "Ran a command" over the one command would be a fold that hides nothing.
+  // What it captured keeps the run's line, which is where the tiles sit.
+  const single = !live && steps.length === 1 && captures.length === 0 && waiting.length === 0;
+  if (flat || single) {
     return (
       <div className="crew-timeline flex flex-col gap-0.5">
         {steps.map((block) => (
@@ -166,7 +169,7 @@ export const ActivityGroup = memo(function ActivityGroup({
           <RunLine blocks={blocks} steps={steps} live={live} open={open} waiting={waiting.length > 0} since={since} />
         </Collapsible.Trigger>
         <Collapsible.Panel className="crew-phase-panel">
-          <div className="crew-timeline flex flex-col gap-0.5 pt-1 pb-0.5">
+          <div className="crew-timeline crew-phase-steps flex flex-col gap-0.5 pt-1 pb-0.5">
             {steps.map((block) => (
               <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
             ))}
@@ -276,15 +279,18 @@ function RunLine({
   const icon: Icon = DIGEST_ICON[digest.kind];
   return (
     <>
+      {/* The orb stays while the agent works: it is the sign that it does. The chevron is for the settled line. */}
       <span className="crew-node relative">
         {doing ? (
-          <WorkOrb state={orbFor(steps.at(-1))} label={doing} className="transition-opacity group-hover:opacity-0" />
+          <WorkOrb state={orbFor(steps.at(-1))} label={doing} />
         ) : (
-          createElement(icon, { className: "size-3.5 transition-opacity group-hover:opacity-0" })
+          <>
+            {createElement(icon, { className: "size-3.5 transition-opacity group-hover:opacity-0" })}
+            <ChevronRightIcon
+              className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+            />
+          </>
         )}
-        <ChevronRightIcon
-          className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-        />
       </span>
       {doing ? (
         <RollingLine text={doing} />
@@ -350,7 +356,7 @@ function RollingLine({ text }: { text: string }) {
   }, [frame.seq, frame.previous]);
   // The outgoing line keeps its key, so its node and its light carry on as it leaves.
   return (
-    <span className="crew-roll" title={frame.current}>
+    <span className="crew-roll max-w-[28rem]" title={frame.current}>
       {frame.previous !== null ? (
         <span key={frame.seq - 1} className="crew-roll-out" aria-hidden>
           <Shimmer className="truncate">{frame.previous}</Shimmer>

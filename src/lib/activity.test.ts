@@ -247,6 +247,13 @@ describe("nowDoing", () => {
     expect(nowDoing([withDetail(tool("Read", "Read a.ts", "pending"), { kind: "file", path: "src/a.ts" })])).toBe("Reading src/a.ts");
   });
 
+  it("names a long command by its program", () => {
+    const run = (command: string) => nowDoing([withDetail(tool("Bash", command, "pending"), { kind: "command", command })]);
+    expect(run("cd /Users/me/project && npm test")).toBe("Running npm test");
+    expect(run("cd /Users/me/project && grep -rn \"working orb\" src | head -30 | sort")).toBe("Running grep");
+    expect(run("RUST_LOG=debug /usr/local/bin/cargo test --workspace --all-features -- --nocapture")).toBe("Running cargo");
+  });
+
   it("turns a server's tool into a verb", () => {
     const shot = withDetail(tool("mcp__chrome__take_screenshot", "chrome · take screenshot", "pending"), { kind: "mcp", server: "chrome", tool: "take_screenshot", input: "{}" });
     expect(nowDoing([shot])).toBe("Taking screenshot");

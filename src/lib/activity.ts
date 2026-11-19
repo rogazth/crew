@@ -217,7 +217,7 @@ export function nowDoing(blocks: Block[]): string | null {
   if (block.role !== "tool") return null;
   const line = toolLine(block);
   const detail = detailOf(block);
-  if (detail?.kind === "command") return `Running ${line.text}`;
+  if (detail?.kind === "command") return running(line.text);
   if (detail?.kind === "mcp") {
     const [verb = "", ...rest] = detail.tool.replace(/[_-]/g, " ").split(" ");
     return [ing(verb), ...rest].join(" ");
@@ -225,6 +225,25 @@ export function nowDoing(blocks: Block[]): string | null {
   if (detail?.kind === "fetch") return `Reading ${line.text}`;
   if (line.verb) return `${ING[line.verb] ?? line.verb} ${line.text}`;
   return line.text || null;
+}
+
+/** A command longer than this is named by its program alone. */
+const COMMAND_MAX = 40;
+
+/**
+ * A command as the line says it: whole when short, else by the program it
+ * runs ("Running grep"), since the middle of a long one tells nothing at a
+ * glance. A leading `cd <dir> &&` and `NAME=value` set no program of their own.
+ */
+function running(command: string): string {
+  const bare = command.replace(/^(?:\s*cd\s+\S+\s*(?:&&|;)\s*)+/, "").trim();
+  if (bare.length <= COMMAND_MAX) return `Running ${bare || command}`;
+  const program = bare
+    .split(/\s+/)
+    .find((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
+    ?.split("/")
+    .pop();
+  return program ? `Running ${program}` : "Running command";
 }
 
 function decap(label: string): string {

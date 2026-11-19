@@ -546,11 +546,9 @@ html[data-sidebar-resize="active"] * {
   grid-template-rows: 0fr;
   opacity: 0;
 }
-/* Steps hang off a hairline rail under the phase icon. */
+/* Steps sit under the run's words, one level in from its icon (19px node + 8px gap). */
 .crew-phase-steps {
-  margin-left: 9px;
-  padding-left: 18px;
-  border-left: 1px solid var(--color-border);
+  padding-left: 27px;
 }
 /* Live labels move; the rest of the log holds still. */
 @keyframes crew-shimmer {
