@@ -306,7 +306,7 @@ impl Connectors {
         drop(_held);
         super::set_identity(&self.store, &flow.account_id, Some(&identity))?;
         super::set_state(&self.store, &flow.account_id, AccountState::Connected, None)?;
-        super::set_builtin_tools(&self.store, &flow.account_id, &builtin.tool_defs())?;
+        super::set_tools(&self.store, &flow.account_id, &builtin.tool_defs())?;
         // Another app of the same account may have waited on this consent.
         self.changed();
         super::account(&self.store, &flow.account_id)?.ok_or_else(|| "The account is gone".into())
@@ -601,7 +601,7 @@ impl Connectors {
             return Ok(());
         }
         if let Some(builtin) = super::connector_of(&self.store, account_id)?.as_ref().and_then(Builtin::of) {
-            super::set_builtin_tools(&self.store, account_id, &builtin.tool_defs())?;
+            super::set_tools(&self.store, account_id, &builtin.tool_defs())?;
             self.changed();
             // Every built-in is one of Google's apps, run with `gws`.
             let Builtin::Google(app) = builtin;
@@ -614,7 +614,7 @@ impl Connectors {
             .with_token(account_id, |remote, token| async move { remote.list_tools(&token).await })
             .await
             .map_err(|Unavailable(line)| line)?;
-        super::set_raw_tools(&self.store, account_id, &listed)?;
+        super::set_tools(&self.store, account_id, &listed)?;
         self.changed();
         Ok(())
     }

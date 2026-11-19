@@ -59,7 +59,9 @@ pub fn mint(store: &Store, name: &str) -> Result<(VaultMachine, String), String>
 pub fn machines(store: &Store) -> Result<Vec<VaultMachine>, String> {
     store.with(|conn| {
         conn.prepare("SELECT id, name, created_at, last_call FROM vault_machines ORDER BY created_at")?
-            .query_map([], |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? }))?
+            .query_map([], |row| {
+                Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? })
+            })?
             .collect()
     })
 }
@@ -76,18 +78,18 @@ pub fn revoke_all(store: &Store) -> Result<(), String> {
 /// The machine a token is, if any.
 pub fn machine_of(store: &Store, token: &str) -> Result<Option<VaultMachine>, String> {
     store.with(|conn| {
-        conn.query_row(
-            "SELECT id, name, created_at, last_call FROM vault_machines WHERE token_hash = ?1",
-            [hash(token)],
-            |row| Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? }),
-        )
+        conn.query_row("SELECT id, name, created_at, last_call FROM vault_machines WHERE token_hash = ?1", [hash(token)], |row| {
+            Ok(VaultMachine { id: row.get(0)?, name: row.get(1)?, created_at: row.get(2)?, last_call: row.get(3)? })
+        })
         .optional()
     })
 }
 
 /// Whether a machine is still known here: revoking one ends what it has open.
 pub fn is_known(store: &Store, id: &str) -> Result<bool, String> {
-    store.with(|conn| conn.query_row("SELECT 1 FROM vault_machines WHERE id = ?1", [id], |_| Ok(())).optional().map(|row| row.is_some()))
+    store.with(|conn| {
+        conn.query_row("SELECT 1 FROM vault_machines WHERE id = ?1", [id], |_| Ok(())).optional().map(|row| row.is_some())
+    })
 }
 
 pub fn called(store: &Store, id: &str) -> Result<(), String> {
@@ -290,15 +292,34 @@ mod tests {
         let vault = store();
         let c = connectors::add(
             &vault,
-            NewConnector { name: "Notion".into(), registry_name: Some("com.notion/mcp".into()), url: "https://mcp.notion.com/mcp".into(), icon_url: None, description: String::new(), publisher: "notion.com".into() },
+            NewConnector {
+                name: "Notion".into(),
+                registry_name: Some("com.notion/mcp".into()),
+                url: "https://mcp.notion.com/mcp".into(),
+                icon_url: None,
+                description: String::new(),
+                publisher: "notion.com".into(),
+            },
         )
         .unwrap();
         let a = connectors::add_account(&vault, &c.id, None, None).unwrap();
         connectors::set_state(&vault, &a.id, AccountState::Connected, None).unwrap();
         connectors::set_workspaces(&vault, &a.id, Some(&["w1".into()])).unwrap();
-        connectors::set_raw_tools(&vault, &a.id, &[serde_json::json!({ "name": "search", "annotations": { "readOnlyHint": true } })]).unwrap();
+        connectors::set_tools(&vault, &a.id, &[serde_json::json!({ "name": "search", "annotations": { "readOnlyHint": true } })])
+            .unwrap();
         let copy = store();
-        connectors::add(&copy, NewConnector { name: "Stale".into(), registry_name: None, url: "https://x.dev/mcp".into(), icon_url: None, description: String::new(), publisher: "x.dev".into() }).unwrap();
+        connectors::add(
+            &copy,
+            NewConnector {
+                name: "Stale".into(),
+                registry_name: None,
+                url: "https://x.dev/mcp".into(),
+                icon_url: None,
+                description: String::new(),
+                publisher: "x.dev".into(),
+            },
+        )
+        .unwrap();
         let snap = snapshot(&vault).unwrap();
         import(&copy, &snap).unwrap();
         assert_eq!(snapshot(&copy).unwrap(), snap);
