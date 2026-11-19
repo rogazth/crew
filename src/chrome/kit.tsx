@@ -73,7 +73,7 @@ export function Field({
 }) {
   return (
     <label className={`flex flex-col gap-1.5 ${className}`}>
-      <span className="text-[12px] font-medium text-text-muted">{label}</span>
+      <span className="text-[12px] font-medium text-text">{label}</span>
       {children}
       {error ? (
         <span data-error className="text-[12px] text-danger">{error}</span>
