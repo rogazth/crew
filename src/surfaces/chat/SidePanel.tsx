@@ -12,7 +12,8 @@ import { useSidebarWidth } from "../../hooks/useSidebarWidth";
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 900;
-const DEFAULT_WIDTH = 420;
+/** Until it is dragged, the panel takes this share of the window, and follows the window as it resizes. */
+const DEFAULT_SHARE = 0.4;
 /** Long enough for the spring to land; a frame that never comes must not leave the pane shut. */
 const LAND_MS = 500;
 
@@ -68,6 +69,18 @@ const placeHost = (host: HTMLElement, width: number) => host.style.setProperty("
 const shutSlot = (slot: HTMLElement) => {
   slot.style.width = "0px";
 };
+const fitWidth = () => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(window.innerWidth * DEFAULT_SHARE)));
+
+/** The default width: a share of the window, kept current as the window resizes. */
+function useFitWidth() {
+  const [fit, setFit] = useState(fitWidth);
+  useEffect(() => {
+    const update = () => setFit(fitWidth());
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return fit;
+}
 
 export function SidePanel({ open, active, onHost, children }: { open: boolean; active: boolean; onHost?: (el: HTMLElement | null) => void; children: ReactNode }) {
   const [host] = useState(() => {
@@ -76,8 +89,9 @@ export function SidePanel({ open, active, onHost, children }: { open: boolean; a
     return el;
   });
   const [slot, setSlot] = useState<HTMLElement | null>(null);
-  const { width: stored, resize } = useSidebarWidth("side-panel:width", DEFAULT_WIDTH);
-  const width = stored ?? DEFAULT_WIDTH;
+  const { width: stored, resize, reset } = useSidebarWidth("side-panel:width", null);
+  const fit = useFitWidth();
+  const width = stored ?? fit;
   const [dragging, setDragging] = useState(false);
   const [sheet, setSheet] = useState<HTMLElement | null>(null);
   const start = useRef<{ x: number; width: number } | null>(null);
@@ -164,7 +178,7 @@ export function SidePanel({ open, active, onHost, children }: { open: boolean; a
         }}
         onPointerUp={up}
         onPointerCancel={up}
-        onDoubleClick={() => resize(DEFAULT_WIDTH)}
+        onDoubleClick={reset}
       />
     </>,
     host,

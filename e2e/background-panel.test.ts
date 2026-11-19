@@ -387,7 +387,7 @@ test("the list holds a native subagent, a Crew subagent and a session alike, and
   await crew.window.mouse.move(grip.x - 60, grip.y + 100, { steps: 4 });
   await crew.window.mouse.up();
   await waitFor(async () => ((await crew.window.locator("[data-side-panel]").boundingBox())?.width ?? 0) > box.width + 40, { message: "the panel grows" });
-  await waitFor(async () => Number(await crew.request<string | null>("state_get", { key: "side-panel:width" })) > 420, { message: "the width is kept" });
+  await waitFor(async () => Number(await crew.request<string | null>("state_get", { key: "side-panel:width" })) > box.width + 40, { message: "the width is kept" });
 
   await crew.window.keyboard.press("Escape");
   await list().waitFor({ state: "hidden" });

@@ -3,9 +3,11 @@ import * as api from "../lib/api";
 
 /**
  * The stored width, and a setter that paints now and saves where the drag
- * stopped. `key` is where it is kept: the sidebar's, or the explorer's.
+ * stopped. `key` is where it is kept: the sidebar's, or the explorer's. A
+ * `null` fallback leaves the width `null` until one is kept, for a caller
+ * whose default follows the window; `reset` forgets the kept one.
  */
-export function useSidebarWidth(key = "sidebar:width", fallback = 300) {
+export function useSidebarWidth(key = "sidebar:width", fallback: number | null = 300) {
   const [width, setWidth] = useState<number | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
@@ -33,7 +35,13 @@ export function useSidebarWidth(key = "sidebar:width", fallback = 300) {
     }, 200);
   }, [key]);
 
+  const reset = useCallback(() => {
+    window.clearTimeout(timer.current);
+    setWidth(fallback);
+    void api.stateDelete(key).catch(() => {});
+  }, [key, fallback]);
+
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  return { width, resize };
+  return { width, resize, reset };
 }
