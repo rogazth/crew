@@ -591,14 +591,25 @@ export const paneId = (workspaceId: string, tabId: string) => `${workspaceId}/${
 
 export type Pane = { id: string; workspaceId: string; tab: Tab; visible: boolean };
 
-/** Every open tab of every restored workspace. Only one of them is on screen. */
+/**
+ * Every open tab of every restored workspace. Only one of them is on screen.
+ *
+ * Listed by id, not in the strip's order: the panes are laid over each other,
+ * so their order means nothing on screen, and React moves the element of a keyed
+ * child whose place in the list changed. A moved page is destroyed by Electron,
+ * and a moved terminal or chat loses its focus and scroll. Dragging a tab, pinning
+ * one, a workspace reordered in the rail or a tab opened beside its opener would
+ * each do it; by id, a pane keeps its place for as long as it is open.
+ */
 export function panesOf(registry: TabRegistry, activeWorkspaceId: string | null): Pane[] {
-  return Object.entries(registry).flatMap(([workspaceId, state]) =>
-    state.tabs.map((tab) => ({
-      id: paneId(workspaceId, tab.id),
-      workspaceId,
-      tab,
-      visible: workspaceId === activeWorkspaceId && tab.id === state.activeId,
-    })),
-  );
+  return Object.entries(registry)
+    .flatMap(([workspaceId, state]) =>
+      state.tabs.map((tab) => ({
+        id: paneId(workspaceId, tab.id),
+        workspaceId,
+        tab,
+        visible: workspaceId === activeWorkspaceId && tab.id === state.activeId,
+      })),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
 }

@@ -26,6 +26,7 @@ import {
   stepTab,
   tabFile,
   tabTitle,
+  type TabRegistry,
   type TabState,
   unpinTab,
   withRecent,
@@ -523,6 +524,46 @@ describe("panesOf", () => {
 
   it("shows nothing while no workspace is active", () => {
     expect(panesOf(registry, null).some((pane) => pane.visible)).toBe(false);
+  });
+
+  describe("keeps every pane in its place, whatever moves around it", () => {
+    const page = (id: string): Tab => ({ id: `browser:${id}`, kind: "browser", url: `https://${id}.test`, title: "" });
+    const order = (reg: TabRegistry) => panesOf(reg, "one").map((pane) => pane.id);
+    const strip = (...tabs: Tab[]): TabState => ({ tabs, activeId: tabs[0]!.id, closed: [] });
+    const [a, b, c, d] = [page("a"), page("b"), page("c"), page("d")] as [Tab, Tab, Tab, Tab];
+    const base: TabRegistry = { one: strip(a, b, sessionTab("s"), c, d), two: strip(page("e"), page("f")) };
+
+    it("after the strip is dragged", () => {
+      const ids = ["browser:d", "browser:a", "session:s", "browser:b", "browser:c"];
+      expect(order({ ...base, one: reorderTabs(base.one!, ids) })).toEqual(order(base));
+    });
+
+    it("after a tab is pinned or unpinned", () => {
+      const pinned = pinTab(base.one!, "browser:c");
+      expect(order({ ...base, one: pinned })).toEqual(order(base));
+      expect(order({ ...base, one: unpinTab(pinned, "browser:c") })).toEqual(order(base));
+    });
+
+    it("after the workspaces change places in the registry", () => {
+      expect(order({ two: base.two!, one: base.one! })).toEqual(order(base));
+    });
+
+    it("after a tab opens beside its opener, and the others stay as they were", () => {
+      const e = page("x");
+      const next = order({ ...base, one: openTab(base.one!, e, { opener: "browser:a" }) });
+      expect(next.filter((id) => id !== "one/browser:x")).toEqual(order(base));
+    });
+
+    it("after a tab closes", () => {
+      const next = order({ ...base, one: closeTab(base.one!, "browser:b") });
+      expect(next).toEqual(order(base).filter((id) => id !== "one/browser:b"));
+    });
+
+    it("also when the workspace ids and tab ids of two panes share a prefix", () => {
+      const reg: TabRegistry = { a: strip(page("1")), "a/b": strip(page("2")) };
+      const shuffled: TabRegistry = { "a/b": reg["a/b"]!, a: reg.a! };
+      expect(panesOf(shuffled, "a").map((pane) => pane.id)).toEqual(panesOf(reg, "a").map((pane) => pane.id));
+    });
   });
 });
 
