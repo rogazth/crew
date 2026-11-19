@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import type { MemoryPressure } from "../../src/lib/browser/retention";
 
-/** Below this share of memory available, pages go cold sooner; below the second, all hidden ones go. */
+/** Below this share of memory available, pressure is moderate; below the second, critical and hidden pages start to go. */
 const MODERATE_AVAILABLE = 0.15;
 const CRITICAL_AVAILABLE = 0.05;
 
@@ -34,7 +34,7 @@ function macLevel(): Promise<number | null> {
   });
 }
 
-/** Normal when it can't be read: pages then go cold on time alone. */
+/** Normal when it can't be read: then no page goes cold. */
 export async function memoryPressure(): Promise<MemoryPressure> {
   if (process.platform === "darwin") {
     const level = await macLevel();

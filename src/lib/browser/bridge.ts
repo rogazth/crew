@@ -36,6 +36,12 @@ export function isPagePartition(partition: unknown): partition is string {
 /** A webview whose src starts with this asks main to restore a saved back/forward stack instead of loading. */
 export const RESTORE_PREFIX = "about:blank#crew-restore=";
 
+/**
+ * guest preload → window, via sendToHost: the person typed into a form on the
+ * page. No payload; once per document, so a half-filled form is not discarded.
+ */
+export const FORM_TYPED = "crew:form-typed";
+
 export const CHANNELS = {
   /** window → main: the commands the window can run right now, so a focused page can forward them. */
   commands: "browser:commands",
@@ -58,7 +64,7 @@ export const CHANNELS = {
   safeStart: "browser:safe-start",
   /** The window's CSP keeps remote images out, so main fetches a page's icon and hands back a data: URL. */
   favicon: "browser:favicon",
-  /** window → main: how tight the machine's memory is, for how soon hidden pages go cold. */
+  /** window → main: how tight the machine's memory is, for when hidden pages start to go cold. */
   memoryPressure: "browser:memory-pressure",
   /** main → window: where a download is; a page with one in flight must not be discarded meanwhile. */
   downloads: "browser:downloads",

@@ -1,5 +1,6 @@
 
 import { returnFocus } from "./agentFocus";
+import { FORM_TYPED } from "./bridge";
 
 /**
  * The slice of Electron's <webview> element the pane uses. The renderer build
@@ -46,6 +47,8 @@ export type GuestEvents = {
   gone(): void;
   devtools(open: boolean): void;
   media(playing: boolean): void;
+  /** The person typed into a form field of the page's current document. Once per document. */
+  formTyped(): void;
   focus(): void;
   found(result: FindResult): void;
 };
@@ -162,6 +165,10 @@ export function createGuest(container: HTMLElement, src: string, partition: stri
   listen("devtools-closed", () => on.devtools(false));
   listen("media-started-playing", () => on.media(true));
   listen("media-paused", () => on.media(false));
+  // Only the guest preload's isolated world can send this; the page's own script has no ipcRenderer.
+  listen("ipc-message", (event) => {
+    if (event.channel === FORM_TYPED) on.formTyped();
+  });
   // An agent's click hands the page the keyboard; it goes back, and the pane never hears of it.
   listen("focus", () => {
     if (!returnFocus(view, learnId())) on.focus();

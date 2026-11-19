@@ -1,23 +1,24 @@
 /**
  * Which browser guests stay alive while hidden. The rest go cold and keep only
- * their saved stack. Like Chrome's: a page goes cold after a while out of
- * sight, sooner when the machine runs short of memory.
+ * their saved stack. Like Chrome's: a hidden page stays loaded however long it
+ * goes unseen, until the machine runs critically short of memory.
  */
 
 /** How tight memory is, as main reads it from the OS. */
 export type MemoryPressure = "normal" | "moderate" | "critical";
 
-/** A hidden page left alone this long goes cold, whatever the memory. */
-export const IDLE_MS = 60 * 60 * 1000;
-/** Under moderate pressure a page out of sight this long may go, one per sweep. */
+/** A page out of sight this recently is never dropped for memory: it was just being read. */
 export const GRACE_MS = 5 * 60 * 1000;
 /** How often the window asks for the pressure and sweeps the warm pages. */
 export const SWEEP_MS = 30 * 1000;
 
+/** Stands for "in use right now", so a page on screen or pinned costs no update per sweep. */
+const IN_USE = Number.POSITIVE_INFINITY;
+
 /**
- * Warm pages, each with when it was last in use: on screen, playing, driven.
- * A page absent from it is cold. The same map back when nothing moves, so a
- * React state setter bails out.
+ * Warm pages, each with when it was last in use (on screen, playing, driven),
+ * or Infinity while it still is. A page absent from it is cold. The same map
+ * back when nothing moves, so a React state setter bails out.
  */
 export type Warm = ReadonlyMap<string, number>;
 
@@ -40,11 +41,12 @@ export function liveGuests(input: { warm: Warm; visible: string | null; pinned: 
 
 /**
  * One sweep: what stays warm. Pinned pages (DevTools open, audio playing, a
- * download in flight, an incognito page, an agent driving it) and the visible
- * one are in use, so they're touched rather than judged. Pages of a workspace
- * with work in flight are spared until memory is critical. Under moderate
- * pressure the least recently used page past its grace goes as well, one a
- * sweep, so memory gets a chance to recover before the next one does.
+ * form typed into, a download in flight, an incognito page, an agent driving
+ * it) and the visible one are in use and never judged. The rest go only when
+ * memory is critical, and then one a sweep, as Chrome's urgent discarding does:
+ * the least recently used page past its grace, a busy workspace's only once no
+ * other is left. Moderate pressure takes nothing; the OS compresses and swaps
+ * well before it hurts.
  */
 export function sweep(input: {
   warm: Warm;
@@ -57,28 +59,26 @@ export function sweep(input: {
   pressure: MemoryPressure;
   now: number;
 }): Warm {
-  const { ids, pinned, busy, pressure, now } = input;
-  const used = [...pinned, ...(input.visible === null ? [] : [input.visible])].filter((id) => ids.has(id));
-  const warm = touch(input.warm, used, now);
-  const inUse = new Set(used);
+  const { warm, ids, visible, pinned, busy, pressure, now } = input;
   const kept = new Map<string, number>();
+  for (const id of pinned) if (ids.has(id)) kept.set(id, IN_USE);
+  if (visible !== null && ids.has(visible)) kept.set(visible, IN_USE);
   let oldest: string | null = null;
-  for (const [id, at] of warm) {
-    if (!ids.has(id)) continue;
-    if (inUse.has(id)) {
-      kept.set(id, at);
-      continue;
-    }
-    if (pressure === "critical") continue;
-    if (busy.has(id)) {
-      kept.set(id, now);
-      continue;
-    }
-    if (now - at >= IDLE_MS) continue;
+  let oldestBusy: string | null = null;
+  for (const [id, last] of warm) {
+    if (kept.has(id) || !ids.has(id)) continue;
+    // A page that just stopped being in use starts its clock now.
+    const at = last === IN_USE ? now : last;
     kept.set(id, at);
-    if (now - at >= GRACE_MS && (oldest === null || at < (kept.get(oldest) as number))) oldest = id;
+    if (pressure !== "critical" || now - at < GRACE_MS) continue;
+    if (busy.has(id)) {
+      if (oldestBusy === null || at < (kept.get(oldestBusy) as number)) oldestBusy = id;
+    } else if (oldest === null || at < (kept.get(oldest) as number)) {
+      oldest = id;
+    }
   }
-  if (pressure === "moderate" && oldest !== null) kept.delete(oldest);
+  const victim = oldest ?? oldestBusy;
+  if (victim !== null) kept.delete(victim);
   const same = kept.size === warm.size && [...kept].every(([id, at]) => warm.get(id) === at);
   return same ? warm : kept;
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { COMMAND_IDS, keysFor, repeatable } from "../commands";
 import { resolveForward, type LiveCommand } from "../keymap";
-import { newBrowserTab, openTab, patchBrowserTab, type TabState } from "../tabs";
+import { newBrowserTab, openTab, panesOf, patchBrowserTab, reorderTabs, type TabRegistry, type TabState } from "../tabs";
 import { createPageStore } from "./pageStore";
-import { IDLE_MS, liveGuests, sweep, touch, type Warm } from "./retention";
+import { liveGuests, sweep, SWEEP_MS, touch, type Warm } from "./retention";
 import { capSnapshot } from "./snapshot";
 import { buildSuggestions } from "./suggest";
 import { resolveAddress } from "./url";
@@ -68,14 +68,84 @@ describe("stress", () => {
         now += 10_000;
         const visible = `p${(i * 7) % 1000}`;
         warm = touch(warm, [visible], now);
-        if (i % 30 === 0) warm = sweep({ warm, ids, visible, pinned: none, busy: none, pressure: "normal", now });
+        if (i % 3 === 0) warm = sweep({ warm, ids, visible, pinned: none, busy: none, pressure: "normal", now });
         live = liveGuests({ warm, visible, pinned: none });
       }
     });
-    // A switch every ten seconds: what was shown in the last hour is warm, give or take a sweep.
-    expect(live.size).toBeGreaterThanOrEqual(IDLE_MS / 10_000);
-    expect(live.size).toBeLessThanOrEqual(IDLE_MS / 10_000 + 30);
-    expect(ms).toBeLessThan(BUDGET_MS * 4);
+    // Memory is fine throughout: every page once shown stays warm, however long ago.
+    expect(live.size).toBe(1000);
+    // All 1,000 stay warm, so each switch copies a map of them: about 75 µs a switch alone,
+    // with room for a loaded machine running the whole suite.
+    expect(ms).toBeLessThan(BUDGET_MS * 8);
+  });
+
+  it("sweeps 200 open pages cheaply, and hands back the same map while nothing moves", () => {
+    const ids = new Set(Array.from({ length: 200 }, (_, n) => `p${n}`));
+    const pinned = new Set(["p1", "p2", "p3"]);
+    const busy = new Set(Array.from({ length: 50 }, (_, n) => `p${n + 100}`));
+    let now = 24 * 60 * 60 * 1000;
+    let warm: Warm = new Map([...ids].map((id, n) => [id, now - n * 60_000]));
+    const input = { ids, visible: "p0", pinned, busy, pressure: "normal" as const };
+    warm = sweep({ ...input, warm, now });
+    // A day of sweeps every 30 seconds, as the window runs them.
+    const sweeps = (24 * 60 * 60 * 1000) / SWEEP_MS;
+    let changed = 0;
+    const ms = timed(() => {
+      for (let i = 0; i < sweeps; i++) {
+        now += SWEEP_MS;
+        const next = sweep({ ...input, warm, now });
+        if (next !== warm) changed++;
+        warm = next;
+      }
+    });
+    // No new map, so the window's state setter bails out and nothing re-renders.
+    expect(changed).toBe(0);
+    expect(warm.size).toBe(200);
+    console.info(`sweep of 200 pages: ${((ms / sweeps) * 1000).toFixed(1)} µs each over ${sweeps} sweeps`);
+    expect(ms / sweeps).toBeLessThan(1);
+  });
+
+  it("lists 200 panes of five workspaces, in the same order however their strips are dragged", () => {
+    const strip = (w: number): TabState => {
+      const tabs = Array.from({ length: 40 }, (_, n) => newBrowserTab(`https://w${w}.test/${n}`));
+      return { tabs, activeId: tabs[0]!.id, closed: [] };
+    };
+    let registry: TabRegistry = Object.fromEntries(Array.from({ length: 5 }, (_, w) => [`w${w}`, strip(w)]));
+    const order = panesOf(registry, "w0").map((pane) => pane.id);
+    const runs = 10_000;
+    let same = true;
+    const ms = timed(() => {
+      for (let i = 0; i < runs; i++) {
+        // Every run drags the active strip's last tab to the front, as the window would re-list on each.
+        const state = registry.w0!;
+        const ids = state.tabs.map((tab) => tab.id);
+        registry = { ...registry, w0: reorderTabs(state, [ids[ids.length - 1]!, ...ids.slice(0, -1)]) };
+        const panes = panesOf(registry, "w0");
+        if (i % 1000 === 0) same &&= panes.every((pane, n) => pane.id === order[n]);
+      }
+    });
+    expect(same).toBe(true);
+    console.info(`panesOf over 200 panes: ${((ms / runs) * 1000).toFixed(1)} µs each`);
+    expect(ms / runs).toBeLessThan(1);
+  });
+
+  it("under critical pressure lets 200 pages go one a sweep, least recently used first", () => {
+    const ids = new Set(Array.from({ length: 200 }, (_, n) => `p${n}`));
+    const none = new Set<string>();
+    let now = 24 * 60 * 60 * 1000;
+    // p0 was used last, p199 first.
+    let warm: Warm = new Map([...ids].map((id, n) => [id, now - (n + 10) * 60_000]));
+    const gone: string[] = [];
+    const ms = timed(() => {
+      for (let i = 0; i < 200; i++) {
+        now += SWEEP_MS;
+        const next = sweep({ warm, ids, visible: null, pinned: none, busy: none, pressure: "critical", now });
+        gone.push(...[...warm.keys()].filter((id) => !next.has(id)));
+        warm = next;
+      }
+    });
+    expect(gone).toEqual([...ids].reverse());
+    expect(ms).toBeLessThan(BUDGET_MS);
   });
 
   it("patches 500 tabs without copying state that did not change", () => {

@@ -146,6 +146,8 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
     let devtools = false;
     let docked = false;
     let playing = false;
+    // A half-filled form: losing the guest would lose what was typed.
+    let filling = false;
 
     const update = (patch: Parameters<typeof pages.update>[1]) => pages.update(pageId, patch);
     const patchTab = (patch: BrowserTabPatch) => {
@@ -178,7 +180,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       canGoBack: built?.canGoBack() ?? false,
       canGoForward: built?.canGoForward() ?? false,
     });
-    const pin = () => latest.current.onPinned(devtools || docked || playing);
+    const pin = () => latest.current.onPinned(devtools || docked || playing || filling);
 
     // The bar is usable while source() waits on the daemon. A URL typed then is
     // kept here, and the guest is built as soon as one arrives instead of after
@@ -296,6 +298,11 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
             ...(arrived ? { pending: null } : {}),
           });
           latest.current.onNavigate(inPage);
+          // A new document, a reload's included, holds none of what was typed.
+          if (!inPage && filling) {
+            filling = false;
+            pin();
+          }
           // A blank page shows the canvas underneath, not the guest's white.
           if (built) built.element.style.visibility = shows(next) ? "" : "hidden";
           if (!isWebUrl(next)) return;
@@ -344,6 +351,11 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         },
         gone: () => {
           update({ crashed: true, hung: false, loading: false });
+          // The renderer took what was typed with it: nothing is left to keep the page for.
+          if (filling) {
+            filling = false;
+            pin();
+          }
           // One quiet retry: a renderer that died once usually comes back. The next commit clears the flag.
           if (retried) return;
           retried = true;
@@ -356,6 +368,10 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         },
         media: (on) => {
           playing = on;
+          pin();
+        },
+        formTyped: () => {
+          filling = true;
           pin();
         },
         focus: () => {
@@ -399,7 +415,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       if (Object.keys(pending).length > 0) latest.current.onPatch(pending);
       built?.destroy();
       if (guest.current === facade) guest.current = null;
-      if (devtools || docked || playing) latest.current.onPinned(false);
+      if (devtools || docked || playing || filling) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false, hung: false, pending: null });
     };
     // The file's path stands for it: the object is made afresh with every render.

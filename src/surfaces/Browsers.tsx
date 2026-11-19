@@ -39,9 +39,9 @@ const AT_WORK: ReadonlySet<SessionStatus> = new Set(["starting", "working", "nee
 
 /**
  * Every open page stays mounted, shown or not, like the terminals: a guest
- * that leaves the DOM loses its page. Only the ones used lately keep a live
- * guest, fewer as memory runs short; the rest go cold until they are looked
- * at again.
+ * that leaves the DOM loses its page. Hidden ones keep a live guest however
+ * long they go unseen, until memory runs critically short; then they go cold,
+ * one at a time, until looked at again.
  */
 export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props) {
   const { prefs } = useBrowserPrefs();
@@ -143,8 +143,7 @@ export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props
     latest.current = { panes, browsers, visible, onOpenTab, onAdopt, ids, pinnedIds, busy };
   });
 
-  // Every so often hidden pages left alone long enough go cold, sooner when
-  // the OS says memory is short.
+  // Every so often, while the OS says memory is critical, one hidden page goes cold.
   useEffect(() => {
     if (!hasPages) return;
     let stopped = false;

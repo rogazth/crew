@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GRACE_MS, IDLE_MS, liveGuests, sweep, touch, type MemoryPressure, type Warm } from "./retention";
+import { GRACE_MS, liveGuests, sweep, touch, type MemoryPressure, type Warm } from "./retention";
 
 const none: ReadonlySet<string> = new Set();
 const MIN = 60 * 1000;
-const NOW = 10 * IDLE_MS;
+const HOUR = 60 * MIN;
+const NOW = 100 * HOUR;
 
 /** Each page with how long ago it was last used. */
 function warmFrom(ago: Record<string, number>): Warm {
@@ -12,7 +13,14 @@ function warmFrom(ago: Record<string, number>): Warm {
 
 function swept(
   warm: Warm,
-  opts: { visible?: string | null; pinned?: string[]; busy?: string[]; pressure?: MemoryPressure; ids?: string[] } = {},
+  opts: {
+    visible?: string | null;
+    pinned?: string[];
+    busy?: string[];
+    pressure?: MemoryPressure;
+    ids?: string[];
+    now?: number;
+  } = {},
 ) {
   const result = sweep({
     warm,
@@ -21,7 +29,7 @@ function swept(
     pinned: new Set(opts.pinned),
     busy: new Set(opts.busy),
     pressure: opts.pressure ?? "normal",
-    now: NOW,
+    now: opts.now ?? NOW,
   });
   return { result, ids: [...result.keys()].sort() };
 }
@@ -52,62 +60,109 @@ describe("liveGuests", () => {
   });
 });
 
-describe("sweep", () => {
-  it("lets a hidden page go cold after an hour unused", () => {
-    expect(swept(warmFrom({ fresh: 59 * MIN, stale: IDLE_MS })).ids).toEqual(["fresh"]);
-  });
-
-  it("keeps any number of recent pages while memory is fine", () => {
-    const many = Object.fromEntries(Array.from({ length: 40 }, (_, n) => [`p${n}`, n * MIN]));
-    expect(swept(warmFrom(many)).ids).toHaveLength(40);
-  });
-
-  it("returns the same map when nothing goes cold", () => {
-    const warm = warmFrom({ a: MIN, b: 2 * MIN });
+describe("sweep, memory fine", () => {
+  it("keeps hidden pages forever while memory is fine", () => {
+    const warm = warmFrom({ day: 24 * HOUR, week: 7 * 24 * HOUR, fresh: MIN });
     expect(swept(warm).result).toBe(warm);
+    expect(swept(warm, { pressure: "moderate" }).result).toBe(warm);
   });
 
+  it("keeps any number of pages", () => {
+    const many = Object.fromEntries(Array.from({ length: 200 }, (_, n) => [`p${n}`, n * HOUR]));
+    expect(swept(warmFrom(many)).ids).toHaveLength(200);
+  });
+});
+
+describe("sweep, memory pressure", () => {
+  it("takes nothing under moderate pressure", () => {
+    const warm = warmFrom({ a: 9 * HOUR, b: 3 * HOUR, c: HOUR });
+    expect(swept(warm, { pressure: "moderate" }).result).toBe(warm);
+  });
+
+  it("under critical pressure takes exactly one page a sweep, least recently used first", () => {
+    let warm = warmFrom({ newer: 10 * MIN, oldest: 3 * HOUR, older: HOUR });
+    const order: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const before = new Set(warm.keys());
+      warm = swept(warm, { pressure: "critical" }).result;
+      const gone = [...before].filter((id) => !warm.has(id));
+      expect(gone.length).toBeLessThanOrEqual(1);
+      order.push(...gone);
+    }
+    expect(order).toEqual(["oldest", "older", "newer"]);
+    expect(warm.size).toBe(0);
+  });
+
+  it("under critical pressure keeps a page seen within the grace", () => {
+    const warm = warmFrom({ a: GRACE_MS - 1, b: MIN });
+    expect(swept(warm, { pressure: "critical" }).result).toBe(warm);
+    expect(swept(warm, { pressure: "critical", now: NOW + GRACE_MS }).ids).toEqual(["b"]);
+  });
+
+  it("under critical pressure takes a busy workspace's pages only once no other is left", () => {
+    let warm = warmFrom({ busyOld: 9 * HOUR, busyNew: 2 * HOUR, idle: 10 * MIN });
+    const busy = ["busyOld", "busyNew"];
+    warm = swept(warm, { pressure: "critical", busy }).result;
+    expect([...warm.keys()].sort()).toEqual(["busyNew", "busyOld"]);
+    warm = swept(warm, { pressure: "critical", busy }).result;
+    expect([...warm.keys()]).toEqual(["busyNew"]);
+  });
+
+  it("under critical pressure passes over busy pages in their grace too", () => {
+    const warm = warmFrom({ busy: MIN, fresh: MIN });
+    expect(swept(warm, { pressure: "critical", busy: ["busy"] }).result).toBe(warm);
+  });
+
+  it("under critical pressure never takes the visible or pinned pages", () => {
+    const warm = warmFrom({ v: 9 * HOUR, p: 9 * HOUR });
+    const { ids } = swept(warm, { pressure: "critical", visible: "v", pinned: ["p"] });
+    expect(ids).toEqual(["p", "v"]);
+  });
+
+  it("under critical pressure takes nothing while every hidden page is in its grace", () => {
+    const warm = warmFrom({ a: MIN, b: 2 * MIN, c: GRACE_MS - 1 });
+    expect(swept(warm, { pressure: "critical" }).result).toBe(warm);
+  });
+});
+
+describe("sweep, bookkeeping", () => {
   it("drops pages that were closed", () => {
     expect(swept(warmFrom({ a: 0, gone: 0 }), { ids: ["a"] }).ids).toEqual(["a"]);
   });
 
-  it("keeps the visible and pinned pages warm, however long ago they were first shown", () => {
-    const { result, ids } = swept(warmFrom({ v: 2 * IDLE_MS, p: 2 * IDLE_MS }), { visible: "v", pinned: ["p", "q"] });
+  it("keeps the visible and pinned pages warm, even ones that were cold", () => {
+    const { ids } = swept(warmFrom({ v: 2 * HOUR, p: 2 * HOUR }), { visible: "v", pinned: ["p", "q"] });
     expect(ids).toEqual(["p", "q", "v"]);
-    expect(result.get("v")).toBe(NOW);
-    expect(result.get("p")).toBe(NOW);
-  });
-
-  it("spares a busy workspace's pages and restarts their clock", () => {
-    const { result, ids } = swept(warmFrom({ busy: 2 * IDLE_MS, idle: 2 * IDLE_MS }), { busy: ["busy"] });
-    expect(ids).toEqual(["busy"]);
-    expect(result.get("busy")).toBe(NOW);
   });
 
   it("does not warm a cold page because its workspace is busy", () => {
     expect(swept(new Map(), { ids: ["cold"], busy: ["cold"] }).ids).toEqual([]);
   });
 
-  it("under moderate pressure lets the least recently used page past its grace go, one a sweep", () => {
-    const warm = warmFrom({ recent: GRACE_MS - 1, older: 10 * MIN, oldest: 20 * MIN });
-    const first = swept(warm, { pressure: "moderate" });
-    expect(first.ids).toEqual(["older", "recent"]);
-    expect(swept(first.result, { pressure: "moderate" }).ids).toEqual(["recent"]);
+  it("returns the same map when nothing moves, a visible, pinned and busy page included", () => {
+    const first = swept(warmFrom({ v: 0, p: 0, busy: HOUR, a: MIN }), {
+      visible: "v",
+      pinned: ["p"],
+      busy: ["busy"],
+    }).result;
+    const again = sweep({
+      warm: first,
+      ids: new Set(first.keys()),
+      visible: "v",
+      pinned: new Set(["p"]),
+      busy: new Set(["busy"]),
+      pressure: "moderate",
+      now: NOW + 10 * MIN,
+    });
+    expect(again).toBe(first);
   });
 
-  it("under moderate pressure keeps pages shown within the grace", () => {
-    const warm = warmFrom({ a: MIN, b: 2 * MIN });
-    expect(swept(warm, { pressure: "moderate" }).result).toBe(warm);
-  });
-
-  it("under moderate pressure still spares busy pages", () => {
-    expect(swept(warmFrom({ busy: 30 * MIN, idle: 10 * MIN }), { pressure: "moderate", busy: ["busy"] }).ids).toEqual([
-      "busy",
-    ]);
-  });
-
-  it("under critical pressure keeps only the visible and pinned pages", () => {
-    const warm = warmFrom({ v: 0, p: 0, busy: 0, fresh: 0 });
-    expect(swept(warm, { pressure: "critical", visible: "v", pinned: ["p"], busy: ["busy"] }).ids).toEqual(["p", "v"]);
+  it("starts a page's clock when it stops being in use, with its grace", () => {
+    const inUse = swept(warmFrom({ p: 9 * HOUR }), { pinned: ["p"] }).result;
+    const later = NOW + 3 * HOUR;
+    const released = swept(inUse, { ids: ["p"], now: later }).result;
+    expect(released.get("p")).toBe(later);
+    expect(swept(released, { ids: ["p"], now: later + MIN, pressure: "critical" }).ids).toEqual(["p"]);
+    expect(swept(released, { ids: ["p"], now: later + GRACE_MS, pressure: "critical" }).ids).toEqual([]);
   });
 });
