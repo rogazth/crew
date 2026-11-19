@@ -68,7 +68,7 @@ const row = (text: string | RegExp) => crew.window.locator("[data-block]").filte
 
 test("Crew calls draw as beats that say who and to whom, never the words: subagents, a report, sessions started, a message; control calls stay rows", async () => {
   await send("crew");
-  await row("Listed 7 peers").waitFor({ timeout: 30_000 });
+  await row("See who is in the workspace").waitFor({ timeout: 30_000 });
   await idle();
 
   // A subagent that answered: that it started, that it reported, and not what it said.
@@ -101,10 +101,10 @@ test("Crew calls draw as beats that say who and to whom, never the words: subage
   const text = flat(await crew.window.locator("[data-block]").allInnerTexts().then((all) => all.join(" | ")));
   for (const sentence of [
     "Interrupted billing-ui and redirected it",
-    "Read billing-ui's last 12 messages",
-    "Listed 7 peers · 3 sessions, 1 subagent, 3 bots",
-    "Stopped docs-sweep and its 2 subagents",
-    "Deleted docs-sweep · its worktree stays",
+    "Read billing-ui last 12 messages",
+    "See who is in the workspace 3 sessions, 1 subagent, 3 bots",
+    "Stopped docs-sweep",
+    "Deleted docs-sweep",
   ]) {
     assert.ok(text.includes(sentence), `${sentence}\n${text}`);
   }
@@ -112,7 +112,7 @@ test("Crew calls draw as beats that say who and to whom, never the words: subage
   // The checkpoint row is gone: no "wrote to" arrows.
   assert.equal(await crew.window.getByLabel("to", { exact: true }).count(), 0);
 
-  await row("Listed 7 peers").scrollIntoViewIfNeeded();
+  await row("See who is in the workspace").scrollIntoViewIfNeeded();
   await shoot("transcript-orchestrator");
 });
 

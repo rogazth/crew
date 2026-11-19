@@ -136,7 +136,15 @@ export type ControlIcon = "interrupt" | "read" | "list" | "stop" | "rename" | "d
  * A control call as one line: `before`, the session it acted on, `after`.
  * `text` is what it carried when that is worth a card (an interrupt's redirect).
  */
-export type Control = { icon: ControlIcon; before: string; target?: CrewTarget; after: string; text?: string };
+export type Control = {
+  icon: ControlIcon;
+  before: string;
+  target?: CrewTarget;
+  after: string;
+  text?: string;
+  /** What the call found, muted after the line, as a search's matches: the line itself holds still from call to answer. */
+  suffix?: string;
+};
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -152,29 +160,30 @@ export function controlOf(block: Block): Control | null {
   const target = detail.targets[0];
   const at = target ? { target } : {};
   switch (detail.verb) {
+    // The line is what the call asked, and holds still from call to answer; what the answer adds is the suffix.
+    // Interrupt, stop and delete say what was done and nothing of the answer: the target's own state shows the rest.
     case "interrupt_session": {
       const text = detail.text?.trim();
       if (text) return { icon: "interrupt", before: "Interrupted", ...at, after: " and redirected it", text };
-      return { icon: "interrupt", before: "Interrupted", ...at, after: detail.note === "idle" ? " · it was idle" : "" };
+      return { icon: "interrupt", before: "Interrupted", ...at, after: "" };
     }
+    // A look is a step of the run, so it reads like one: what it does, not what it did.
     case "read_session": {
       const n = detail.count;
-      const after = n === undefined ? "'s messages" : n === 1 ? "'s last message" : `'s last ${n} messages`;
-      return { icon: "read", before: "Read", ...at, after };
+      const read = n === undefined ? {} : { suffix: n === 1 ? "last message" : `last ${n} messages` };
+      return { icon: "read", before: "Read", ...at, after: "", ...read };
     }
     case "list_peers": {
-      const peers = detail.count === undefined ? "peers" : plural(detail.count, "peer");
-      return { icon: "list", before: `Listed ${peers}${detail.note ? ` · ${detail.note}` : ""}`, after: "" };
+      // The note already counts each kind; the total is the fallback when it does not.
+      const found = detail.note ?? (detail.count === undefined ? undefined : plural(detail.count, "peer"));
+      return { icon: "list", before: "See who is in the workspace", after: "", ...(found ? { suffix: found } : {}) };
     }
     case "stop_session":
-      return { icon: "stop", before: "Stopped", ...at, after: detail.count ? ` and its ${plural(detail.count, "subagent")}` : "" };
+      return { icon: "stop", before: "Stopped", ...at, after: "" };
     case "update_session":
       if (detail.note === "rename") return { icon: "rename", before: "Renamed", ...at, after: detail.text ? ` to ${detail.text}` : "" };
       if (detail.note === "effort") return { icon: "rename", before: "Set the effort of", ...at, after: detail.text ? ` to ${detail.text}` : "" };
-      if (detail.note === "delete") {
-        const also = detail.count ? ` and its ${plural(detail.count, "subagent")}` : "";
-        return { icon: "delete", before: "Deleted", ...at, after: `${also} · its worktree stays` };
-      }
+      if (detail.note === "delete") return { icon: "delete", before: "Deleted", ...at, after: "" };
       return null;
     default:
       return null;

@@ -137,7 +137,7 @@ export function toolLine(block: Block): ToolLine {
     case "todo": {
       // What the agent is on now says more than the word "todos" does.
       const current = detail.items.find((item) => item.status === "inProgress");
-      return { text: current?.text ?? "Todos", mono: false, suffix: todoTally(detail.items), failed };
+      return { text: current?.text ?? "To-do list", mono: false, suffix: todoTally(detail.items), failed };
     }
     case "agent":
       return { text: detail.description, mono: false, suffix: detail.agentType, failed };

@@ -134,22 +134,28 @@ describe("control rows", () => {
     tool({ kind: "crew", verb, targets: [{ id: "s1", name: "billing-ui" }], ...rest });
   const sentence = (block: Block) => {
     const control = controlOf(block);
-    return control ? `${control.before}${control.target ? ` [${control.target.name}]` : ""}${control.after}` : null;
+    if (!control) return null;
+    const line = `${control.before}${control.target ? ` [${control.target.name}]` : ""}${control.after}`;
+    return control.suffix ? `${line} | ${control.suffix}` : line;
   };
 
-  it("says each verb in one line", () => {
+  it("says each verb in one line, what the answer added apart", () => {
     expect(sentence(crew("interrupt_session", { text: "use the component" }))).toBe("Interrupted [billing-ui] and redirected it");
     expect(sentence(crew("interrupt_session"))).toBe("Interrupted [billing-ui]");
-    expect(sentence(crew("interrupt_session", { note: "idle" }))).toBe("Interrupted [billing-ui] · it was idle");
-    expect(sentence(crew("read_session", { count: 12 }))).toBe("Read [billing-ui]'s last 12 messages");
-    expect(sentence(crew("read_session", { count: 1 }))).toBe("Read [billing-ui]'s last message");
+    expect(sentence(crew("interrupt_session", { note: "idle" }))).toBe("Interrupted [billing-ui]");
+    expect(sentence(crew("read_session", { count: 12 }))).toBe("Read [billing-ui] | last 12 messages");
+    expect(sentence(crew("read_session", { count: 1 }))).toBe("Read [billing-ui] | last message");
+    expect(sentence(crew("read_session"))).toBe("Read [billing-ui]");
     expect(sentence(tool({ kind: "crew", verb: "list_peers", targets: [], count: 7, note: "3 sessions, 1 subagent, 3 bots" }))).toBe(
-      "Listed 7 peers · 3 sessions, 1 subagent, 3 bots",
+      "See who is in the workspace | 3 sessions, 1 subagent, 3 bots",
     );
-    expect(sentence(crew("stop_session", { count: 2 }))).toBe("Stopped [billing-ui] and its 2 subagents");
+    expect(sentence(tool({ kind: "crew", verb: "list_peers", targets: [], count: 1 }))).toBe("See who is in the workspace | 1 peer");
+    expect(sentence(tool({ kind: "crew", verb: "list_peers", targets: [] }))).toBe("See who is in the workspace");
+    expect(sentence(crew("stop_session", { count: 2 }))).toBe("Stopped [billing-ui]");
     expect(sentence(crew("stop_session", { count: 0 }))).toBe("Stopped [billing-ui]");
     expect(sentence(crew("update_session", { note: "rename", text: "ui" }))).toBe("Renamed [billing-ui] to ui");
-    expect(sentence(crew("update_session", { note: "delete", count: 0 }))).toBe("Deleted [billing-ui] · its worktree stays");
+    expect(sentence(crew("update_session", { note: "delete", count: 0 }))).toBe("Deleted [billing-ui]");
+    expect(sentence(crew("update_session", { note: "delete", count: 1 }))).toBe("Deleted [billing-ui]");
   });
 
   it("has a card only for an interrupt's redirect, and leaves a failed call to the generic row", () => {

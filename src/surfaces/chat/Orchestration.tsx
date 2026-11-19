@@ -48,11 +48,14 @@ export function ToolLine({
   children,
   id,
   marked = null,
+  suffix,
 }: {
   icon: LucideIcon;
   children: ReactNode;
   id?: string;
   marked?: string | null;
+  /** What came back, muted after the sentence. */
+  suffix?: string | undefined;
 }) {
   return (
     <div
@@ -62,7 +65,8 @@ export function ToolLine({
       <span className="crew-node">
         <Glyph className="size-3.5" />
       </span>
-      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <span className={`min-w-0 truncate${suffix ? "" : " flex-1"}`}>{children}</span>
+      {suffix ? <span className="min-w-0 flex-1 truncate text-[11px] text-placeholder">{suffix}</span> : null}
     </div>
   );
 }
@@ -321,7 +325,7 @@ export const ControlRow = memo(function ControlRow({ block, marked }: { block: B
   if (!control) return null;
   const icon = CONTROL_ICON[control.icon];
   return (
-    <ToolLine icon={icon} id={block.id} marked={marked}>
+    <ToolLine icon={icon} id={block.id} marked={marked} suffix={control.suffix}>
       {control.before}
       {target ? (
         <>
