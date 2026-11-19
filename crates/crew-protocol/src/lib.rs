@@ -813,6 +813,25 @@ pub struct UploadChunk {
     pub base64_contents: String,
 }
 
+/// Starts an upload whose pieces come as binary frames, in any order, or starts it over.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct UploadBegin {
+    pub id: String,
+}
+
+/// Ends an upload: `size` is how big the file is, so a missing piece is caught.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct UploadFinish {
+    pub id: String,
+    pub extension: String,
+    #[ts(type = "number")]
+    pub size: u64,
+}
+
 /// `length` bytes of the file at `path`, from `offset`.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Connection, EnvDown } from "./connection";
+import { Connection, EnvDown, uploadFrame } from "./connection";
 import { trace } from "../trace";
 
 vi.mock("../trace", async (original) => ({
@@ -17,13 +17,15 @@ class FakeSocket {
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
   onclose: ((event?: { code: number; wasClean: boolean }) => void) | null = null;
   sent: string[] = [];
+  frames: Uint8Array[] = [];
 
   constructor(public url: string) {
     FakeSocket.instances.push(this);
   }
 
-  send(data: string | ArrayBuffer) {
+  send(data: string | Uint8Array) {
     if (typeof data === "string") this.sent.push(data);
+    else this.frames.push(data);
   }
 
   close(code?: number) {
@@ -136,6 +138,149 @@ describe("Connection", () => {
     expect(back).toHaveBeenCalledTimes(1);
     conn.stop();
   });
+  describe("upload pieces", () => {
+    async function online(conn: Connection): Promise<FakeSocket> {
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
+      latest().open();
+      latest().hello();
+      await opened;
+      return latest();
+    }
+
+    const answer = (socket: FakeSocket, id: number, reply: object) =>
+      socket.onmessage?.({ data: JSON.stringify({ id, ...reply }) });
+
+    it("lays a piece out as stream 0, request id, offset, id length, id, bytes, little endian", () => {
+      const frame = uploadFrame(0x01020304, "ab", 2 ** 33 + 5, new Uint8Array([9, 8, 7]));
+      expect([...frame]).toEqual([
+        0, 0, 0, 0, // stream 0
+        4, 3, 2, 1, // request id
+        5, 0, 0, 0, 2, 0, 0, 0, // offset, u64
+        2, // id length
+        97, 98, // "ab"
+        9, 8, 7, // the piece
+      ]);
+      expect([...uploadFrame(1, "x", 0, new Uint8Array())]).toEqual([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 120]);
+      expect(() => uploadFrame(1, "x".repeat(256), 0, new Uint8Array())).toThrow("too long");
+    });
+
+    it("sends a piece as one binary frame on the request ids JSON calls use, and settles with its answer", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const socket = await online(conn);
+      const listing = conn.request("session_list", {});
+      const piece = conn.uploadPiece("4f1c-up", 131072, new Uint8Array([1, 2, 3]));
+      const failing = conn.uploadPiece("4f1c-up", 0, new Uint8Array([4]));
+      await vi.waitFor(() => expect(socket.frames).toHaveLength(2));
+      const listed = JSON.parse(socket.sent.at(-1) as string) as { id: number };
+      const [first, second] = socket.frames.map((frame) => new DataView(frame.buffer).getUint32(4, true));
+      expect([first, second]).toEqual([listed.id + 1, listed.id + 2]);
+      expect([...(socket.frames[0] ?? [])]).toEqual([...uploadFrame(listed.id + 1, "4f1c-up", 131072, new Uint8Array([1, 2, 3]))]);
+
+      answer(socket, second ?? 0, { ok: false, error: "Disk full" });
+      answer(socket, first ?? 0, { ok: true, result: null });
+      answer(socket, listed.id, { ok: true, result: [] });
+      await expect(piece).resolves.toBeNull();
+      await expect(failing).rejects.toThrow("Disk full");
+      await expect(listing).resolves.toEqual([]);
+      conn.stop();
+    });
+
+    it("waits for the link like a request, and is dropped with the rest when it closes", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const piece = conn.uploadPiece("up", 0, new Uint8Array([1]));
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().open();
+      latest().hello();
+      await vi.waitFor(() => expect(latest().frames).toHaveLength(1));
+      latest().close();
+      await expect(piece).rejects.toBeInstanceOf(EnvDown);
+      conn.stop();
+    });
+
+    it("fails at once while the machine is offline, or when it needs an update", async () => {
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().onerror?.();
+      await expect(opened).rejects.toThrow("Could not reach");
+      await expect(conn.uploadPiece("up", 0, new Uint8Array([1]))).rejects.toBeInstanceOf(EnvDown);
+      expect(latest().frames).toHaveLength(0);
+      conn.stop();
+
+      const old = new Connection("vps", endpoint, true);
+      old.mismatch = true;
+      await expect(old.uploadPiece("up", 0, new Uint8Array([1]))).rejects.toThrow("needs an update");
+      old.stop();
+    });
+  });
+
+  describe("heartbeat", () => {
+    async function beating(): Promise<{ conn: Connection; socket: FakeSocket }> {
+      // The ping runs only where there is a window.
+      vi.stubGlobal("window", {});
+      const conn = new Connection("vps", endpoint, true);
+      const opened = conn.connect();
+      await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+      latest().open();
+      latest().hello();
+      await opened;
+      const socket = latest();
+      await vi.waitFor(() => expect(socket.sent.some((frame) => frame.includes('"method":"ping"'))).toBe(true));
+      return { conn, socket };
+    }
+
+    /** A call the daemon answers right away, ping or not. */
+    async function answered(conn: Connection, socket: FakeSocket) {
+      const call = conn.request("session_list", {});
+      await vi.waitFor(() => expect(socket.sent.at(-1)).toContain("session_list"));
+      const { id } = JSON.parse(socket.sent.at(-1) as string) as { id: number };
+      socket.onmessage?.({ data: JSON.stringify({ id, ok: true, result: [] }) });
+      await call;
+    }
+
+    it("keeps a link whose ping waits behind calls it keeps answering, and closes it 15 s after the last answer", async () => {
+      const { conn, socket } = await beating();
+      for (let second = 0; second < 20; second += 2) {
+        await vi.advanceTimersByTimeAsync(2_000);
+        await answered(conn, socket);
+      }
+      // 20 s since the ping went out, unanswered, and the link is up.
+      expect(socket.readyState).toBe(FakeSocket.OPEN);
+      expect(socket.sent.filter((frame) => frame.includes('"method":"ping"'))).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(14_900);
+      expect(socket.readyState).toBe(FakeSocket.OPEN);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(socket.readyState).toBe(3);
+      conn.stop();
+    });
+
+    it("closes a link that pushes events but answers nothing", async () => {
+      const { conn, socket } = await beating();
+      for (let second = 0; second < 14; second += 2) {
+        await vi.advanceTimersByTimeAsync(2_000);
+        socket.onmessage?.({ data: JSON.stringify({ event: "session.status", payload: {} }) });
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(socket.readyState).toBe(3);
+      conn.stop();
+    });
+
+    it("clears the wait when the ping itself is answered", async () => {
+      const { conn, socket } = await beating();
+      const ping = JSON.parse(socket.sent.find((frame) => frame.includes('"method":"ping"')) as string) as { id: number };
+      await vi.advanceTimersByTimeAsync(9_000);
+      socket.onmessage?.({ data: JSON.stringify({ id: ping.id, ok: true, result: null }) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(conn.latency).toBeGreaterThanOrEqual(9_000);
+      // The next ping goes out on the next beat, with a fresh wait.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(socket.sent.filter((frame) => frame.includes('"method":"ping"'))).toHaveLength(2);
+      expect(socket.readyState).toBe(FakeSocket.OPEN);
+      conn.stop();
+    });
+  });
+
   describe("trace", () => {
     const calls = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.calls as Array<[string, Record<string, unknown>]>;
 

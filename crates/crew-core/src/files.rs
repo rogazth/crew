@@ -485,10 +485,7 @@ pub fn write_chunk(id: &str, extension: &str, offset: u64, base64_contents: &str
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64_contents.as_bytes())
         .map_err(|e| format!("Upload data is not valid base64: {e}"))?;
-    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
-    if id.is_empty() {
-        return Err("Upload needs an id".into());
-    }
+    let id = upload_id(id)?;
     if offset + bytes.len() as u64 > MAX_UPLOAD_BYTES {
         return Err("File is too large to upload".into());
     }
@@ -508,6 +505,69 @@ pub fn write_chunk(id: &str, extension: &str, offset: u64, base64_contents: &str
     std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// An upload's id reduced to safe characters, so the files named after it stay in the dir.
+fn upload_id(id: &str) -> Result<String, String> {
+    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
+    if id.is_empty() {
+        return Err("Upload needs an id".into());
+    }
+    Ok(id)
+}
+
+/// Where an upload's pieces gather until `finish_upload` gives it its name.
+fn part_path(id: &str) -> PathBuf {
+    crate::paths::tmp("files").join(format!("{id}.part"))
+}
+
+/// Starts an upload whose pieces may arrive in any order, or starts it over.
+pub fn begin_upload(id: &str) -> Result<(), String> {
+    let path = part_path(&upload_id(id)?);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::File::create(&path).map(drop).map_err(|e| e.to_string())
+}
+
+/// One piece of an upload, written where it belongs. Pieces travel side by side
+/// and one is sent again when the link drops under it, so a write never
+/// truncates and writing the same piece twice leaves the same file.
+pub fn write_piece(id: &str, offset: u64, bytes: &[u8]) -> Result<(), String> {
+    use std::io::{Seek as _, Write as _};
+    let path = part_path(&upload_id(id)?);
+    if offset.saturating_add(bytes.len() as u64) > MAX_UPLOAD_BYTES {
+        return Err("File is too large to upload".into());
+    }
+    // Never created here: a piece that outlives its upload must not start a new one.
+    let mut file = match std::fs::OpenOptions::new().write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("Upload was not started".into()),
+        Err(error) => return Err(error.to_string()),
+    };
+    file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())
+}
+
+/// Names a finished upload and returns its path. The caller says how big the
+/// file is, so a piece still missing at the end is caught here. Asking again
+/// after the answer was lost returns the same path.
+pub fn finish_upload(id: &str, extension: &str, size: u64) -> Result<String, String> {
+    let part = part_path(&upload_id(id)?);
+    let done = part.with_extension(safe_extension(extension));
+    let named = || done.to_string_lossy().into_owned();
+    match std::fs::metadata(&part) {
+        Ok(meta) if meta.len() != size => Err(format!("Upload is incomplete: {} of {size} bytes arrived", meta.len())),
+        Ok(_) => {
+            std::fs::rename(&part, &done).map_err(|e| e.to_string())?;
+            Ok(named())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match std::fs::metadata(&done) {
+            Ok(meta) if meta.len() == size => Ok(named()),
+            _ => Err("Upload was not started".into()),
+        },
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -580,6 +640,95 @@ mod tests {
         assert_eq!(range.size, 11);
         assert_eq!(range.data, enc(b"world"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn upload() -> String {
+        let id = format!("t-{}", uuid::Uuid::new_v4());
+        super::begin_upload(&id).unwrap();
+        id
+    }
+
+    #[test]
+    fn pieces_land_in_any_order_and_twice() {
+        let id = upload();
+        super::write_piece(&id, 6, b"world").unwrap();
+        super::write_piece(&id, 0, b"hello ").unwrap();
+        super::write_piece(&id, 6, b"world").unwrap();
+        super::write_piece(&id, 0, b"hello ").unwrap();
+        let path = super::finish_upload(&id, "PSD", 11).unwrap();
+        assert!(path.ends_with(&format!("{id}.psd")));
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello world");
+        // The answer was lost and the window asks again.
+        assert_eq!(super::finish_upload(&id, "psd", 11).unwrap(), path);
+        assert_eq!(super::finish_upload(&id, "psd", 12).unwrap_err(), "Upload was not started");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn begin_starts_over() {
+        let id = upload();
+        super::write_piece(&id, 0, b"stale bytes").unwrap();
+        super::begin_upload(&id).unwrap();
+        super::write_piece(&id, 0, b"new").unwrap();
+        let path = super::finish_upload(&id, "txt", 3).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_piece_needs_a_started_upload() {
+        let id = format!("t-{}", uuid::Uuid::new_v4());
+        assert_eq!(super::write_piece(&id, 0, b"x").unwrap_err(), "Upload was not started");
+        assert!(!super::part_path(&id).exists());
+        assert_eq!(super::finish_upload(&id, "bin", 1).unwrap_err(), "Upload was not started");
+        assert_eq!(super::begin_upload("../..").unwrap_err(), "Upload needs an id");
+    }
+
+    #[test]
+    fn finish_checks_the_size() {
+        let id = upload();
+        super::write_piece(&id, 0, b"abc").unwrap();
+        assert_eq!(super::finish_upload(&id, "bin", 5).unwrap_err(), "Upload is incomplete: 3 of 5 bytes arrived");
+        assert!(super::finish_upload(&id, "bin", 2).is_err());
+        let path = super::finish_upload(&id, "bin", 3).unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_empty_upload_is_a_file() {
+        let id = upload();
+        super::write_piece(&id, 0, b"").unwrap();
+        let path = super::finish_upload(&id, "", 0).unwrap();
+        assert!(path.ends_with(&format!("{id}.bin")));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        let _ = std::fs::remove_file(&path);
+        let id = upload();
+        let path = super::finish_upload(&id, "txt", 0).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_upload_id_cannot_leave_the_dir() {
+        let id = format!("../../t-{}/x", uuid::Uuid::new_v4());
+        super::begin_upload(&id).unwrap();
+        let part = super::part_path(&super::upload_id(&id).unwrap());
+        assert_eq!(part.parent().unwrap(), crate::paths::tmp("files"));
+        assert!(part.exists());
+        super::write_piece(&id, 0, b"x").unwrap();
+        let path = super::finish_upload(&id, "../sh", 1).unwrap();
+        assert_eq!(std::path::Path::new(&path).parent().unwrap(), crate::paths::tmp("files"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_piece_past_the_bound_is_refused() {
+        let id = upload();
+        let error = "File is too large to upload";
+        assert_eq!(super::write_piece(&id, super::MAX_UPLOAD_BYTES, b"x").unwrap_err(), error);
+        assert_eq!(super::write_piece(&id, u64::MAX, b"x").unwrap_err(), error);
+        super::write_piece(&id, super::MAX_UPLOAD_BYTES, b"").unwrap();
+        let _ = std::fs::remove_file(super::part_path(&id));
     }
 
     #[test]

@@ -1981,10 +1981,20 @@ cacheReadTokens?: number,
 cacheWriteTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
 
 /**
+ * Starts an upload whose pieces come as binary frames, in any order, or starts it over.
+ */
+export type UploadBegin = { id: string, };
+
+/**
  * One piece of a file too big for a single message. `id` names the upload,
  * `offset` is where the piece starts; the first piece (offset 0) begins the file.
  */
 export type UploadChunk = { id: string, extension: string, offset: number, base64Contents: string, };
+
+/**
+ * Ends an upload: `size` is how big the file is, so a missing piece is caught.
+ */
+export type UploadFinish = { id: string, extension: string, size: number, };
 
 export type UrlKey = { urlKey: string, };
 

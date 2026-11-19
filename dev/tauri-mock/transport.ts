@@ -2197,6 +2197,11 @@ function writeStream(_id: number, _bytes: Uint8Array): Promise<void> {
   return Promise.resolve();
 }
 
+/** No uploads here: `upload_begin` is unknown too, so an upload stops with this before any piece. */
+function uploadPiece(_upload: string, _offset: number, _bytes: Uint8Array, _envId?: string): Promise<unknown> {
+  return Promise.reject(new Error("mock: uploads are not supported"));
+}
+
 /** A prompt a beat after spawn, so the status machinery has something to chew on. */
 function mockShell(_id: string, streamId: number) {
   const encoder = new TextEncoder();
@@ -2205,4 +2210,4 @@ function mockShell(_id: string, streamId: number) {
   setTimeout(() => say("\x1b[32m❯\x1b[0m "), 250);
 }
 
-export const transport = { request, on, onReconnect, openStream, writeStream };
+export const transport = { request, on, onReconnect, openStream, writeStream, uploadPiece };

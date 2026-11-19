@@ -59,6 +59,11 @@ export class Connection {
   >();
   /** Requests turned away while offline since the last one traced: one line per episode, not per call. */
   private refused = 0;
+  /**
+   * When (performance.now) the daemon last answered a call on this socket. Not
+   * `lastSeen`: a daemon that pushes events but answers nothing is not alive.
+   */
+  private answeredAt = -Infinity;
   private attempts = 0;
   private openedAt = 0;
   private readonly streams = new Map<number, (bytes: Uint8Array) => void>();
@@ -119,6 +124,19 @@ export class Connection {
   }
 
   request<T>(method: string, params: object = {}): Promise<T> {
+    return this.call<T>(method, (ws, id) => ws.send(JSON.stringify({ id, method, params })));
+  }
+
+  /**
+   * One piece of an upload, raw bytes in a binary frame instead of base64 in
+   * JSON: a quarter less on the wire and no encoding at either end. The daemon
+   * answers it like a request, so it settles like one.
+   */
+  uploadPiece(upload: string, offset: number, bytes: Uint8Array): Promise<unknown> {
+    return this.call("upload_piece", (ws, id) => ws.send(uploadFrame(id, upload, offset, bytes)));
+  }
+
+  private call<T>(method: string, send: (ws: WebSocket, id: number) => void): Promise<T> {
     if (this.mismatch) return Promise.reject(new Error("This machine needs an update. Update it in Settings › Environments."));
     if (this.failFast && this.status === "offline" && !this.opened) {
       // The method and the machine, never the params.
@@ -132,7 +150,12 @@ export class Connection {
       const id = this.nextId++;
       return new Promise<T>((resolve, reject) => {
         this.pending.set(id, { method, resolve: (value) => resolve(value as T), reject });
-        ws.send(JSON.stringify({ id, method, params }));
+        try {
+          send(ws, id);
+        } catch (error) {
+          this.pending.delete(id);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
       });
     });
   }
@@ -258,6 +281,7 @@ export class Connection {
     const again = this.ever;
     this.openedAt = performance.now();
     this.refused = 0;
+    this.answeredAt = -Infinity;
     this.attempts = 0;
     trace.info(again ? "socket.reconnected" : "socket.open", {
       machine: this.envId,
@@ -367,6 +391,7 @@ export class Connection {
     const waiter = this.pending.get(message.id);
     if (!waiter) return;
     this.pending.delete(message.id);
+    this.answeredAt = performance.now();
     if (message.ok) waiter.resolve(message.result);
     else {
       // The method and why; the params stay out (a pty_write carries keystrokes).
@@ -420,13 +445,23 @@ export class Connection {
     const ws = this.socket;
     if (!ws || ws.readyState !== WebSocket.OPEN || this.mismatch || this.pingTimer !== null) return;
     const started = performance.now();
-    const timer = globalThis.setTimeout(() => {
+    // A ping can wait behind an upload's pieces for seconds while every one of
+    // them is answered: a busy link is not a dead one. It is given up on only
+    // `PING_TIMEOUT_MS` after the last call it answered, never later.
+    const expire = () => {
+      const quiet = performance.now() - this.answeredAt;
+      if (this.socket === ws && quiet < PING_TIMEOUT_MS) {
+        timer = globalThis.setTimeout(expire, PING_TIMEOUT_MS - quiet);
+        this.pingTimer = timer;
+        return;
+      }
       this.pingTimer = null;
       if (this.socket === ws) {
         trace.warn("socket.ping_timeout", { machine: this.envId, waited_ms: PING_TIMEOUT_MS });
         ws.close();
       }
-    }, PING_TIMEOUT_MS);
+    };
+    let timer = globalThis.setTimeout(expire, PING_TIMEOUT_MS);
     this.pingTimer = timer;
     void this.request("ping", {})
       .then(() => {
@@ -453,6 +488,29 @@ export class Connection {
   }
 }
 
+/** The binary stream id upload pieces travel on; pty streams start at 1. */
+export const UPLOAD_STREAM = 0;
+
+/**
+ * An upload piece on the wire, little endian: u32 stream id `UPLOAD_STREAM`,
+ * u32 request id (the counter JSON calls use, so the daemon's JSON answer finds
+ * its waiter), u64 offset in the file, u8 length of the upload id, the id in
+ * ASCII, then the piece's bytes to the end of the frame.
+ */
+export function uploadFrame(requestId: number, upload: string, offset: number, bytes: Uint8Array): Uint8Array {
+  const name = new TextEncoder().encode(upload);
+  if (name.byteLength > 255) throw new Error("Upload id is too long");
+  const head = 17 + name.byteLength;
+  const frame = new Uint8Array(head + bytes.byteLength);
+  const view = new DataView(frame.buffer);
+  view.setUint32(0, UPLOAD_STREAM, true);
+  view.setUint32(4, requestId, true);
+  view.setBigUint64(8, BigInt(offset), true);
+  frame[16] = name.byteLength;
+  frame.set(name, 17);
+  frame.set(bytes, head);
+  return frame;
+}
 
 /** A remote that is down, distinct from a request the daemon refused. */
 export class EnvDown extends Error {

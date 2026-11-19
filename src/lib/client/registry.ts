@@ -175,6 +175,14 @@ export async function request<T>(method: string, params: object = {}, envId?: st
   return result;
 }
 
+/** One upload piece as a binary frame, routed like `request`; settles with the daemon's answer. */
+export async function uploadPiece(upload: string, offset: number, bytes: Uint8Array, envId?: string): Promise<unknown> {
+  const env = routeEnv("upload_piece", {}, maps(), envId, focused);
+  const conn = connections.get(env);
+  if (!conn) throw new EnvDown(env);
+  return conn.uploadPiece(upload, offset, bytes);
+}
+
 export function on(event: string, listener: Listener): () => void {
   const set = listeners.get(event) ?? new Set();
   set.add(listener);

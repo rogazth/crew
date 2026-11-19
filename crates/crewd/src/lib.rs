@@ -1215,6 +1215,18 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                     continue;
                 }
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                if stream_id == UPLOAD_STREAM {
+                    let hub = hub.clone();
+                    tokio::spawn(
+                        async move {
+                            if let Some(reply) = handle_piece(client_id, bytes).await {
+                                hub.send(client_id, Outgoing::Text(reply));
+                            }
+                        }
+                        .instrument(span.clone()),
+                    );
+                    continue;
+                }
                 enqueue_pty_input(&pty_in, &hosts, &hub, stream_id, bytes[4..].to_vec());
             }
             Message::Close(_) => {
@@ -1345,6 +1357,36 @@ fn pty_target(text: &str) -> Option<String> {
     target.method.starts_with("pty_").then_some(target.params.id)
 }
 
+/// The stream id of a binary frame that carries a piece of an upload rather than
+/// terminal input. Terminals' stream ids start at 1 (`next_stream` in
+/// crew-core's pty.rs), so 0 never names one.
+const UPLOAD_STREAM: u32 = 0;
+
+/// An upload piece's frame: stream id (u32), request id (u32), offset (u64),
+/// the upload id's length (u8), the id (ASCII), then the bytes. Little endian.
+/// The answer is the ordinary response to that request id. A frame too short
+/// to carry a request id cannot be answered and is dropped.
+async fn handle_piece(client_id: u64, frame: tokio_tungstenite::tungstenite::Bytes) -> Option<String> {
+    let req_id = u32::from_le_bytes(frame.get(4..8)?.try_into().ok()?);
+    let span = rpc_span(client_id, req_id, "upload_piece", None);
+    let started = Instant::now();
+    let result = async {
+        let header = frame.get(..17).ok_or("Upload piece is too short")?;
+        let offset = u64::from_le_bytes(header[8..16].try_into().unwrap());
+        let start = 17 + header[16] as usize;
+        let id = frame.get(17..start).ok_or("Upload piece is too short")?;
+        let id = std::str::from_utf8(id).map_err(|_| "Upload id is not text")?.to_string();
+        block(move || files::write_piece(&id, offset, &frame[start..])).await
+    }
+    .instrument(span.clone())
+    .await;
+    span.in_scope(|| rpc_done("upload_piece", started, result.as_ref().err()));
+    Some(encode(&match result {
+        Ok(()) => proto::ok(req_id, Value::Null),
+        Err(error) => proto::err(req_id, error),
+    }))
+}
+
 async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) -> Option<String> {
     let request = match serde_json::from_str::<Request>(text) {
         Ok(request) => request,
@@ -1441,6 +1483,9 @@ const HOT_METHODS: &[&str] = &[
     "background_list",
     "process_log_tail",
     "upload_chunk",
+    "upload_begin",
+    "upload_piece",
+    "upload_finish",
     "read_file_range",
     "path_exists",
     "path_is_file",
@@ -2154,6 +2199,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "upload_chunk" => {
             let proto::UploadChunk { id, extension, offset, base64_contents } = parse(params)?;
             json(block(move || files::write_chunk(&id, &extension, offset, &base64_contents)).await?)
+        }
+        "upload_begin" => {
+            let proto::UploadBegin { id } = parse(params)?;
+            block(move || files::begin_upload(&id)).await?;
+            Ok(Value::Null)
+        }
+        "upload_finish" => {
+            let proto::UploadFinish { id, extension, size } = parse(params)?;
+            json(block(move || files::finish_upload(&id, &extension, size)).await?)
         }
         "read_file_range" => {
             let proto::FileRange { path, offset, length } = parse(params)?;
@@ -2961,6 +3015,80 @@ mod tests {
 
         let output = wait_bytes(&mut ws, b"hi").await;
         assert!(output.windows(2).any(|w| w == b"hi"), "output: {output:?}");
+        handle.shutdown();
+    }
+
+    fn upload_piece(req_id: u32, id: &str, offset: u64, bytes: &[u8]) -> Message {
+        let mut frame = Vec::from(UPLOAD_STREAM.to_le_bytes());
+        frame.extend_from_slice(&req_id.to_le_bytes());
+        frame.extend_from_slice(&offset.to_le_bytes());
+        frame.push(id.len() as u8);
+        frame.extend_from_slice(id.as_bytes());
+        frame.extend_from_slice(bytes);
+        Message::Binary(frame.into())
+    }
+
+    /// Pieces sent side by side land where they belong whatever order they
+    /// arrive in, and one sent twice changes nothing.
+    #[tokio::test]
+    async fn an_upload_in_binary_pieces_lands_whole() {
+        let dir = test_dir("upload-pieces");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let id = format!("t-pieces-{}", std::process::id());
+        let begin = Request { id: 1, method: "upload_begin".into(), params: serde_json::json!({ "id": id }) };
+        send_json(&mut ws, &begin).await;
+        assert!(wait_response(&mut ws, 1).await.error.is_none());
+
+        ws.send(upload_piece(4, &id, 8, b"ces!")).await.unwrap();
+        ws.send(upload_piece(3, &id, 4, b" pie")).await.unwrap();
+        ws.send(upload_piece(2, &id, 0, b"all ")).await.unwrap();
+        ws.send(upload_piece(5, &id, 4, b" pie")).await.unwrap();
+        // Their answers come in whatever order the writes end.
+        let mut waiting = vec![2, 3, 4, 5];
+        while !waiting.is_empty() {
+            let answer = wait_one_of(&mut ws, &waiting).await;
+            assert!(answer.error.is_none(), "piece {}: {:?}", answer.id, answer.error);
+            waiting.retain(|id| *id != answer.id);
+        }
+
+        let finish = |req_id: u32, size: u64| {
+            let params = serde_json::json!({ "id": id, "extension": "txt", "size": size });
+            Request { id: req_id, method: "upload_finish".into(), params }
+        };
+        send_json(&mut ws, &finish(6, 13)).await;
+        assert_eq!(wait_response(&mut ws, 6).await.error.as_deref(), Some("Upload is incomplete: 12 of 13 bytes arrived"));
+        send_json(&mut ws, &finish(7, 12)).await;
+        let path = wait_response(&mut ws, 7).await.result.and_then(|v| v.as_str().map(String::from)).expect("path");
+        assert_eq!(std::fs::read(&path).unwrap(), b"all  pieces!");
+        let _ = std::fs::remove_file(&path);
+        handle.shutdown();
+    }
+
+    /// Stream id 0 is an upload's: it is answered as a call and never written
+    /// to a terminal, which would answer with a `pty-error`.
+    #[tokio::test]
+    async fn a_frame_on_stream_zero_never_reaches_a_terminal() {
+        let dir = test_dir("upload-stream");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        ws.send(Message::Binary(Vec::from([0u8; 6]).into())).await.unwrap();
+        let mut short = Vec::from([0u8; 4]);
+        short.extend_from_slice(&9u32.to_le_bytes());
+        ws.send(Message::Binary(short.into())).await.unwrap();
+        ws.send(upload_piece(10, "never-begun", 0, b"echo hi\n")).await.unwrap();
+        for _ in 0..2 {
+            let answer = wait_one_of(&mut ws, &[9, 10]).await;
+            let want = if answer.id == 9 { "Upload piece is too short" } else { "Upload was not started" };
+            assert_eq!(answer.error.as_deref(), Some(want));
+        }
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+        while let Ok(Some(Ok(msg))) = tokio::time::timeout_at(deadline, ws.next()).await {
+            if let Message::Text(text) = msg {
+                assert!(!text.contains("pty-error"), "reached a terminal: {text}");
+            }
+        }
         handle.shutdown();
     }
 

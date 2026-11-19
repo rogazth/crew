@@ -1,3 +1,3 @@
-import { on, onReconnect, openStream, request, writeStream } from "./registry";
+import { on, onReconnect, openStream, request, uploadPiece, writeStream } from "./registry";
 
-export const transport = { request, on, onReconnect, openStream, writeStream };
+export const transport = { request, on, onReconnect, openStream, writeStream, uploadPiece };
