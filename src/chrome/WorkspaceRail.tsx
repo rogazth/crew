@@ -1,7 +1,17 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { PlusIcon, SettingsIcon, UnplugIcon, type LucideIcon as Icon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { CrewGlyph } from "./CrewGlyph";
 import { Tooltip } from "./kit";
 import { SortableItem, SortableList } from "./SortableList";
@@ -101,15 +111,20 @@ export function WorkspaceRail(props: Props) {
     }
     return map;
   }, [props.sessions]);
+  const navRef = useRef<HTMLElement>(null);
+  const gliderRef = useRef<HTMLSpanElement>(null);
+  useGlidingPill(navRef, gliderRef, props.activeId, props.settingsOpen);
 
   return (
     <nav
+      ref={navRef}
       data-sidebar-rail
       aria-label="Workspaces"
-      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-2"
+      className="relative flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-2"
     >
       {props.home && (
         <HomeMark
+          id={props.home.id}
           active={props.home.id === props.activeId && !props.settingsOpen}
           current={props.home.id === props.activeId}
           status={loudest(byWorkspace.get(props.home.id) ?? [], props.home.id === props.activeId)}
@@ -176,6 +191,13 @@ export function WorkspaceRail(props: Props) {
           anchor={peek.anchor}
         />
       )}
+
+      {/* The pill on its way from one mark to the next; at rest each mark wears its own. */}
+      <span
+        ref={gliderRef}
+        aria-hidden
+        className="pointer-events-none absolute top-0 left-0 w-[3px] rounded-r-full bg-text opacity-0"
+      />
     </nav>
   );
 }
@@ -185,11 +207,13 @@ export function WorkspaceRail(props: Props) {
  * keeps it out of the projects' order. It is not dragged, renamed or removed.
  */
 function HomeMark({
+  id,
   active,
   current,
   status,
   onSelect,
 }: {
+  id: string;
   active: boolean;
   current: boolean;
   status: SessionStatus | null;
@@ -206,6 +230,7 @@ function HomeMark({
             type="button"
             data-nav
             data-home-mark
+            data-rail-id={id}
             data-tauri-drag-region="false"
             aria-current={current ? "true" : undefined}
             aria-label="Home"
@@ -216,7 +241,8 @@ function HomeMark({
       >
         <span
           aria-hidden
-          className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 ${
+          data-rail-pill
+          className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 in-data-gliding:invisible ${
             active ? "h-6" : current ? "h-2" : "h-0 group-hover:h-3"
           }`}
         />
@@ -279,6 +305,7 @@ function Mark({
     <button
       type="button"
       data-nav
+      data-rail-id={workspace.id}
       data-tauri-drag-region="false"
       aria-current={current ? "true" : undefined}
       aria-label={workspace.name}
@@ -294,7 +321,8 @@ function Mark({
       {/* The pill on the rail's edge: full for the one on screen, a hint on hover. */}
       <span
         aria-hidden
-        className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 ${
+        data-rail-pill
+        className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 in-data-gliding:invisible ${
           active ? "h-6" : current ? "h-2" : "h-0 group-hover:h-3"
         }`}
       />
@@ -406,13 +434,15 @@ function RailButton({
 function RailScroll({ activeId, children }: { activeId: string; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  // Before paint, and before the pill measures where it lands.
+  useLayoutEffect(() => {
     ref.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [activeId]);
 
   return (
     <div
       ref={ref}
+      data-rail-scroll
       style={{ maskImage: `linear-gradient(to bottom, transparent, #000 ${FADE}px, #000 calc(100% - ${FADE}px), transparent)` }}
       className="no-scrollbar -my-2 flex min-h-0 w-full shrink flex-col items-center overflow-y-auto overscroll-contain py-3 [scroll-padding-block:12px]"
     >
@@ -423,6 +453,65 @@ function RailScroll({ activeId, children }: { activeId: string; children: ReactN
 
 /** The fade's height, and the margin under it at either end of the list. */
 const FADE = 12;
+
+/** A mark's own pill, Home's included. */
+function pillOf(rail: HTMLElement, id: string): HTMLElement | null {
+  return rail.querySelector(`[data-rail-id="${CSS.escape(id)}"] [data-rail-pill]`);
+}
+
+/**
+ * Picking another workspace slides the pill from the mark it leaves to the
+ * one picked, instead of shrinking in one and growing in the other. A copy
+ * over the rail makes the trip, so the marks' scroller doesn't cut it on the
+ * way to or from Home, and the marks' own pills stay out of sight until it
+ * lands. A mark scrolled out of view sends it from the edge it lies past; one
+ * that is gone, like a workspace just removed, sends nothing.
+ */
+function useGlidingPill(
+  navRef: RefObject<HTMLElement | null>,
+  gliderRef: RefObject<HTMLSpanElement | null>,
+  activeId: string,
+  settingsOpen: boolean,
+) {
+  const was = useRef(activeId);
+  useLayoutEffect(() => {
+    const from = was.current;
+    was.current = activeId;
+    const rail = navRef.current;
+    const glider = gliderRef.current;
+    if (from === activeId || !rail || !glider) return;
+
+    // A pick made mid-trip leaves from wherever the pill is by then.
+    const flying = glider.getAnimations()[0];
+    const origin = flying ? glider : pillOf(rail, from);
+    const target = pillOf(rail, activeId);
+    const start = origin?.getBoundingClientRect();
+    flying?.cancel();
+    delete rail.dataset.gliding;
+    if (!origin || !start || !target || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const box = rail.getBoundingClientRect();
+    const end = target.getBoundingClientRect();
+    let fromY = start.top + start.height / 2;
+    const scroller = origin.closest("[data-rail-scroll]")?.getBoundingClientRect();
+    if (scroller) fromY = Math.min(Math.max(fromY, scroller.top), scroller.bottom);
+    const toY = end.top + end.height / 2;
+    if (fromY === toY) return;
+
+    const x = end.left - box.left;
+    // h-6 on screen, h-2 while settings cover the workspace: what the mark's own pill grows to.
+    const height = settingsOpen ? "0.5rem" : "1.5rem";
+    rail.dataset.gliding = "";
+    const trip = glider.animate(
+      [
+        { opacity: 1, height: `${start.height}px`, transform: `translate(${x}px, calc(${fromY - box.top}px - 50%))` },
+        { opacity: 1, height, transform: `translate(${x}px, calc(${toY - box.top}px - 50%))` },
+      ],
+      { duration: 240, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+    trip.onfinish = () => delete rail.dataset.gliding;
+  }, [activeId, settingsOpen, navRef, gliderRef]);
+}
 
 /**
  * A mark's status, cut out of its corner. A turn running spins rather than
