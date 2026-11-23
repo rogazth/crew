@@ -137,4 +137,10 @@ export type Tab = (
     }
   /** One run of a workspace command: its output, in the worktree it runs in (null, the main checkout). */
   | { id: string; kind: "process"; processId: string; title: string; worktree: string | null }
+  /**
+   * What ⌘T opens: a seat in the strip that becomes whatever is picked in it,
+   * started in the worktree it was opened in (null, the main checkout). Never
+   * written to disk, and never in the reopen stack.
+   */
+  | { id: string; kind: "blank"; worktree: string | null }
 ) & { pinned?: true };

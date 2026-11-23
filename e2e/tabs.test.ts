@@ -1,14 +1,15 @@
-// L2: the tab launcher and the strip's order. Pages visited in a Crew browser
+// L2: the blank tab and the strip's order. Pages visited in a Crew browser
 // tab (a local server, the only web the sandbox has) land in crewd's history;
-// the launcher (⌘T) offers them under "Pages" by their title, and an address
+// the blank tab (⌘T, or the plus) offers them by their title, and an address
 // typed there opens as "Open <address>". Each pick loads the page, as the
-// server sees. Dragging a tab along the strip reorders crewd's saved strip,
-// and a relaunch paints the strip in that order.
+// server sees, in the blank tab's seat. Dragging a tab along the strip
+// reorders crewd's saved strip, and a relaunch paints the strip in that order.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { HistoryEntry } from "../src/lib/protocol.ts";
 import {
   launchCrew,
+  openAddress,
   savedStrip,
   servePages,
   stripTabIds,
@@ -17,27 +18,17 @@ import {
   type PageServer,
 } from "./harness.ts";
 
-/** The launcher, opened from the strip's plus (a page may hold the keyboard). */
-async function openLauncher(crew: Crew) {
+/** A blank tab, opened from the strip's plus (a page may hold the keyboard). */
+async function openNewTab(crew: Crew) {
   await crew.window.getByRole("button", { name: /^New tab/ }).click();
-  const search = crew.window.getByRole("textbox", { name: "Open a tab" });
+  const search = crew.window.locator("input[aria-label='Open a tab']:visible");
   await search.waitFor();
   return search;
 }
 
-/** The launcher's rows as [group heading, label], in order; ungrouped rows head with "". */
-async function launcherRows(crew: Crew): Promise<[string, string][]> {
-  return crew.window.locator("[data-launcher-list]").evaluate((element) => {
-    const rows: [string, string][] = [];
-    let heading = "";
-    for (const child of element.children) {
-      if (child.matches("[data-group-header]")) heading = child.textContent?.trim() ?? "";
-      else if (child.matches("[data-launcher-row]")) {
-        rows.push([heading, child.querySelector("[data-launcher-label]")?.textContent?.trim() ?? ""]);
-      }
-    }
-    return rows;
-  });
+/** The blank tab's rows on screen, each as its text: its title, then the line under it. */
+async function rowTexts(crew: Crew): Promise<string[]> {
+  return crew.window.getByRole("option").evaluateAll((rows) => rows.map((row) => row.textContent?.trim() ?? ""));
 }
 
 /** How many times the server was asked for `path`. */
@@ -54,7 +45,7 @@ async function visited(crew: Crew, url: string, title: string): Promise<HistoryE
   );
 }
 
-test("L2: visited pages and typed addresses open from the launcher; a dragged strip keeps its order", async (t) => {
+test("L2: visited pages and typed addresses open from a blank tab; a dragged strip keeps its order", async (t) => {
   let crew = await launchCrew();
   t.after(() => crew.close());
   const titles = { "/alpha": "Alpha harbor", "/beta": "Beta lighthouse", "/gamma": "Gamma quarry" };
@@ -65,36 +56,32 @@ test("L2: visited pages and typed addresses open from the launcher; a dragged st
   const page = crew.window;
   const url = (at: keyof typeof titles) => `${server.origin}${at}`;
 
-  // Two pages, each opened by typing its address into the launcher: "Open <address>".
-  const openAddress = async (at: keyof typeof titles) => {
-    const search = await openLauncher(crew);
-    const typed = url(at).replace(/^http:\/\//, "");
-    await search.fill(typed);
-    await page.getByRole("button", { name: `Open ${typed}`, exact: true }).click();
+  // Two pages, each opened by typing its address into a blank tab: "Open <host>" leads, and ↵ opens it.
+  const openPage = async (at: keyof typeof titles) => {
+    await openAddress(crew, url(at).replace(/^http:\/\//, ""));
     await waitFor(() => hits(server, at) >= 1, { message: `a new tab loads ${at}` });
   };
   for (const at of ["/alpha", "/beta"] as const) {
-    await openAddress(at);
+    await openPage(at);
     await visited(crew, url(at), titles[at]);
   }
   assert.equal((await stripTabIds(crew)).length, 2, "each address opened a page of its own");
 
-  // A piece of the second page's title finds it under Pages.
-  const search = await openLauncher(crew);
+  // A piece of the second page's title finds it.
+  const search = await openNewTab(crew);
   await search.fill("lighthouse");
-  await waitFor(
-    async () => (await launcherRows(crew)).some(([group, label]) => group === "Pages" && label === titles["/beta"]),
-    { message: `the launcher lists "${titles["/beta"]}" under Pages` },
-  );
+  await waitFor(async () => (await rowTexts(crew)).some((text) => text.startsWith(titles["/beta"])), {
+    message: `the blank tab lists "${titles["/beta"]}"`,
+  });
   assert.ok(
-    !(await launcherRows(crew)).some(([, label]) => label === titles["/alpha"]),
+    !(await rowTexts(crew)).some((text) => text.startsWith(titles["/alpha"])),
     "the other page does not match the query",
   );
-  await page.getByRole("button", { name: titles["/beta"] }).click();
+  await page.getByRole("option", { name: new RegExp(`^${titles["/beta"]}`) }).click();
   await waitFor(() => hits(server, "/beta") === 2, { message: "the picked page loads again, in a tab of its own" });
 
   // An address nobody visited opens the same way.
-  await openAddress("/gamma");
+  await openPage("/gamma");
   assert.equal(hits(server, "/gamma"), 1);
 
   const before = await waitFor(async () => {

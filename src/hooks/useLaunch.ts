@@ -1,9 +1,8 @@
 import { useCallback } from "react";
-import type { Launch } from "../chrome/TabLauncher";
 import type { AttachedFile } from "../lib/blocks";
 import { carryUnsent, setFirstPrompt, type Unsent } from "../lib/firstPrompt";
 import { choiceForNewSession, type AgentChoice, type ProviderId } from "../lib/providers";
-import type { Session, StubKind } from "../lib/types";
+import type { Session } from "../lib/types";
 import { PLACEHOLDER_SESSION_NAME } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
 import type { useSessions } from "./useSessions";
@@ -15,33 +14,16 @@ type Deps = {
   /** Keeps a session nothing has been said in out of the sidebar. */
   markBlank: (id: string) => void;
   openSession: (session: Session) => void;
-  openStub: (stub: StubKind, title: string) => void;
-  openTerminal: (worktree: string | null) => void;
-  openBrowser: (url?: string, incognito?: boolean) => void;
-  /** The file explorer beside the tabs, on its files half. */
-  openExplorer: () => void;
-  newBot: () => void;
   /** Puts the start screen on screen with the caret in its composer, starting in the worktree at `place` when one is named. */
   showStart: (place?: string) => void;
 };
 
-/** New sessions and the tab launcher's picks. */
-export function useLaunch({
-  worktree,
-  create,
-  markBlank,
-  openSession,
-  openStub,
-  openTerminal,
-  openBrowser,
-  openExplorer,
-  newBot,
-  showStart,
-}: Deps) {
+/** New sessions: made and opened at once, or made for a tab that is waiting for them. */
+export function useLaunch({ worktree, create, markBlank, openSession, showStart }: Deps) {
   const { effective: defaultAgent, setDraft, lastOf } = useDefaultAgent();
 
-  // Sessions open straight away; the name is derived, never prompted.
-  const newSession = useCallback(
+  // The name is derived, never prompted.
+  const createSession = useCallback(
     /**
      * `pick` is a whole choice, as Home's composer makes one, or a provider,
      * which takes the default's model when it is the default's and its effort
@@ -66,10 +48,19 @@ export function useLaunch({
       if (prompt) setFirstPrompt(session.id, prompt, files);
       else markBlank(session.id);
       if (unsent) carryUnsent(session.id, unsent);
-      openSession(session);
       return session;
     },
-    [create, defaultAgent, markBlank, openSession, worktree],
+    [create, defaultAgent, markBlank, worktree],
+  );
+
+  // Sessions open straight away.
+  const newSession = useCallback(
+    async (...args: Parameters<typeof createSession>) => {
+      const session = await createSession(...args);
+      if (session) openSession(session);
+      return session;
+    },
+    [createSession, openSession],
   );
 
   // A new session is the start screen: a provider picked for it becomes the composer's choice, nothing is created yet.
@@ -83,20 +74,5 @@ export function useLaunch({
     [defaultAgent, lastOf, setDraft, showStart],
   );
 
-  const launch = useCallback(
-    (item: Launch) => {
-      if (item.kind === "stub") {
-        if (item.stub === "terminal") openTerminal(worktree);
-        else openStub(item.stub, item.title);
-      }
-      if (item.kind === "browser") openBrowser(item.url, item.incognito);
-      if (item.kind === "explorer") openExplorer();
-      if (item.kind === "new-bot") newBot();
-      if (item.kind === "new-session") void newSession(item.provider);
-      if (item.kind === "session") openSession(item.session);
-    },
-    [newBot, newSession, openSession, openStub, openTerminal, openBrowser, openExplorer, worktree],
-  );
-
-  return { newSession, startSession, launch };
+  return { createSession, newSession, startSession };
 }

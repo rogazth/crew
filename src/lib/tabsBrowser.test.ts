@@ -125,7 +125,7 @@ describe("incognito tabs", () => {
     expect(newBrowserTab("https://a.com", true)).toMatchObject({ kind: "browser", incognito: true });
   });
 
-  it("are left out of what the strip writes to disk, with the ids that point at them", () => {
+  it("are left out of what the strip writes to disk, with the ids that point at them; it comes back on the tab used before", () => {
     const page = newBrowserTab("https://a.com");
     const secret = newBrowserTab("https://secret.test", true);
     const saved = persistedTabs({
@@ -135,9 +135,9 @@ describe("incognito tabs", () => {
       recent: [secret.id, page.id, "file:a"],
       collapsed: ["w"],
     });
-    expect(saved).toEqual({ tabs: [file("a"), page], activeId: null, recent: [page.id, "file:a"], collapsed: ["w"] });
+    expect(saved).toEqual({ tabs: [file("a"), page], activeId: page.id, recent: [page.id, "file:a"], collapsed: ["w"] });
     expect(JSON.stringify(saved)).not.toContain("secret");
-    expect(parseTabs(JSON.stringify(saved)).activeId).toBe("file:a");
+    expect(parseTabs(JSON.stringify(saved)).activeId).toBe(page.id);
   });
 
   it("leave a strip without them as it was, minus the closed stack", () => {

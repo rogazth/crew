@@ -8,7 +8,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { addRemote, launchCrew, MOD, openLauncher, pressChord, typeInTerminal, waitFor, withSystemClipboard, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, newTabPick, MOD, pressChord, typeInTerminal, waitFor, withSystemClipboard, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 /** A 2×2 PNG, as a clipboard would hold a screenshot. */
 const PNG = Buffer.from(
@@ -40,8 +40,7 @@ async function pasteImageInto(crew: Crew, out: string): Promise<void> {
 }
 
 async function openShell(crew: Crew): Promise<void> {
-  await openLauncher(crew);
-  await crew.window.keyboard.press("Enter");
+  await newTabPick(crew, "Terminal");
   await typeInTerminal(crew, "echo ready");
 }
 

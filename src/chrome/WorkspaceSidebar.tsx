@@ -34,7 +34,7 @@ import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { useNow } from "../hooks/useNow";
 import { useSidebarPrefs } from "../hooks/useSidebarPrefs";
-import { commandKeys } from "../lib/commands";
+import { withKeys } from "../lib/commands";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
 import { childrenOf, failedUnseen, unseen } from "../lib/letters";
 import {
@@ -396,7 +396,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
           <div className="px-2 pb-1">
             <div className="flex h-8 items-center gap-0.5 pl-2">
               <span className="min-w-0 flex-1 truncate text-text-muted">Bots</span>
-              <HeaderButton icon={PlusIcon} label={`New bot ${commandKeys("new-bot")}`} onClick={() => props.onNewBot(main)} />
+              <HeaderButton icon={PlusIcon} label={withKeys("New bot", "new-bot")} onClick={() => props.onNewBot(main)} />
             </div>
             {bots.length > 0 ? (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(64px,1fr))] gap-0.5">
@@ -454,7 +454,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
                     worktrees={props.home ? [] : props.worktrees}
                   />
                 )}
-                <HeaderButton icon={PlusIcon} label={`New session ${commandKeys("new-session")}`} onClick={() => props.onNewSession()} />
+                <HeaderButton icon={PlusIcon} label={withKeys("New session", "new-session")} onClick={() => props.onNewSession()} />
               </div>
             )}
           </div>

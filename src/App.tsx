@@ -37,13 +37,15 @@ import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
 import { peekUnsent } from "./lib/firstPrompt";
 import { zoomApp } from "./lib/host";
-import { isTerminalTab, tabFile } from "./lib/tabs";
+import { isBlankTab, isTerminalTab, newBlankTab, paneId, sessionTabId, tabFile } from "./lib/tabs";
 import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { useConnectorsAlert } from "./surfaces/settings/integrations/alert";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
 import { liveRuns, startableIn } from "./lib/processes";
+import { BlankTab, type BlankPick } from "./surfaces/BlankTab";
+import { focusBlankTab } from "./lib/blankTabFocus";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { ServicesView, type Place } from "./surfaces/ServicesView";
 import { showToast } from "./lib/toasts";
@@ -64,7 +66,7 @@ import type { AgentChoice } from "./lib/providers";
 import type { NavPlace } from "./chrome/WorkspacePlaces";
 import { WorkspaceSettingsPage } from "./surfaces/WorkspaceSettingsPage";
 import { focus as focusBlock } from "./lib/transcript";
-import type { Session } from "./lib/types";
+import type { Session, Tab } from "./lib/types";
 
 /** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
 const NO_PROCESSES: Process[] = [];
@@ -308,19 +310,11 @@ export function App() {
 
   // The worktree the sidebar's + asked the start screen to start in, until a tab comes up.
   const { setStartIn } = work;
-  const { newSession, startSession, launch } = useLaunch({
+  const { createSession, newSession, startSession } = useLaunch({
     worktree: work.placeIn,
     create,
     markBlank,
     openSession: nav.openSession,
-    openStub: nav.openStub,
-    openTerminal: nav.openTerminal,
-    openBrowser: (url, incognito) => nav.openBrowser(url, incognito),
-    openExplorer: () => {
-      closePage();
-      explorer.setMode("files");
-    },
-    newBot: sheet.newBot,
     showStart: (place) => {
       closePage();
       setStartIn(place ?? null);
@@ -329,6 +323,42 @@ export function App() {
       window.setTimeout(focusWorkspaceStart, 0);
     },
   });
+
+  // ⌘T and the plus open a blank tab, which becomes what is picked in it, in its seat. On one already, ⌘T
+  // selects what was typed there instead of piling up another.
+  const { placeIn } = work;
+  const openNewTab = useCallback(() => {
+    closePage();
+    const on = tabs.active;
+    if (isBlankTab(on) && workspaceId) return focusBlankTab(paneId(workspaceId, on.id));
+    tabs.open(newBlankTab(placeIn));
+  }, [closePage, tabs, placeIn, workspaceId]);
+  // What a blank tab finds by name: the workspace's bots and sessions, the never-used ones left out as the sidebar leaves them.
+  const blankAgents = useMemo(() => startAgents.filter((session) => !blank.has(session.id)), [startAgents, blank]);
+  const pickInBlank = useCallback(
+    (pane: { workspaceId: string; tab: Tab }, pick: BlankPick): void | Promise<void> => {
+      if (pane.tab.kind !== "blank") return;
+      const { worktree } = pane.tab;
+      switch (pick.kind) {
+        case "session":
+          // Made while the field waits; it fills this blank tab wherever the screen has gone since.
+          return createSession(pick.choice, worktree).then((session) => {
+            if (session) tabs.fill(pane.workspaceId, pane.tab.id, { id: sessionTabId(session.id), kind: "session", sessionId: session.id });
+          });
+        case "existing":
+          return nav.openSession(pick.session);
+        case "terminal":
+          return nav.openTerminal(worktree);
+        case "browser":
+          return nav.openBrowser(pick.url, pick.incognito);
+        case "bot":
+          return sheet.newBot();
+        case "setup":
+          return openSettings("providers");
+      }
+    },
+    [createSession, tabs, nav, sheet, openSettings],
+  );
 
   // A session the palette found, at the line it found: at once in this workspace, or once its own is on screen.
   const opening = useRef<{ session: Session; pos: number | null } | null>(null);
@@ -554,7 +584,7 @@ export function App() {
             onReorder={tabs.reorder}
             onPin={tabs.pin}
             onUnpin={tabs.unpin}
-            onLaunch={launch}
+            onNewTab={openNewTab}
             context={{
               workspace: isHome ? "Home" : (active?.name ?? ""),
               // The worktree on screen, by its real branch; a checkout with no branch names none.
@@ -625,6 +655,9 @@ export function App() {
               onAdoptBrowserTab={tabs.adopt}
               files={files}
               onConfirm={confirms.ask}
+              renderBlank={(pane) => (
+                <BlankTab paneId={pane.id} visible={pane.visible} agents={blankAgents} onPick={(pick) => pickInBlank(pane, pick)} />
+              )}
               renderProcess={(tab) => (
                 <ProcessTab
                   key={tab.id}

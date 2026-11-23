@@ -27,7 +27,7 @@ test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal 
   assert.ok(home, "home was never made");
   const order = [home.id, ...crew.workspaces.map((w) => w.id)];
   // A shell in each workspace first, while the field is clean: an open
-  // composition would eat the launcher's Enter.
+  // composition would eat the blank tab's Enter.
   for (const key of ["1", "2", "3"]) {
     await pressChord(crew, `${MOD}+${key}`);
     // The workspace restores its tabs as it opens: a tab opened before that is lost.

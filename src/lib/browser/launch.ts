@@ -1,7 +1,7 @@
 import { sameUrlKey } from "./suggest";
 import { filePathOf, isLocalAddress, isWebUrl, resolveAddress } from "./url";
 
-/** What the tab launcher offers for a query that reads as an address. */
+/** What the blank tab offers for a query that reads as an address. */
 export type LauncherAddress = {
   url: string;
   /** What was typed, without the scheme: `Open localhost:3200`. */
@@ -11,9 +11,8 @@ export type LauncherAddress = {
 };
 
 /**
- * Only an address gets a row: a search would show up for every query typed
- * into a launcher of bots and sessions. `notes.md` also reads as a host, so
- * a bare dotted name only leads while nothing else matches; a scheme, a port,
+ * Only an address gets an "Open" row. `notes.md` also reads as a host, so a
+ * bare dotted name only leads while nothing else matches; a scheme, a port,
  * a path or a local host is unmistakable.
  * `contested`: an action or a session also matches the query.
  */

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type { Rule } from "../src/lib/protocol.ts";
-import { launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, newTabPick, sessions, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -19,11 +19,11 @@ after(async () => {
   await crew?.close();
 });
 
-/** ⇧⌘A, a name and its instructions, Create: resolves to the session crewd made for it. */
+/** The blank tab's Bot row, a name and its instructions, Create: resolves to the session crewd made for it. */
 async function newBot(name: string, instructions = "") {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await pressChord(crew, `${MOD}+Shift+a`);
+  await newTabPick(crew, "Bot");
   const dialog = crew.window.getByRole("dialog", { name: "New bot" });
   await dialog.waitFor();
   await dialog.getByLabel("Name", { exact: true }).fill(name);
@@ -43,7 +43,7 @@ test("New Bot makes a bot even with v0.1.16's terminal mode saved", async () => 
 });
 
 test("New Bot keeps what the dialog was given, and Create with no name goes back to the name", async () => {
-  await pressChord(crew, `${MOD}+Shift+a`);
+  await newTabPick(crew, "Bot");
   const dialog = crew.window.getByRole("dialog", { name: "New bot" });
   await dialog.waitFor();
   await dialog.getByRole("button", { name: "Create bot" }).click();

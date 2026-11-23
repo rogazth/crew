@@ -15,7 +15,7 @@
 // Diagnostics only: nothing here fails on a number.
 import path from "node:path";
 import { after, before, test, type TestContext } from "node:test";
-import { launchCrew, MOD, openLauncher, pressChord, waitFor, type Crew } from "../harness.ts";
+import { launchCrew, MOD, newTabPick, pressChord, waitFor, type Crew } from "../harness.ts";
 import { seedHeavy } from "./heavy.ts";
 import { probe, profiled, read, requestOf, reset, settle, stats } from "./probe.ts";
 
@@ -84,7 +84,7 @@ type Open = {
 
 async function openOne(crew: Crew): Promise<Open> {
   const t0 = await reset(crew);
-  await openLauncher(crew);
+  await newTabPick(crew, "Terminal", { enter: false });
   const launcher = (await crew.window.evaluate(() => performance.now())) - t0;
   await reset(crew);
   await arm(crew);

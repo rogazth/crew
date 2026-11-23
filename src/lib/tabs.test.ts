@@ -4,10 +4,12 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
+  fillBlankTab,
   isSignInTab,
   isTurnTab,
   isTerminalTab,
   lastUsed,
+  newBlankTab,
   newBrowserTab,
   newFileBrowserTab,
   newSignInTab,
@@ -607,5 +609,75 @@ describe("pinned tabs", () => {
     const state = parseTabs(raw);
     expect(ids(state)).toEqual(["session:b", "session:a"]);
     expect(state.collapsed).toEqual(["/wt"]);
+  });
+});
+
+describe("blank tabs", () => {
+  // As ⌘T opens one, and as useTabs opens a pick while it is on screen.
+  const blankOver = (state: TabState) => {
+    const blank = newBlankTab(null);
+    return { blank, state: withRecent(openTab(state, blank, { lookup: true })) };
+  };
+  const pick = (state: TabState, id: string) =>
+    withRecent(openTab(state, sessionTab(id), { lookup: true, ...(state.activeId?.startsWith("blank:") && { into: state.activeId }) }));
+  const ids = (state: TabState) => state.tabs.map((tab) => tab.id);
+
+  it("is a new tab each time", () => {
+    expect(newBlankTab(null).id).not.toBe(newBlankTab(null).id);
+  });
+
+  it("becomes what is picked in it, in its seat, and still hands back where ⌘T was pressed", () => {
+    const base = visit(opened("a", "b", "c"), "a");
+    const { blank, state } = blankOver(base);
+    const moved = withRecent(reorderTabs(state, [sessionTabId("a"), blank.id, sessionTabId("b"), sessionTabId("c")]));
+    const filled = pick(moved, "x");
+    expect(ids(filled)).toEqual([sessionTabId("a"), sessionTabId("x"), sessionTabId("b"), sessionTabId("c")]);
+    expect(filled.activeId).toBe(sessionTabId("x"));
+    expect(closeTab(filled, sessionTabId("x")).activeId).toBe(sessionTabId("a"));
+  });
+
+  it("goes when its pick is already open, which comes up", () => {
+    const { state } = blankOver(visit(opened("a", "b"), "a"));
+    const next = pick(state, "b");
+    expect(ids(next)).toEqual([sessionTabId("a"), sessionTabId("b")]);
+    expect(next.activeId).toBe(sessionTabId("b"));
+    expect(next.closed).toEqual([]);
+  });
+
+  it("is left alone by a tab opened while another is on screen", () => {
+    const { blank, state } = blankOver(opened("a"));
+    const away = withRecent(selectTab(state, sessionTabId("a")));
+    expect(ids(pick(away, "x"))).toEqual([sessionTabId("a"), blank.id, sessionTabId("x")]);
+  });
+
+  it("fills in place, behind, when the screen moved on while its pick was on its way", () => {
+    const { blank, state } = blankOver(opened("a"));
+    const away = withRecent(selectTab(state, sessionTabId("a")));
+    const filled = fillBlankTab(away, blank.id, sessionTab("x"));
+    expect(ids(filled)).toEqual([sessionTabId("a"), sessionTabId("x")]);
+    expect(filled.activeId).toBe(sessionTabId("a"));
+  });
+
+  it("lands nowhere once the blank tab is closed", () => {
+    const { blank, state } = blankOver(opened("a"));
+    const gone = closeTab(state, blank.id);
+    expect(fillBlankTab(gone, blank.id, sessionTab("x"))).toBe(gone);
+  });
+
+  it("stays out of the reopen stack and is never pinned", () => {
+    const { blank, state } = blankOver(opened("a"));
+    expect(closeTab(state, blank.id).closed).toEqual([]);
+    expect(pinTab(state, blank.id)).toBe(state);
+  });
+
+  it("is not written to disk, which comes back on the tab used before it", () => {
+    const { blank, state } = blankOver(visit(opened("a", "b"), "a"));
+    const saved = persistedTabs(state);
+    expect(saved.tabs.map((tab) => tab.id)).not.toContain(blank.id);
+    expect(saved.activeId).toBe(sessionTabId("a"));
+  });
+
+  it("is titled New tab", () => {
+    expect(tabTitle(newBlankTab(null), [])).toBe("New tab");
   });
 });

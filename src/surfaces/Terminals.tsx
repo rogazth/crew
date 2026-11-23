@@ -29,7 +29,7 @@ type Props = {
 export function Terminals({ panes, onOpenFile, onInputSent }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
   // Before the first terminal, so its pane does not wait out Suspense's reveal
-  // throttle. The launcher asks too, for a ⌘T before the window is idle.
+  // throttle. The blank tab asks too, for a ⌘T before the window is idle.
   useEffect(() => preloadWhenIdle(terminalView.preload), []);
   const { prefs, update } = useTerminalPrefs();
   const zoom = (delta: number) =>

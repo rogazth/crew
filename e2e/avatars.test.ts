@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, newTabPick, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
 
 /** The bot's card in the sidebar panel. */
 function card(crew: Crew, name: string) {
@@ -41,7 +41,7 @@ test("A1: the avatar style and a face picked for one bot survive a restart", asy
   const page = crew.window;
 
   // A bot, made in its dialog.
-  await pressChord(crew, `${MOD}+Shift+a`);
+  await newTabPick(crew, "Bot");
   const sheet = page.getByRole("dialog", { name: "New bot" });
   await sheet.getByLabel("Name", { exact: true }).fill("Scout");
   await sheet.getByRole("button", { name: "Create bot" }).click();

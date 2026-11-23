@@ -1,14 +1,15 @@
-// I1: an incognito tab (⇧⌘N) opens in the workspace's in-memory session. It
-// sees none of the workspace's cookies and leaves none behind: no history, no
-// saved back/forward stack, no place in the saved strip. Incognito tabs share
-// their session with each other, the tabs their pages open are incognito too,
-// and the session is wiped once the last of them closes. ⇧⌘B opens a regular
-// page, and the launcher's ⌥↵ opens a typed address incognito.
+// I1: an incognito tab (the blank tab's Incognito row) opens in the workspace's
+// in-memory session. It sees none of the workspace's cookies and leaves none
+// behind: no history, no saved back/forward stack, no place in the saved strip.
+// Incognito tabs share their session with each other, the tabs their pages open
+// are incognito too, and the session is wiped once the last of them closes. The
+// Browser row opens a regular page, and ⌥↵ in the blank tab opens a typed
+// address incognito.
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
-import { launchCrew, MOD, pressChord, savedStrip, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, newTabPick, pressChord, savedStrip, stripTabIds, waitFor, type Crew } from "./harness.ts";
 import { partitionFor } from "../src/lib/browser/bridge.ts";
 
 type Visit = { path: string; cookie: string };
@@ -127,8 +128,8 @@ async function closeTab(id: string): Promise<void> {
 let regularId = "";
 let firstIncognitoId = "";
 
-test("⇧⌘B opens a regular page in the workspace's saved session, signed in there", async () => {
-  const tab = await newTab(() => chord(`${MOD}+Shift+b`));
+test("Browser opens a regular page in the workspace's saved session, signed in there", async () => {
+  const tab = await newTab(() => newTabPick(crew, "Browser"));
   regularId = tab.id;
   assert.equal(tab.incognito, false);
   await waitFor(() => addressBar().evaluate((el) => el === document.activeElement), { message: "the address bar has focus" });
@@ -138,8 +139,8 @@ test("⇧⌘B opens a regular page in the workspace's saved session, signed in t
   await waitFor(() => historyHas("/set/regular"), { message: "the visit reaches history" });
 });
 
-test("⇧⌘N opens an incognito page that sees none of the saved session's cookies", async () => {
-  const tab = await newTab(() => chord(`${MOD}+Shift+n`));
+test("Incognito opens a page that sees none of the saved session's cookies", async () => {
+  const tab = await newTab(() => newTabPick(crew, "Incognito"));
   firstIncognitoId = tab.id;
   assert.equal(tab.incognito, true, "the tab wears the incognito mark");
   await waitFor(() => addressBar().evaluate((el) => el === document.activeElement), { message: "the address bar has focus" });
@@ -175,7 +176,7 @@ test("an incognito page leaves no history, no saved stack and no place in the sa
 
 test("incognito tabs share one session, and the tabs their pages open are incognito too", async () => {
   // A second incognito tab is signed in as the first.
-  const second = await newTab(() => chord(`${MOD}+Shift+n`));
+  const second = await newTab(() => newTabPick(crew, "Incognito"));
   assert.equal(second.incognito, true);
   await go(`${origin}/links`);
   assert.match(lastVisit("/links").cookie, /sid=secret/);
@@ -193,12 +194,12 @@ test("incognito tabs share one session, and the tabs their pages open are incogn
   assert.equal(await sessionOf(`${origin}/popped`), "incognito");
 });
 
-test("the launcher's ⌥↵ opens a typed address in an incognito tab", async () => {
+test("the blank tab's ⌥↵ opens a typed address in an incognito tab", async () => {
   const tab = await newTab(async () => {
     await chord(`${MOD}+t`);
-    const field = crew.window.getByLabel("Open a tab");
+    const field = crew.window.locator("input[aria-label='Open a tab']:visible");
     await field.fill(`${origin}/from-launcher`);
-    await crew.window.getByText("⌥↵").waitFor();
+    await crew.window.getByRole("option", { name: /^Open 127\.0\.0\.1/, selected: true }).waitFor();
     await field.press("Alt+Enter");
   });
   assert.equal(tab.incognito, true);
@@ -207,17 +208,21 @@ test("the launcher's ⌥↵ opens a typed address in an incognito tab", async ()
   assert.match(lastVisit("/from-launcher").cookie, /sid=secret/);
 });
 
-test("⇧⌘N works with the keyboard inside a page", async () => {
-  const tab = await newTab(() =>
-    crew.app.evaluate(async ({ webContents }, target) => {
+test("⌘T works with the keyboard inside a page", async () => {
+  const tab = await newTab(async () => {
+    await crew.app.evaluate(async ({ webContents }, target) => {
       const guest = webContents.getAllWebContents().find((wc) => wc.getURL() === target);
       if (!guest) throw new Error("no page");
       guest.focus();
-      const modifiers = [process.platform === "darwin" ? "meta" : "control", "shift"] as ("meta" | "control" | "shift")[];
-      guest.sendInputEvent({ type: "keyDown", keyCode: "N", modifiers });
-      guest.sendInputEvent({ type: "keyUp", keyCode: "N", modifiers });
-    }, `${origin}/from-launcher`),
-  );
+      const modifiers = [process.platform === "darwin" ? "meta" : "control"] as ("meta" | "control")[];
+      guest.sendInputEvent({ type: "keyDown", keyCode: "T", modifiers });
+      guest.sendInputEvent({ type: "keyUp", keyCode: "T", modifiers });
+    }, `${origin}/from-launcher`);
+    const field = crew.window.locator("input[aria-label='Open a tab']:visible");
+    await waitFor(() => field.evaluate((input) => input === document.activeElement), { message: "the blank tab takes the keys" });
+    await field.fill("Incognito");
+    await field.press("Enter");
+  });
   assert.equal(tab.incognito, true);
 });
 
@@ -233,7 +238,7 @@ test("closing the last incognito tab wipes the session; the next one starts sign
   await waitFor(async () => (await cookiesIn(true)).length === 0, { message: "the incognito session is wiped" });
   assert.ok((await cookiesIn(false)).includes("sid=regular"), "the saved session is untouched");
 
-  await newTab(() => chord(`${MOD}+Shift+n`));
+  await newTab(() => newTabPick(crew, "Incognito"));
   await go(`${origin}/after-wipe`);
   assert.doesNotMatch(lastVisit("/after-wipe").cookie, /sid=/);
 });
@@ -249,8 +254,8 @@ test("incognito tabs do not come back after a restart; regular ones do", async (
   assert.equal((await browserTabs()).length, 1);
 });
 
-test("⇧⌘A still opens the new bot dialog", async () => {
-  await chord(`${MOD}+Shift+a`);
+test("the blank tab's Bot row opens the new bot dialog", async () => {
+  await newTabPick(crew, "Bot");
   const sheet = crew.window.getByRole("dialog", { name: "New bot" });
   await sheet.waitFor();
   await sheet.getByLabel("Name", { exact: true }).click();

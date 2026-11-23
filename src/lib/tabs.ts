@@ -35,15 +35,25 @@ export function tabFile(tab: Tab | null): { path: string; relative: string } | n
 
 export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incognito === true;
 
+export type BlankTab = Extract<Tab, { kind: "blank" }>;
+
+export const isBlankTab = (tab: Tab | null | undefined): tab is BlankTab => tab?.kind === "blank";
+
+/** Each ⌘T a new one, in the worktree on screen. */
+export function newBlankTab(worktree: string | null): BlankTab {
+  return { id: `blank:${crypto.randomUUID()}`, kind: "blank", worktree };
+}
+
 /**
  * What a strip writes to disk: everything but its incognito tabs, which end
- * with the app like a private window does, and its sign-in terminals.
+ * with the app like a private window does, its sign-in terminals and its blank
+ * tabs. Left on one of those, it comes back on the tab used before it.
  */
 export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   const { activeId, recent, collapsed } = state;
   // A command typed for someone runs once: a tab saved with it would run it again on the next launch.
   const tabs = state.tabs
-    .filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab))
+    .filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab) && !isBlankTab(tab))
     .map((tab) => {
       if (tab.kind !== "stub" || tab.input === undefined) return tab;
       return Object.fromEntries(Object.entries(tab).filter(([key]) => key !== "input")) as Tab;
@@ -51,7 +61,7 @@ export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   const kept = new Set(tabs.map((tab) => tab.id));
   return {
     tabs,
-    activeId: activeId !== null && kept.has(activeId) ? activeId : null,
+    activeId: activeId !== null && kept.has(activeId) ? activeId : (recent?.find((id) => kept.has(id)) ?? null),
     ...(recent && { recent: recent.filter((id) => kept.has(id)) }),
     ...(collapsed && { collapsed }),
   };
@@ -136,6 +146,8 @@ export const CLOSED_LIMIT = 10;
  * opens behind. `lookup` makes the tab on screen its opener only until another
  * tab comes up, the way Chromium's ⌘T does: closed right away, it hands back
  * where you were.
+ *
+ * `into` is a blank tab the pick fills: see `fillBlankTab`.
  */
 export function openTab(
   state: TabState,
@@ -146,8 +158,12 @@ export function openTab(
     background = false,
     opener,
     lookup = false,
-  }: { after?: string; at?: number; background?: boolean; opener?: string; lookup?: boolean } = {},
+    into,
+  }: { after?: string; at?: number; background?: boolean; opener?: string; lookup?: boolean; into?: string } = {},
 ): TabState {
+  if (into !== undefined && !isBlankTab(tab) && !tab.pinned && isBlankTab(state.tabs.find((t) => t.id === into))) {
+    return fillBlankTab(state, into, tab);
+  }
   // A tab already open comes up, even one asked for behind.
   if (state.tabs.some((t) => t.id === tab.id)) return switchTo(state, tab.id);
   const from = opener ?? (lookup ? state.activeId : null);
@@ -167,6 +183,36 @@ export function openTab(
   const marked: TabState = { ...next, openers };
   if (!background) delete marked.lookup;
   return lookup && opener === undefined ? { ...marked, lookup: tab.id } : marked;
+}
+
+/**
+ * What was picked in blank tab `blankId` takes its seat: its place in the
+ * strip, who opened it and its quick look, so closing it right away still
+ * hands back where ⌘T was pressed. A pick that is already open comes up and the
+ * blank tab goes, the way Chromium's "switch to tab" leaves no empty tab
+ * behind. Only a blank tab on screen moves the screen: one left while its pick
+ * was on its way (a session being made) fills in place, behind. With the blank
+ * tab gone the pick lands nowhere.
+ */
+export function fillBlankTab(state: TabState, blankId: string, tab: Tab): TabState {
+  const seat = state.tabs.findIndex((t) => t.id === blankId);
+  if (seat === -1 || !isBlankTab(state.tabs[seat])) return state;
+  const onScreen = state.activeId === blankId;
+  if (state.tabs.some((t) => t.id === tab.id)) {
+    const shown = onScreen ? switchTo(state, tab.id) : state;
+    return withoutTab(shown, blankId, shown.closed);
+  }
+  const tabs = state.tabs.slice();
+  tabs[seat] = tab;
+  const next: TabState = { ...state, tabs, activeId: onScreen ? tab.id : state.activeId };
+  if (state.openers) {
+    const openers = reparent(state.openers, blankId);
+    const parent = state.openers[blankId];
+    if (parent !== undefined) openers[tab.id] = parent;
+    next.openers = openers;
+  }
+  if (state.lookup === blankId) next.lookup = tab.id;
+  return next;
 }
 
 /**
@@ -282,6 +328,8 @@ export function closeTab(state: TabState, id: string, visible?: Visible): TabSta
   const index = state.tabs.findIndex((t) => t.id === id);
   const tab = state.tabs[index];
   if (!tab) return state;
+  // An empty tab is nothing to get back.
+  if (isBlankTab(tab)) return withoutTab(state, id, state.closed, visible);
   const closed: ClosedTab = { ...tab, closedAt: { after: state.tabs[index - 1]?.id ?? null, index } };
   return withoutTab(state, id, [closed, ...state.closed].slice(0, CLOSED_LIMIT), visible);
 }
@@ -370,10 +418,10 @@ export function pinnedFirst(tabs: Tab[]): Tab[] {
   return pinned.length === pinnedCount(tabs) ? tabs : [...pinned, ...tabs.filter((tab) => !tab.pinned)];
 }
 
-/** Pins a tab after the ones already pinned, the way Chromium does. */
+/** Pins a tab after the ones already pinned, the way Chromium does. A blank tab is a seat for what comes next, never pinned. */
 export function pinTab(state: TabState, id: string): TabState {
   const tab = state.tabs.find((t) => t.id === id);
-  if (!tab || tab.pinned) return state;
+  if (!tab || tab.pinned || isBlankTab(tab)) return state;
   const rest = state.tabs.filter((t) => t.id !== id);
   const at = pinnedCount(rest);
   return { ...state, tabs: [...rest.slice(0, at), { ...tab, pinned: true }, ...rest.slice(at)] };
@@ -562,6 +610,7 @@ export function relativeTo(root: string, path: string): string {
 
 export function tabTitle(tab: Tab, sessions: Session[]): string {
   if (tab.kind === "stub" || tab.kind === "process") return tab.title;
+  if (tab.kind === "blank") return "New tab";
   if (tab.kind === "browser") return browserTitle(tab.title, tab.url);
   if (tab.kind === "file") return tab.relative.split("/").pop() ?? tab.relative;
   return sessions.find((s) => s.id === tab.sessionId)?.name ?? "Untitled";

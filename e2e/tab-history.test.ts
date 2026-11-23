@@ -4,7 +4,7 @@
 // last on screen. With ⌘W and with the tab's close button.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { launchCrew, MOD, pressChord, servePages, stripTabIds, waitFor, type Crew } from "./harness.ts";
+import { launchCrew, MOD, openAddress, pressChord, servePages, stripTabIds, waitFor, type Crew } from "./harness.ts";
 
 const tab = (crew: Crew, id: string) => crew.window.locator(`[data-tab-strip] [role="tab"][data-tab-id="${id}"]`);
 
@@ -35,14 +35,10 @@ test("closing the tab on screen returns to a quick look's tab, else to its neigh
   const server = await servePages(Object.fromEntries(paths.map((at) => [at, at.slice(1)])));
   t.after(() => server.close());
 
-  /** A page opened from the launcher by its address; its tab's id. */
+  /** A page opened from a blank tab by its address; its tab's id. */
   const openPage = async (at: string) => {
     const before = await stripTabIds(crew);
-    await crew.window.getByRole("button", { name: /^New tab/ }).click();
-    const search = crew.window.getByRole("textbox", { name: "Open a tab" });
-    const typed = `${server.origin}${at}`.replace(/^http:\/\//, "");
-    await search.fill(typed);
-    await crew.window.getByRole("button", { name: `Open ${typed}`, exact: true }).click();
+    await openAddress(crew, `${server.origin}${at}`.replace(/^http:\/\//, ""));
     return waitFor(async () => (await stripTabIds(crew)).find((id) => !before.includes(id)), {
       message: `a tab opens for ${at}`,
     });
@@ -95,11 +91,7 @@ test("reopening a closed tab brings it back where it stood in the strip", async 
 
   const openPage = async (at: string) => {
     const before = await stripTabIds(crew);
-    await crew.window.getByRole("button", { name: /^New tab/ }).click();
-    const search = crew.window.getByRole("textbox", { name: "Open a tab" });
-    const typed = `${server.origin}${at}`.replace(/^http:\/\//, "");
-    await search.fill(typed);
-    await crew.window.getByRole("button", { name: `Open ${typed}`, exact: true }).click();
+    await openAddress(crew, `${server.origin}${at}`.replace(/^http:\/\//, ""));
     return waitFor(async () => (await stripTabIds(crew)).find((id) => !before.includes(id)), {
       message: `a tab opens for ${at}`,
     });

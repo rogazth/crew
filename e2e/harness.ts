@@ -750,10 +750,14 @@ export async function gitBranches(crew: Crew, repo: string): Promise<string[]> {
   return out.split("\n").filter(Boolean).sort();
 }
 
-/** The tab ids of the strip on screen, in order. */
+/**
+ * The tab ids of the strip on screen, in order. A blank tab is a seat waiting
+ * for its pick, not a tab of its own: left out, so waiting for a new tab waits
+ * for what was picked in it.
+ */
 export function stripTabIds(crew: Crew): Promise<string[]> {
   return crew.window
-    .locator('[data-tab-strip] [role="tab"][data-tab-id]')
+    .locator('[data-tab-strip] [role="tab"][data-tab-id]:not([data-tab-id^="blank:"])')
     .evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("data-tab-id") ?? ""));
 }
 
@@ -864,9 +868,9 @@ export async function startChat(
   list: () => Promise<Session[]>,
 ): Promise<Session> {
   const known = new Set((await list()).map((row) => row.id));
-  await pressChord(crew, `${MOD}+n`);
+  await newTabPick(crew, "Session");
   const session = await waitFor(async () => (await list()).find((row) => row.kind === "terminal" && !known.has(row.id)), {
-    message: "⌘N makes the session",
+    message: "the blank tab's Session row makes the session",
   });
   const field = composerOf(crew, session);
   await field.fill(text);
@@ -874,25 +878,56 @@ export async function startChat(
   return session;
 }
 
+/** The field of the blank tab on screen. */
+export function newTabField(crew: Crew): Locator {
+  return crew.window.locator("input[aria-label='Open a tab']:visible");
+}
+
+/** The strip's plus, an address typed into the blank tab it opens, ↵: the page opens in the blank tab's seat. */
+export async function openAddress(crew: Crew, address: string): Promise<void> {
+  await crew.window.getByRole("button", { name: /^New tab/ }).click();
+  const field = newTabField(crew);
+  await field.fill(address);
+  await crew.window.getByRole("option", { name: /^Open /, selected: true }).waitFor();
+  await field.press("Enter");
+}
+
 /**
- * ⌘T, once the launcher has the keys. Its field is on screen before it has
- * focus, which moves in on the next animation frame: a key pressed in between
- * goes to what had focus, the terminal behind it, and the launcher never hears it.
+ * ⌘T, once the blank tab's field has the keys. It takes focus a frame after
+ * it is on screen: a key pressed in between goes to what had focus, the
+ * terminal behind it, and the blank tab never hears it.
  */
-export async function openLauncher(crew: Crew): Promise<Locator> {
+export async function openNewTab(crew: Crew): Promise<Locator> {
   await pressChord(crew, `${MOD}+t`);
-  const field = crew.window.getByLabel("Open a tab");
+  const field = newTabField(crew);
   await waitFor(() => field.evaluate((input) => input === document.activeElement), {
-    message: "the launcher takes the keys",
+    message: "the blank tab takes the keys",
     interval: 10,
   });
   return field;
 }
 
-/** ⌘T ↵: a shell in the tab on screen. */
+/**
+ * The strip's plus, then a kind of tab by its name, ready for ↵: "Session",
+ * "Terminal", "Browser", "Incognito" or "Bot". The plus, not ⌘T: a page that
+ * holds the keyboard keeps synthetic keys. Without `enter`, the caller presses
+ * it, to time what follows.
+ */
+export async function newTabPick(crew: Crew, kind: string, { enter = true }: { enter?: boolean } = {}): Promise<void> {
+  await crew.window.getByRole("button", { name: /^New tab/ }).click();
+  const field = newTabField(crew);
+  await waitFor(() => field.evaluate((input) => input === document.activeElement), {
+    message: "the blank tab takes the keys",
+    interval: 10,
+  });
+  await field.fill(kind);
+  await crew.window.getByRole("option", { name: new RegExp(`^${kind}`), selected: true }).waitFor();
+  if (enter) await crew.window.keyboard.press("Enter");
+}
+
+/** A shell in the tab on screen, from the blank tab's Terminal row. */
 export async function openShell(crew: Crew): Promise<void> {
-  await openLauncher(crew);
-  await crew.window.keyboard.press("Enter");
+  await newTabPick(crew, "Terminal");
   await waitFor(
     () =>
       crew.window.evaluate(() =>

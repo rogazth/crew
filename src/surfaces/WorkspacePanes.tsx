@@ -46,6 +46,8 @@ type Props = {
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
   renderProcess: (tab: ProcessTabOf) => ReactNode;
+  /** What a blank tab shows. Each stays mounted while it is open, so what was typed in it survives a switch away. */
+  renderBlank: (pane: MountedPane) => ReactNode;
   /** The workspace's commands: a chat lists the runs its session started. */
   processes: readonly Process[];
   onOpenProcessRun: (process: Process, worktree: string | null) => void;
@@ -78,6 +80,7 @@ export function WorkspacePanes({
   onOpenHistory,
   onConfirm,
   renderProcess,
+  renderBlank,
   processes,
   onOpenProcessRun,
   onOpenConnectors,
@@ -101,7 +104,7 @@ export function WorkspacePanes({
       const cwd =
         tab.kind === 'session'
           ? (where.get(tab.sessionId) ?? workspace.path)
-          : tab.kind === 'stub' && tab.worktree !== undefined
+          : (tab.kind === 'stub' || tab.kind === 'blank') && tab.worktree !== undefined
             ? placeOf(tab.worktree, workspace)
             : placeOf(null, workspace);
       return [{ ...pane, cwd }];
@@ -161,6 +164,14 @@ export function WorkspacePanes({
           renderProcess={renderProcess}
         />
       </DiffsPool>
+      {mounted.map(
+        (pane) =>
+          pane.tab.kind === 'blank' && (
+            <div key={pane.id} hidden={!pane.visible} className="absolute inset-0">
+              {renderBlank(pane)}
+            </div>
+          ),
+      )}
       <Terminals panes={mounted} onOpenFile={onOpenFile} {...(onClearTerminalInput && { onInputSent: onClearTerminalInput })} />
       <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>

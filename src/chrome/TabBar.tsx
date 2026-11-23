@@ -1,5 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs";
-import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, LayersIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, LayersIcon, PlusIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BranchTag } from "./BranchDot";
@@ -10,11 +10,11 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
-import { TabLauncher, type Launch } from "./TabLauncher";
 import { useLease } from "../hooks/useBrowserLeases";
 import { toneOf } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
+import { withKeys } from "../lib/commands";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { useTabDrag } from "../hooks/useTabDrag";
 import { useTabOverflow } from "../hooks/useTabOverflow";
@@ -71,7 +71,8 @@ type Props = {
   onReorder: (ids: string[]) => void;
   onPin: (id: string) => void;
   onUnpin: (id: string) => void;
-  onLaunch: (launch: Launch) => void;
+  /** The plus and ⌘T: a blank tab, which becomes whatever is picked in it. */
+  onNewTab: () => void;
   /** Said on the strip while the sidebar is away: where you are, in the worktree's hue, and the door to switch. */
   context: { workspace: string; branch: string; hue?: number | undefined; onSwitch: () => void };
   groups: TabGroups | null;
@@ -122,7 +123,8 @@ function tabActions(
     ...(tab.kind === "file" ? [COPY_PATH] : []),
     ...(tab.kind === "browser" && tab.url ? [COPY_URL] : []),
     SEPARATOR,
-    tab.pinned ? UNPIN_TAB : PIN_TAB,
+    // A blank tab is a seat for what comes next: nothing to keep at the strip's end.
+    ...(tab.kind === "blank" ? [] : [tab.pinned ? UNPIN_TAB : PIN_TAB]),
     ...(place !== null && groups
       ? [
           { ...COLLAPSE_WORKTREE, disabled: !canCollapse(place, tabs, activeId, groups) },
@@ -155,14 +157,13 @@ export function TabBar({
   onReorder,
   onPin,
   onUnpin,
-  onLaunch,
+  onNewTab,
   context,
   groups,
   onDropFiles,
 }: Props) {
   const bar = useRef<HTMLDivElement>(null);
   const dropping = useFileDrop(bar, onDropFiles);
-  const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
   // The shell's close is remade with every tab and session; the pills get one
   // that is not, so a tab opened does not redraw every pill in the strip.
@@ -190,14 +191,7 @@ export function TabBar({
     return place ? groups!.labelOf(place) : null;
   };
 
-  // ⌘T with the plus scrolled out of view would anchor the launcher off the window's
-  // edge, and focusing its field would scroll the whole window after it. The strip
-  // brings its end, and the plus, into view first.
-  useCommand("open-launcher", () => {
-    const scroller = ref.current;
-    if (!launcher && scroller) scroller.scrollLeft = scroller.scrollWidth;
-    setLauncher(!launcher);
-  });
+  useCommand("open-launcher", onNewTab);
 
   // A press in the strip — a click, a close, a middle click — holds it where it stands, so
   // the tab that comes up after a close never slides another under the pointer. The hold
@@ -222,7 +216,7 @@ export function TabBar({
     };
   }, [ref]);
 
-  // Selecting from the launcher or the sidebar can land on a tab that scrolled out of view.
+  // Selecting from the sidebar or opening a tab can land on one that scrolled out of view.
   // Brought in sideways only: the strip never scrolls up or down, whatever a tab's height.
   useEffect(() => {
     if (pressed.current) return;
@@ -324,12 +318,16 @@ export function TabBar({
                 )}
 
               <div className="ml-1 flex shrink-0 items-center">
-                <TabLauncher
-                  open={launcher}
-                  onOpenChange={setLauncher}
-                  sessions={sessions}
-                  onLaunch={onLaunch}
-                />
+                <button
+                  type="button"
+                  data-tauri-drag-region="false"
+                  aria-label={withKeys("New tab", "open-launcher")}
+                  title={withKeys("New tab", "open-launcher")}
+                  onClick={onNewTab}
+                  className="flex size-7 shrink-0 items-center justify-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text"
+                >
+                  <PlusIcon className="size-4" />
+                </button>
               </div>
               {/* The strip's end: once it is in view, so is the plus, and the end arrow goes. */}
               <span ref={endRef} aria-hidden className="h-px w-px shrink-0" />
@@ -441,7 +439,8 @@ const TabPill = memo(function TabPill({
         <BrowserTabFace tab={tab} sessions={sessions} />
       ) : (
         <>
-          <TabIcon tab={tab} sessions={sessions} />
+          {/* A blank tab is its title alone. */}
+          {tab.kind !== "blank" && <TabIcon tab={tab} sessions={sessions} />}
           {/* Laid over its own bold copy, so turning bold for news never resizes the tab. */}
           <span data-text={tabTitle(tab, sessions)} className="crew-steady-title flex-1">
             <span className={tone.bold ? "font-semibold text-text" : undefined}>{tabTitle(tab, sessions)}</span>
@@ -647,6 +646,7 @@ const tabStatus = (tab: Tab, sessions: Session[]) =>
     fills the same 14px box, so a tab keeps its layout when its kind changes. */
 function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
   const icon = () => {
+    if (tab.kind === "blank") return null;
     if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-icon" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
     if (tab.kind === "process") return <LayersIcon className="size-3.5 text-icon" />;

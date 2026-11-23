@@ -70,8 +70,8 @@ export function Surface({
   // Mounted only while on screen: a command runs on in the daemon, and its
   // terminal paints again from the log when the tab comes back.
   if (tab.kind === "process") return renderProcess(tab);
-  // Pages stay mounted in their own overlay, like terminals: a file's too.
-  if (tab.kind === "browser") return null;
+  // Pages stay mounted in their own overlay, like terminals: a file's too. So do blank tabs, with what was typed in them.
+  if (tab.kind === "browser" || tab.kind === "blank") return null;
   if (tab.kind === "file") {
     // Keyed by path: CodeView keeps its previous item when only props change,
     // which rendered the old file's contents under the new tab's header.

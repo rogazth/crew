@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SEARCH, displayUrl, filePathOf, isWebUrl, resolveAddress, sameDocument, type Address } from "./url";
+import {
+  addressParts,
+  DEFAULT_SEARCH,
+  displayUrl,
+  filePathOf,
+  isWebUrl,
+  resolveAddress,
+  sameDocument,
+  siteSecurity,
+  unicodeHost,
+  type Address,
+} from "./url";
 
 const go = (url: string): Address => ({ kind: "url", url });
 const google = (query: string): Address => ({
@@ -142,4 +153,97 @@ describe("sameDocument", () => {
   it("still answers for URLs that do not parse", () => {
     expect(sameDocument("not a url#x", "not a url#y")).toBe(true);
   });
+});
+
+describe("addressParts", () => {
+  const host = (h: string, path = "") => ({ kind: "host" as const, host: h, path });
+  const cases: Array<[string, ReturnType<typeof addressParts>]> = [
+    ["https://example.com/", host("example.com")],
+    ["http://example.com/", host("example.com")],
+    ["https://www.example.com/a/b?c=1#d", host("example.com", "/a/b?c=1#d")],
+    ["https://example.com/?q=1", host("example.com", "/?q=1")],
+    ["https://www.com/", host("www.com")],
+    // The port is part of where the page is.
+    ["http://localhost:3000/app", host("localhost:3000", "/app")],
+    ["https://example.com:8443/", host("example.com:8443")],
+    ["https://example.com:443/", host("example.com")],
+    ["http://127.0.0.1:8080/x", host("127.0.0.1:8080", "/x")],
+    ["http://[::1]:5173/", host("[::1]:5173")],
+    ["http://192.168.1.10/", host("192.168.1.10")],
+    // A user name or password is never shown, and never read as the host.
+    ["https://user:secret@example.com/a", host("example.com", "/a")],
+    ["https://google.com@evil.example/login", host("evil.example", "/login")],
+    // Escapes read as text, except those that would hide something.
+    ["https://example.com/caf%C3%A9", host("example.com", "/café")],
+    ["https://example.com/a%20b", host("example.com", "/a%20b")],
+    ["https://example.com/%E2%80%AEtxt.exe", host("example.com", "/%E2%80%AEtxt.exe")],
+    ["https://example.com/%E0%A4%A", host("example.com", "/%E0%A4%A")],
+    // International names read in their own letters when that is safe.
+    ["https://xn--bcher-kva.de/", host("bücher.de")],
+    ["https://www.xn--bcher-kva.de/", host("bücher.de")],
+    ["https://xn--80ak6aa92e.com/", host("xn--80ak6aa92e.com")],
+    ["https://xn--d1acpjx3f.xn--p1ai/", host("яндекс.рф")],
+    // A file: its folder, then its name.
+    ["file:///Users/me/site/index.html", { kind: "file", folder: "/Users/me/site/", name: "index.html" }],
+    ["file:///tmp/my%20report.html", { kind: "file", folder: "/tmp/", name: "my%20report.html" }],
+    ["about:blank", null],
+    ["data:text/html,hi", null],
+    ["not a url", null],
+  ];
+
+  for (const [url, expected] of cases) {
+    it(`splits ${url}`, () => {
+      expect(addressParts(url)).toEqual(expected);
+    });
+  }
+
+  it("keeps a very long path whole, for the bar to elide", () => {
+    const path = `/${"segment/".repeat(200)}end`;
+    expect(addressParts(`https://example.com${path}`)).toEqual(host("example.com", path));
+  });
+});
+
+describe("unicodeHost", () => {
+  it("leaves plain hosts alone", () => {
+    expect(unicodeHost("example.com")).toBe("example.com");
+  });
+
+  it("shows Japanese and Korean labels", () => {
+    expect(unicodeHost("xn--wgv71a119e.jp")).toBe("日本語.jp");
+    expect(unicodeHost("xn--3e0b707e.kr")).toBe("한국.kr");
+  });
+
+  it("keeps a label mixing Latin and Cyrillic in punycode", () => {
+    // "pаypal" with a Cyrillic а.
+    expect(unicodeHost("xn--pypal-4ve.com")).toBe("xn--pypal-4ve.com");
+  });
+
+  it("keeps punycode that does not decode", () => {
+    expect(unicodeHost("xn--.com")).toBe("xn--.com");
+    expect(unicodeHost("xn--zz!.com")).toBe("xn--zz!.com");
+  });
+});
+
+describe("siteSecurity", () => {
+  const cases: Array<[string, ReturnType<typeof siteSecurity>]> = [
+    ["https://example.com/", "secure"],
+    ["http://example.com/", "insecure"],
+    ["http://192.168.1.10:8000/", "insecure"],
+    ["http://localhost:3000/", "local"],
+    ["https://localhost:3000/", "local"],
+    ["http://127.0.0.1:8080/", "local"],
+    ["http://[::1]:5173/", "local"],
+    ["http://sandbox.localhost:3000/", "local"],
+    ["http://localhost.evil.com/", "insecure"],
+    ["file:///tmp/a.html", "file"],
+    ["crew-file://abc/a.html", "crew"],
+    ["about:blank", "none"],
+    ["", "none"],
+    ["data:text/html,hi", "none"],
+  ];
+  for (const [url, expected] of cases) {
+    it(`calls ${url || "an empty page"} ${expected}`, () => {
+      expect(siteSecurity(url)).toBe(expected);
+    });
+  }
 });

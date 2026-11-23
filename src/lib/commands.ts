@@ -56,13 +56,12 @@ export const COMMANDS = {
   "workspace-8": { label: "Go to Workspace 8", keys: "Mod+8" },
   "workspace-9": { label: "Go to Workspace 9", keys: "Mod+9" },
 
-  // Making things
-  "new-bot": { label: "New bot", keys: "Mod+Shift+A" },
-  "new-session": { label: "New session", keys: "Mod+N" },
+  // Making things. ⌘T's blank tab makes every kind of tab, so these stay in ⌘K, unbound until someone binds them.
+  "new-bot": { label: "New bot" },
+  "new-session": { label: "New session" },
   "new-worktree": { label: "New worktree", keys: { key: "N", ctrl: true, meta: true } },
-  // ⇧⌘N is Chrome's incognito window, so the muscle memory transfers; B is for browser.
-  "new-browser-tab": { label: "New browser tab", keys: "Mod+Shift+B" },
-  "new-incognito-tab": { label: "New incognito tab", keys: "Mod+Shift+N" },
+  "new-browser-tab": { label: "New browser tab" },
+  "new-incognito-tab": { label: "New incognito tab" },
 
   // Find and zoom — bound by whatever fills the active tab: a terminal or a page zooms
   // itself, anything else zooms the window.
@@ -176,6 +175,12 @@ const MAC_ORDER = ["⌃", "⌥", "⇧", "⌘"];
 export function commandKeys(id: CommandId): string {
   const keys = keysFor(id);
   return keys ? chordLabel(keys) : "";
+}
+
+/** A button's name with its command's chord after it, or the name alone while the command is unbound. */
+export function withKeys(label: string, id: CommandId): string {
+  const keys = commandKeys(id);
+  return keys ? `${label} ${keys}` : label;
 }
 
 /** Every chord of the command as the platform spells it, the one shown first. */

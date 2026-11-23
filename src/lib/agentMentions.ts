@@ -56,7 +56,7 @@ function matchNames<T extends { name: string }>(query: string, items: readonly T
 const fold = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 /** Where the first word typed starts in the name, or null when the words do not all start words of it, in order. */
-function wordsMatch(query: string, name: string): number | null {
+export function wordsMatch(query: string, name: string): number | null {
   const hay = fold(name);
   const words = fold(query).split(/\s+/);
   const goesOn = words.at(-1) === "";

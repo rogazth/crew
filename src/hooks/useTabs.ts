@@ -7,6 +7,8 @@ import {
   closeTab,
   NO_TABS,
   offPages,
+  fillBlankTab,
+  isBlankTab,
   openTab,
   panesOf,
   patchBrowserTab,
@@ -132,8 +134,23 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [workspaceId, mutateIn, placeOf],
   );
 
-  /** A tab opened from the strip, the sidebar or the launcher: closed right away, it hands back the tab it came from. */
-  const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab, { lookup: true })), [mutate]);
+  /**
+   * A tab opened from the strip, the sidebar or ⌘K: closed right away, it hands back the tab it came from.
+   * Opened while a blank tab is on screen, it takes that tab's seat, as a page typed into Chromium's new tab does.
+   */
+  const open = useCallback(
+    (tab: Tab) =>
+      mutate((s) => {
+        const blank = s.tabs.find((t) => t.id === s.activeId);
+        return openTab(s, tab, { lookup: true, ...(isBlankTab(blank) && { into: blank.id }) });
+      }),
+    [mutate],
+  );
+  /** A pick that took a while (a session being made) fills the blank tab it was made in, wherever the screen is now. */
+  const fill = useCallback(
+    (workspaceId: string, blankId: string, tab: Tab) => mutateIn(workspaceId, (s) => fillBlankTab(s, blankId, tab)),
+    [mutateIn],
+  );
   /** A link followed from the tab on screen: its child, beside it; `background` keeps the screen where it is. */
   const openLink = useCallback(
     (tab: Tab, background = false) =>
@@ -325,6 +342,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     openIn,
     adopt,
     patchBrowser,
+    fill,
     clearInput,
     dropWorkspace,
     unsavedIn,

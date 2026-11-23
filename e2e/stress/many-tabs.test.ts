@@ -8,7 +8,7 @@
 //   STRESS_TABS=30 npm run e2e -- --stress many-tabs
 import assert from "node:assert/strict";
 import { after, before, test, type TestContext } from "node:test";
-import { composerOf, launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "../harness.ts";
+import { composerOf, launchCrew, MOD, newTabPick, pressChord, sessions, waitFor, type Crew } from "../harness.ts";
 
 const COUNT = Number(process.env.STRESS_TABS ?? 100);
 
@@ -60,7 +60,7 @@ async function press(crew: Crew, workspaceId: string, n: number): Promise<Press>
     const w = window as unknown as { __frames: Frame[] };
     return [performance.now(), w.__frames.at(-1)?.shown ?? "none"] as const;
   });
-  await pressChord(crew, `${MOD}+n`);
+  await newTabPick(crew, "Session");
   await waitFor(async () => (await sessions(crew, workspaceId)).find((s) => !known.has(s.id)), {
     message: `session ${n} reaches crewd`,
   });

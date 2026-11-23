@@ -8,7 +8,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import type { Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, openLauncher, pressChord, remoteRequest, typeInTerminal, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, newTabPick, MOD, pressChord, remoteRequest, typeInTerminal, waitFor, workspaceMark, type Crew, type RemoteDaemon } from "./harness.ts";
 
 // Draws a frame, then rewrites one line in place, padded so the ring wraps
 // within a second. On SIGWINCH it clears and draws the whole frame, as Ink does.
@@ -60,8 +60,7 @@ test("a TUI that draws by difference shows its whole frame after the window relo
     const workspaces = await remoteRequest<Workspace[]>(remote, "workspace_list");
     assert.equal(workspaces.length, 1);
 
-    await openLauncher(crew);
-    await window.keyboard.press("Enter");
+    await newTabPick(crew, "Terminal");
     await typeInTerminal(crew, "node draw.cjs");
     await waitFor(async () => (await found(crew, "PROMPT-MARKER")) > 0, { message: "the frame is drawn" });
     // 2.5 KB a tick: well past the 256 KB ring.

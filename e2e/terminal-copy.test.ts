@@ -6,11 +6,10 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { launchCrew, openLauncher, typeInTerminal, waitFor, withSystemClipboard, type Crew } from "./harness.ts";
+import { launchCrew, newTabPick, typeInTerminal, waitFor, withSystemClipboard, type Crew } from "./harness.ts";
 
 async function openShell(crew: Crew): Promise<void> {
-  await openLauncher(crew);
-  await crew.window.keyboard.press("Enter");
+  await newTabPick(crew, "Terminal");
 }
 
 const clipboard = (crew: Crew) => crew.app.evaluate(({ clipboard }) => clipboard.readText());
