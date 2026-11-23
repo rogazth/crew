@@ -84,11 +84,12 @@ test("B1: a tab opened, read, filled, clicked and captured through the relay", a
   });
 });
 
-// The page and a cross-origin iframe in it see the browser under its own name,
-// because Cloudflare's Turnstile fails one passing for Chrome, and the agent
-// still reads the console without the debugger's Runtime domain, which pages
-// can detect.
-test("B2: a page and its cross-origin iframe see the browser's own name, and the console still reaches the agent", async (t) => {
+// The page and a cross-origin iframe in it see plain Chromium, without the
+// app's token or Electron's, which sites take for an old browser. The iframe
+// is the one a session's agent would miss, and Cloudflare's Turnstile fails a
+// browser whose frames disagree. The agent still reads the console without the
+// debugger's Runtime domain, which pages can detect.
+test("B2: a page and its cross-origin iframe see plain Chromium, and the console still reaches the agent", async (t) => {
   const frame = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(`<!doctype html><script>
@@ -134,7 +135,9 @@ test("B2: a page and its cross-origin iframe see the browser's own name, and the
     ),
   );
   assert.ok(!top.brands.includes("Google Chrome"), JSON.stringify(top));
-  assert.match(top.agent, /Electron\//);
+  assert.ok(top.brands.includes("Chromium"), JSON.stringify(top));
+  assert.doesNotMatch(top.agent, /Electron\/|crew\//i);
+  assert.match(top.agent, /Chrome\/\d+\.0\.0\.0/);
 
   const inFrame = await waitFor(
     async () => {
@@ -144,7 +147,9 @@ test("B2: a page and its cross-origin iframe see the browser's own name, and the
     { timeout: 15_000, message: "the iframe reports what it sees" },
   );
   assert.ok(!inFrame.brands.includes("Google Chrome"), JSON.stringify(inFrame));
-  assert.match(inFrame.agent, /Electron\//);
+  assert.ok(inFrame.brands.includes("Chromium"), JSON.stringify(inFrame));
+  assert.doesNotMatch(inFrame.agent, /Electron\/|crew\//i);
+  assert.match(inFrame.agent, /Chrome\/\d+\.0\.0\.0/);
 
   await tool("browser_evaluate", {
     expression: "console.log('top-log'); console.warn('top-warn'); setTimeout(() => { throw new Error('top-uncaught'); }, 0); 1",

@@ -25,6 +25,7 @@ import {
   serveFiles,
   startBrowserHost,
 } from "./browser";
+import { chromiumUserAgent } from "./browser/identity";
 import { openExternal } from "./external";
 import { release, sha } from "./build-info";
 import { connectAgent, launchdStandIn, tailLog, unloadAgent, type AgentLink } from "./daemon-agent";
@@ -593,6 +594,9 @@ if (refused) {
 }
 // The name also keys the app's item in the login keychain: each build its own.
 app.setName(appName(channelOf(app.isPackaged, release)));
+// Pages see plain Chromium (browser/identity.ts). Only the fallback reaches every frame
+// and worker; with a session's agent, a frame of another site still says Electron.
+app.userAgentFallback = chromiumUserAgent(app.userAgentFallback);
 // An e2e app outlives a spec killed on a timeout unless it watches for that.
 const owner = Number(process.env.CREW_E2E_OWNER_PID);
 if (e2e && owner > 1) watchOwner(owner, () => app.exit(1));

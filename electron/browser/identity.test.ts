@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
+import { chromiumUserAgent, firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
 
 describe("firefoxUserAgent", () => {
   it("names the platform Firefox would", () => {
@@ -8,6 +8,39 @@ describe("firefoxUserAgent", () => {
     expect(firefoxUserAgent("linux")).toContain("X11; Linux x86_64");
     expect(firefoxUserAgent("darwin")).not.toMatch(/Chrome|Electron|crew/i);
   });
+});
+
+describe("chromiumUserAgent", () => {
+  const tail = "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+
+  it.each([
+    [
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Crew/0.8.2 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36",
+      `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ${tail}`,
+    ],
+    [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.167 Electron/44.9.3 crew-dev/0.0.1 Safari/537.36",
+      `Mozilla/5.0 (Windows NT 10.0; Win64; x64) ${tail}`,
+    ],
+    [
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Electron/44.9.3 crew/0.8.2 Chrome/152.0.7977.167 Safari/537.36",
+      `Mozilla/5.0 (X11; Linux x86_64) ${tail}`,
+    ],
+  ])("drops the app's and Electron's tokens from %s", (agent, expected) => {
+    expect(chromiumUserAgent(agent)).toBe(expected);
+  });
+
+  it("leaves an agent that is already plain as it is", () => {
+    const plain = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ${tail}`;
+    expect(chromiumUserAgent(plain)).toBe(plain);
+  });
+
+  it.each(["", "Chrome", "Mozilla/5.0 Chrome/140 Electron/44.2.0", "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/152.0.0.0"])(
+    "leaves an agent of another shape as it is: %j",
+    (agent) => {
+      expect(chromiumUserAgent(agent)).toBe(agent);
+    },
+  );
 });
 
 describe("isGoogleSignIn", () => {
