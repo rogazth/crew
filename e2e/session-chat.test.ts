@@ -355,8 +355,6 @@ test("/reload in the chat asks the CLI for its plugins and then its skills, and 
 // turn like the real one (echoed at once, named in the turn's reply), so a
 // steer shows; a message held for the next turn goes in as one turn of its own.
 
-type Rows = ReturnType<Crew["window"]["locator"]>;
-
 /** A fresh chat of the workspace's, with a turn of `seconds` running and taken in by the CLI. */
 async function workingChat(seconds: number): Promise<{ session: Session; cwd: string }> {
   const [workspace] = crew.workspaces;
