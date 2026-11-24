@@ -844,10 +844,7 @@ impl SessionTools {
         let model = match text(args.get("model")) {
             Some(model) if models.contains(&model) => model,
             Some(model) => return Err(unknown_model(&model, &provider)),
-            None => match caller.session().filter(|me| me.provider == provider && !me.model.is_empty()) {
-                Some(me) => me.model.clone(),
-                None => crate::tools::unnamed_model(&provider),
-            },
+            None => return Err(crate::tools::model_required()),
         };
         let effort = crate::tools::named_effort(&provider, args)?;
         // Never more than the caller has: a parent that has to ask before a
@@ -2074,7 +2071,7 @@ fn start_schema(wait: bool) -> Value {
     let mut properties = json!({
         "prompt": { "type": "string", "description": "The job, with everything it needs: the goal, the files, the constraints, what done looks like, and whether it may commit." },
         "provider": { "type": "string", "enum": provider_names(), "description": "Which CLI runs it. Defaults to yours." },
-        "model": { "type": "string", "description": format!("Defaults to yours when the provider is yours, else the provider's first. What there is:\n{}", crate::tools::model_sheet()) },
+        "model": crate::tools::model_property(),
         "worktree": { "type": "string", "description": "current (the default), new, or a branch name or worktree path." },
         "name": { "type": "string", "description": "What it is listed as. Defaults to the provider and the first words of the prompt." },
         "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"], "description": "Defaults to yours. Never more than yours." }
@@ -2085,7 +2082,7 @@ fn start_schema(wait: bool) -> Value {
         properties["timeout_s"] = json!({ "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "With wait: seconds to wait, 600 by default, 3600 at most." });
     }
     properties["effort"] = crate::tools::effort_property();
-    json!({ "type": "object", "properties": properties, "required": ["prompt", "effort"] })
+    json!({ "type": "object", "properties": properties, "required": ["prompt", "model", "effort"] })
 }
 
 /// The session tools. They need no host to be described, so the CLI builds
@@ -2134,7 +2131,7 @@ pub fn catalog() -> Vec<Tool> {
             ),
             schema: start_schema(true),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex --effort medium fix the failing login test\n  crew sessions delegate --effort low --wait --timeout-s 300 -- what does the billing webhook do?")],
+            cli: vec![cli("sessions", "delegate").rest(&["prompt"]).eg("crew sessions delegate --provider codex --model gpt-5.6-luna --effort medium fix the failing login test\n  crew sessions delegate --model claude-sonnet-5-5 --effort low --wait --timeout-s 300 -- what does the billing webhook do?")],
         },
         Tool {
             name: "start_session",
@@ -2146,12 +2143,12 @@ pub fn catalog() -> Vec<Tool> {
             ),
             schema: start_schema(false),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --effort high --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --effort medium --name Reviewer review the diff on main")],
+            cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --model claude-opus-5-5 --effort high --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --model gpt-5.6-sol --effort medium --name Reviewer review the diff on main")],
         },
         Tool {
             name: "start_sessions",
             description: concat!(
-                "Start several separate sessions in one call: sessions is a list of 1 to 20 entries, each what start_session takes (prompt, effort, provider, model, worktree, name, autonomy), each with its own prompt. Each is the user's, like one start_session makes: it shows in the sidebar, reports to nobody and is not capped. ",
+                "Start several separate sessions in one call: sessions is a list of 1 to 20 entries, each what start_session takes (prompt, model and effort, which are required; provider, worktree, name, autonomy), each with its own prompt. Each is the user's, like one start_session makes: it shows in the sidebar, reports to nobody and is not capped. ",
                 "Each entry succeeds or fails on its own, and the result lists both: sessions has one result per entry, in order, with ok, and on a failure the error. A worktree made for an entry that then failed is kept and named in its result. More than 20 entries is refused whole, before anything starts. ",
                 "request_id makes the whole call safe to retry. Use it for independent jobs that each need a session of their own; for one, use start_session."
             ),
@@ -2167,13 +2164,13 @@ pub fn catalog() -> Vec<Tool> {
                             "properties": {
                                 "prompt": { "type": "string", "description": "As in start_session." },
                                 "provider": { "type": "string", "enum": provider_names() },
-                                "model": { "type": "string", "description": "As in start_session." },
+                                "model": { "type": "string", "description": "Required, as in start_session." },
                                 "worktree": { "type": "string" },
                                 "name": { "type": "string" },
                                 "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"] },
                                 "effort": crate::tools::effort_property()
                             },
-                            "required": ["prompt", "effort"]
+                            "required": ["prompt", "model", "effort"]
                         },
                         "description": "One entry per session to start."
                     },
@@ -2182,7 +2179,7 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["sessions"]
             }),
             audience: Audience::PARENTS,
-            cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"effort\": \"medium\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"effort\": \"low\", \"provider\": \"codex\"}'")],
+            cli: vec![cli("sessions", "start-many").eg("crew sessions start-many --sessions '{\"prompt\": \"fix the login test\", \"model\": \"claude-sonnet-5-5\", \"effort\": \"medium\", \"worktree\": \"new\"}' --sessions '{\"prompt\": \"update the docs\", \"model\": \"gpt-5.6-luna\", \"effort\": \"low\", \"provider\": \"codex\"}'")],
         },
         Tool {
             name: "read_session",
@@ -9520,7 +9517,7 @@ time.sleep(600)
             .run(
                 &user,
                 "start_sessions",
-                &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "effort": "none", "worktree": "new" })] }),
+                &json!({ "sessions": [json!({ "provider": "opencode", "model": crate::tools::default_model("opencode"), "prompt": "x", "effort": "none", "worktree": "new" })] }),
             )
             .expect("a batch")
         {
@@ -9892,20 +9889,51 @@ time.sleep(600)
         assert!(bot.is_err_and(|e| e.contains("is a bot")));
     }
 
+    /// No tool hands down the caller's model: whoever starts a session or a
+    /// bot picks one for the job.
+    #[test]
+    fn the_tools_that_start_a_session_or_a_bot_require_a_model() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let bare = json!({ "provider": "opencode", "prompt": "x", "effort": "none" });
+        for tool in ["delegate", "start_session"] {
+            let out = w.call_bare(&shell, tool, bare.clone());
+            assert!(out.is_err_and(|e| e.contains("model is required")), "{tool}");
+        }
+        let many = w.call_bare(&shell, "start_sessions", json!({ "sessions": [bare] })).expect("batch");
+        assert!(many["sessions"][0]["error"].as_str().is_some_and(|e| e.contains("model is required")), "{many}");
+        for tool in ["delegate", "start_session"] {
+            let schema = catalog().into_iter().find(|t| t.name == tool).unwrap().schema;
+            assert_eq!(schema["required"], json!(["prompt", "model", "effort"]), "{tool}");
+        }
+        let schema = catalog().into_iter().find(|t| t.name == "start_sessions").unwrap().schema;
+        assert_eq!(schema["properties"]["sessions"]["items"]["required"], json!(["prompt", "model", "effort"]));
+    }
+
     #[test]
     fn the_tools_that_start_a_session_require_an_effort() {
         let w = world();
         let shell = w.session("terminal", "shell", "full");
         for tool in ["delegate", "start_session"] {
-            let out = w.call_bare(&shell, tool, json!({ "provider": "claude", "prompt": "x" }));
+            let out = w.call_bare(&shell, tool, json!({ "provider": "claude", "model": "claude-sonnet-5-5", "prompt": "x" }));
             assert!(out.is_err_and(|e| e.contains("effort is required")), "{tool}");
         }
-        let out = w.call_bare(&shell, "delegate", json!({ "provider": "claude", "prompt": "x", "effort": "ludicrous" }));
+        let out = w.call_bare(
+            &shell,
+            "delegate",
+            json!({ "provider": "claude", "model": "claude-sonnet-5-5", "prompt": "x", "effort": "ludicrous" }),
+        );
         assert!(out.is_err_and(|e| e.contains("one of low, medium, high, xhigh, max")));
-        let out = w.call_bare(&shell, "delegate", json!({ "provider": "opencode", "prompt": "x", "effort": "high" }));
+        let opencode = crate::tools::default_model("opencode");
+        let out = w.call_bare(
+            &shell,
+            "delegate",
+            json!({ "provider": "opencode", "model": opencode, "prompt": "x", "effort": "high" }),
+        );
         assert!(out.is_err_and(|e| e.contains("Pass effort \"none\"")));
-        let made =
-            w.call_bare(&shell, "delegate", json!({ "provider": "opencode", "prompt": "x", "effort": "none" })).expect("none");
+        let made = w
+            .call_bare(&shell, "delegate", json!({ "provider": "opencode", "model": opencode, "prompt": "x", "effort": "none" }))
+            .expect("none");
         assert_eq!(made["effort"], "");
         let many = w
             .call_bare(&shell, "start_sessions", json!({ "sessions": [{ "provider": "opencode", "prompt": "y" }] }))

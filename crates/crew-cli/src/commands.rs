@@ -518,19 +518,42 @@ mod tests {
 
     #[test]
     fn a_rest_positional_joins_its_words() {
-        let (group, verb, matches) =
-            parse(&["sessions", "start", "--provider", "codex", "--effort", "low", "run", "the", "-e2e"]);
+        let (group, verb, matches) = parse(&[
+            "sessions",
+            "start",
+            "--provider",
+            "codex",
+            "--model",
+            "gpt-5.6-luna",
+            "--effort",
+            "low",
+            "run",
+            "the",
+            "-e2e",
+        ]);
         assert_eq!((group.as_str(), verb.as_str()), ("sessions", "start"));
         let (verb, tool) = find("sessions", "start");
         assert_eq!(
             arguments(&matches, &tool, &verb).expect("args"),
-            json!({ "prompt": "run the -e2e", "provider": "codex", "effort": "low" })
+            json!({ "prompt": "run the -e2e", "provider": "codex", "model": "gpt-5.6-luna", "effort": "low" })
         );
-        let (_, _, matches) = parse(&["sessions", "delegate", "--effort", "low", "--wait", "--timeout-s", "30", "--", "go"]);
+        let (_, _, matches) = parse(&[
+            "sessions",
+            "delegate",
+            "--model",
+            "claude-sonnet-5-5",
+            "--effort",
+            "low",
+            "--wait",
+            "--timeout-s",
+            "30",
+            "--",
+            "go",
+        ]);
         let (verb, tool) = find("sessions", "delegate");
         assert_eq!(
             arguments(&matches, &tool, &verb).expect("args"),
-            json!({ "prompt": "go", "effort": "low", "wait": true, "timeout_s": 30 })
+            json!({ "prompt": "go", "model": "claude-sonnet-5-5", "effort": "low", "wait": true, "timeout_s": 30 })
         );
     }
 

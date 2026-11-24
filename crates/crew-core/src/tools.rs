@@ -101,22 +101,43 @@ pub fn effort_property() -> Value {
     })
 }
 
-/// For tests: the effort a call would have to name, filled in where it names
-/// none, so a test about something else need not say it.
+/// The `model` argument of every tool that starts a session or a bot. Never
+/// the caller's by default: a session or a bot spends the account's quota, so
+/// its model is chosen for its job.
+pub fn model_property() -> Value {
+    json!({
+        "type": "string",
+        "description": format!(
+            "Required. Choose it for the job: a lighter model for lookups, tests and screenshots, a stronger one for hard work; nothing defaults it. \
+             A model belongs to one provider and is spelled differently by each, so pass the two together. What there is:\n{}",
+            model_sheet()
+        )
+    })
+}
+
+/// What a call that names no model is told.
+pub fn model_required() -> String {
+    format!("model is required: choose one for the job, not your own by habit. What there is:\n{}", model_sheet())
+}
+
+/// For tests: the model and effort a call would have to name, filled in where
+/// it names none, so a test about something else need not say them.
 #[cfg(test)]
 pub fn with_effort(caller: &Caller, name: &str, mut args: Value) -> Value {
     fn fill(caller: &Caller, entry: &mut Value) {
         let Some(map) = entry.as_object_mut() else { return };
-        if map.contains_key("effort") {
-            return;
-        }
         let provider = map
             .get("provider")
             .and_then(Value::as_str)
             .map(str::to_string)
             .or_else(|| caller.session().map(|me| me.provider.clone()))
             .unwrap_or_else(|| "claude".into());
-        map.insert("effort".into(), json!(if efforts(&provider).is_empty() { "none" } else { "low" }));
+        if !map.contains_key("model") {
+            map.insert("model".into(), json!(default_model(&provider)));
+        }
+        if !map.contains_key("effort") {
+            map.insert("effort".into(), json!(if efforts(&provider).is_empty() { "none" } else { "low" }));
+        }
     }
     match name {
         "delegate" | "start_session" | "create_bot" => fill(caller, &mut args),
@@ -544,28 +565,20 @@ pub(crate) fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "create_bot",
-            description: "Create a new bot in this workspace. It stays idle until the user messages it or a routine wakes it. Provider and model default to yours, and it runs with your autonomy: you cannot make one that is allowed more than you are.",
+            description: "Create a new bot in this workspace. It stays idle until the user messages it or a routine wakes it. Provider defaults to yours, the model is yours to choose for its job, and it runs with your autonomy: you cannot make one that is allowed more than you are.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "name": { "type": "string" },
                     "description": { "type": "string", "description": "Who it is, its job and where it works, written as instructions to it." },
                     "provider": { "type": "string", "enum": provider_names(), "description": "Defaults to yours." },
-                    "model": {
-                        "type": "string",
-                        "description": format!(
-                            "Defaults to yours when the provider is yours. A model belongs to one \
-                             provider and is spelled differently by each, so pass the two together. \
-                             What there is:\n{}",
-                            model_sheet()
-                        )
-                    },
+                    "model": model_property(),
                     "effort": effort_property()
                 },
-                "required": ["name", "description", "effort"]
+                "required": ["name", "description", "model", "effort"]
             }),
             audience: Audience::SESSIONS,
-            cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --effort medium --description \"Review every diff on main\"")],
+            cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --model claude-sonnet-5-5 --effort medium --description \"Review every diff on main\"")],
         },
         Tool {
             name: "update_description",
@@ -1032,13 +1045,10 @@ fn create_bot(
     let provider = text(args.get("provider")).unwrap_or_else(|| me.provider.clone());
     let models = provider_models(&provider)
         .ok_or_else(|| format!("Unknown provider \"{provider}\". One of: {}", provider_names().join(", ")))?;
-    let requested = text(args.get("model"));
-    if let Some(requested) = &requested {
-        if !models.contains(requested) {
-            return Err(unknown_model(requested, &provider));
-        }
+    let model = text(args.get("model")).ok_or_else(model_required)?;
+    if !models.contains(&model) {
+        return Err(unknown_model(&model, &provider));
     }
-    let model = requested.unwrap_or_else(|| if provider == me.provider { me.model.clone() } else { unnamed_model(&provider) });
     let effort = named_effort(&provider, args)?;
     // Inherited, never asked for. A session that has to stop at every command
     // could otherwise build one that does not, and then send it the command.

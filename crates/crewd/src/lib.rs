@@ -3459,7 +3459,7 @@ mod tests {
         let payload = serde_json::json!({
             "token": bridge.mint(&session_id),
             "method": "tools/call",
-            "params": { "name": "create_bot", "arguments": { "name": "B", "description": "does B", "effort": "low" } }
+            "params": { "name": "create_bot", "arguments": { "name": "B", "description": "does B", "model": "claude-sonnet-5-5", "effort": "low" } }
         });
         let reply = unix_call(&info.socket_path, &payload);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -5777,7 +5777,7 @@ for line in sys.stdin:
             ("send_message", serde_json::json!({ "to": second, "text": format!("letter {MARKER}") })),
             (
                 "delegate",
-                serde_json::json!({ "prompt": format!("subagent {MARKER}"), "name": format!("name {MARKER}"), "provider": "claude", "effort": "low" }),
+                serde_json::json!({ "prompt": format!("subagent {MARKER}"), "name": format!("name {MARKER}"), "provider": "claude", "model": "claude-sonnet-5-5", "effort": "low" }),
             ),
         ] {
             let reply = unix_call(
