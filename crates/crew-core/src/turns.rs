@@ -3731,7 +3731,7 @@ impl TurnHost {
                 env.insert("CLAUDE_CODE_ENTRYPOINT".into(), crate::providers::claude::ENTRYPOINT.into());
                 // A bot's next message often comes minutes later: an hour's
                 // cache carries its episode on where five minutes would not.
-                // A subscription has it already; this asks it of an API key too.
+                // Asked for here rather than left to the CLI's default.
                 if session.kind == "bot" {
                     env.insert(CACHE_TTL_ENV.into(), "1h".into());
                 }
