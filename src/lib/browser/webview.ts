@@ -12,6 +12,7 @@ type WebviewElement = HTMLElement & {
   canGoForward(): boolean;
   getTitle(): string;
   getURL(): string;
+  isLoadingMainFrame(): boolean;
   goBack(): void;
   goForward(): void;
   reload(): void;
@@ -128,15 +129,30 @@ export function createGuest(container: HTMLElement, src: string, partition: stri
     ready = true;
     learnId();
   });
+  // Only the page's own loads count, as in Chrome: a frame inside it that loads
+  // again on its own (a captcha, an ad) would otherwise blink the tab each time.
+  // A navigation that starts while a frame loads gets no did-start-loading of
+  // its own, so it starts the spinner itself.
+  let loading = false;
+  const startLoading = () => {
+    if (loading) return;
+    loading = true;
+    on.loading(true);
+  };
   listen("did-start-navigation", (event) => {
-    if (event.isMainFrame && !event.isInPlace) on.start(String(event.url));
+    if (!event.isMainFrame || event.isInPlace) return;
+    on.start(String(event.url));
+    startLoading();
   });
   listen("did-navigate", (event) => on.navigate(String(event.url), false));
   listen("did-navigate-in-page", (event) => {
     if (event.isMainFrame) on.navigate(String(event.url), true);
   });
-  listen("did-start-loading", () => on.loading(true));
+  listen("did-start-loading", () => {
+    if (safely(() => view.isLoadingMainFrame(), true)) startLoading();
+  });
   listen("did-stop-loading", () => {
+    loading = false;
     on.loading(false);
     // A page restored from a saved stack comes back with its entry's title, and
     // Chromium announces no title that doesn't change, so it is read here.
