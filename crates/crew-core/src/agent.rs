@@ -14,7 +14,9 @@ use crate::shell_path;
 
 const STDOUT_EVENT: &str = "agent-stdout";
 const STDERR_EVENT: &str = "agent-stderr";
-const KILL_ESCALATE: Duration = Duration::from_secs(2);
+/// Longer than the two seconds Claude Code waits, on SIGTERM, for a sign-in
+/// renewal in flight: a kill inside them can revoke the sign-in.
+const KILL_ESCALATE: Duration = crate::child_stop::TERM_GRACE;
 /// How often a group is asked whether anyone is left in it.
 const GROUP_POLL: Duration = Duration::from_millis(50);
 /// How long the emitter waits for the next line before sending what it has.
@@ -427,8 +429,8 @@ fn home_dir() -> Option<String> {
     std::env::var("HOME").ok().filter(|home| !home.is_empty())
 }
 
-/// SIGTERM the group, then SIGKILL it if the child is still ours two seconds
-/// later. `exited` is the guard: once reaped, the pid can be anyone's.
+/// SIGTERM the group, then SIGKILL it if the child is still ours
+/// [`KILL_ESCALATE`] later. `exited` is the guard: once reaped, the pid can be anyone's.
 fn terminate(live: &Arc<LiveChild>) -> Option<thread::JoinHandle<()>> {
     if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
         return None;

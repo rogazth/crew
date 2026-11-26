@@ -11,6 +11,7 @@ pub mod browser_relay;
 pub mod browser_tools;
 pub mod caller;
 pub mod child_env;
+pub mod child_stop;
 pub mod claude_title;
 pub mod command_output;
 pub mod command_sources;

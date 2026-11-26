@@ -18,11 +18,16 @@ use super::{local_day_of, parse_iso_ms, window_label};
 
 /// How long a `get_usage` may take: the CLI starts, then asks claude.ai.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the CLI has to exit by itself once its stdin closes. It may be
+/// writing a renewed sign-in to disk, which a kill would lose.
+const EXIT_WAIT: Duration = Duration::from_secs(10);
 
 /// Every window of the plan, without a turn: a short-lived `claude -p` in
 /// stream-json answers `get_usage` and exits. It writes no transcript and
-/// spends nothing. None when the CLI fails, is signed out of claude.ai, or
-/// says no rate limits are available.
+/// spends nothing. It is never killed while it may be renewing the sign-in
+/// (see [`crate::child_stop`]): its stdin closes and it exits by itself.
+/// None when the CLI fails, is signed out of claude.ai, or says no rate limits
+/// are available.
 pub fn probe(bin: &str) -> Option<(Vec<UsageWindow>, Option<String>)> {
     let mut child = Command::new(bin)
         .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
@@ -36,9 +41,7 @@ pub fn probe(bin: &str) -> Option<(Vec<UsageWindow>, Option<String>)> {
         .spawn()
         .ok()?;
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        // SAFETY: the group is the child's own, spawned above.
-        unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-        let _ = child.wait();
+        crate::child_stop::stop(&mut child, Duration::ZERO);
         return None;
     };
     let (tx, rx) = mpsc::channel::<Value>();
@@ -68,9 +71,7 @@ pub fn probe(bin: &str) -> Option<(Vec<UsageWindow>, Option<String>)> {
         }
     });
     drop(stdin);
-    // SAFETY: the group is the child's own, spawned above.
-    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-    let _ = child.wait();
+    crate::child_stop::stop(&mut child, EXIT_WAIT);
     let answer = answer?;
     if answer.get("subtype").and_then(Value::as_str) != Some("success") {
         return None;

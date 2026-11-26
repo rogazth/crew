@@ -194,7 +194,10 @@ fn fill(spec: &Spec, path: &Path, refresh: bool, status: &mut ProviderStatus) {
 
 fn account_of(id: &str, path: &Path) -> Option<ProviderAccount> {
     Some(match id {
-        "claude" => parse_claude_auth(&run(path, &["auth", "status"], LOOKUP_TIMEOUT)?),
+        "claude" => {
+            let _turn = crate::child_stop::claude_turn();
+            parse_claude_auth(&run(path, &["auth", "status"], LOOKUP_TIMEOUT)?)
+        }
         // The app-server knows the email and plan; its sentence only says whether.
         "codex" => match crate::usage::codex::read_account(&path.to_string_lossy()) {
             Some(result) => parse_codex_account(&result),
@@ -278,8 +281,7 @@ pub(crate) fn run_checked_in(path: &Path, args: &[&str], cwd: Option<&Path>, tim
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
             _ => {
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                let _ = child.wait();
+                crate::child_stop::stop(&mut child, Duration::ZERO);
                 return None;
             }
         }

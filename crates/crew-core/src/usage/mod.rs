@@ -307,6 +307,7 @@ impl UsageHost {
         );
     }
 
+    /// Who is signed in; the caller holds [`crate::child_stop::claude_turn`].
     fn claude_signed_in(&self) -> Option<(String, Option<String>)> {
         let mut held = self.claude_account.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, who)) = held.as_ref() {
@@ -363,15 +364,17 @@ impl UsageHost {
     }
 
     /// Asks Claude who is signed in and, with `get_usage`, every window of the
-    /// plan; when that fails, keeps the windows last heard.
+    /// plan; when that fails, keeps the windows last heard. One CLI at a time:
+    /// the probe first, since it may renew the sign-in, then `auth status`.
     fn ask_claude(&self) {
         let Ok(bin) = AgentHost::resolve("claude") else {
             return;
         };
-        let (who, probed) = std::thread::scope(|scope| {
-            let probed = scope.spawn(|| claude::probe(&bin.path));
-            (self.claude_signed_in(), probed.join().ok().flatten())
-        });
+        let (who, probed) = {
+            let _turn = crate::child_stop::claude_turn();
+            let probed = claude::probe(&bin.path);
+            (self.claude_signed_in(), probed)
+        };
         let Some((account, plan)) = who else {
             return;
         };
@@ -493,9 +496,9 @@ pub(crate) fn run(path: &str, args: &[&str], timeout: Duration) -> Option<String
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
-                // Kill the whole group: a grandchild may hold the pipe open.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                let _ = child.wait();
+                // The whole group, asked first: a grandchild may hold the pipe
+                // open, and a Claude CLI may be renewing its sign-in.
+                crate::child_stop::stop(&mut child, Duration::ZERO);
                 break false;
             }
         }
